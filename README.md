@@ -13,6 +13,7 @@ A zero-dependency DNS server written in pure Go. NothingDNS is designed to be li
 - **Signal Handling** - Graceful shutdown (SIGINT/SIGTERM) and configuration reload (SIGHUP)
 - **Blocklist Support** - Block domains using hosts file format
 - **Prometheus Metrics** - Export metrics for monitoring and observability
+- **HTTP API** - RESTful API for server management and monitoring
 - **Management CLI** - `dnsctl` tool for zone and server management
 
 ## Quick Start
@@ -133,6 +134,42 @@ dnsctl cache flush
 dnsctl config reload
 ```
 
+## HTTP API
+
+NothingDNS provides a RESTful HTTP API for management and monitoring:
+
+```yaml
+server:
+  http:
+    enabled: true
+    bind: "127.0.0.1:8080"
+    auth_token: "your-secret-token"  # Optional
+```
+
+### Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check |
+| `/api/v1/status` | GET | Server status and cache stats |
+| `/api/v1/zones` | GET | List loaded zones |
+| `/api/v1/zones/reload?zone=<name>` | POST | Reload a zone |
+| `/api/v1/cache/stats` | GET | Cache statistics |
+| `/api/v1/cache/flush` | POST | Flush the cache |
+| `/api/v1/config/reload` | POST | Reload configuration |
+
+### Authentication
+
+When `auth_token` is configured, include it via header or query parameter:
+
+```bash
+# Via header
+curl -H "Authorization: Bearer your-secret-token" http://localhost:8080/api/v1/status
+
+# Via query parameter
+curl http://localhost:8080/api/v1/status?token=your-secret-token
+```
+
 ## Architecture
 
 ```
@@ -159,8 +196,10 @@ dnsctl config reload
 │   ├── nothingdns/     # Main DNS server binary
 │   └── dnsctl/         # CLI management tool
 ├── internal/
+│   ├── api/            # HTTP API for management
 │   ├── cache/          # LRU cache with TTL
 │   ├── config/         # YAML configuration parser
+│   ├── metrics/        # Prometheus metrics export
 │   ├── protocol/       # DNS protocol implementation
 │   ├── server/         # UDP/TCP server handlers
 │   ├── upstream/       # Upstream DNS client
@@ -203,7 +242,7 @@ Contributions are welcome! Please ensure:
 ## Roadmap
 
 - [ ] DNSSEC validation and signing
-- [ ] HTTP API for management
+- [x] HTTP API for management
 - [ ] Clustering support
 - [x] Blocklist support (hosts file format)
 - [x] Metrics export (Prometheus)

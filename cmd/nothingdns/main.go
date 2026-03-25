@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nothingdns/nothingdns/internal/api"
 	"github.com/nothingdns/nothingdns/internal/blocklist"
 	"github.com/nothingdns/nothingdns/internal/cache"
 	"github.com/nothingdns/nothingdns/internal/config"
@@ -154,6 +155,45 @@ func run() error {
 		logger.Infof("Metrics server listening on %s%s", cfg.Metrics.Bind, cfg.Metrics.Path)
 	}
 
+	// Initialize zone manager
+	zoneManager := zone.NewManager()
+	for _, zoneFile := range cfg.Zones {
+		z, err := loadZoneFile(zoneFile)
+		if err != nil {
+			logger.Warnf("Failed to load zone file %s: %v", zoneFile, err)
+			continue
+		}
+		zoneManager.LoadZone(z, zoneFile)
+		logger.Infof("Loaded zone %s with %d records", z.Origin, len(z.Records))
+	}
+
+	// Initialize API server
+	apiServer := api.NewServer(cfg.Server.HTTP, zoneManager, dnsCache, func() error {
+		logger.Info("Reloading configuration via API...")
+		// Reload zone files
+		for _, zoneFile := range cfg.Zones {
+			z, err := loadZoneFile(zoneFile)
+			if err != nil {
+				logger.Warnf("Failed to reload zone file %s: %v", zoneFile, err)
+				continue
+			}
+			zoneManager.LoadZone(z, zoneFile)
+			logger.Infof("Reloaded zone %s", z.Origin)
+		}
+		// Reload blocklist
+		if bl != nil {
+			if err := bl.Reload(); err != nil {
+				logger.Warnf("Failed to reload blocklist: %v", err)
+			}
+		}
+		return nil
+	})
+	if err := apiServer.Start(); err != nil {
+		logger.Warnf("Failed to start API server: %v", err)
+	} else if cfg.Server.HTTP.Enabled {
+		logger.Infof("API server listening on %s", cfg.Server.HTTP.Bind)
+	}
+
 	// Create handler
 	handler := &integratedHandler{
 		config:    cfg,
@@ -219,6 +259,11 @@ func run() error {
 			// Stop metrics server
 			if metricsCollector != nil {
 				metricsCollector.Stop()
+			}
+
+			// Stop API server
+			if apiServer != nil {
+				apiServer.Stop()
 			}
 
 			logger.Info("Server shutdown complete")

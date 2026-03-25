@@ -94,6 +94,9 @@ type HTTPConfig struct {
 
 	// Listen address
 	Bind string `yaml:"bind"`
+
+	// Authentication token (optional)
+	AuthToken string `yaml:"auth_token"`
 }
 
 // ResolutionConfig contains DNS resolution settings.

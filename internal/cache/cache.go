@@ -79,6 +79,11 @@ func (s *Stats) HitRate() float64 {
 	return float64(s.Hits) / float64(total) * 100
 }
 
+// HitRatio returns the cache hit ratio (alias for HitRate).
+func (s *Stats) HitRatio() float64 {
+	return s.HitRate()
+}
+
 // Cache is a thread-safe DNS cache with LRU eviction.
 type Cache struct {
 	// Configuration
@@ -305,6 +310,11 @@ func (c *Cache) Clear() {
 	c.entries = make(map[string]*Entry, c.capacity)
 	c.lruList.Init()
 	c.stats.Size = 0
+}
+
+// Flush is an alias for Clear.
+func (c *Cache) Flush() {
+	c.Clear()
 }
 
 // Stats returns a copy of the current cache statistics.
