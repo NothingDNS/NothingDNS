@@ -36,6 +36,15 @@ type Config struct {
 
 	// ACL configuration
 	ACL []ACLRule `yaml:"acl"`
+
+	// Blocklist configuration
+	Blocklist BlocklistConfig `yaml:"blocklist"`
+}
+
+// BlocklistConfig holds blocklist configuration.
+type BlocklistConfig struct {
+	Enabled bool     `yaml:"enabled"`
+	Files   []string `yaml:"files"`
 }
 
 // ServerConfig contains server-level settings.
@@ -255,6 +264,10 @@ func DefaultConfig() *Config {
 			TrustAnchor: "",
 			IgnoreTime:  false,
 		},
+		Blocklist: BlocklistConfig{
+			Enabled: false,
+			Files:   []string{},
+		},
 	}
 }
 
@@ -407,6 +420,13 @@ func unmarshalToConfig(node *Node, cfg *Config) error {
 		}
 	}
 
+	// Blocklist config
+	if blocklistNode := node.Get("blocklist"); blocklistNode != nil {
+		if err := unmarshalBlocklist(blocklistNode, &cfg.Blocklist); err != nil {
+			return fmt.Errorf("blocklist: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -546,6 +566,17 @@ func unmarshalDNSSEC(node *Node, cfg *DNSSECConfig) error {
 	return nil
 }
 
+func unmarshalBlocklist(node *Node, cfg *BlocklistConfig) error {
+	if node.Type != NodeMapping {
+		return fmt.Errorf("expected mapping")
+	}
+
+	cfg.Enabled = getBool(node, "enabled", cfg.Enabled)
+	cfg.Files = getStringSlice(node, "files", cfg.Files)
+
+	return nil
+}
+
 // Helper functions for unmarshaling
 
 func getString(node *Node, key string, defaultValue string) string {
@@ -613,6 +644,9 @@ func (c *Config) Validate() []string {
 
 	// Validate ACL rules
 	errors = append(errors, c.validateACL()...)
+
+	// Validate blocklist configuration
+	errors = append(errors, c.validateBlocklist()...)
 
 	// Validate zone files exist
 	for _, zone := range c.Zones {
@@ -812,6 +846,27 @@ func (c *Config) validateACL() []string {
 			if !isValidQueryType(qt) {
 				errors = append(errors, fmt.Sprintf("%s: invalid query type '%s'", prefix, qt))
 			}
+		}
+	}
+
+	return errors
+}
+
+func (c *Config) validateBlocklist() []string {
+	var errors []string
+
+	if !c.Blocklist.Enabled {
+		return errors
+	}
+
+	// Validate blocklist files exist
+	for _, file := range c.Blocklist.Files {
+		if file == "" {
+			errors = append(errors, "blocklist: file path cannot be empty")
+			continue
+		}
+		if _, err := os.Stat(file); os.IsNotExist(err) {
+			errors = append(errors, fmt.Sprintf("blocklist: file '%s' does not exist", file))
 		}
 	}
 

@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ecostack/nothingdns/internal/blocklist"
 	"github.com/ecostack/nothingdns/internal/cache"
 	"github.com/ecostack/nothingdns/internal/config"
 	"github.com/ecostack/nothingdns/internal/protocol"
@@ -42,11 +43,12 @@ type DNSServer struct {
 
 // integratedHandler is the DNS request handler that uses all components.
 type integratedHandler struct {
-	config   *config.Config
-	logger   *util.Logger
-	cache    *cache.Cache
-	upstream *upstream.Client
-	zones    map[string]*zone.Zone
+	config    *config.Config
+	logger    *util.Logger
+	cache     *cache.Cache
+	upstream  *upstream.Client
+	zones     map[string]*zone.Zone
+	blocklist *blocklist.Blocklist
 }
 
 func main() {
@@ -126,13 +128,26 @@ func run() error {
 		logger.Infof("Loaded zone %s with %d records", z.Origin, len(z.Records))
 	}
 
+	// Initialize blocklist
+	bl := blocklist.New(blocklist.Config{
+		Enabled: cfg.Blocklist.Enabled,
+		Files:   cfg.Blocklist.Files,
+	})
+	if err := bl.Load(); err != nil {
+		logger.Warnf("Failed to load blocklist: %v", err)
+	} else if cfg.Blocklist.Enabled {
+		stats := bl.Stats()
+		logger.Infof("Blocklist loaded with %d entries from %d files", stats.TotalBlocks, stats.Files)
+	}
+
 	// Create handler
 	handler := &integratedHandler{
-		config:   cfg,
-		logger:   logger,
-		cache:    dnsCache,
-		upstream: client,
-		zones:    zones,
+		config:    cfg,
+		logger:    logger,
+		cache:     dnsCache,
+		upstream:  client,
+		zones:     zones,
+		blocklist: bl,
 	}
 
 	// Create and start DNS servers
@@ -201,6 +216,15 @@ func run() error {
 				zones[z.Origin] = z
 				logger.Infof("Reloaded zone %s", z.Origin)
 			}
+			// Reload blocklist
+			if bl != nil {
+				if err := bl.Reload(); err != nil {
+					logger.Warnf("Failed to reload blocklist: %v", err)
+				} else {
+					stats := bl.Stats()
+					logger.Infof("Reloaded blocklist with %d entries from %d files", stats.TotalBlocks, stats.Files)
+				}
+			}
 		}
 	}
 }
@@ -267,6 +291,13 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 	qtype := q.QType
 
 	h.logger.Debugf("Query: %s %s", qname, typeToString(qtype))
+
+	// Check blocklist
+	if h.blocklist != nil && h.blocklist.IsBlocked(qname) {
+		h.logger.Infof("Blocked query for %s", qname)
+		sendError(w, r, protocol.RcodeNameError)
+		return
+	}
 
 	// Check cache first
 	cacheKey := cache.MakeKey(qname, qtype)
