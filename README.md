@@ -1,0 +1,210 @@
+# NothingDNS
+
+A zero-dependency DNS server written in pure Go. NothingDNS is designed to be lightweight, fast, and self-contained with no external dependencies.
+
+## Features
+
+- **Zero Dependencies** - Pure Go implementation, no external libraries
+- **DNS Protocol Support** - Full RFC 1035 compliant DNS message handling
+- **Caching** - Thread-safe LRU cache with TTL support and prefetching
+- **Upstream Forwarding** - Multiple upstream servers with health checking and failover strategies (round_robin, random, fastest, backup)
+- **Authoritative Zones** - Zone file support for hosting your own DNS records
+- **UDP & TCP** - Support for both UDP and TCP DNS queries
+- **Signal Handling** - Graceful shutdown (SIGINT/SIGTERM) and configuration reload (SIGHUP)
+- **Custom YAML Parser** - Built-in YAML configuration parser with no external deps
+- **Management CLI** - `dnsctl` tool for zone and server management
+
+## Quick Start
+
+### Build
+
+```bash
+# Build the server
+go build -o nothingdns ./cmd/nothingdns
+
+# Build the CLI tool
+go build -o dnsctl ./cmd/dnsctl
+```
+
+### Run
+
+```bash
+# Start with default configuration
+./nothingdns
+
+# Start with custom config
+./nothingdns -config /path/to/config.yaml
+```
+
+### Test
+
+```bash
+go test ./...
+```
+
+## Configuration
+
+Create a `nothingdns.yaml` file:
+
+```yaml
+server:
+  port: 5353
+  bind:
+    - 0.0.0.0
+  tls_enabled: false
+
+upstream:
+  strategy: round_robin
+  servers:
+    - 1.1.1.1:53
+    - 8.8.8.8:53
+  timeout: 5
+  tls_preferred: true
+
+cache:
+  size: 10000
+  min_ttl: 300
+  max_ttl: 86400
+  default_ttl: 3600
+  negative_ttl: 60
+  prefetch: true
+  prefetch_threshold: 28800
+
+logging:
+  level: info
+  format: text
+  output: stdout
+
+zones:
+  - /etc/nothingdns/zones/example.com.zone
+
+acl:
+  - action: allow
+    cidr: 127.0.0.1/32
+  - action: allow
+    cidr: 10.0.0.0/8
+  - action: deny
+    cidr: 0.0.0.0/0
+```
+
+## Zone File Format
+
+NothingDNS uses a simple zone file format:
+
+```
+$ORIGIN example.com.
+$TTL 3600
+
+@   IN  SOA ns1.example.com. admin.example.com. (
+            2024010101  ; Serial
+            3600        ; Refresh
+            1800        ; Retry
+            604800      ; Expire
+            86400 )     ; Minimum TTL
+
+@       IN  A       192.0.2.1
+www     IN  A       192.0.2.2
+mail    IN  A       192.0.2.3
+@       IN  MX  10  mail.example.com.
+@       IN  NS      ns1.example.com.
+@       IN  TXT     "v=spf1 include:_spf.example.com ~all"
+```
+
+## CLI Usage
+
+The `dnsctl` tool provides management capabilities:
+
+```bash
+# Check server status
+dnsctl server status
+
+# List zones
+dnsctl zone list
+
+# Reload zones
+dnsctl zone reload example.com
+
+# Cache operations
+dnsctl cache stats
+dnsctl cache flush
+
+# Configuration reload
+dnsctl config reload
+```
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        NothingDNS                            │
+├─────────────────────────────────────────────────────────────┤
+│  UDP Server    │    TCP Server    │    Signal Handler       │
+├────────────────┴──────────────────┴─────────────────────────┤
+│                    Request Handler                           │
+│  ┌─────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
+│  │  Cache  │→ │Auth Zones   │→ │   Upstream Client       │  │
+│  │ (LRU)   │  │             │  │  (Health Check/Failover)│  │
+│  └─────────┘  └─────────────┘  └─────────────────────────┘  │
+├─────────────────────────────────────────────────────────────┤
+│                    Config Parser (YAML)                      │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## Project Structure
+
+```
+.
+├── cmd/
+│   ├── nothingdns/     # Main DNS server binary
+│   └── dnsctl/         # CLI management tool
+├── internal/
+│   ├── cache/          # LRU cache with TTL
+│   ├── config/         # YAML configuration parser
+│   ├── protocol/       # DNS protocol implementation
+│   ├── server/         # UDP/TCP server handlers
+│   ├── upstream/       # Upstream DNS client
+│   ├── util/           # Logging utilities
+│   └── zone/           # Zone file parser
+└── go.mod
+```
+
+## Supported Record Types
+
+- A (IPv4 address)
+- AAAA (IPv6 address)
+- CNAME (Canonical name)
+- MX (Mail exchange)
+- NS (Name server)
+- TXT (Text record)
+- SOA (Start of authority)
+- PTR (Pointer)
+- SRV (Service locator)
+
+## Upstream Strategies
+
+- **round_robin** - Rotate through upstream servers
+- **random** - Random selection
+- **fastest** - Use the fastest responding server
+- **backup** - Use primary unless it fails
+
+## License
+
+MIT License - See LICENSE file for details
+
+## Contributing
+
+Contributions are welcome! Please ensure:
+
+1. All tests pass (`go test ./...`)
+2. Code follows Go conventions (`go fmt`, `go vet`)
+3. New features include tests
+
+## Roadmap
+
+- [ ] DNSSEC validation and signing
+- [ ] HTTP API for management
+- [ ] Clustering support
+- [ ] Blocklist support (hosts file format)
+- [ ] Metrics export (Prometheus)
+- [ ] DoH (DNS over HTTPS) support
+- [ ] DoT (DNS over TLS) support

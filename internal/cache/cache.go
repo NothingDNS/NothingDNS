@@ -1,0 +1,378 @@
+package cache
+
+import (
+	"container/list"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/ecostack/nothingdns/internal/protocol"
+)
+
+// Entry represents a cached DNS response.
+type Entry struct {
+	// Query key
+	Key string
+
+	// Response message
+	Message *protocol.Message
+
+	// Response code (for negative caching)
+	RCode uint8
+
+	// TTL information
+	TTL        uint32    // Original TTL from record
+	ExpireTime time.Time // When this entry expires
+
+	// Prefetch tracking
+	CanPrefetch bool      // Whether this entry can be prefetched
+	PrefetchDue time.Time // When prefetch should occur
+
+	// Entry type
+	IsNegative bool // True for NXDOMAIN/NODATA entries
+
+	// Access tracking for LRU
+	element *list.Element // Position in LRU list
+}
+
+// IsExpired returns true if the entry has expired.
+func (e *Entry) IsExpired(now time.Time) bool {
+	return now.After(e.ExpireTime)
+}
+
+// ShouldPrefetch returns true if prefetch is due for this entry.
+func (e *Entry) ShouldPrefetch(now time.Time) bool {
+	if !e.CanPrefetch || e.IsNegative {
+		return false
+	}
+	return now.After(e.PrefetchDue)
+}
+
+// RemainingTTL returns the remaining TTL for this entry in seconds.
+func (e *Entry) RemainingTTL(now time.Time) uint32 {
+	if e.IsExpired(now) {
+		return 0
+	}
+	remaining := e.ExpireTime.Sub(now)
+	if remaining < 0 {
+		return 0
+	}
+	return uint32(remaining.Seconds())
+}
+
+// Stats tracks cache statistics.
+type Stats struct {
+	Hits        uint64
+	Misses      uint64
+	Evictions   uint64
+	Expirations uint64
+	Size        int
+	Capacity    int
+}
+
+// HitRate returns the cache hit rate as a percentage.
+func (s *Stats) HitRate() float64 {
+	total := s.Hits + s.Misses
+	if total == 0 {
+		return 0
+	}
+	return float64(s.Hits) / float64(total) * 100
+}
+
+// Cache is a thread-safe DNS cache with LRU eviction.
+type Cache struct {
+	// Configuration
+	capacity          int
+	minTTL            time.Duration
+	maxTTL            time.Duration
+	defaultTTL        time.Duration
+	negativeTTL       time.Duration
+	prefetchEnabled   bool
+	prefetchThreshold time.Duration
+
+	// Storage
+	mu      sync.RWMutex
+	entries map[string]*Entry
+	lruList *list.List // Front = most recently used, Back = least recently used
+
+	// Statistics
+	stats Stats
+
+	// Prefetch callback
+	prefetchFunc func(key string, qtype uint16)
+}
+
+// Config holds cache configuration.
+type Config struct {
+	Capacity          int
+	MinTTL            time.Duration
+	MaxTTL            time.Duration
+	DefaultTTL        time.Duration
+	NegativeTTL       time.Duration
+	PrefetchEnabled   bool
+	PrefetchThreshold time.Duration
+}
+
+// DefaultConfig returns the default cache configuration.
+func DefaultConfig() Config {
+	return Config{
+		Capacity:          10000,
+		MinTTL:            5 * time.Second,
+		MaxTTL:            24 * time.Hour,
+		DefaultTTL:        5 * time.Minute,
+		NegativeTTL:       60 * time.Second,
+		PrefetchEnabled:   false,
+		PrefetchThreshold: 60 * time.Second,
+	}
+}
+
+// New creates a new DNS cache with the given configuration.
+func New(config Config) *Cache {
+	return &Cache{
+		capacity:          config.Capacity,
+		minTTL:            config.MinTTL,
+		maxTTL:            config.MaxTTL,
+		defaultTTL:        config.DefaultTTL,
+		negativeTTL:       config.NegativeTTL,
+		prefetchEnabled:   config.PrefetchEnabled,
+		prefetchThreshold: config.PrefetchThreshold,
+		entries:           make(map[string]*Entry, config.Capacity),
+		lruList:           list.New(),
+		stats:             Stats{Capacity: config.Capacity},
+	}
+}
+
+// MakeKey creates a cache key from query name and type.
+func MakeKey(name string, qtype uint16) string {
+	return fmt.Sprintf("%s:%d", name, qtype)
+}
+
+// Get retrieves an entry from the cache.
+// Returns nil if not found or expired.
+func (c *Cache) Get(key string) *Entry {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	entry, exists := c.entries[key]
+	if !exists {
+		c.stats.Misses++
+		return nil
+	}
+
+	now := time.Now()
+	if entry.IsExpired(now) {
+		// Entry expired, remove it
+		c.removeEntry(entry)
+		c.stats.Expirations++
+		c.stats.Misses++
+		return nil
+	}
+
+	// Move to front (most recently used)
+	c.lruList.MoveToFront(entry.element)
+	c.stats.Hits++
+
+	return entry
+}
+
+// Set adds or updates an entry in the cache.
+func (c *Cache) Set(key string, msg *protocol.Message, ttl uint32) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.setInternal(key, msg, ttl, false)
+}
+
+// SetNegative adds a negative cache entry (NXDOMAIN or NODATA).
+func (c *Cache) SetNegative(key string, rcode uint8) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Apply min/max TTL constraints to negative TTL
+	ttl := c.negativeTTL
+	if ttl < c.minTTL {
+		ttl = c.minTTL
+	}
+	if ttl > c.maxTTL {
+		ttl = c.maxTTL
+	}
+
+	expireTime := time.Now().Add(ttl)
+
+	entry := &Entry{
+		Key:        key,
+		RCode:      rcode,
+		ExpireTime: expireTime,
+		IsNegative: true,
+	}
+
+	c.addEntry(key, entry)
+}
+
+// setInternal adds or updates an entry with the given TTL.
+func (c *Cache) setInternal(key string, msg *protocol.Message, ttl uint32, isPrefetch bool) {
+	// Apply min/max TTL constraints
+	duration := time.Duration(ttl) * time.Second
+	if duration < c.minTTL {
+		duration = c.minTTL
+	}
+	if duration > c.maxTTL {
+		duration = c.maxTTL
+	}
+
+	now := time.Now()
+	expireTime := now.Add(duration)
+
+	// Calculate prefetch time if enabled
+	var prefetchDue time.Time
+	canPrefetch := c.prefetchEnabled && !isPrefetch
+	if canPrefetch {
+		prefetchOffset := c.prefetchThreshold
+		if duration > prefetchOffset {
+			prefetchDue = expireTime.Add(-prefetchOffset)
+		} else {
+			canPrefetch = false
+		}
+	}
+
+	entry := &Entry{
+		Key:         key,
+		Message:     msg,
+		TTL:         ttl,
+		ExpireTime:  expireTime,
+		CanPrefetch: canPrefetch,
+		PrefetchDue: prefetchDue,
+		IsNegative:  false,
+	}
+
+	c.addEntry(key, entry)
+}
+
+// addEntry adds an entry to the cache, handling eviction if needed.
+func (c *Cache) addEntry(key string, entry *Entry) {
+	// Check if key already exists
+	if oldEntry, exists := c.entries[key]; exists {
+		// Remove old entry from LRU list
+		c.lruList.Remove(oldEntry.element)
+	}
+
+	// Evict oldest entries if at capacity
+	for len(c.entries) >= c.capacity {
+		c.evictOldest()
+	}
+
+	// Add to map and LRU list
+	element := c.lruList.PushFront(entry)
+	entry.element = element
+	c.entries[key] = entry
+	c.stats.Size = len(c.entries)
+}
+
+// removeEntry removes an entry from the cache.
+func (c *Cache) removeEntry(entry *Entry) {
+	c.lruList.Remove(entry.element)
+	delete(c.entries, entry.Key)
+	c.stats.Size = len(c.entries)
+}
+
+// evictOldest removes the least recently used entry.
+func (c *Cache) evictOldest() {
+	element := c.lruList.Back()
+	if element == nil {
+		return
+	}
+
+	entry := element.Value.(*Entry)
+	c.removeEntry(entry)
+	c.stats.Evictions++
+}
+
+// Delete removes an entry from the cache.
+func (c *Cache) Delete(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if entry, exists := c.entries[key]; exists {
+		c.removeEntry(entry)
+	}
+}
+
+// Clear removes all entries from the cache.
+func (c *Cache) Clear() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.entries = make(map[string]*Entry, c.capacity)
+	c.lruList.Init()
+	c.stats.Size = 0
+}
+
+// Stats returns a copy of the current cache statistics.
+func (c *Cache) Stats() Stats {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	return c.stats
+}
+
+// Size returns the current number of entries in the cache.
+func (c *Cache) Size() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	return len(c.entries)
+}
+
+// GetPrefetchable returns entries that are due for prefetching.
+func (c *Cache) GetPrefetchable() []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	now := time.Now()
+	var keys []string
+
+	for _, entry := range c.entries {
+		if entry.ShouldPrefetch(now) {
+			// Extract query type from key for prefetch callback
+			keys = append(keys, entry.Key)
+		}
+	}
+
+	return keys
+}
+
+// SetPrefetchFunc sets the callback function for prefetching.
+func (c *Cache) SetPrefetchFunc(fn func(key string, qtype uint16)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.prefetchFunc = fn
+}
+
+// OnPrefetchComplete marks a prefetch as complete and resets the prefetch flag.
+func (c *Cache) OnPrefetchComplete(key string, msg *protocol.Message, ttl uint32) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Update with new TTL but mark as prefetch to avoid infinite prefetch loop
+	c.setInternal(key, msg, ttl, true)
+}
+
+// ExtractQueryInfo extracts the query name and type from a cache key.
+// Returns empty values if the key format is unexpected.
+func ExtractQueryInfo(key string) (string, uint16) {
+	// Find the last colon separator
+	for i := len(key) - 1; i >= 0; i-- {
+		if key[i] == ':' {
+			name := key[:i]
+			typeStr := key[i+1:]
+			var qtype uint16
+			// Try to parse the type number
+			if _, err := fmt.Sscanf(typeStr, "%d", &qtype); err != nil {
+				return "", 0
+			}
+			return name, qtype
+		}
+	}
+	return "", 0
+}
