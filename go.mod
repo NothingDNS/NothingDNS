@@ -1,3 +1,3 @@
-module github.com/ecostack/nothingdns
+module github.com/nothingdns/nothingdns
 
 go 1.22

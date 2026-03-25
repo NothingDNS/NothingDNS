@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ecostack/nothingdns/internal/protocol"
+	"github.com/nothingdns/nothingdns/internal/protocol"
 )
 
 // Server represents an upstream DNS server.

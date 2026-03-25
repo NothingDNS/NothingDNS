@@ -161,10 +161,10 @@ fuzz:
 # Show module dependencies (should be empty!)
 deps:
 	@echo "Module dependencies:"
-	$(GO) list -m all | grep -v "^github.com/ecostack/nothingdns" || true
+	$(GO) list -m all | grep -v "^github.com/nothingdns/nothingdns" || true
 	@echo ""
 	@echo "Direct dependencies:"
-	$(GO) list -f '{{if not .Indirect}}{{.}}{{end}}' -m all | grep -v "^github.com/ecostack/nothingdns$$" || echo "None (zero dependencies!)"
+	$(GO) list -f '{{if not .Indirect}}{{.}}{{end}}' -m all | grep -v "^github.com/nothingdns/nothingdns$$" || echo "None (zero dependencies!)"
 
 # Verify zero dependencies
 verify-zero-deps:

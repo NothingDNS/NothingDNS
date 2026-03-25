@@ -3,7 +3,7 @@ package server
 import (
 	"net"
 
-	"github.com/ecostack/nothingdns/internal/protocol"
+	"github.com/nothingdns/nothingdns/internal/protocol"
 )
 
 // ClientInfo contains information about the client making the DNS request.

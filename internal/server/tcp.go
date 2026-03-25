@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ecostack/nothingdns/internal/protocol"
+	"github.com/nothingdns/nothingdns/internal/protocol"
 )
 
 // TCP Constants.

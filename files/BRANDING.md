@@ -182,7 +182,7 @@ SECTIONS:
 5. BOTTOM LEFT: Cluster visualization (3 nodes with Raft arrows)
 6. BOTTOM RIGHT: Management icons (API, Dashboard, CLI, MCP robot, Prometheus graph)
 
-FOOTER: "Pure Go • Single Binary • Zero Dependencies • github.com/ecostack/nothingdns"
+FOOTER: "Pure Go • Single Binary • Zero Dependencies • github.com/nothingdns/nothingdns"
 ```
 
 ### 4.3 X/Twitter Post Templates
@@ -203,7 +203,7 @@ Zero external dependencies.
 
 One binary. That's it.
 
-github.com/ecostack/nothingdns
+github.com/nothingdns/nothingdns
 ```
 
 **Technical:**

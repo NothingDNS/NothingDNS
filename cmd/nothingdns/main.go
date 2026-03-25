@@ -14,14 +14,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ecostack/nothingdns/internal/blocklist"
-	"github.com/ecostack/nothingdns/internal/cache"
-	"github.com/ecostack/nothingdns/internal/config"
-	"github.com/ecostack/nothingdns/internal/protocol"
-	"github.com/ecostack/nothingdns/internal/server"
-	"github.com/ecostack/nothingdns/internal/upstream"
-	"github.com/ecostack/nothingdns/internal/util"
-	"github.com/ecostack/nothingdns/internal/zone"
+	"github.com/nothingdns/nothingdns/internal/blocklist"
+	"github.com/nothingdns/nothingdns/internal/cache"
+	"github.com/nothingdns/nothingdns/internal/config"
+	"github.com/nothingdns/nothingdns/internal/metrics"
+	"github.com/nothingdns/nothingdns/internal/protocol"
+	"github.com/nothingdns/nothingdns/internal/server"
+	"github.com/nothingdns/nothingdns/internal/upstream"
+	"github.com/nothingdns/nothingdns/internal/util"
+	"github.com/nothingdns/nothingdns/internal/zone"
 )
 
 const (
@@ -49,6 +50,7 @@ type integratedHandler struct {
 	upstream  *upstream.Client
 	zones     map[string]*zone.Zone
 	blocklist *blocklist.Blocklist
+	metrics   *metrics.MetricsCollector
 }
 
 func main() {
@@ -140,6 +142,18 @@ func run() error {
 		logger.Infof("Blocklist loaded with %d entries from %d files", stats.TotalBlocks, stats.Files)
 	}
 
+	// Initialize metrics collector
+	metricsCollector := metrics.New(metrics.Config{
+		Enabled: cfg.Metrics.Enabled,
+		Bind:    cfg.Metrics.Bind,
+		Path:    cfg.Metrics.Path,
+	})
+	if err := metricsCollector.Start(); err != nil {
+		logger.Warnf("Failed to start metrics server: %v", err)
+	} else if cfg.Metrics.Enabled {
+		logger.Infof("Metrics server listening on %s%s", cfg.Metrics.Bind, cfg.Metrics.Path)
+	}
+
 	// Create handler
 	handler := &integratedHandler{
 		config:    cfg,
@@ -148,6 +162,7 @@ func run() error {
 		upstream:  client,
 		zones:     zones,
 		blocklist: bl,
+		metrics:   metricsCollector,
 	}
 
 	// Create and start DNS servers
@@ -199,6 +214,11 @@ func run() error {
 			// Close upstream client
 			if client != nil {
 				client.Close()
+			}
+
+			// Stop metrics server
+			if metricsCollector != nil {
+				metricsCollector.Stop()
 			}
 
 			logger.Info("Server shutdown complete")
@@ -292,9 +312,17 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 
 	h.logger.Debugf("Query: %s %s", qname, typeToString(qtype))
 
+	// Record query metric
+	if h.metrics != nil {
+		h.metrics.RecordQuery(typeToString(qtype))
+	}
+
 	// Check blocklist
 	if h.blocklist != nil && h.blocklist.IsBlocked(qname) {
 		h.logger.Infof("Blocked query for %s", qname)
+		if h.metrics != nil {
+			h.metrics.RecordBlocklistBlock()
+		}
 		sendError(w, r, protocol.RcodeNameError)
 		return
 	}
@@ -304,12 +332,25 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 	if entry := h.cache.Get(cacheKey); entry != nil {
 		if entry.IsNegative {
 			h.logger.Debugf("Cache hit (negative) for %s", qname)
+			if h.metrics != nil {
+				h.metrics.RecordCacheHit()
+				h.metrics.RecordResponse(entry.RCode)
+			}
 			sendError(w, r, entry.RCode)
 			return
 		}
 		h.logger.Debugf("Cache hit for %s", qname)
+		if h.metrics != nil {
+			h.metrics.RecordCacheHit()
+			h.metrics.RecordResponse(protocol.RcodeSuccess)
+		}
 		reply(w, r, entry.Message)
 		return
+	}
+
+	// Record cache miss
+	if h.metrics != nil {
+		h.metrics.RecordCacheMiss()
 	}
 
 	// Check authoritative zones
@@ -325,9 +366,15 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 	// Forward to upstream
 	if h.upstream != nil {
 		h.logger.Debugf("Forwarding query for %s to upstream", qname)
+		if h.metrics != nil {
+			h.metrics.RecordUpstreamQuery(h.config.Upstream.Servers[0])
+		}
 		resp, err := h.upstream.Query(r)
 		if err != nil {
 			h.logger.Warnf("Upstream query failed for %s: %v", qname, err)
+			if h.metrics != nil {
+				h.metrics.RecordResponse(protocol.RcodeServerFailure)
+			}
 			sendError(w, r, protocol.RcodeServerFailure)
 			return
 		}
@@ -338,12 +385,18 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 			h.cache.Set(cacheKey, resp, ttl)
 		}
 
+		if h.metrics != nil {
+			h.metrics.RecordResponse(resp.Header.Flags.RCODE)
+		}
 		reply(w, r, resp)
 		return
 	}
 
 	// No upstream configured
 	h.logger.Debugf("No upstream configured, returning NXDOMAIN for %s", qname)
+	if h.metrics != nil {
+		h.metrics.RecordResponse(protocol.RcodeNameError)
+	}
 	sendError(w, r, protocol.RcodeNameError)
 }
 
@@ -359,6 +412,9 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 		cnameRecords := z.Lookup(qname, "CNAME")
 		if len(cnameRecords) > 0 {
 			resp := h.buildResponse(r, cnameRecords)
+			if h.metrics != nil {
+				h.metrics.RecordResponse(protocol.RcodeSuccess)
+			}
 			reply(w, r, resp)
 			return true
 		}
@@ -366,6 +422,9 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 	}
 
 	resp := h.buildResponse(r, records)
+	if h.metrics != nil {
+		h.metrics.RecordResponse(protocol.RcodeSuccess)
+	}
 	reply(w, r, resp)
 	return true
 }
@@ -558,7 +617,7 @@ Examples:
   # Show version
   %s -version
 
-For more information, visit: https://github.com/ecostack/nothingdns
+For more information, visit: https://github.com/nothingdns/nothingdns
 `, Name, os.Args[0], os.Args[0], os.Args[0], os.Args[0])
 }
 

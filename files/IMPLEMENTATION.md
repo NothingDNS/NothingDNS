@@ -37,13 +37,13 @@
 ### 1.1 Go Module Initialization
 
 ```
-go mod init github.com/ecostack/nothingdns
+go mod init github.com/nothingdns/nothingdns
 ```
 
 `go.mod` will contain ONLY the module declaration and Go version. No `require` block. No `go.sum` entries.
 
 ```go
-module github.com/ecostack/nothingdns
+module github.com/nothingdns/nothingdns
 
 go 1.22
 ```

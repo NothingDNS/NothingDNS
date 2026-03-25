@@ -25,7 +25,7 @@ NothingDNS is a modern, production-grade DNS server that combines authoritative 
 - **Default Ports:** 53 (UDP/TCP), 853 (DoT), 443 (DoH), 853/UDP (DoQ), 8080 (API/Dashboard), 9153 (Metrics), 4222 (Raft), 4223 (gRPC inter-node)
 - **License:** Apache 2.0
 - **Language:** Go 1.22+
-- **Repository:** github.com/ecostack/nothingdns
+- **Repository:** github.com/nothingdns/nothingdns
 
 ---
 
@@ -1203,7 +1203,7 @@ All config values can be overridden via environment variables:
 ### 16.1 Single Binary
 ```bash
 # Download and run
-curl -fsSL https://github.com/ecostack/nothingdns/releases/latest/download/nothingdns-linux-amd64 -o nothingdns
+curl -fsSL https://github.com/nothingdns/nothingdns/releases/latest/download/nothingdns-linux-amd64 -o nothingdns
 chmod +x nothingdns
 ./nothingdns --config /etc/nothingdns/nothingdns.yaml
 ```

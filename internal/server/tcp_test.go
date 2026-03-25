@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ecostack/nothingdns/internal/protocol"
+	"github.com/nothingdns/nothingdns/internal/protocol"
 )
 
 // TestTCPServerBasicQuery tests basic TCP query handling.

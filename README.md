@@ -11,7 +11,8 @@ A zero-dependency DNS server written in pure Go. NothingDNS is designed to be li
 - **Authoritative Zones** - Zone file support for hosting your own DNS records
 - **UDP & TCP** - Support for both UDP and TCP DNS queries
 - **Signal Handling** - Graceful shutdown (SIGINT/SIGTERM) and configuration reload (SIGHUP)
-- **Custom YAML Parser** - Built-in YAML configuration parser with no external deps
+- **Blocklist Support** - Block domains using hosts file format
+- **Prometheus Metrics** - Export metrics for monitoring and observability
 - **Management CLI** - `dnsctl` tool for zone and server management
 
 ## Quick Start
@@ -204,7 +205,7 @@ Contributions are welcome! Please ensure:
 - [ ] DNSSEC validation and signing
 - [ ] HTTP API for management
 - [ ] Clustering support
-- [ ] Blocklist support (hosts file format)
-- [ ] Metrics export (Prometheus)
+- [x] Blocklist support (hosts file format)
+- [x] Metrics export (Prometheus)
 - [ ] DoH (DNS over HTTPS) support
 - [ ] DoT (DNS over TLS) support
