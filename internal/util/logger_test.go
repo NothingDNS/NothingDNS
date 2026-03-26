@@ -2,6 +2,7 @@ package util
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 )
@@ -142,4 +143,137 @@ func TestDefaultLogger(t *testing.T) {
 	Error("error")
 
 	// Don't test Fatal as it calls os.Exit
+}
+
+func TestNewLoggerWithNilOutput(t *testing.T) {
+	// When output is nil, it should default to os.Stdout
+	logger := NewLogger(INFO, TextFormat, nil)
+	if logger == nil {
+		t.Fatal("NewLogger returned nil")
+	}
+	if logger.output != os.Stdout {
+		t.Error("Logger output should default to os.Stdout when nil is passed")
+	}
+}
+
+func TestLoggerSetLevel(t *testing.T) {
+	var buf bytes.Buffer
+	logger := NewLogger(INFO, TextFormat, &buf)
+
+	// Initially INFO level, debug should be filtered
+	logger.Debug("should not appear")
+	if buf.Len() > 0 {
+		t.Error("Debug should be filtered at INFO level")
+	}
+
+	// Change level to DEBUG
+	logger.SetLevel(DEBUG)
+	logger.Debug("should appear now")
+	if !strings.Contains(buf.String(), "should appear now") {
+		t.Error("Debug should appear after SetLevel(DEBUG)")
+	}
+}
+
+func TestLoggerSetFormat(t *testing.T) {
+	var buf bytes.Buffer
+	logger := NewLogger(INFO, TextFormat, &buf)
+
+	logger.Info("text message")
+	if !strings.Contains(buf.String(), "[") {
+		t.Error("Expected text format with brackets")
+	}
+
+	buf.Reset()
+	logger.SetFormat(JSONFormat)
+	logger.Info("json message")
+	if !strings.Contains(buf.String(), `"level":"INFO"`) {
+		t.Error("Expected JSON format after SetFormat")
+	}
+}
+
+func TestLoggerSetOutput(t *testing.T) {
+	var buf1, buf2 bytes.Buffer
+	logger := NewLogger(INFO, TextFormat, &buf1)
+
+	logger.Info("to buf1")
+	if !strings.Contains(buf1.String(), "to buf1") {
+		t.Error("Expected output in buf1")
+	}
+
+	logger.SetOutput(&buf2)
+	logger.Info("to buf2")
+	if !strings.Contains(buf2.String(), "to buf2") {
+		t.Error("Expected output in buf2 after SetOutput")
+	}
+}
+
+func TestLoggerWithFieldsNil(t *testing.T) {
+	var buf bytes.Buffer
+	logger := NewLogger(DEBUG, TextFormat, &buf)
+
+	// WithFields with nil should still work
+	logger2 := logger.WithFields(nil)
+	logger2.Info("test")
+	output := buf.String()
+	if !strings.Contains(output, "test") {
+		t.Error("Expected output with nil fields")
+	}
+}
+
+func TestLoggerLogWithAdditionalFields(t *testing.T) {
+	var buf bytes.Buffer
+	logger := NewLogger(DEBUG, JSONFormat, &buf)
+
+	// Test the internal log method with additional fields
+	logger.Info("message")
+	output := buf.String()
+	if !strings.Contains(output, `"msg":"message"`) {
+		t.Errorf("Expected JSON output with msg field, got: %s", output)
+	}
+}
+
+func TestGetDefaultLogger(t *testing.T) {
+	logger := GetDefaultLogger()
+	if logger == nil {
+		t.Error("GetDefaultLogger should not return nil")
+	}
+}
+
+func TestPackageLevelWithField(t *testing.T) {
+	logger := WithField("testkey", "testvalue")
+	if logger == nil {
+		t.Error("WithField should not return nil")
+	}
+}
+
+func TestPackageLevelWithFields(t *testing.T) {
+	logger := WithFields(Fields{"key1": "value1", "key2": "value2"})
+	if logger == nil {
+		t.Error("WithFields should not return nil")
+	}
+}
+
+func TestPackageLevelDebugf(t *testing.T) {
+	// Set to DEBUG level to ensure output
+	SetDefaultLogger(NewLogger(DEBUG, TextFormat, os.Stdout))
+	Debugf("debug formatted %s", "message")
+	// Should not panic
+}
+
+func TestPackageLevelInfof(t *testing.T) {
+	SetDefaultLogger(NewLogger(INFO, TextFormat, os.Stdout))
+	Infof("info formatted %d", 42)
+	// Should not panic
+}
+
+func TestPackageLevelWarnf(t *testing.T) {
+	SetDefaultLogger(NewLogger(WARN, TextFormat, os.Stdout))
+	Warnf("warn formatted %v", true)
+	// Should not panic
+}
+
+func TestPackageLevelErrorf(t *testing.T) {
+	SetDefaultLogger(NewLogger(ERROR, TextFormat, os.Stdout))
+	Errorf("error formatted %s", "test")
+	// Should not panic
 }
