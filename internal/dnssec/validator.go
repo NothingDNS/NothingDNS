@@ -2,11 +2,13 @@ package dnssec
 
 import (
 	"context"
+	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
@@ -403,15 +405,76 @@ func (v *Validator) canonicalizeRRSet(rrSet []*protocol.ResourceRecord, rrsig *p
 }
 
 // canonicalizeRR creates a canonical wire format representation of a record.
+// Per RFC 4034 Section 6, canonical form includes:
+// - Owner name in lowercase wire format (no compression)
+// - Type (2 bytes, big-endian)
+// - Class (2 bytes, big-endian)
+// - TTL (4 bytes, big-endian) - from RRSIG's OriginalTTL
+// - RDATA in canonical form
 func (v *Validator) canonicalizeRR(rr *protocol.ResourceRecord, ttl uint32) []byte {
-	// This is a simplified implementation
-	// Full implementation would:
-	// 1. Convert name to lowercase wire format
-	// 2. Use type from RRSIG
-	// 3. Use class from original
-	// 4. Use TTL from RRSIG for signatures
-	// 5. Use original RDATA
-	return []byte{} // Placeholder
+	// Estimate buffer size: max name (255) + type (2) + class (2) + ttl (4) + rdata
+	buf := make([]byte, 0, 512)
+
+	// 1. Canonical owner name (lowercase, wire format, no compression)
+	// Each label: 1 byte length + label data (lowercase)
+	name := rr.Name.String()
+	if !strings.HasSuffix(name, ".") {
+		name += "."
+	}
+	labels := strings.Split(strings.TrimSuffix(name, "."), ".")
+	for _, label := range labels {
+		if label == "" {
+			continue // Skip empty labels (root)
+		}
+		buf = append(buf, byte(len(label)))
+		buf = append(buf, toLowerBytes(label)...)
+	}
+	buf = append(buf, 0) // Root label terminator
+
+	// 2. Type (2 bytes, big-endian)
+	typeBytes := make([]byte, 2)
+	protocol.PutUint16(typeBytes, rr.Type)
+	buf = append(buf, typeBytes...)
+
+	// 3. Class (2 bytes, big-endian)
+	classBytes := make([]byte, 2)
+	protocol.PutUint16(classBytes, rr.Class)
+	buf = append(buf, classBytes...)
+
+	// 4. TTL (4 bytes, big-endian) - use the TTL from RRSIG
+	ttlBytes := make([]byte, 4)
+	protocol.PutUint32(ttlBytes, ttl)
+	buf = append(buf, ttlBytes...)
+
+	// 5. RDATA length (2 bytes, big-endian)
+	rdataLen := rr.Data.Len()
+	rdatalenBytes := make([]byte, 2)
+	protocol.PutUint16(rdatalenBytes, uint16(rdataLen))
+	buf = append(buf, rdatalenBytes...)
+
+	// 6. RDATA (packed)
+	if rdataLen > 0 {
+		rdataBuf := make([]byte, rdataLen)
+		n, err := rr.Data.Pack(rdataBuf, 0)
+		if err == nil && n > 0 {
+			buf = append(buf, rdataBuf[:n]...)
+		}
+	}
+
+	return buf
+}
+
+// toLowerBytes converts a string to lowercase bytes.
+func toLowerBytes(s string) []byte {
+	result := make([]byte, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			c = c + ('a' - 'A')
+		}
+		result[i] = c
+	}
+	return result
 }
 
 // canonicalSort sorts records in canonical order for signing.
@@ -590,23 +653,50 @@ func (v *Validator) fetchDS(ctx context.Context, zone string) ([]*protocol.Resou
 }
 
 // calculateDSDigestFromDNSKEY computes the DS digest for a DNSKEY.
+// Per RFC 4034 Section 5:
+//   digest = hash(canonical_owner_name | DNSKEY_RDATA)
+// Where DNSKEY_RDATA = flags | protocol | algorithm | public_key
 func calculateDSDigestFromDNSKEY(zone string, dnskey *protocol.RDataDNSKEY, digestType uint8) []byte {
-	// This is a simplified placeholder
-	// Full implementation per RFC 4034:
-	// digest = hash(canonical_owner_name | DNSKEY_RDATA)
-	// Where DNSKEY_RDATA = flags | protocol | algorithm | public_key
+	// Create the data to be hashed: canonical owner name + DNSKEY RDATA
+	var data []byte
 
+	// 1. Canonical owner name (lowercase, wire format)
+	name := zone
+	if !strings.HasSuffix(name, ".") {
+		name += "."
+	}
+	name = strings.TrimSuffix(name, ".")
+	labels := strings.Split(name, ".")
+	for _, label := range labels {
+		if label == "" {
+			continue
+		}
+		data = append(data, byte(len(label)))
+		data = append(data, toLowerBytes(label)...)
+	}
+	data = append(data, 0) // Root label terminator
+
+	// 2. DNSKEY RDATA: flags (2) | protocol (1) | algorithm (1) | public_key
+	flagsBytes := make([]byte, 2)
+	protocol.PutUint16(flagsBytes, dnskey.Flags)
+	data = append(data, flagsBytes...)
+	data = append(data, dnskey.Protocol)
+	data = append(data, dnskey.Algorithm)
+	data = append(data, dnskey.PublicKey...)
+
+	// Hash the data based on digest type
 	switch digestType {
-	case 1: // SHA-1
-		h := sha256.New() // Placeholder - should use SHA-1
+	case 1: // SHA-1 (NOT RECOMMENDED but supported for compatibility)
+		h := sha1.New()
+		h.Write(data)
 		return h.Sum(nil)
-	case 2: // SHA-256
+	case 2: // SHA-256 (MUST implement per RFC 8624)
 		h := sha256.New()
-		// Add canonical owner name
-		// Add DNSKEY RDATA
+		h.Write(data)
 		return h.Sum(nil)
-	case 4: // SHA-384
+	case 4: // SHA-384 (MAY implement per RFC 8624)
 		h := sha512.New384()
+		h.Write(data)
 		return h.Sum(nil)
 	default:
 		return nil

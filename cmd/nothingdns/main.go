@@ -840,6 +840,66 @@ func extractTTL(resp *protocol.Message) uint32 {
 	return 300
 }
 
+// hasDOBit checks if the client wants DNSSEC (DO bit in OPT record).
+// The DO bit indicates the client supports DNSSEC and wants signatures.
+func hasDOBit(msg *protocol.Message) bool {
+	for _, rr := range msg.Additionals {
+		if rr.Type == protocol.TypeOPT {
+			// The DO bit is bit 15 of the TTL field in OPT records
+			// Format: Extended RCODE (8 bits) | Version (8 bits) | DO (1 bit) | Z (15 bits)
+			return (rr.TTL & 0x8000) != 0
+		}
+	}
+	return false
+}
+
+// buildSignedResponse builds a DNS response with DNSSEC signatures.
+// This adds RRSIG records to the response if the zone has a signer configured.
+func (h *integratedHandler) buildSignedResponse(query *protocol.Message, records []zone.Record, signer *dnssec.Signer, wantsDNSSEC bool) *protocol.Message {
+	resp := h.buildResponse(query, records)
+
+	if !wantsDNSSEC || signer == nil {
+		return resp
+	}
+
+	// Convert zone records to protocol.ResourceRecord for signing
+	var rrs []*protocol.ResourceRecord
+	for _, rec := range records {
+		rr := &protocol.ResourceRecord{
+			Name:  query.Questions[0].Name,
+			Type:  stringToType(rec.Type),
+			Class: protocol.ClassIN,
+			TTL:   rec.TTL,
+			Data:  parseRData(rec.Type, rec.RData),
+		}
+		rrs = append(rrs, rr)
+	}
+
+	// Sign the RRSet and add RRSIG to answers
+	if len(rrs) > 0 {
+		inception := time.Now().UTC()
+		expiration := inception.Add(24 * time.Hour * 30) // 30 days
+
+		// Find ZSK for signing
+		zsks := signer.GetZSKs()
+		if len(zsks) > 0 {
+			zsk := zsks[0] // Use first ZSK
+			rrsig, err := signer.SignRRSet(
+				rrs,
+				zsk,
+				uint32(inception.Unix()),
+				uint32(expiration.Unix()),
+			)
+			if err == nil && rrsig != nil {
+				resp.AddAnswer(rrsig)
+				h.logger.Debugf("Added RRSIG for %s", query.Questions[0].Name.String())
+			}
+		}
+	}
+
+	return resp
+}
+
 func printHelp() {
 	fmt.Printf(`%s - Zero-dependency DNS server
 

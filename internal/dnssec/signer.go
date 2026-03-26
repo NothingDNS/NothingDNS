@@ -184,7 +184,7 @@ func (s *Signer) SignZone(records []*protocol.ResourceRecord) ([]*protocol.Resou
 	signedRecords = append(signedRecords, dnskeyRRs...)
 
 	for _, ksk := range ksks {
-		rrsig, err := s.signRRSet(dnskeyRRs, ksk, inception, expiration)
+		rrsig, err := s.SignRRSet(dnskeyRRs, ksk, inception, expiration)
 		if err != nil {
 			return nil, fmt.Errorf("signing DNSKEY: %w", err)
 		}
@@ -207,7 +207,7 @@ func (s *Signer) SignZone(records []*protocol.ResourceRecord) ([]*protocol.Resou
 
 		// Sign with all ZSKs
 		for _, zsk := range zsks {
-			rrsig, err := s.signRRSet(rrSet, zsk, inception, expiration)
+			rrsig, err := s.SignRRSet(rrSet, zsk, inception, expiration)
 			if err != nil {
 				return nil, fmt.Errorf("signing RRSet: %w", err)
 			}
@@ -229,7 +229,7 @@ func (s *Signer) SignZone(records []*protocol.ResourceRecord) ([]*protocol.Resou
 		signedRecords = append(signedRecords, nsecSet...)
 
 		for _, zsk := range zsks {
-			rrsig, err := s.signRRSet(nsecSet, zsk, inception, expiration)
+			rrsig, err := s.SignRRSet(nsecSet, zsk, inception, expiration)
 			if err != nil {
 				return nil, fmt.Errorf("signing NSEC: %w", err)
 			}
@@ -240,8 +240,8 @@ func (s *Signer) SignZone(records []*protocol.ResourceRecord) ([]*protocol.Resou
 	return signedRecords, nil
 }
 
-// signRRSet creates an RRSIG record for an RRSet.
-func (s *Signer) signRRSet(rrSet []*protocol.ResourceRecord, key *SigningKey, inception, expiration uint32) (*protocol.ResourceRecord, error) {
+// SignRRSet creates an RRSIG record for an RRSet.
+func (s *Signer) SignRRSet(rrSet []*protocol.ResourceRecord, key *SigningKey, inception, expiration uint32) (*protocol.ResourceRecord, error) {
 	if len(rrSet) == 0 {
 		return nil, fmt.Errorf("cannot sign empty RRSet")
 	}
