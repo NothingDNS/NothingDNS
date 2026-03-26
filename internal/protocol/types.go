@@ -1111,27 +1111,3 @@ func (r *RDataNAPTR) Copy() RData {
 		Replacement: replacement,
 	}
 }
-
-// ============================================================================
-// DNSSEC Record Placeholders
-// These will be fully implemented in Phase 6 (DNSSEC)
-// ============================================================================
-
-// RDataDS placeholder for Delegation Signer record (RFC 4034)
-type RDataDS struct{ RDataRaw }
-
-// RDataDNSKEY placeholder for DNSKEY record (RFC 4034)
-type RDataDNSKEY struct{ RDataRaw }
-
-// RDataRRSIG placeholder for RRSIG record (RFC 4034)
-type RDataRRSIG struct{ RDataRaw }
-
-// RDataNSEC placeholder for NSEC record (RFC 4034)
-type RDataNSEC struct{ RDataRaw }
-
-// RDataNSEC3 placeholder for NSEC3 record (RFC 5155)
-type RDataNSEC3 struct{ RDataRaw }
-
-// RDataNSEC3PARAM placeholder for NSEC3PARAM record (RFC 5155)
-type RDataNSEC3PARAM struct{ RDataRaw }
-
