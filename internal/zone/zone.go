@@ -9,7 +9,22 @@ import (
 	"strings"
 )
 
-// Zone represents an authoritative DNS zone.
+// RecordChange represents a single record addition or deletion
+// Used for IXFR (Incremental Zone Transfer) journaling
+type RecordChange struct {
+	Name   string
+	Type   uint16 // protocol.TypeA, protocol.TypeAAAA, etc.
+	TTL    uint32
+	RData  string
+}
+
+// ZoneChange represents a set of changes made to a zone in one update
+type ZoneChange struct {
+	OldSerial uint32
+	NewSerial uint32
+	Added     []RecordChange
+	Deleted   []RecordChange
+}
 type Zone struct {
 	// Origin is the root domain name of the zone (e.g., "example.com.")
 	Origin string

@@ -42,12 +42,45 @@ type Config struct {
 
 	// Blocklist configuration
 	Blocklist BlocklistConfig `yaml:"blocklist"`
+
+	// Slave zone configuration for automatic zone transfers
+	SlaveZones []SlaveZoneConfig `yaml:"slave_zones"`
 }
 
 // BlocklistConfig holds blocklist configuration.
 type BlocklistConfig struct {
 	Enabled bool     `yaml:"enabled"`
 	Files   []string `yaml:"files"`
+}
+
+// SlaveZoneConfig represents configuration for a slave zone.
+// Slave zones are replicated from master servers via zone transfers.
+type SlaveZoneConfig struct {
+	// Zone name (e.g., "example.com.")
+	ZoneName string `yaml:"zone_name"`
+
+	// Master servers to transfer from (host:port format)
+	// Multiple masters can be specified for redundancy
+	Masters []string `yaml:"masters"`
+
+	// Transfer type: "ixfr" (incremental) or "axfr" (full)
+	// Default is "ixfr" with fallback to "axfr"
+	TransferType string `yaml:"transfer_type"`
+
+	// TSIG key name for authenticated transfers (optional)
+	TSIGKeyName string `yaml:"tsig_key_name"`
+
+	// TSIG secret for authenticated transfers (optional)
+	TSIGSecret string `yaml:"tsig_secret"`
+
+	// Transfer timeout (duration string, e.g., "30s", "1m")
+	Timeout string `yaml:"timeout"`
+
+	// Retry interval on transfer failure (duration string, e.g., "5m")
+	RetryInterval string `yaml:"retry_interval"`
+
+	// Maximum retry attempts (0 = unlimited)
+	MaxRetries int `yaml:"max_retries"`
 }
 
 // ServerConfig contains server-level settings.
@@ -167,6 +200,54 @@ type UpstreamConfig struct {
 
 	// Failover timeout
 	FailoverTimeout string `yaml:"failover_timeout"`
+
+	// Anycast groups for advanced load balancing
+	AnycastGroups []AnycastGroupConfig `yaml:"anycast_groups"`
+
+	// Topology configuration for this instance
+	Topology TopologyConfig `yaml:"topology"`
+}
+
+// AnycastGroupConfig holds configuration for an anycast group.
+type AnycastGroupConfig struct {
+	// Anycast IP address shared by all backends
+	AnycastIP string `yaml:"anycast_ip"`
+
+	// Backend servers in this group
+	Backends []AnycastBackendConfig `yaml:"backends"`
+
+	// Health check interval (overrides global setting)
+	HealthCheck string `yaml:"health_check"`
+}
+
+// AnycastBackendConfig holds configuration for an anycast backend.
+type AnycastBackendConfig struct {
+	// Physical IP address of the backend
+	PhysicalIP string `yaml:"physical_ip"`
+
+	// Port (default: 53)
+	Port int `yaml:"port"`
+
+	// Region identifier (e.g., "us-east-1")
+	Region string `yaml:"region"`
+
+	// Zone identifier within region (e.g., "a", "b")
+	Zone string `yaml:"zone"`
+
+	// Weight for load balancing (0-100, default: 100)
+	Weight int `yaml:"weight"`
+}
+
+// TopologyConfig holds topology information for routing decisions.
+type TopologyConfig struct {
+	// Region identifier (e.g., "us-east-1")
+	Region string `yaml:"region"`
+
+	// Zone identifier within region (e.g., "a", "b")
+	Zone string `yaml:"zone"`
+
+	// Weight for load balancing (0-100)
+	Weight int `yaml:"weight"`
 }
 
 // CacheConfig contains DNS cache settings.
@@ -480,6 +561,42 @@ func unmarshalToConfig(node *Node, cfg *Config) error {
 		}
 	}
 
+	// Slave zones config
+	if slaveZonesNode := node.Get("slave_zones"); slaveZonesNode != nil && slaveZonesNode.Type == NodeSequence {
+		for _, slaveNode := range slaveZonesNode.Children {
+			if slaveNode.Type == NodeMapping {
+				var slave SlaveZoneConfig
+				slave.ZoneName = slaveNode.GetString("zone_name")
+				slave.TransferType = slaveNode.GetString("transfer_type")
+				if slave.TransferType == "" {
+					slave.TransferType = "ixfr"
+				}
+				slave.TSIGKeyName = slaveNode.GetString("tsig_key_name")
+				slave.TSIGSecret = slaveNode.GetString("tsig_secret")
+				slave.Timeout = slaveNode.GetString("timeout")
+				if slave.Timeout == "" {
+					slave.Timeout = "30s"
+				}
+				slave.RetryInterval = slaveNode.GetString("retry_interval")
+				if slave.RetryInterval == "" {
+					slave.RetryInterval = "5m"
+				}
+				slave.MaxRetries = getInt(slaveNode, "max_retries", 0)
+
+				// Parse masters
+				if mastersNode := slaveNode.Get("masters"); mastersNode != nil {
+					if mastersNode.Type == NodeSequence {
+						slave.Masters = mastersNode.getStringSlice()
+					} else if mastersNode.Type == NodeScalar {
+						slave.Masters = []string{mastersNode.Value}
+					}
+				}
+
+				cfg.SlaveZones = append(cfg.SlaveZones, slave)
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -550,6 +667,41 @@ func unmarshalUpstream(node *Node, cfg *UpstreamConfig) error {
 	cfg.FailoverTimeout = node.GetString("failover_timeout")
 	if cfg.FailoverTimeout == "" {
 		cfg.FailoverTimeout = "5s"
+	}
+
+	// Parse topology configuration
+	if topologyNode := node.Get("topology"); topologyNode != nil {
+		cfg.Topology.Region = topologyNode.GetString("region")
+		cfg.Topology.Zone = topologyNode.GetString("zone")
+		cfg.Topology.Weight = getInt(topologyNode, "weight", 100)
+	}
+
+	// Parse anycast groups
+	if anycastNode := node.Get("anycast_groups"); anycastNode != nil && anycastNode.Type == NodeSequence {
+		for _, groupNode := range anycastNode.Children {
+			if groupNode.Type == NodeMapping {
+				var group AnycastGroupConfig
+				group.AnycastIP = groupNode.GetString("anycast_ip")
+				group.HealthCheck = groupNode.GetString("health_check")
+
+				// Parse backends
+				if backendsNode := groupNode.Get("backends"); backendsNode != nil && backendsNode.Type == NodeSequence {
+					for _, backendNode := range backendsNode.Children {
+						if backendNode.Type == NodeMapping {
+							var backend AnycastBackendConfig
+							backend.PhysicalIP = backendNode.GetString("physical_ip")
+							backend.Port = getInt(backendNode, "port", 53)
+							backend.Region = backendNode.GetString("region")
+							backend.Zone = backendNode.GetString("zone")
+							backend.Weight = getInt(backendNode, "weight", 100)
+							group.Backends = append(group.Backends, backend)
+						}
+					}
+				}
+
+				cfg.AnycastGroups = append(cfg.AnycastGroups, group)
+			}
+		}
 	}
 
 	return nil
@@ -736,6 +888,9 @@ func (c *Config) Validate() []string {
 	// Validate cluster configuration
 	errors = append(errors, c.validateCluster()...)
 
+	// Validate slave zones configuration
+	errors = append(errors, c.validateSlaveZones()...)
+
 	// Validate zone files exist
 	for _, zone := range c.Zones {
 		if zone == "" {
@@ -789,15 +944,53 @@ func (c *Config) validateUpstream() []string {
 		errors = append(errors, fmt.Sprintf("upstream: invalid strategy '%s' (must be random, round_robin, or fastest)", c.Upstream.Strategy))
 	}
 
-	// Validate servers
-	if len(c.Upstream.Servers) == 0 {
-		errors = append(errors, "upstream: at least one server must be specified")
+	// Validate servers (only if no anycast groups configured)
+	if len(c.Upstream.Servers) == 0 && len(c.Upstream.AnycastGroups) == 0 {
+		errors = append(errors, "upstream: at least one server or anycast group must be specified")
 	}
 
 	for _, server := range c.Upstream.Servers {
 		if !isValidServerAddress(server) {
 			errors = append(errors, fmt.Sprintf("upstream: invalid server address '%s'", server))
 		}
+	}
+
+	// Validate anycast groups
+	for i, group := range c.Upstream.AnycastGroups {
+		prefix := fmt.Sprintf("upstream.anycast_groups[%d]", i)
+
+		if group.AnycastIP == "" {
+			errors = append(errors, fmt.Sprintf("%s: anycast_ip is required", prefix))
+		} else if !isValidIP(group.AnycastIP) {
+			errors = append(errors, fmt.Sprintf("%s: anycast_ip '%s' must be a valid IP address", prefix, group.AnycastIP))
+		}
+
+		if len(group.Backends) == 0 {
+			errors = append(errors, fmt.Sprintf("%s: at least one backend must be specified", prefix))
+		}
+
+		for j, backend := range group.Backends {
+			backendPrefix := fmt.Sprintf("%s.backends[%d]", prefix, j)
+
+			if backend.PhysicalIP == "" {
+				errors = append(errors, fmt.Sprintf("%s: physical_ip is required", backendPrefix))
+			} else if !isValidIP(backend.PhysicalIP) {
+				errors = append(errors, fmt.Sprintf("%s: physical_ip '%s' must be a valid IP address", backendPrefix, backend.PhysicalIP))
+			}
+
+			if backend.Port < 1 || backend.Port > 65535 {
+				errors = append(errors, fmt.Sprintf("%s: port %d must be between 1-65535", backendPrefix, backend.Port))
+			}
+
+			if backend.Weight < 0 || backend.Weight > 100 {
+				errors = append(errors, fmt.Sprintf("%s: weight %d must be between 0-100", backendPrefix, backend.Weight))
+			}
+		}
+	}
+
+	// Validate topology
+	if c.Upstream.Topology.Weight < 0 || c.Upstream.Topology.Weight > 100 {
+		errors = append(errors, fmt.Sprintf("upstream.topology: weight %d must be between 0-100", c.Upstream.Topology.Weight))
 	}
 
 	return errors
@@ -995,6 +1188,41 @@ func (c *Config) validateCluster() []string {
 		}
 		if portNum, err := strconv.Atoi(port); err != nil || portNum < 1 || portNum > 65535 {
 			errors = append(errors, fmt.Sprintf("cluster: seed node '%s' has invalid port", seed))
+		}
+	}
+
+	return errors
+}
+
+func (c *Config) validateSlaveZones() []string {
+	var errors []string
+
+	for i, slave := range c.SlaveZones {
+		prefix := fmt.Sprintf("slave_zones[%d]", i)
+
+		// Validate zone name
+		if slave.ZoneName == "" {
+			errors = append(errors, fmt.Sprintf("%s: zone_name is required", prefix))
+		}
+
+		// Validate masters
+		if len(slave.Masters) == 0 {
+			errors = append(errors, fmt.Sprintf("%s: at least one master server must be specified", prefix))
+		}
+		for _, master := range slave.Masters {
+			if !isValidServerAddress(master) {
+				errors = append(errors, fmt.Sprintf("%s: invalid master address '%s'", prefix, master))
+			}
+		}
+
+		// Validate transfer type
+		if slave.TransferType != "" && slave.TransferType != "ixfr" && slave.TransferType != "axfr" {
+			errors = append(errors, fmt.Sprintf("%s: invalid transfer_type '%s' (must be 'ixfr' or 'axfr')", prefix, slave.TransferType))
+		}
+
+		// Validate max retries
+		if slave.MaxRetries < 0 {
+			errors = append(errors, fmt.Sprintf("%s: max_retries cannot be negative", prefix))
 		}
 	}
 

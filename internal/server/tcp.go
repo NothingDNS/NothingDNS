@@ -248,10 +248,10 @@ func (s *TCPServer) handleMessage(conn net.Conn, data []byte) {
 
 // tcpResponseWriter implements ResponseWriter for TCP.
 type tcpResponseWriter struct {
-	conn    net.Conn
-	client  *ClientInfo
-	maxSize int
-	written bool
+	conn       net.Conn
+	client     *ClientInfo
+	maxSize    int
+	writeCount int // Number of writes (for AXFR support)
 }
 
 func (w *tcpResponseWriter) ClientInfo() *ClientInfo {
@@ -263,11 +263,6 @@ func (w *tcpResponseWriter) MaxSize() int {
 }
 
 func (w *tcpResponseWriter) Write(msg *protocol.Message) (int, error) {
-	if w.written {
-		return 0, errors.New("response already written")
-	}
-	w.written = true
-
 	// Pack the response
 	buf := make([]byte, TCPMaxMessageSize)
 	n, err := msg.Pack(buf[2:]) // Leave room for length prefix
@@ -296,6 +291,7 @@ func (w *tcpResponseWriter) Write(msg *protocol.Message) (int, error) {
 		// Update metrics through a global or passed mechanism
 	}
 
+	w.writeCount++
 	return sent, err
 }
 

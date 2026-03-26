@@ -25,6 +25,7 @@ import (
 	"github.com/nothingdns/nothingdns/internal/metrics"
 	"github.com/nothingdns/nothingdns/internal/protocol"
 	"github.com/nothingdns/nothingdns/internal/server"
+	"github.com/nothingdns/nothingdns/internal/transfer"
 	"github.com/nothingdns/nothingdns/internal/upstream"
 	"github.com/nothingdns/nothingdns/internal/util"
 	"github.com/nothingdns/nothingdns/internal/zone"
@@ -47,9 +48,11 @@ type DNSServer struct {
 	tcpServer *server.TCPServer
 }
 
-// dnssecResolverAdapter adapts upstream.Client to dnssec.Resolver interface
+// dnssecResolverAdapter adapts upstream.Client or upstream.LoadBalancer to dnssec.Resolver interface
 type dnssecResolverAdapter struct {
-	upstream *upstream.Client
+	upstream interface {
+		Query(msg *protocol.Message) (*protocol.Message, error)
+	}
 }
 
 // Query implements dnssec.Resolver interface
@@ -83,16 +86,22 @@ func mustParseName(name string) *protocol.Name {
 
 // integratedHandler is the DNS request handler that uses all components.
 type integratedHandler struct {
-	config      *config.Config
-	logger      *util.Logger
-	cache       *cache.Cache
-	upstream    *upstream.Client
-	zones       map[string]*zone.Zone
-	blocklist   *blocklist.Blocklist
-	metrics     *metrics.MetricsCollector
-	validator   *dnssec.Validator         // NEW: DNSSEC validator
-	zoneSigners map[string]*dnssec.Signer // NEW: Zone signers for authoritative zones
-	cluster     *cluster.Cluster          // NEW: Cluster manager
+	config        *config.Config
+	logger        *util.Logger
+	cache         *cache.Cache
+	upstream      *upstream.Client
+	loadBalancer  *upstream.LoadBalancer        // NEW: Load balancer with anycast support
+	zones         map[string]*zone.Zone
+	blocklist     *blocklist.Blocklist
+	metrics       *metrics.MetricsCollector
+	validator     *dnssec.Validator             // NEW: DNSSEC validator
+	zoneSigners   map[string]*dnssec.Signer     // NEW: Zone signers for authoritative zones
+	cluster       *cluster.Cluster              // NEW: Cluster manager
+	axfrServer    *transfer.AXFRServer          // NEW: AXFR server for zone transfers
+	ixfrServer    *transfer.IXFRServer          // NEW: IXFR server for incremental zone transfers
+	notifyHandler *transfer.NOTIFYSlaveHandler  // NEW: NOTIFY handler for slave servers
+	ddnsHandler   *transfer.DynamicDNSHandler   // NEW: Dynamic DNS handler for updates
+	slaveManager  *transfer.SlaveManager        // NEW: Slave zone manager for automatic zone transfers
 }
 
 func main() {
@@ -145,18 +154,71 @@ func run() error {
 	dnsCache := cache.New(cacheConfig)
 	logger.Infof("Cache initialized with capacity %d", cfg.Cache.Size)
 
-	// Initialize upstream client
+	// Initialize upstream client (with optional load balancer for anycast)
 	var client *upstream.Client
-	if len(cfg.Upstream.Servers) > 0 {
-		upstreamConfig := upstream.Config{
-			Servers:  cfg.Upstream.Servers,
-			Strategy: cfg.Upstream.Strategy,
-		}
-		client, err = upstream.NewClient(upstreamConfig)
-		if err != nil {
-			logger.Warnf("Failed to initialize upstream client: %v", err)
+	var loadBalancer *upstream.LoadBalancer
+	if len(cfg.Upstream.Servers) > 0 || len(cfg.Upstream.AnycastGroups) > 0 {
+		// Check if anycast groups are configured
+		if len(cfg.Upstream.AnycastGroups) > 0 {
+			// Use advanced load balancer with anycast support
+			lbConfig := upstream.LoadBalancerConfig{
+				Servers:         cfg.Upstream.Servers,
+				Strategy:        cfg.Upstream.Strategy,
+				HealthCheck:     parseDurationOrDefault(cfg.Upstream.HealthCheck, 30*time.Second),
+				FailoverTimeout: parseDurationOrDefault(cfg.Upstream.FailoverTimeout, 5*time.Second),
+				Region:          cfg.Upstream.Topology.Region,
+				Zone:            cfg.Upstream.Topology.Zone,
+				Weight:          cfg.Upstream.Topology.Weight,
+			}
+
+			// Convert anycast group configs
+			for _, groupConfig := range cfg.Upstream.AnycastGroups {
+				group := upstream.AnycastGroupConfig{
+					AnycastIP:   groupConfig.AnycastIP,
+					HealthCheck: groupConfig.HealthCheck,
+				}
+				for _, backendConfig := range groupConfig.Backends {
+					group.Backends = append(group.Backends, upstream.AnycastBackendConfig{
+						PhysicalIP: backendConfig.PhysicalIP,
+						Port:       backendConfig.Port,
+						Region:     backendConfig.Region,
+						Zone:       backendConfig.Zone,
+						Weight:     backendConfig.Weight,
+					})
+				}
+				lbConfig.AnycastGroups = append(lbConfig.AnycastGroups, group)
+			}
+
+			var err error
+			loadBalancer, err = upstream.NewLoadBalancer(lbConfig)
+			if err != nil {
+				logger.Warnf("Failed to initialize load balancer: %v", err)
+			} else {
+				totalBackends := 0
+				for _, group := range loadBalancer.GetAnycastGroups() {
+					total, _ := group.Stats()
+					totalBackends += total
+				}
+				logger.Infof("Load balancer initialized with %d anycast groups (%d total backends)",
+					len(lbConfig.AnycastGroups), totalBackends)
+				if len(cfg.Upstream.Servers) > 0 {
+					logger.Infof("Load balancer also has %d standalone servers", len(cfg.Upstream.Servers))
+				}
+			}
 		} else {
-			logger.Infof("Upstream client initialized with %d servers", len(cfg.Upstream.Servers))
+			// Use standard upstream client
+			upstreamConfig := upstream.Config{
+				Servers:     cfg.Upstream.Servers,
+				Strategy:    cfg.Upstream.Strategy,
+				Timeout:     parseDurationOrDefault(cfg.Resolution.Timeout, 5*time.Second),
+				HealthCheck: parseDurationOrDefault(cfg.Upstream.HealthCheck, 30*time.Second),
+			}
+			client, err = upstream.NewClient(upstreamConfig)
+			if err != nil {
+				logger.Warnf("Failed to initialize upstream client: %v", err)
+			} else {
+				logger.Infof("Upstream client initialized with %d servers", len(cfg.Upstream.Servers))
+			}
 		}
 	}
 
@@ -198,7 +260,7 @@ func run() error {
 
 	// Initialize DNSSEC validator if enabled
 	var validator *dnssec.Validator
-	if cfg.DNSSEC.Enabled && client != nil {
+	if cfg.DNSSEC.Enabled && (client != nil || loadBalancer != nil) {
 		trustAnchors := dnssec.NewTrustAnchorStoreWithBuiltIn()
 
 		// Load custom trust anchors if specified
@@ -210,8 +272,13 @@ func run() error {
 			}
 		}
 
-		// Create resolver adapter
-		resolverAdapter := &dnssecResolverAdapter{upstream: client}
+		// Create resolver adapter - prefer loadBalancer if available
+		var resolverAdapter dnssec.Resolver
+		if loadBalancer != nil {
+			resolverAdapter = &dnssecResolverAdapter{upstream: loadBalancer}
+		} else {
+			resolverAdapter = &dnssecResolverAdapter{upstream: client}
+		}
 
 		validator = dnssec.NewValidator(dnssec.ValidatorConfig{
 			Enabled:    cfg.DNSSEC.Enabled,
@@ -294,18 +361,70 @@ func run() error {
 		logger.Infof("Loaded zone %s with %d records", z.Origin, len(z.Records))
 	}
 
+	// Initialize AXFR server for zone transfers
+	axfrServer := transfer.NewAXFRServer(zones)
+	logger.Infof("AXFR server initialized with %d zones", len(zones))
+
+	// Initialize IXFR server for incremental zone transfers
+	ixfrServer := transfer.NewIXFRServer(axfrServer)
+	logger.Infof("IXFR server initialized for incremental transfers")
+
+	// Initialize NOTIFY handler for slave servers
+	notifyHandler := transfer.NewNOTIFYSlaveHandler(zones)
+	logger.Infof("NOTIFY handler initialized for %d zones", len(zones))
+
+	// Initialize Dynamic DNS handler
+	ddnsHandler := transfer.NewDynamicDNSHandler(zones)
+	logger.Infof("Dynamic DNS handler initialized for %d zones", len(zones))
+
+	// Initialize Slave Manager for automatic zone transfers
+	keyStore := transfer.NewKeyStore()
+	slaveManager := transfer.NewSlaveManager(keyStore)
+	logger.Info("Slave manager initialized for automatic zone transfers")
+
+	// Configure slave zones from config if available
+	for _, slaveConfig := range cfg.SlaveZones {
+		// Convert config.SlaveZoneConfig to transfer.SlaveZoneConfig
+		transferConfig := transfer.SlaveZoneConfig{
+			ZoneName:      slaveConfig.ZoneName,
+			Masters:       slaveConfig.Masters,
+			TransferType:  slaveConfig.TransferType,
+			TSIGKeyName:   slaveConfig.TSIGKeyName,
+			TSIGSecret:    slaveConfig.TSIGSecret,
+			Timeout:       parseDurationOrDefault(slaveConfig.Timeout, 30*time.Second),
+			RetryInterval: parseDurationOrDefault(slaveConfig.RetryInterval, 5*time.Minute),
+			MaxRetries:    slaveConfig.MaxRetries,
+		}
+
+		if err := slaveManager.AddSlaveZone(transferConfig); err != nil {
+			logger.Warnf("Failed to add slave zone %s: %v", slaveConfig.ZoneName, err)
+		} else {
+			logger.Infof("Added slave zone %s (masters: %v)", slaveConfig.ZoneName, slaveConfig.Masters)
+		}
+	}
+
+	// Start the slave manager
+	slaveManager.Start()
+	logger.Info("Slave manager started")
+
 	// Create DNS handler (needed for API server DoH support)
 	handler := &integratedHandler{
-		config:      cfg,
-		logger:      logger,
-		cache:       dnsCache,
-		upstream:    client,
-		zones:       zones,
-		blocklist:   bl,
-		metrics:     metricsCollector,
-		validator:   validator,
-		zoneSigners: make(map[string]*dnssec.Signer),
-		cluster:     clusterMgr,
+		config:        cfg,
+		logger:        logger,
+		cache:         dnsCache,
+		upstream:      client,
+		loadBalancer:  loadBalancer,
+		zones:         zones,
+		blocklist:     bl,
+		metrics:       metricsCollector,
+		validator:     validator,
+		zoneSigners:   make(map[string]*dnssec.Signer),
+		cluster:       clusterMgr,
+		axfrServer:    axfrServer,
+		ixfrServer:    ixfrServer,
+		notifyHandler: notifyHandler,
+		ddnsHandler:   ddnsHandler,
+		slaveManager:  slaveManager,
 	}
 
 	// Initialize API server
@@ -422,6 +541,11 @@ func run() error {
 				client.Close()
 			}
 
+			// Close load balancer
+			if loadBalancer != nil {
+				loadBalancer.Close()
+			}
+
 			// Stop metrics server
 			if metricsCollector != nil {
 				metricsCollector.Stop()
@@ -435,6 +559,11 @@ func run() error {
 			// Stop cluster manager
 			if clusterMgr != nil {
 				clusterMgr.Stop()
+			}
+
+			// Stop slave manager
+			if slaveManager != nil {
+				slaveManager.Stop()
 			}
 
 			logger.Info("Server shutdown complete")
@@ -533,6 +662,30 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 		h.metrics.RecordQuery(typeToString(qtype))
 	}
 
+	// Handle AXFR (zone transfer) requests
+	if qtype == protocol.TypeAXFR {
+		h.handleAXFR(w, r, q)
+		return
+	}
+
+	// Handle IXFR (incremental zone transfer) requests
+	if qtype == protocol.TypeIXFR {
+		h.handleIXFR(w, r, q)
+		return
+	}
+
+	// Handle NOTIFY requests (RFC 1996)
+	if transfer.IsNOTIFYRequest(r) {
+		h.handleNOTIFY(w, r, q)
+		return
+	}
+
+	// Handle Dynamic DNS UPDATE requests (RFC 2136)
+	if transfer.IsUpdateRequest(r) {
+		h.handleUPDATE(w, r, q)
+		return
+	}
+
 	// Check blocklist
 	if h.blocklist != nil && h.blocklist.IsBlocked(qname) {
 		h.logger.Infof("Blocked query for %s", qname)
@@ -580,12 +733,23 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 	}
 
 	// Forward to upstream
-	if h.upstream != nil {
+	if h.upstream != nil || h.loadBalancer != nil {
 		h.logger.Debugf("Forwarding query for %s to upstream", qname)
 		if h.metrics != nil {
-			h.metrics.RecordUpstreamQuery(h.config.Upstream.Servers[0])
+			if len(h.config.Upstream.Servers) > 0 {
+				h.metrics.RecordUpstreamQuery(h.config.Upstream.Servers[0])
+			} else if len(h.config.Upstream.AnycastGroups) > 0 {
+				h.metrics.RecordUpstreamQuery(h.config.Upstream.AnycastGroups[0].AnycastIP + ":53")
+			}
 		}
-		resp, err := h.upstream.Query(r)
+
+		var resp *protocol.Message
+		var err error
+		if h.loadBalancer != nil {
+			resp, err = h.loadBalancer.Query(r)
+		} else {
+			resp, err = h.upstream.Query(r)
+		}
 		if err != nil {
 			h.logger.Warnf("Upstream query failed for %s: %v", qname, err)
 			if h.metrics != nil {
@@ -673,6 +837,269 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 	}
 	reply(w, r, resp)
 	return true
+}
+
+// handleAXFR handles zone transfer (AXFR) requests.
+// AXFR must use TCP (RFC 5936 Section 4.1).
+func (h *integratedHandler) handleAXFR(w server.ResponseWriter, r *protocol.Message, q *protocol.Question) {
+	clientInfo := w.ClientInfo()
+
+	// AXFR requires TCP per RFC 5936
+	if clientInfo.Protocol != "tcp" {
+		h.logger.Warnf("AXFR request over UDP from %s - refusing", clientInfo.String())
+		sendError(w, r, protocol.RcodeRefused)
+		return
+	}
+
+	qname := q.Name.String()
+	h.logger.Infof("AXFR request for %s from %s", qname, clientInfo.String())
+
+	// Get client IP for access control
+	clientIP := clientInfo.IP()
+
+	// Handle AXFR using the AXFR server
+	records, err := h.axfrServer.HandleAXFR(r, clientIP)
+	if err != nil {
+		h.logger.Warnf("AXFR failed for %s: %v", qname, err)
+		sendError(w, r, protocol.RcodeRefused)
+		return
+	}
+
+	// Send AXFR response as multiple messages
+	// Per RFC 5936: SOA + all zone records + SOA
+	// Each message is sent separately over TCP
+
+	// We need to batch records into messages that fit within TCP size limits
+	// For simplicity, we'll send each record in its own message (inefficient but correct)
+	// A production implementation would batch multiple records per message
+
+	for _, rr := range records {
+		resp := &protocol.Message{
+			Header: protocol.Header{
+				ID:    r.Header.ID,
+				Flags: protocol.NewResponseFlags(protocol.RcodeSuccess),
+			},
+			Questions: r.Questions,
+			Answers:   []*protocol.ResourceRecord{rr},
+		}
+
+		if _, err := w.Write(resp); err != nil {
+			h.logger.Warnf("Failed to write AXFR response: %v", err)
+			return
+		}
+	}
+
+	h.logger.Infof("AXFR completed for %s - sent %d records", qname, len(records))
+
+	if h.metrics != nil {
+		h.metrics.RecordResponse(protocol.RcodeSuccess)
+	}
+}
+
+// handleIXFR handles incremental zone transfer (IXFR) requests.
+// IXFR must use TCP (RFC 1995).
+func (h *integratedHandler) handleIXFR(w server.ResponseWriter, r *protocol.Message, q *protocol.Question) {
+	clientInfo := w.ClientInfo()
+
+	// IXFR requires TCP per RFC 1995
+	if clientInfo.Protocol != "tcp" {
+		h.logger.Warnf("IXFR request over UDP from %s - refusing", clientInfo.String())
+		sendError(w, r, protocol.RcodeRefused)
+		return
+	}
+
+	qname := q.Name.String()
+	h.logger.Infof("IXFR request for %s from %s", qname, clientInfo.String())
+
+	// Get client IP for access control
+	clientIP := clientInfo.IP()
+
+	// Handle IXFR using the IXFR server
+	records, err := h.ixfrServer.HandleIXFR(r, clientIP)
+	if err != nil {
+		h.logger.Warnf("IXFR failed for %s: %v", qname, err)
+		// Check if the error indicates AXFR fallback is needed
+		if err.Error() == "no journal available for incremental transfer" ||
+			err.Error() == "client serial not in journal range" {
+			h.logger.Infof("Falling back to AXFR for %s", qname)
+			h.handleAXFR(w, r, q)
+			return
+		}
+		sendError(w, r, protocol.RcodeRefused)
+		return
+	}
+
+	// Send IXFR response as multiple messages
+	// Per RFC 1995: The response format varies based on whether it's incremental or full AXFR
+	for _, rr := range records {
+		resp := &protocol.Message{
+			Header: protocol.Header{
+				ID:    r.Header.ID,
+				Flags: protocol.NewResponseFlags(protocol.RcodeSuccess),
+			},
+			Questions: r.Questions,
+			Answers:   []*protocol.ResourceRecord{rr},
+		}
+
+		if _, err := w.Write(resp); err != nil {
+			h.logger.Warnf("Failed to write IXFR response: %v", err)
+			return
+		}
+	}
+
+	h.logger.Infof("IXFR completed for %s - sent %d records", qname, len(records))
+
+	if h.metrics != nil {
+		h.metrics.RecordResponse(protocol.RcodeSuccess)
+	}
+}
+
+// handleNOTIFY handles NOTIFY requests from master servers (RFC 1996).
+// NOTIFY informs slave servers that a zone has changed and should be refreshed.
+func (h *integratedHandler) handleNOTIFY(w server.ResponseWriter, r *protocol.Message, q *protocol.Question) {
+	clientInfo := w.ClientInfo()
+	clientIP := clientInfo.IP()
+
+	h.logger.Infof("NOTIFY request for %s from %s", q.Name.String(), clientInfo.String())
+
+	// Handle NOTIFY using the NOTIFY handler
+	resp, err := h.notifyHandler.HandleNOTIFY(r, clientIP)
+	if err != nil {
+		h.logger.Warnf("NOTIFY handling failed for %s: %v", q.Name.String(), err)
+		sendError(w, r, protocol.RcodeServerFailure)
+		return
+	}
+
+	// Send NOTIFY response
+	if _, err := w.Write(resp); err != nil {
+		h.logger.Warnf("Failed to write NOTIFY response: %v", err)
+		return
+	}
+
+	h.logger.Infof("NOTIFY response sent for %s", q.Name.String())
+
+	if h.metrics != nil {
+		h.metrics.RecordResponse(resp.Header.Flags.RCODE)
+	}
+
+	// Start a goroutine to listen for NOTIFY events and trigger zone transfers
+	go h.processNotifyEvents()
+}
+
+// processNotifyEvents listens for NOTIFY events and triggers zone transfers.
+func (h *integratedHandler) processNotifyEvents() {
+	notifyChan := h.notifyHandler.GetNotifyChannel()
+	for req := range notifyChan {
+		h.logger.Infof("Processing NOTIFY for zone %s (serial %d)", req.ZoneName, req.Serial)
+
+		// Forward to slave manager if we have one
+		if h.slaveManager != nil {
+			select {
+			case h.slaveManager.GetNotifyChannel() <- req:
+				h.logger.Debugf("Forwarded NOTIFY for %s to slave manager", req.ZoneName)
+			default:
+				h.logger.Warnf("Slave manager notify channel full, dropping NOTIFY for %s", req.ZoneName)
+			}
+		}
+	}
+}
+
+// handleUPDATE handles Dynamic DNS UPDATE requests (RFC 2136).
+// UPDATE allows authenticated clients to dynamically modify DNS records.
+func (h *integratedHandler) handleUPDATE(w server.ResponseWriter, r *protocol.Message, q *protocol.Question) {
+	clientInfo := w.ClientInfo()
+	clientIP := clientInfo.IP()
+
+	h.logger.Infof("UPDATE request for %s from %s", q.Name.String(), clientInfo.String())
+
+	// Handle UPDATE using the Dynamic DNS handler
+	resp, err := h.ddnsHandler.HandleUpdate(r, clientIP)
+	if err != nil {
+		h.logger.Warnf("UPDATE handling failed for %s: %v", q.Name.String(), err)
+		sendError(w, r, protocol.RcodeServerFailure)
+		return
+	}
+
+	// Send UPDATE response
+	if _, err := w.Write(resp); err != nil {
+		h.logger.Warnf("Failed to write UPDATE response: %v", err)
+		return
+	}
+
+	if resp.Header.Flags.RCODE == protocol.RcodeSuccess {
+		h.logger.Infof("UPDATE successful for %s", q.Name.String())
+	} else {
+		h.logger.Warnf("UPDATE failed for %s with rcode %d", q.Name.String(), resp.Header.Flags.RCODE)
+	}
+
+	if h.metrics != nil {
+		h.metrics.RecordResponse(resp.Header.Flags.RCODE)
+	}
+
+	// Start a goroutine to listen for update events and apply changes
+	go h.processUpdateEvents()
+}
+
+// processUpdateEvents listens for update events and applies changes to zones.
+func (h *integratedHandler) processUpdateEvents() {
+	updateChan := h.ddnsHandler.GetUpdateChannel()
+	for req := range updateChan {
+		h.logger.Infof("Processing UPDATE for zone %s", req.ZoneName)
+
+		// Get the zone
+		z, ok := h.zones[req.ZoneName]
+		if !ok {
+			h.logger.Warnf("Zone %s not found for UPDATE", req.ZoneName)
+			continue
+		}
+
+		// Record old serial for IXFR journal
+		var oldSerial uint32
+		if z.SOA != nil {
+			oldSerial = z.SOA.Serial
+		}
+
+		// Apply the update
+		if err := transfer.ApplyUpdate(z, req); err != nil {
+			h.logger.Warnf("Failed to apply UPDATE to zone %s: %v", req.ZoneName, err)
+			continue
+		}
+
+		// Record the change in the IXFR journal
+		if h.ixfrServer != nil && z.SOA != nil {
+			newSerial := z.SOA.Serial
+			var added, deleted []zone.RecordChange
+			for _, op := range req.Updates {
+				change := zone.RecordChange{
+					Name:  op.Name,
+					Type:  op.Type,
+					TTL:   op.TTL,
+					RData: op.RData,
+				}
+				switch op.Operation {
+				case transfer.UpdateOpAdd:
+					added = append(added, change)
+				case transfer.UpdateOpDelete, transfer.UpdateOpDeleteRRSet, transfer.UpdateOpDeleteName:
+					deleted = append(deleted, change)
+				}
+			}
+			h.recordZoneChange(req.ZoneName, oldSerial, newSerial, added, deleted)
+		}
+
+		h.logger.Infof("UPDATE applied to zone %s", req.ZoneName)
+	}
+}
+
+// recordZoneChange records a zone modification to the IXFR journal.
+// This should be called whenever a zone is modified via dynamic updates.
+func (h *integratedHandler) recordZoneChange(zoneName string, oldSerial, newSerial uint32, added, deleted []zone.RecordChange) {
+	if h.ixfrServer == nil {
+		return
+	}
+
+	h.ixfrServer.RecordChange(zoneName, oldSerial, newSerial, added, deleted)
+	h.logger.Debugf("Recorded zone change for %s: serial %d -> %d (added: %d, deleted: %d)",
+		zoneName, oldSerial, newSerial, len(added), len(deleted))
 }
 
 // buildResponse builds a DNS response from zone records.
@@ -898,6 +1325,18 @@ func (h *integratedHandler) buildSignedResponse(query *protocol.Message, records
 	}
 
 	return resp
+}
+
+// parseDurationOrDefault parses a duration string, returning defaultValue if parsing fails.
+func parseDurationOrDefault(s string, defaultValue time.Duration) time.Duration {
+	if s == "" {
+		return defaultValue
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return defaultValue
+	}
+	return d
 }
 
 func printHelp() {
