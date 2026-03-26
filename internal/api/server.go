@@ -9,6 +9,8 @@ import (
 
 	"github.com/nothingdns/nothingdns/internal/cache"
 	"github.com/nothingdns/nothingdns/internal/config"
+	"github.com/nothingdns/nothingdns/internal/doh"
+	"github.com/nothingdns/nothingdns/internal/server"
 	"github.com/nothingdns/nothingdns/internal/zone"
 )
 
@@ -19,15 +21,17 @@ type Server struct {
 	zoneManager *zone.Manager
 	cache       *cache.Cache
 	reloadFunc  func() error
+	dnsHandler  server.Handler
 }
 
 // NewServer creates a new API server.
-func NewServer(cfg config.HTTPConfig, zm *zone.Manager, c *cache.Cache, reload func() error) *Server {
+func NewServer(cfg config.HTTPConfig, zm *zone.Manager, c *cache.Cache, reload func() error, dnsHandler server.Handler) *Server {
 	return &Server{
 		config:      cfg,
 		zoneManager: zm,
 		cache:       c,
 		reloadFunc:  reload,
+		dnsHandler:  dnsHandler,
 	}
 }
 
@@ -38,6 +42,12 @@ func (s *Server) Start() error {
 	}
 
 	mux := http.NewServeMux()
+
+	// DoH endpoint (RFC 8484) - no auth required
+	if s.config.DoHEnabled && s.dnsHandler != nil {
+		dohHandler := doh.NewHandler(s.dnsHandler)
+		mux.Handle(s.config.DoHPath, dohHandler)
+	}
 
 	// Health and status
 	mux.HandleFunc("/health", s.handleHealth)

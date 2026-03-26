@@ -167,6 +167,17 @@ func run() error {
 		logger.Infof("Loaded zone %s with %d records", z.Origin, len(z.Records))
 	}
 
+	// Create DNS handler (needed for API server DoH support)
+	handler := &integratedHandler{
+		config:    cfg,
+		logger:    logger,
+		cache:     dnsCache,
+		upstream:  client,
+		zones:     zones,
+		blocklist: bl,
+		metrics:   metricsCollector,
+	}
+
 	// Initialize API server
 	apiServer := api.NewServer(cfg.Server.HTTP, zoneManager, dnsCache, func() error {
 		logger.Info("Reloading configuration via API...")
@@ -187,22 +198,14 @@ func run() error {
 			}
 		}
 		return nil
-	})
+	}, handler)
 	if err := apiServer.Start(); err != nil {
 		logger.Warnf("Failed to start API server: %v", err)
 	} else if cfg.Server.HTTP.Enabled {
 		logger.Infof("API server listening on %s", cfg.Server.HTTP.Bind)
-	}
-
-	// Create handler
-	handler := &integratedHandler{
-		config:    cfg,
-		logger:    logger,
-		cache:     dnsCache,
-		upstream:  client,
-		zones:     zones,
-		blocklist: bl,
-		metrics:   metricsCollector,
+		if cfg.Server.HTTP.DoHEnabled {
+			logger.Infof("DoH endpoint enabled at %s", cfg.Server.HTTP.DoHPath)
+		}
 	}
 
 	// Create and start DNS servers

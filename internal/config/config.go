@@ -97,6 +97,10 @@ type HTTPConfig struct {
 
 	// Authentication token (optional)
 	AuthToken string `yaml:"auth_token"`
+
+	// DoH (DNS over HTTPS) settings
+	DoHEnabled bool   `yaml:"doh_enabled"` // Enable DoH endpoint
+	DoHPath    string `yaml:"doh_path"`    // DoH endpoint path (default: /dns-query)
 }
 
 // ResolutionConfig contains DNS resolution settings.
@@ -455,6 +459,12 @@ func unmarshalServer(node *Node, cfg *ServerConfig) error {
 	if httpNode := node.Get("http"); httpNode != nil {
 		cfg.HTTP.Enabled = getBool(httpNode, "enabled", cfg.HTTP.Enabled)
 		cfg.HTTP.Bind = httpNode.GetString("bind")
+		cfg.HTTP.AuthToken = httpNode.GetString("auth_token")
+		cfg.HTTP.DoHEnabled = getBool(httpNode, "doh_enabled", cfg.HTTP.DoHEnabled)
+		cfg.HTTP.DoHPath = httpNode.GetString("doh_path")
+		if cfg.HTTP.DoHPath == "" {
+			cfg.HTTP.DoHPath = "/dns-query"
+		}
 	}
 
 	return nil

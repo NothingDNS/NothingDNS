@@ -10,6 +10,7 @@ A zero-dependency DNS server written in pure Go. NothingDNS is designed to be li
 - **Upstream Forwarding** - Multiple upstream servers with health checking and failover strategies (round_robin, random, fastest, backup)
 - **Authoritative Zones** - Zone file support for hosting your own DNS records
 - **UDP & TCP** - Support for both UDP and TCP DNS queries
+- **DNS over HTTPS (DoH)** - RFC 8484 compliant DoH support via HTTP API
 - **Signal Handling** - Graceful shutdown (SIGINT/SIGTERM) and configuration reload (SIGHUP)
 - **Blocklist Support** - Block domains using hosts file format
 - **Prometheus Metrics** - Export metrics for monitoring and observability
@@ -170,6 +171,51 @@ curl -H "Authorization: Bearer your-secret-token" http://localhost:8080/api/v1/s
 curl http://localhost:8080/api/v1/status?token=your-secret-token
 ```
 
+## DNS over HTTPS (DoH)
+
+NothingDNS supports RFC 8484 compliant DNS over HTTPS (DoH). DoH provides encrypted DNS resolution over HTTPS, preventing eavesdropping and tampering.
+
+### Configuration
+
+```yaml
+server:
+  http:
+    enabled: true
+    bind: "0.0.0.0:8080"
+    auth_token: "your-secret-token"  # Optional - not required for DoH
+    doh_enabled: true                # Enable DoH endpoint
+    doh_path: "/dns-query"           # DoH endpoint path (default: /dns-query)
+```
+
+### Usage
+
+DoH supports both GET and POST methods as per RFC 8484:
+
+**GET Request:**
+```bash
+# Encode DNS query in base64url
+dns_query=$(echo -n 'AAABAAABAAAAAAAAA3d3dwdleGFtcGxlA2NvbQAAAQAB' | base64 -d | base64 -w0 | tr '+/' '-_' | tr -d '=')
+curl "http://localhost:8080/dns-query?dns=${dns_query}"
+```
+
+**POST Request:**
+```bash
+curl -X POST http://localhost:8080/dns-query \
+  -H "Content-Type: application/dns-message" \
+  --data-binary @dns-query.bin
+```
+
+**Using dig:**
+```bash
+dig @localhost -p 8080 +https www.example.com
+```
+
+### Security Notes
+
+- The DoH endpoint does not require authentication (following RFC 8484)
+- Management API endpoints still require auth_token when configured
+- DoH responses include `X-Content-Type-Options: nosniff` header
+
 ## Architecture
 
 ```
@@ -199,6 +245,7 @@ curl http://localhost:8080/api/v1/status?token=your-secret-token
 │   ├── api/            # HTTP API for management
 │   ├── cache/          # LRU cache with TTL
 │   ├── config/         # YAML configuration parser
+│   ├── doh/            # DNS over HTTPS (RFC 8484)
 │   ├── metrics/        # Prometheus metrics export
 │   ├── protocol/       # DNS protocol implementation
 │   ├── server/         # UDP/TCP server handlers
@@ -246,5 +293,5 @@ Contributions are welcome! Please ensure:
 - [ ] Clustering support
 - [x] Blocklist support (hosts file format)
 - [x] Metrics export (Prometheus)
-- [ ] DoH (DNS over HTTPS) support
+- [x] DoH (DNS over HTTPS) support
 - [ ] DoT (DNS over TLS) support
