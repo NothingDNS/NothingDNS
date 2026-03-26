@@ -1,9 +1,13 @@
 package dnssec
 
 import (
+	"crypto/sha1" // #nosec G505 - Required for legacy DS digest support
+	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/hex"
 	"encoding/xml"
 	"fmt"
+	"hash"
 	"os"
 	"sync"
 	"time"
@@ -416,17 +420,63 @@ func DSFromDNSKEY(zone string, dnskey *protocol.RDataDNSKEY, digestType uint8) (
 
 // calculateDSDigestSHA256 computes SHA-256 digest for DS record.
 func calculateDSDigestSHA256(zone string, dnskey *protocol.RDataDNSKEY) ([]byte, error) {
-	// DS digest = SHA-256(owner name in wire format | DNSKEY RDATA)
-	// For now, simplified implementation
-	return nil, fmt.Errorf("not implemented")
+	return calculateDSDigestWithHash(zone, dnskey, sha256.New())
 }
 
 // calculateDSDigestSHA1 computes SHA-1 digest for DS record.
 func calculateDSDigestSHA1(zone string, dnskey *protocol.RDataDNSKEY) ([]byte, error) {
-	return nil, fmt.Errorf("SHA-1 not implemented: use SHA-256")
+	return calculateDSDigestWithHash(zone, dnskey, sha1.New())
 }
 
 // calculateDSDigestSHA384 computes SHA-384 digest for DS record.
 func calculateDSDigestSHA384(zone string, dnskey *protocol.RDataDNSKEY) ([]byte, error) {
-	return nil, fmt.Errorf("not implemented")
+	return calculateDSDigestWithHash(zone, dnskey, sha512.New384())
+}
+
+// calculateDSDigestWithHash computes DS digest using a hash function.
+func calculateDSDigestWithHash(zone string, dnskey *protocol.RDataDNSKEY, h hash.Hash) ([]byte, error) {
+	// Wire format of owner name
+	ownerWire := canonicalWireName(zone)
+
+	// DNSKEY RDATA: flags (2) + protocol (1) + algorithm (1) + public key
+	dnskeyRData := make([]byte, 4+len(dnskey.PublicKey))
+	dnskeyRData[0] = byte(dnskey.Flags >> 8)
+	dnskeyRData[1] = byte(dnskey.Flags)
+	dnskeyRData[2] = dnskey.Protocol
+	dnskeyRData[3] = dnskey.Algorithm
+	copy(dnskeyRData[4:], dnskey.PublicKey)
+
+	// Calculate digest: hash(owner | dnskey_rdata)
+	h.Write(ownerWire)
+	h.Write(dnskeyRData)
+
+	return h.Sum(nil), nil
+}
+
+// canonicalWireName converts a name to wire format (simplified).
+func canonicalWireName(name string) []byte {
+	// Lowercase the name
+	name = toLower(name)
+
+	// Remove trailing dot
+	if len(name) > 0 && name[len(name)-1] == '.' {
+		name = name[:len(name)-1]
+	}
+
+	// Split labels and create wire format
+	var wire []byte
+	labels := splitLabels(name)
+
+	for _, label := range labels {
+		if len(label) == 0 {
+			continue
+		}
+		wire = append(wire, byte(len(label)))
+		wire = append(wire, []byte(label)...)
+	}
+
+	// Root label
+	wire = append(wire, 0)
+
+	return wire
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/cache"
+	"github.com/nothingdns/nothingdns/internal/cluster"
 	"github.com/nothingdns/nothingdns/internal/config"
 	"github.com/nothingdns/nothingdns/internal/doh"
 	"github.com/nothingdns/nothingdns/internal/server"
@@ -22,16 +23,18 @@ type Server struct {
 	cache       *cache.Cache
 	reloadFunc  func() error
 	dnsHandler  server.Handler
+	cluster     *cluster.Cluster
 }
 
 // NewServer creates a new API server.
-func NewServer(cfg config.HTTPConfig, zm *zone.Manager, c *cache.Cache, reload func() error, dnsHandler server.Handler) *Server {
+func NewServer(cfg config.HTTPConfig, zm *zone.Manager, c *cache.Cache, reload func() error, dnsHandler server.Handler, cluster *cluster.Cluster) *Server {
 	return &Server{
 		config:      cfg,
 		zoneManager: zm,
 		cache:       c,
 		reloadFunc:  reload,
 		dnsHandler:  dnsHandler,
+		cluster:     cluster,
 	}
 }
 
@@ -52,6 +55,12 @@ func (s *Server) Start() error {
 	// Health and status
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/api/v1/status", s.handleStatus)
+
+	// Cluster management
+	if s.cluster != nil {
+		mux.HandleFunc("/api/v1/cluster/status", s.handleClusterStatus)
+		mux.HandleFunc("/api/v1/cluster/nodes", s.handleClusterNodes)
+	}
 
 	// Zone management
 	mux.HandleFunc("/api/v1/zones", s.handleZones)
@@ -155,6 +164,21 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			"hits":      stats.Hits,
 			"misses":    stats.Misses,
 			"hit_ratio": stats.HitRatio(),
+		}
+	}
+
+	if s.cluster != nil {
+		clusterStats := s.cluster.Stats()
+		status["cluster"] = map[string]interface{}{
+			"enabled":     true,
+			"node_id":     clusterStats.NodeID,
+			"node_count":  clusterStats.NodeCount,
+			"alive_count": clusterStats.AliveCount,
+			"healthy":     clusterStats.IsHealthy,
+		}
+	} else {
+		status["cluster"] = map[string]interface{}{
+			"enabled": false,
 		}
 	}
 
@@ -270,6 +294,66 @@ func (s *Server) handleConfigReload(w http.ResponseWriter, r *http.Request) {
 
 	s.writeJSON(w, http.StatusOK, map[string]interface{}{
 		"message": "Configuration reloaded",
+	})
+}
+
+// handleClusterStatus returns cluster status.
+func (s *Server) handleClusterStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	if s.cluster == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Cluster not available")
+		return
+	}
+
+	stats := s.cluster.Stats()
+	s.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"node_id":     stats.NodeID,
+		"node_count":  stats.NodeCount,
+		"alive_count": stats.AliveCount,
+		"healthy":     stats.IsHealthy,
+		"gossip": map[string]interface{}{
+			"messages_sent":     stats.GossipStats.MessagesSent,
+			"messages_received": stats.GossipStats.MessagesReceived,
+			"ping_sent":         stats.GossipStats.PingSent,
+			"ping_received":     stats.GossipStats.PingReceived,
+		},
+	})
+}
+
+// handleClusterNodes returns list of cluster nodes.
+func (s *Server) handleClusterNodes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	if s.cluster == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Cluster not available")
+		return
+	}
+
+	nodes := s.cluster.GetNodes()
+	nodeList := make([]map[string]interface{}, 0, len(nodes))
+	for _, node := range nodes {
+		nodeList = append(nodeList, map[string]interface{}{
+			"id":        node.ID,
+			"addr":      node.Addr,
+			"port":      node.Port,
+			"state":     node.State.String(),
+			"region":    node.Meta.Region,
+			"zone":      node.Meta.Zone,
+			"weight":    node.Meta.Weight,
+			"http_addr": node.Meta.HTTPAddr,
+			"version":   node.Version,
+		})
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"nodes": nodeList,
 	})
 }
 

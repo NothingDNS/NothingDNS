@@ -13,6 +13,9 @@ type Config struct {
 	// Server configuration
 	Server ServerConfig `yaml:"server"`
 
+	// Cluster configuration
+	Cluster ClusterConfig `yaml:"cluster"`
+
 	// DNS resolution configuration
 	Resolution ResolutionConfig `yaml:"resolution"`
 
@@ -85,6 +88,36 @@ type TLSConfig struct {
 
 	// Listen address
 	Bind string `yaml:"bind"`
+}
+
+// ClusterConfig contains cluster settings.
+type ClusterConfig struct {
+	// Enable clustering
+	Enabled bool `yaml:"enabled"`
+
+	// Node ID (auto-generated if empty)
+	NodeID string `yaml:"node_id"`
+
+	// Bind address for gossip protocol
+	BindAddr string `yaml:"bind_addr"`
+
+	// Gossip port (default: 7946)
+	GossipPort int `yaml:"gossip_port"`
+
+	// Region for topology awareness
+	Region string `yaml:"region"`
+
+	// Zone for topology awareness
+	Zone string `yaml:"zone"`
+
+	// Weight for load balancing
+	Weight int `yaml:"weight"`
+
+	// Seed nodes to join (format: "host:port")
+	SeedNodes []string `yaml:"seed_nodes"`
+
+	// Enable cache synchronization
+	CacheSync bool `yaml:"cache_sync"`
 }
 
 // HTTPConfig contains HTTP API settings.
@@ -275,6 +308,12 @@ func DefaultConfig() *Config {
 			Enabled: false,
 			Files:   []string{},
 		},
+		Cluster: ClusterConfig{
+			Enabled:    false,
+			GossipPort: 7946,
+			Weight:     100,
+			CacheSync:  true,
+		},
 	}
 }
 
@@ -434,6 +473,13 @@ func unmarshalToConfig(node *Node, cfg *Config) error {
 		}
 	}
 
+	// Cluster config
+	if clusterNode := node.Get("cluster"); clusterNode != nil {
+		if err := unmarshalCluster(clusterNode, &cfg.Cluster); err != nil {
+			return fmt.Errorf("cluster: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -590,6 +636,32 @@ func unmarshalBlocklist(node *Node, cfg *BlocklistConfig) error {
 	return nil
 }
 
+func unmarshalCluster(node *Node, cfg *ClusterConfig) error {
+	if node.Type != NodeMapping {
+		return fmt.Errorf("expected mapping")
+	}
+
+	cfg.Enabled = getBool(node, "enabled", cfg.Enabled)
+	cfg.NodeID = node.GetString("node_id")
+	cfg.BindAddr = node.GetString("bind_addr")
+	cfg.GossipPort = getInt(node, "gossip_port", cfg.GossipPort)
+	cfg.Region = node.GetString("region")
+	cfg.Zone = node.GetString("zone")
+	cfg.Weight = getInt(node, "weight", cfg.Weight)
+	cfg.CacheSync = getBool(node, "cache_sync", cfg.CacheSync)
+
+	// Parse seed nodes
+	if seedNodesNode := node.Get("seed_nodes"); seedNodesNode != nil {
+		if seedNodesNode.Type == NodeSequence {
+			cfg.SeedNodes = seedNodesNode.getStringSlice()
+		} else if seedNodesNode.Type == NodeScalar {
+			cfg.SeedNodes = []string{seedNodesNode.Value}
+		}
+	}
+
+	return nil
+}
+
 // Helper functions for unmarshaling
 
 func getString(node *Node, key string, defaultValue string) string {
@@ -660,6 +732,9 @@ func (c *Config) Validate() []string {
 
 	// Validate blocklist configuration
 	errors = append(errors, c.validateBlocklist()...)
+
+	// Validate cluster configuration
+	errors = append(errors, c.validateCluster()...)
 
 	// Validate zone files exist
 	for _, zone := range c.Zones {
@@ -880,6 +955,46 @@ func (c *Config) validateBlocklist() []string {
 		}
 		if _, err := os.Stat(file); os.IsNotExist(err) {
 			errors = append(errors, fmt.Sprintf("blocklist: file '%s' does not exist", file))
+		}
+	}
+
+	return errors
+}
+
+func (c *Config) validateCluster() []string {
+	var errors []string
+
+	if !c.Cluster.Enabled {
+		return errors
+	}
+
+	// Validate gossip port
+	if c.Cluster.GossipPort < 1 || c.Cluster.GossipPort > 65535 {
+		errors = append(errors, fmt.Sprintf("cluster: invalid gossip_port %d (must be 1-65535)", c.Cluster.GossipPort))
+	}
+
+	// Validate weight
+	if c.Cluster.Weight < 0 {
+		errors = append(errors, "cluster: weight cannot be negative")
+	}
+
+	// Validate seed nodes format
+	for _, seed := range c.Cluster.SeedNodes {
+		if seed == "" {
+			errors = append(errors, "cluster: seed node cannot be empty")
+			continue
+		}
+		// Seed nodes should be host:port format
+		host, port, err := net.SplitHostPort(seed)
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("cluster: invalid seed node '%s' (expected host:port format)", seed))
+			continue
+		}
+		if host == "" {
+			errors = append(errors, fmt.Sprintf("cluster: seed node '%s' has empty host", seed))
+		}
+		if portNum, err := strconv.Atoi(port); err != nil || portNum < 1 || portNum > 65535 {
+			errors = append(errors, fmt.Sprintf("cluster: seed node '%s' has invalid port", seed))
 		}
 	}
 

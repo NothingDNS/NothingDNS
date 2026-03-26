@@ -3,6 +3,7 @@ package cache
 import (
 	"container/list"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -105,6 +106,9 @@ type Cache struct {
 
 	// Prefetch callback
 	prefetchFunc func(key string, qtype uint16)
+
+	// Invalidation callback for cluster sync
+	invalidateFunc func(key string)
 }
 
 // Config holds cache configuration.
@@ -292,6 +296,14 @@ func (c *Cache) evictOldest() {
 	c.stats.Evictions++
 }
 
+// SetInvalidateFunc sets the callback function for cache invalidation.
+func (c *Cache) SetInvalidateFunc(fn func(key string)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.invalidateFunc = fn
+}
+
 // Delete removes an entry from the cache.
 func (c *Cache) Delete(key string) {
 	c.mu.Lock()
@@ -299,6 +311,10 @@ func (c *Cache) Delete(key string) {
 
 	if entry, exists := c.entries[key]; exists {
 		c.removeEntry(entry)
+		// Notify invalidation callback for cluster sync
+		if c.invalidateFunc != nil {
+			c.invalidateFunc(key)
+		}
 	}
 }
 
@@ -315,6 +331,46 @@ func (c *Cache) Clear() {
 // Flush is an alias for Clear.
 func (c *Cache) Flush() {
 	c.Clear()
+}
+
+// DeleteLocal removes an entry without triggering invalidation callback.
+// Used when receiving invalidation from cluster to avoid broadcast loops.
+func (c *Cache) DeleteLocal(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if entry, exists := c.entries[key]; exists {
+		c.removeEntry(entry)
+	}
+}
+
+// Invalidate removes an entry and broadcasts invalidation to cluster.
+func (c *Cache) Invalidate(key string) {
+	c.Delete(key)
+}
+
+// InvalidatePattern removes entries matching a pattern and broadcasts invalidations.
+// Pattern uses prefix matching (e.g., "example.com" matches "www.example.com:A")
+func (c *Cache) InvalidatePattern(pattern string) []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	var invalidated []string
+	for key := range c.entries {
+		// Extract domain from key (format: "domain:type")
+		domain, _ := ExtractQueryInfo(key)
+		if strings.Contains(domain, pattern) || strings.HasSuffix(domain, pattern) {
+			if entry, exists := c.entries[key]; exists {
+				c.removeEntry(entry)
+				invalidated = append(invalidated, key)
+				// Notify invalidation callback
+				if c.invalidateFunc != nil {
+					c.invalidateFunc(key)
+				}
+			}
+		}
+	}
+	return invalidated
 }
 
 // Stats returns a copy of the current cache statistics.

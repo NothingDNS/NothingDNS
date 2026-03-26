@@ -257,7 +257,7 @@ func (r *RDataNSEC3) String() string {
 		saltStr = hex.EncodeToString(r.Salt)
 	}
 
-	nextHashStr := base32Encode(r.NextHashed)
+	nextHashStr := Base32Encode(r.NextHashed)
 
 	result := fmt.Sprintf("%d %d %d %s %s",
 		r.HashAlgorithm,
@@ -359,9 +359,9 @@ func (r *RDataNSEC3) RemoveType(rrtype uint16) {
 	}
 }
 
-// base32Encode encodes bytes using base32hex (RFC 4648) without padding.
+// Base32Encode encodes bytes using base32hex (RFC 4648) without padding.
 // This is the encoding used for NSEC3 hashed owner names.
-func base32Encode(data []byte) string {
+func Base32Encode(data []byte) string {
 	const base32Chars = "0123456789abcdefghijklmnopqrstuv"
 	if len(data) == 0 {
 		return ""

@@ -4,6 +4,8 @@
 package main
 
 import (
+	"context"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"net"
@@ -17,7 +19,9 @@ import (
 	"github.com/nothingdns/nothingdns/internal/api"
 	"github.com/nothingdns/nothingdns/internal/blocklist"
 	"github.com/nothingdns/nothingdns/internal/cache"
+	"github.com/nothingdns/nothingdns/internal/cluster"
 	"github.com/nothingdns/nothingdns/internal/config"
+	"github.com/nothingdns/nothingdns/internal/dnssec"
 	"github.com/nothingdns/nothingdns/internal/metrics"
 	"github.com/nothingdns/nothingdns/internal/protocol"
 	"github.com/nothingdns/nothingdns/internal/server"
@@ -43,15 +47,52 @@ type DNSServer struct {
 	tcpServer *server.TCPServer
 }
 
+// dnssecResolverAdapter adapts upstream.Client to dnssec.Resolver interface
+type dnssecResolverAdapter struct {
+	upstream *upstream.Client
+}
+
+// Query implements dnssec.Resolver interface
+func (d *dnssecResolverAdapter) Query(ctx context.Context, name string, qtype uint16) (*protocol.Message, error) {
+	// Create a query message
+	msg := &protocol.Message{
+		Header: protocol.Header{
+			ID:      1,
+			Flags:   protocol.NewQueryFlags(),
+			QDCount: 1,
+		},
+		Questions: []*protocol.Question{
+			{
+				Name:   mustParseName(name),
+				QType:  qtype,
+				QClass: protocol.ClassIN,
+			},
+		},
+	}
+	return d.upstream.Query(msg)
+}
+
+// mustParseName parses a domain name or panics (for internal use only)
+func mustParseName(name string) *protocol.Name {
+	n, err := protocol.ParseName(name)
+	if err != nil {
+		panic(err)
+	}
+	return n
+}
+
 // integratedHandler is the DNS request handler that uses all components.
 type integratedHandler struct {
-	config    *config.Config
-	logger    *util.Logger
-	cache     *cache.Cache
-	upstream  *upstream.Client
-	zones     map[string]*zone.Zone
-	blocklist *blocklist.Blocklist
-	metrics   *metrics.MetricsCollector
+	config      *config.Config
+	logger      *util.Logger
+	cache       *cache.Cache
+	upstream    *upstream.Client
+	zones       map[string]*zone.Zone
+	blocklist   *blocklist.Blocklist
+	metrics     *metrics.MetricsCollector
+	validator   *dnssec.Validator         // NEW: DNSSEC validator
+	zoneSigners map[string]*dnssec.Signer // NEW: Zone signers for authoritative zones
+	cluster     *cluster.Cluster          // NEW: Cluster manager
 }
 
 func main() {
@@ -155,6 +196,92 @@ func run() error {
 		logger.Infof("Metrics server listening on %s%s", cfg.Metrics.Bind, cfg.Metrics.Path)
 	}
 
+	// Initialize DNSSEC validator if enabled
+	var validator *dnssec.Validator
+	if cfg.DNSSEC.Enabled && client != nil {
+		trustAnchors := dnssec.NewTrustAnchorStoreWithBuiltIn()
+
+		// Load custom trust anchors if specified
+		if cfg.DNSSEC.TrustAnchor != "" {
+			if err := trustAnchors.LoadFromFile(cfg.DNSSEC.TrustAnchor); err != nil {
+				logger.Warnf("Failed to load trust anchor file: %v", err)
+			} else {
+				logger.Infof("Loaded trust anchors from %s", cfg.DNSSEC.TrustAnchor)
+			}
+		}
+
+		// Create resolver adapter
+		resolverAdapter := &dnssecResolverAdapter{upstream: client}
+
+		validator = dnssec.NewValidator(dnssec.ValidatorConfig{
+			Enabled:    cfg.DNSSEC.Enabled,
+			IgnoreTime: cfg.DNSSEC.IgnoreTime,
+		}, trustAnchors, resolverAdapter)
+
+		logger.Info("DNSSEC validation enabled")
+	}
+
+	// Initialize cluster manager if enabled
+	var clusterMgr *cluster.Cluster
+	if cfg.Cluster.Enabled {
+		clusterConfig := cluster.Config{
+			Enabled:   cfg.Cluster.Enabled,
+			NodeID:    cfg.Cluster.NodeID,
+			BindAddr:  cfg.Cluster.BindAddr,
+			GossipPort: cfg.Cluster.GossipPort,
+			Region:    cfg.Cluster.Region,
+			Zone:      cfg.Cluster.Zone,
+			Weight:    cfg.Cluster.Weight,
+			SeedNodes: cfg.Cluster.SeedNodes,
+			CacheSync: cfg.Cluster.CacheSync,
+			HTTPAddr:  cfg.Server.HTTP.Bind,
+		}
+
+		clusterMgr, err = cluster.New(clusterConfig, logger, dnsCache)
+		if err != nil {
+			logger.Warnf("Failed to initialize cluster: %v", err)
+		} else {
+			if err := clusterMgr.Start(); err != nil {
+				logger.Warnf("Failed to start cluster: %v", err)
+				clusterMgr = nil
+			} else {
+				logger.Infof("Cluster initialized with node ID %s", clusterMgr.GetNodeID())
+				logger.Infof("Cluster has %d nodes", clusterMgr.GetNodeCount())
+
+				// Set up cache invalidation callback for cluster sync
+				if cfg.Cluster.CacheSync {
+					dnsCache.SetInvalidateFunc(func(key string) {
+						if err := clusterMgr.InvalidateCache([]string{key}); err != nil {
+							logger.Debugf("Failed to broadcast cache invalidation: %v", err)
+						}
+					})
+					logger.Info("Cache synchronization enabled across cluster")
+				}
+
+				// Start cluster metrics updater
+				go func() {
+					ticker := time.NewTicker(30 * time.Second)
+					defer ticker.Stop()
+					for {
+						select {
+						case <-ticker.C:
+							if clusterMgr != nil && metricsCollector != nil {
+								stats := clusterMgr.Stats()
+								metricsCollector.SetClusterMetrics(
+									stats.NodeCount,
+									stats.AliveCount,
+									stats.IsHealthy,
+									stats.GossipStats.MessagesSent,
+									stats.GossipStats.MessagesReceived,
+								)
+							}
+						}
+					}
+				}()
+			}
+		}
+	}
+
 	// Initialize zone manager
 	zoneManager := zone.NewManager()
 	for _, zoneFile := range cfg.Zones {
@@ -169,13 +296,16 @@ func run() error {
 
 	// Create DNS handler (needed for API server DoH support)
 	handler := &integratedHandler{
-		config:    cfg,
-		logger:    logger,
-		cache:     dnsCache,
-		upstream:  client,
-		zones:     zones,
-		blocklist: bl,
-		metrics:   metricsCollector,
+		config:      cfg,
+		logger:      logger,
+		cache:       dnsCache,
+		upstream:    client,
+		zones:       zones,
+		blocklist:   bl,
+		metrics:     metricsCollector,
+		validator:   validator,
+		zoneSigners: make(map[string]*dnssec.Signer),
+		cluster:     clusterMgr,
 	}
 
 	// Initialize API server
@@ -198,7 +328,7 @@ func run() error {
 			}
 		}
 		return nil
-	}, handler)
+	}, handler, clusterMgr)
 	if err := apiServer.Start(); err != nil {
 		logger.Warnf("Failed to start API server: %v", err)
 	} else if cfg.Server.HTTP.Enabled {
@@ -237,6 +367,36 @@ func run() error {
 	}()
 	logger.Infof("TCP server listening on %s", tcpAddr)
 
+	// Start TLS server if enabled
+	var tlsServer *server.TLSServer
+	if cfg.Server.TLS.Enabled {
+		tlsAddr := cfg.Server.TLS.Bind
+		if tlsAddr == "" {
+			tlsAddr = fmt.Sprintf(":%d", server.DefaultTLSPort)
+		}
+
+		// Load TLS certificate
+		cert, err := tls.LoadX509KeyPair(cfg.Server.TLS.CertFile, cfg.Server.TLS.KeyFile)
+		if err != nil {
+			return fmt.Errorf("loading TLS certificate: %w", err)
+		}
+
+		tlsConfig := &tls.Config{
+			Certificates: []tls.Certificate{cert},
+		}
+
+		tlsServer = server.NewTLSServer(tlsAddr, handler, tlsConfig)
+		if err := tlsServer.Listen(); err != nil {
+			return fmt.Errorf("starting TLS server: %w", err)
+		}
+		go func() {
+			if err := tlsServer.Serve(); err != nil {
+				logger.Errorf("TLS server error: %v", err)
+			}
+		}()
+		logger.Infof("TLS server listening on %s (DoT)", tlsAddr)
+	}
+
 	// Setup signal handling
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
@@ -253,6 +413,9 @@ func run() error {
 			// Stop servers
 			udpServer.Stop()
 			tcpServer.Stop()
+			if tlsServer != nil {
+				tlsServer.Stop()
+			}
 
 			// Close upstream client
 			if client != nil {
@@ -267,6 +430,11 @@ func run() error {
 			// Stop API server
 			if apiServer != nil {
 				apiServer.Stop()
+			}
+
+			// Stop cluster manager
+			if clusterMgr != nil {
+				clusterMgr.Stop()
 			}
 
 			logger.Info("Server shutdown complete")
@@ -425,6 +593,36 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 			}
 			sendError(w, r, protocol.RcodeServerFailure)
 			return
+		}
+
+		// Validate DNSSEC if enabled and response has signatures
+		if h.validator != nil && dnssec.HasSignature(resp) {
+			ctx := context.Background()
+			result, err := h.validator.ValidateResponse(ctx, resp, qname)
+			if err != nil {
+				h.logger.Warnf("DNSSEC validation error for %s: %v", qname, err)
+			}
+
+			switch result {
+			case dnssec.ValidationSecure:
+				h.logger.Debugf("DNSSEC validation secure for %s", qname)
+				// Set AD bit if validation succeeded
+				resp.Header.Flags.AD = true
+			case dnssec.ValidationBogus:
+				h.logger.Warnf("DNSSEC validation failed (bogus) for %s", qname)
+				if h.config.DNSSEC.Enabled {
+					// Return SERVFAIL if DNSSEC validation failed
+					if h.metrics != nil {
+						h.metrics.RecordResponse(protocol.RcodeServerFailure)
+					}
+					sendError(w, r, protocol.RcodeServerFailure)
+					return
+				}
+			case dnssec.ValidationInsecure:
+				h.logger.Debugf("DNSSEC insecure zone for %s", qname)
+			case dnssec.ValidationIndeterminate:
+				h.logger.Debugf("DNSSEC indeterminate for %s", qname)
+			}
 		}
 
 		// Cache successful response

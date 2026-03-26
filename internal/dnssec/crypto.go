@@ -85,10 +85,10 @@ func parseRSAPublicKey(keyData []byte) (*PublicKey, error) {
 
 	// Determine algorithm from key size or use a default
 	// This is a simplified approach - real implementation should track algorithm
-	algorithm := protocol.AlgorithmRSASHA256
+	alg := protocol.AlgorithmRSASHA256
 
 	return &PublicKey{
-		Algorithm: algorithm,
+		Algorithm: uint8(alg),
 		Key: &rsa.PublicKey{
 			N: modulus,
 			E: int(exponent.Int64()),

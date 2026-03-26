@@ -29,6 +29,13 @@ type MetricsCollector struct {
 	// Upstream metrics
 	upstreamQueries map[string]*uint64 // by server
 
+	// Cluster metrics
+	clusterNodeCount  uint64
+	clusterAliveCount uint64
+	clusterHealthy    uint32 // 0 or 1
+	clusterGossipSent uint64
+	clusterGossipRecv uint64
+
 	// Server metrics
 	startTime time.Time
 }
@@ -163,6 +170,22 @@ func (m *MetricsCollector) RecordBlocklistBlock() {
 	atomic.AddUint64(&m.blocklistBlocks, 1)
 }
 
+// SetClusterMetrics sets cluster-related metrics.
+func (m *MetricsCollector) SetClusterMetrics(nodeCount, aliveCount int, healthy bool, gossipSent, gossipRecv uint64) {
+	if !m.config.Enabled {
+		return
+	}
+	atomic.StoreUint64(&m.clusterNodeCount, uint64(nodeCount))
+	atomic.StoreUint64(&m.clusterAliveCount, uint64(aliveCount))
+	if healthy {
+		atomic.StoreUint32(&m.clusterHealthy, 1)
+	} else {
+		atomic.StoreUint32(&m.clusterHealthy, 0)
+	}
+	atomic.StoreUint64(&m.clusterGossipSent, gossipSent)
+	atomic.StoreUint64(&m.clusterGossipRecv, gossipRecv)
+}
+
 // RecordUpstreamQuery records an upstream query.
 func (m *MetricsCollector) RecordUpstreamQuery(server string) {
 	if !m.config.Enabled {
@@ -244,6 +267,28 @@ func (m *MetricsCollector) handleMetrics(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	m.mu.RUnlock()
+	fmt.Fprintln(w)
+
+	// Cluster metrics
+	fmt.Fprintf(w, "# HELP nothingdns_cluster_nodes_total Total number of cluster nodes\n")
+	fmt.Fprintf(w, "# TYPE nothingdns_cluster_nodes_total gauge\n")
+	fmt.Fprintf(w, "nothingdns_cluster_nodes_total %d\n\n", atomic.LoadUint64(&m.clusterNodeCount))
+
+	fmt.Fprintf(w, "# HELP nothingdns_cluster_nodes_alive Number of alive cluster nodes\n")
+	fmt.Fprintf(w, "# TYPE nothingdns_cluster_nodes_alive gauge\n")
+	fmt.Fprintf(w, "nothingdns_cluster_nodes_alive %d\n\n", atomic.LoadUint64(&m.clusterAliveCount))
+
+	fmt.Fprintf(w, "# HELP nothingdns_cluster_healthy Whether the cluster is healthy (1=healthy, 0=unhealthy)\n")
+	fmt.Fprintf(w, "# TYPE nothingdns_cluster_healthy gauge\n")
+	fmt.Fprintf(w, "nothingdns_cluster_healthy %d\n\n", atomic.LoadUint32(&m.clusterHealthy))
+
+	fmt.Fprintf(w, "# HELP nothingdns_cluster_gossip_messages_sent_total Total gossip messages sent\n")
+	fmt.Fprintf(w, "# TYPE nothingdns_cluster_gossip_messages_sent_total counter\n")
+	fmt.Fprintf(w, "nothingdns_cluster_gossip_messages_sent_total %d\n\n", atomic.LoadUint64(&m.clusterGossipSent))
+
+	fmt.Fprintf(w, "# HELP nothingdns_cluster_gossip_messages_received_total Total gossip messages received\n")
+	fmt.Fprintf(w, "# TYPE nothingdns_cluster_gossip_messages_received_total counter\n")
+	fmt.Fprintf(w, "nothingdns_cluster_gossip_messages_received_total %d\n", atomic.LoadUint64(&m.clusterGossipRecv))
 }
 
 // handleHealth serves a simple health check endpoint.
