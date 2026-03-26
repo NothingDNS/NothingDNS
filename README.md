@@ -1,23 +1,47 @@
 # NothingDNS
 
+[![Go Version](https://img.shields.io/badge/Go-1.21%2B-00ADD8?style=flat&logo=go)](https://golang.org)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Go Report Card](https://goreportcard.com/badge/github.com/nothingdns/nothingdns)](https://goreportcard.com/report/github.com/nothingdns/nothingdns)
+
 A zero-dependency DNS server written in pure Go. NothingDNS is designed to be lightweight, fast, and self-contained with no external dependencies.
 
 ## Features
 
+### Core DNS
 - **Zero Dependencies** - Pure Go implementation, no external libraries
 - **DNS Protocol Support** - Full RFC 1035 compliant DNS message handling
-- **DNSSEC** - DNS Security Extensions validation and zone signing (RFC 4033/4034/4035)
-- **Caching** - Thread-safe LRU cache with TTL support and prefetching
-- **Upstream Forwarding** - Multiple upstream servers with health checking and failover strategies (round_robin, random, fastest, backup)
-- **Authoritative Zones** - Zone file support for hosting your own DNS records
 - **UDP & TCP** - Support for both UDP and TCP DNS queries
-- **Clustering** - Gossip-based cluster membership with cache synchronization
+- **Caching** - Thread-safe LRU cache with TTL support and prefetching
+- **Upstream Forwarding** - Multiple upstream servers with health checking and failover strategies
+
+### Security
 - **DNSSEC** - DNS Security Extensions validation and zone signing (RFC 4033/4034/4035)
-- **DNS over HTTPS (DoH)** - RFC 8484 compliant DoH support via HTTP API
-- **Signal Handling** - Graceful shutdown (SIGINT/SIGTERM) and configuration reload (SIGHUP)
+- **DNS over HTTPS (DoH)** - RFC 8484 compliant DoH support
+- **DNS over TLS (DoT)** - RFC 7858 compliant DoT support
 - **Blocklist Support** - Block domains using hosts file format
-- **Prometheus Metrics** - Export metrics for monitoring and observability
-- **HTTP API** - RESTful API for server management and monitoring
+- **ACL** - Access control lists for client filtering
+
+### Authoritative
+- **Authoritative Zones** - Zone file support for hosting your own DNS records
+- **Slave Zones** - AXFR/IXFR zone transfer from master servers
+- **Zone Transfer** - AXFR support for serving zones to secondary servers
+
+### High Availability
+- **Clustering** - Gossip-based cluster membership with cache synchronization
+- **Anycast/Load Balancing** - Geographic load balancing with health checks
+- **Hot Reload** - SIGHUP for configuration reload without downtime
+
+### Storage & Persistence
+- **KV Store** - Built-in key-value store with ACID transactions
+- **WAL** - Write-ahead logging for crash recovery
+- **TLV Serialization** - Efficient binary serialization
+
+### Management & Observability
+- **Web Dashboard** - Real-time query stream and statistics
+- **HTTP API** - RESTful API for server management
+- **MCP Server** - Model Context Protocol for AI assistant integration
+- **Prometheus Metrics** - Export metrics for monitoring
 - **Management CLI** - `dnsctl` tool for zone and server management
 
 ## Quick Start
@@ -167,6 +191,11 @@ server:
 | `/api/v1/config/reload` | POST | Reload configuration |
 | `/api/v1/cluster/status` | GET | Cluster health and statistics |
 | `/api/v1/cluster/nodes` | GET | List all cluster nodes |
+| `/api/dashboard/stats` | GET | Dashboard statistics |
+| `/api/dashboard/queries` | GET | Recent queries |
+| `/api/dashboard/zones` | GET | Zone list for dashboard |
+| `/ws` | WS | WebSocket for live query stream |
+| `/` | GET | Web dashboard UI |
 
 ### Authentication
 
@@ -474,24 +503,29 @@ cluster:
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        NothingDNS                            │
-├─────────────────────────────────────────────────────────────┤
-│  UDP Server    │    TCP Server    │    Signal Handler       │
-├────────────────┴──────────────────┴─────────────────────────┤
-│                    Request Handler                           │
-│  ┌─────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
-│  │  Cache  │→ │Auth Zones   │→ │   Upstream Client       │  │
-│  │ (LRU)   │  │             │  │  (Health Check/Failover)│  │
-│  └────↑────┘  └─────────────┘  └─────────────────────────┘  │
-│       │                                                      │
-│       │         ┌──────────────────────┐                    │
-│       └────────→│    Cluster Manager   │                    │
-│                 │  (Gossip/Cache Sync) │                    │
-│                 └──────────────────────┘                    │
-├─────────────────────────────────────────────────────────────┤
-│                    Config Parser (YAML)                      │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           NothingDNS                                     │
+├─────────────────────────────────────────────────────────────────────────┤
+│  UDP Server  │  TCP Server  │  DoH Server  │  DoT Server  │  Dashboard  │
+├──────────────────────────────────────────────────────────────────────────┤
+│                          Request Handler                                  │
+│  ┌─────────┐  ┌─────────────┐  ┌─────────────┐  ┌────────────────────┐  │
+│  │  Cache  │→ │ Auth Zones  │→ │  Upstream   │→ │ DNSSEC Validator   │  │
+│  │ (LRU)   │  │ + Transfer  │  │ + Anycast   │  │                    │  │
+│  └────↑────┘  └─────────────┘  └─────────────┘  └────────────────────┘  │
+│       │                       ┌───────────────────────────────────────┐  │
+│       │                       │         Storage Layer                 │  │
+│       └───────────────────────│  KV Store │ WAL │ TLV Serialization  │  │
+│                               └───────────────────────────────────────┘  │
+│       │         ┌──────────────────────────────┐                        │
+│       └────────→│      Cluster Manager         │                        │
+│                 │   (Gossip / Cache Sync)      │                        │
+│                 └──────────────────────────────┘                        │
+├─────────────────────────────────────────────────────────────────────────┤
+│                    API Layer (HTTP + MCP)                                │
+├─────────────────────────────────────────────────────────────────────────┤
+│                    Config Parser (YAML) + Hot Reload                     │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Project Structure
@@ -503,17 +537,24 @@ cluster:
 │   └── dnsctl/         # CLI management tool
 ├── internal/
 │   ├── api/            # HTTP API for management
+│   │   └── mcp/        # MCP server for AI integration
 │   ├── cache/          # LRU cache with TTL
 │   ├── cluster/        # Gossip-based clustering
 │   ├── config/         # YAML configuration parser
+│   ├── dashboard/      # Web dashboard
 │   ├── dnssec/         # DNSSEC validation and signing
 │   ├── doh/            # DNS over HTTPS (RFC 8484)
+│   ├── dot/            # DNS over TLS (RFC 7858)
 │   ├── metrics/        # Prometheus metrics export
 │   ├── protocol/       # DNS protocol implementation
 │   ├── server/         # UDP/TCP server handlers
+│   ├── storage/        # KV store with WAL
+│   ├── transfer/       # Zone transfer (AXFR/IXFR)
 │   ├── upstream/       # Upstream DNS client
 │   ├── util/           # Logging utilities
 │   └── zone/           # Zone file parser
+├── Dockerfile
+├── docker-compose.yml
 └── go.mod
 ```
 
@@ -540,6 +581,221 @@ cluster:
 - **fastest** - Use the fastest responding server
 - **backup** - Use primary unless it fails
 
+## Docker
+
+### Quick Start with Docker
+
+```bash
+# Build the image
+docker build -t nothingdns:latest .
+
+# Run with default configuration
+docker run -d -p 53:53/udp -p 53:53 -p 8080:8080 nothingdns:latest
+
+# Run with custom configuration
+docker run -d \
+  -p 53:53/udp \
+  -p 53:53 \
+  -p 8080:8080 \
+  -v /etc/nothingdns:/etc/nothingdns \
+  nothingdns:latest -config /etc/nothingdns/config.yaml
+```
+
+### Docker Compose Cluster
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+
+services:
+  nothingdns-1:
+    image: nothingdns:latest
+    hostname: nothingdns-1
+    ports:
+      - "53:53/udp"
+      - "53:53"
+      - "8080:8080"
+    volumes:
+      - ./config-node1.yaml:/etc/nothingdns/config.yaml
+      - ./zones:/etc/nothingdns/zones
+    networks:
+      - dns-net
+
+  nothingdns-2:
+    image: nothingdns:latest
+    hostname: nothingdns-2
+    ports:
+      - "5354:53/udp"
+      - "5354:53"
+      - "8081:8080"
+    volumes:
+      - ./config-node2.yaml:/etc/nothingdns/config.yaml
+      - ./zones:/etc/nothingdns/zones
+    networks:
+      - dns-net
+
+  nothingdns-3:
+    image: nothingdns:latest
+    hostname: nothingdns-3
+    ports:
+      - "5355:53/udp"
+      - "5355:53"
+      - "8082:8080"
+    volumes:
+      - ./config-node3.yaml:/etc/nothingdns/config.yaml
+      - ./zones:/etc/nothingdns/zones
+    networks:
+      - dns-net
+
+networks:
+  dns-net:
+    driver: bridge
+```
+
+## Web Dashboard
+
+NothingDNS includes a built-in web dashboard for real-time monitoring:
+
+```yaml
+server:
+  http:
+    enabled: true
+    bind: "0.0.0.0:8080"
+    dashboard: true
+```
+
+Access the dashboard at `http://localhost:8080/`
+
+### Dashboard Features
+
+- Real-time query stream via WebSocket
+- Statistics cards (queries, cache hit rate, blocked, zones)
+- Live query visualization with status badges
+- Auto-reconnecting WebSocket connection
+
+## MCP Server (AI Integration)
+
+NothingDNS provides a Model Context Protocol (MCP) server for AI assistant integration:
+
+```yaml
+server:
+  mcp:
+    enabled: true
+    transport: stdio  # or "sse" for HTTP Server-Sent Events
+```
+
+### Available MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `dns_query` | Query DNS records for a domain |
+| `zone_list` | List all configured zones |
+| `zone_get` | Get details of a specific zone |
+| `zone_create` | Create a new zone |
+| `zone_delete` | Delete a zone |
+| `record_add` | Add a DNS record to a zone |
+| `record_delete` | Delete a DNS record |
+| `record_list` | List records in a zone |
+| `cache_stats` | Get cache statistics |
+| `cache_flush` | Flush the DNS cache |
+| `blocklist_check` | Check if a domain is blocked |
+| `server_stats` | Get server statistics |
+
+## Storage & Persistence
+
+NothingDNS includes a built-in key-value store with WAL support:
+
+```yaml
+storage:
+  enabled: true
+  path: /var/lib/nothingdns/data
+  wal_enabled: true
+  sync_interval: 5s
+```
+
+### Features
+
+- ACID transactions with atomic writes
+- Write-ahead logging (WAL) for crash recovery
+- TLV binary serialization for efficiency
+- Cursor-based iteration
+- Bucket-based organization
+
+## Hot Reload
+
+Send `SIGHUP` to reload configuration without downtime:
+
+```bash
+# Reload configuration
+kill -HUP $(pidof nothingdns)
+
+# Or via CLI
+dnsctl config reload
+```
+
+### Reloadable Components
+
+- Zone files
+- Blocklist files
+- ACL rules
+- Rate limits
+- TLS certificates
+- Log level
+
+## Comparison
+
+| Feature | NothingDNS | CoreDNS | PowerDNS | Unbound |
+|---------|------------|---------|----------|---------|
+| Zero Dependencies | ✅ | ❌ | ❌ | ❌ |
+| Pure Go | ✅ | ✅ | ❌ | ❌ |
+| DNSSEC Validation | ✅ | ✅ | ✅ | ✅ |
+| DNSSEC Signing | ✅ | ❌ | ✅ | ❌ |
+| DoH Support | ✅ | ✅ | ✅ | ✅ |
+| DoT Support | ✅ | ✅ | ✅ | ✅ |
+| Web Dashboard | ✅ | ❌ | ✅ | ❌ |
+| MCP/AI Integration | ✅ | ❌ | ❌ | ❌ |
+| Built-in Clustering | ✅ | ✅ | ✅ | ❌ |
+| Zone Transfer (AXFR) | ✅ | ✅ | ✅ | ❌ |
+| Anycast LB | ✅ | ❌ | ❌ | ❌ |
+| Hot Reload | ✅ | ✅ | ✅ | ✅ |
+| Memory Footprint | ~10MB | ~30MB | ~50MB | ~20MB |
+
+## Systemd Service
+
+Create `/etc/systemd/system/nothingdns.service`:
+
+```ini
+[Unit]
+Description=NothingDNS Server
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nobody
+Group=nogroup
+ExecStart=/usr/local/bin/nothingdns -config /etc/nothingdns/config.yaml
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65535
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+# Enable and start
+systemctl enable nothingdns
+systemctl start nothingdns
+
+# Reload configuration
+systemctl reload nothingdns
+```
+
 ## License
 
 MIT License - See LICENSE file for details
@@ -561,3 +817,12 @@ Contributions are welcome! Please ensure:
 - [x] Metrics export (Prometheus)
 - [x] DoH (DNS over HTTPS) support
 - [x] DoT (DNS over TLS) support
+- [x] Web dashboard
+- [x] MCP server for AI integration
+- [x] Storage & persistence (KV store + WAL)
+- [x] Anycast/Load balancing
+- [x] Slave zone support (AXFR/IXFR)
+- [x] Configuration hot reload
+- [ ] Web GUI for zone management
+- [ ] DNS64/NAT64 support
+- [ ] Response Rate Limiting (RRL)

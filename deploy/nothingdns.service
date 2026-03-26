@@ -1,0 +1,53 @@
+[Unit]
+Description=NothingDNS Server
+Documentation=https://github.com/nothingdns/nothingdns
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nobody
+Group=nogroup
+
+# Main executable
+ExecStart=/usr/local/bin/nothingdns -config /etc/nothingdns/nothingdns.yaml
+
+# Reload configuration on SIGHUP
+ExecReload=/bin/kill -HUP $MAINPID
+
+# Restart policy
+Restart=on-failure
+RestartSec=5
+
+# Resource limits
+LimitNOFILE=65535
+LimitNPROC=512
+
+# Security - bind to privileged ports
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_RAW
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_RAW
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+PrivateTmp=true
+PrivateDevices=true
+
+# Allow write access to data directory
+ReadWritePaths=/var/lib/nothingdns
+
+# Environment
+Environment=NOTHINGDNS_CONFIG=/etc/nothingdns/nothingdns.yaml
+
+# Working directory
+WorkingDirectory=/var/lib/nothingdns
+
+# Timeout settings
+TimeoutStartSec=30
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

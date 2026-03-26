@@ -1,0 +1,45 @@
+# NothingDNS Configuration - Node 2 (Secondary)
+server:
+  port: 53
+  bind:
+    - 0.0.0.0
+  http:
+    enabled: true
+    bind: "0.0.0.0:8080"
+    dashboard: true
+
+upstream:
+  strategy: round_robin
+  servers:
+    - 1.1.1.1:53
+    - 8.8.8.8:53
+  timeout: 5
+
+cache:
+  size: 10000
+  min_ttl: 300
+  max_ttl: 86400
+  default_ttl: 3600
+  negative_ttl: 60
+  prefetch: true
+  prefetch_threshold: 28800
+
+cluster:
+  enabled: true
+  node_id: "node-2"
+  bind_addr: "172.28.0.11"
+  gossip_port: 7946
+  region: "default"
+  zone: "default"
+  weight: 100
+  seed_nodes:
+    - "172.28.0.10:7946"
+  cache_sync: true
+
+logging:
+  level: info
+  format: json
+  output: stdout
+
+zones:
+  - /etc/nothingdns/zones/example.com.zone

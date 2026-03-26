@@ -1,0 +1,121 @@
+# NothingDNS Docker Compose
+# Example configuration for a 3-node cluster with web dashboard
+#
+# Usage:
+#   docker-compose up -d
+#
+# Access:
+#   - DNS: localhost:53 (UDP/TCP)
+#   - Dashboard (Node 1): http://localhost:8080
+#   - Dashboard (Node 2): http://localhost:8081
+#   - Dashboard (Node 3): http://localhost:8082
+
+version: '3.8'
+
+services:
+  # Node 1 - Primary (seed node)
+  nothingdns-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: nothingdns:latest
+    container_name: nothingdns-1
+    hostname: nothingdns-1
+    ports:
+      - "53:53/udp"
+      - "53:53"
+      - "8080:8080"
+      - "7946:7946/udp"
+    volumes:
+      - ./deploy/config-node1.yaml:/etc/nothingdns/nothingdns.yaml:ro
+      - ./deploy/zones:/etc/nothingdns/zones:ro
+      - nothingdns-data-1:/data
+    environment:
+      - NOTHINGDNS_CONFIG=/etc/nothingdns/nothingdns.yaml
+    networks:
+      dns-net:
+        ipv4_address: 172.28.0.10
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/dnsctl", "-server", "http://localhost:8080", "server", "health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  # Node 2 - Secondary
+  nothingdns-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: nothingdns:latest
+    container_name: nothingdns-2
+    hostname: nothingdns-2
+    ports:
+      - "5354:53/udp"
+      - "5354:53"
+      - "8081:8080"
+      - "7947:7946/udp"
+    volumes:
+      - ./deploy/config-node2.yaml:/etc/nothingdns/nothingdns.yaml:ro
+      - ./deploy/zones:/etc/nothingdns/zones:ro
+      - nothingdns-data-2:/data
+    environment:
+      - NOTHINGDNS_CONFIG=/etc/nothingdns/nothingdns.yaml
+    networks:
+      dns-net:
+        ipv4_address: 172.28.0.11
+    depends_on:
+      - nothingdns-1
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/dnsctl", "-server", "http://localhost:8080", "server", "health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  # Node 3 - Tertiary
+  nothingdns-3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: nothingdns:latest
+    container_name: nothingdns-3
+    hostname: nothingdns-3
+    ports:
+      - "5355:53/udp"
+      - "5355:53"
+      - "8082:8080"
+      - "7948:7946/udp"
+    volumes:
+      - ./deploy/config-node3.yaml:/etc/nothingdns/nothingdns.yaml:ro
+      - ./deploy/zones:/etc/nothingdns/zones:ro
+      - nothingdns-data-3:/data
+    environment:
+      - NOTHINGDNS_CONFIG=/etc/nothingdns/nothingdns.yaml
+    networks:
+      dns-net:
+        ipv4_address: 172.28.0.12
+    depends_on:
+      - nothingdns-1
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/dnsctl", "-server", "http://localhost:8080", "server", "health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+networks:
+  dns-net:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.0.0/24
+
+volumes:
+  nothingdns-data-1:
+  nothingdns-data-2:
+  nothingdns-data-3:
