@@ -419,3 +419,571 @@ func TestNOTIFYSlaveHandler_SetSerialChecker(t *testing.T) {
 		t.Error("Serial checker was not called")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// buildNOTIFYRequest - invalid zone name (label > 63 chars)
+// ---------------------------------------------------------------------------
+
+func TestNOTIFYSender_buildNOTIFYRequest_InvalidName(t *testing.T) {
+	sender := NewNOTIFYSender(":53")
+
+	longLabel := strings.Repeat("a", 70)
+	_, err := sender.buildNOTIFYRequest(longLabel+".example.com.", 2024010101)
+	if err == nil {
+		t.Error("Expected error for zone name with label exceeding 63 chars")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SendNOTIFY - connection error (unreachable slave)
+// ---------------------------------------------------------------------------
+
+func TestNOTIFYSender_SendNOTIFY_ConnectionError(t *testing.T) {
+	sender := NewNOTIFYSender(":0")
+	sender.SetTimeout(100 * time.Millisecond)
+
+	err := sender.SendNOTIFY("example.com.", 2024010101, "192.0.2.1:53")
+	if err == nil {
+		t.Error("Expected error for unreachable slave address")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SendNOTIFY - success with mock UDP server
+// ---------------------------------------------------------------------------
+
+func TestNOTIFYSender_SendNOTIFY_Success(t *testing.T) {
+	// Start a mock UDP server that responds to NOTIFY
+	serverAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("ResolveUDPAddr: %v", err)
+	}
+
+	serverConn, err := net.ListenUDP("udp", serverAddr)
+	if err != nil {
+		t.Fatalf("ListenUDP: %v", err)
+	}
+	defer serverConn.Close()
+
+	go func() {
+		buf := make([]byte, 65535)
+		n, clientAddr, err := serverConn.ReadFromUDP(buf)
+		if err != nil {
+			return
+		}
+
+		// Parse the request
+		msg, err := protocol.UnpackMessage(buf[:n])
+		if err != nil {
+			return
+		}
+
+		// Build a proper NOTIFY response
+		resp := &protocol.Message{
+			Header: protocol.Header{
+				ID: msg.Header.ID,
+				Flags: protocol.Flags{
+					QR:     true,
+					Opcode: protocol.OpcodeNotify,
+				},
+			},
+			Questions: msg.Questions,
+		}
+
+		respBuf := make([]byte, 65535)
+		rn, err := resp.Pack(respBuf)
+		if err != nil {
+			return
+		}
+
+		serverConn.WriteToUDP(respBuf[:rn], clientAddr)
+	}()
+
+	sender := NewNOTIFYSender(":0")
+	sender.SetTimeout(2 * time.Second)
+
+	err = sender.SendNOTIFY("example.com.", 2024010101, serverConn.LocalAddr().String())
+	if err != nil {
+		t.Fatalf("SendNOTIFY() error = %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SendNOTIFY - server returns error RCODE
+// ---------------------------------------------------------------------------
+
+func TestNOTIFYSender_SendNOTIFY_ServerError(t *testing.T) {
+	serverAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("ResolveUDPAddr: %v", err)
+	}
+
+	serverConn, err := net.ListenUDP("udp", serverAddr)
+	if err != nil {
+		t.Fatalf("ListenUDP: %v", err)
+	}
+	defer serverConn.Close()
+
+	go func() {
+		buf := make([]byte, 65535)
+		n, clientAddr, err := serverConn.ReadFromUDP(buf)
+		if err != nil {
+			return
+		}
+
+		msg, err := protocol.UnpackMessage(buf[:n])
+		if err != nil {
+			return
+		}
+
+		// Respond with Refused RCODE
+		resp := &protocol.Message{
+			Header: protocol.Header{
+				ID: msg.Header.ID,
+				Flags: protocol.Flags{
+					QR:     true,
+					Opcode: protocol.OpcodeNotify,
+					RCODE:  protocol.RcodeRefused,
+				},
+			},
+			Questions: msg.Questions,
+		}
+
+		respBuf := make([]byte, 65535)
+		rn, err := resp.Pack(respBuf)
+		if err != nil {
+			return
+		}
+
+		serverConn.WriteToUDP(respBuf[:rn], clientAddr)
+	}()
+
+	sender := NewNOTIFYSender(":0")
+	sender.SetTimeout(2 * time.Second)
+
+	err = sender.SendNOTIFY("example.com.", 2024010101, serverConn.LocalAddr().String())
+	if err == nil {
+		t.Error("Expected error for server error RCODE")
+	}
+	if !strings.Contains(err.Error(), "rcode") {
+		t.Errorf("Expected rcode error, got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SendNOTIFY - server response with QR not set
+// ---------------------------------------------------------------------------
+
+func TestNOTIFYSender_SendNOTIFY_QRNotSet(t *testing.T) {
+	serverAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("ResolveUDPAddr: %v", err)
+	}
+
+	serverConn, err := net.ListenUDP("udp", serverAddr)
+	if err != nil {
+		t.Fatalf("ListenUDP: %v", err)
+	}
+	defer serverConn.Close()
+
+	go func() {
+		buf := make([]byte, 65535)
+		n, clientAddr, err := serverConn.ReadFromUDP(buf)
+		if err != nil {
+			return
+		}
+
+		msg, err := protocol.UnpackMessage(buf[:n])
+		if err != nil {
+			return
+		}
+
+		// Respond with QR=0 (not set)
+		resp := &protocol.Message{
+			Header: protocol.Header{
+				ID: msg.Header.ID,
+				Flags: protocol.Flags{
+					QR:     false,
+					Opcode: protocol.OpcodeNotify,
+				},
+			},
+			Questions: msg.Questions,
+		}
+
+		respBuf := make([]byte, 65535)
+		rn, err := resp.Pack(respBuf)
+		if err != nil {
+			return
+		}
+
+		serverConn.WriteToUDP(respBuf[:rn], clientAddr)
+	}()
+
+	sender := NewNOTIFYSender(":0")
+	sender.SetTimeout(2 * time.Second)
+
+	err = sender.SendNOTIFY("example.com.", 2024010101, serverConn.LocalAddr().String())
+	if err == nil {
+		t.Error("Expected error for QR not set in response")
+	}
+	if !strings.Contains(err.Error(), "QR") {
+		t.Errorf("Expected QR error, got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SendNOTIFY - server response with wrong opcode
+// ---------------------------------------------------------------------------
+
+func TestNOTIFYSender_SendNOTIFY_OpcodeMismatch(t *testing.T) {
+	serverAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("ResolveUDPAddr: %v", err)
+	}
+
+	serverConn, err := net.ListenUDP("udp", serverAddr)
+	if err != nil {
+		t.Fatalf("ListenUDP: %v", err)
+	}
+	defer serverConn.Close()
+
+	go func() {
+		buf := make([]byte, 65535)
+		n, clientAddr, err := serverConn.ReadFromUDP(buf)
+		if err != nil {
+			return
+		}
+
+		msg, err := protocol.UnpackMessage(buf[:n])
+		if err != nil {
+			return
+		}
+
+		// Respond with QUERY opcode instead of NOTIFY
+		resp := &protocol.Message{
+			Header: protocol.Header{
+				ID: msg.Header.ID,
+				Flags: protocol.Flags{
+					QR:     true,
+					Opcode: protocol.OpcodeQuery,
+				},
+			},
+			Questions: msg.Questions,
+		}
+
+		respBuf := make([]byte, 65535)
+		rn, err := resp.Pack(respBuf)
+		if err != nil {
+			return
+		}
+
+		serverConn.WriteToUDP(respBuf[:rn], clientAddr)
+	}()
+
+	sender := NewNOTIFYSender(":0")
+	sender.SetTimeout(2 * time.Second)
+
+	err = sender.SendNOTIFY("example.com.", 2024010101, serverConn.LocalAddr().String())
+	if err == nil {
+		t.Error("Expected error for opcode mismatch")
+	}
+	if !strings.Contains(err.Error(), "opcode") {
+		t.Errorf("Expected opcode error, got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SendNOTIFY - timeout (no server response)
+// ---------------------------------------------------------------------------
+
+func TestNOTIFYSender_SendNOTIFY_Timeout(t *testing.T) {
+	serverAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("ResolveUDPAddr: %v", err)
+	}
+
+	serverConn, err := net.ListenUDP("udp", serverAddr)
+	if err != nil {
+		t.Fatalf("ListenUDP: %v", err)
+	}
+	defer serverConn.Close()
+
+	// Server reads but never responds
+	go func() {
+		buf := make([]byte, 65535)
+		serverConn.ReadFromUDP(buf)
+	}()
+
+	sender := NewNOTIFYSender(":0")
+	sender.SetTimeout(100 * time.Millisecond)
+
+	err = sender.SendNOTIFY("example.com.", 2024010101, serverConn.LocalAddr().String())
+	if err == nil {
+		t.Error("Expected error for timeout")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HandleNOTIFY - serial from Authority section (Answer has no SOA)
+// ---------------------------------------------------------------------------
+
+func TestNOTIFYSlaveHandler_HandleNOTIFY_SerialFromAuthority(t *testing.T) {
+	zones := make(map[string]*zone.Zone)
+	z := zone.NewZone("example.com.")
+	z.SOA = &zone.SOARecord{Serial: 100}
+	zones["example.com."] = z
+
+	handler := NewNOTIFYSlaveHandler(zones)
+
+	origin, _ := protocol.ParseName("example.com.")
+	mname, _ := protocol.ParseName("ns1.example.com.")
+	rname, _ := protocol.ParseName("admin.example.com.")
+
+	// SOA in Authority section, not in Answer
+	soaRR := &protocol.ResourceRecord{
+		Name:  origin,
+		Type:  protocol.TypeSOA,
+		Class: protocol.ClassIN,
+		TTL:   86400,
+		Data: &protocol.RDataSOA{
+			MName: mname, RName: rname,
+			Serial: 200, Refresh: 3600,
+		},
+	}
+
+	req := &protocol.Message{
+		Header: protocol.Header{
+			QDCount: 1,
+			NSCount: 1,
+			Flags:   protocol.Flags{Opcode: protocol.OpcodeNotify},
+		},
+		Questions: []*protocol.Question{
+			{Name: origin, QType: protocol.TypeSOA, QClass: protocol.ClassIN},
+		},
+		Authorities: []*protocol.ResourceRecord{soaRR},
+	}
+
+	resp, err := handler.HandleNOTIFY(req, net.ParseIP("127.0.0.1"))
+	if err != nil {
+		t.Fatalf("HandleNOTIFY() error = %v", err)
+	}
+	if resp.Header.Flags.RCODE != protocol.RcodeSuccess {
+		t.Errorf("Expected RcodeSuccess, got %d", resp.Header.Flags.RCODE)
+	}
+
+	// Check notify channel received the serial from Authority
+	select {
+	case notifyReq := <-handler.GetNotifyChannel():
+		if notifyReq.Serial != 200 {
+			t.Errorf("Expected serial 200 (from Authority), got %d", notifyReq.Serial)
+		}
+	case <-time.After(time.Second):
+		t.Error("Timeout waiting for NOTIFY event")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HandleNOTIFY - serial from local zone (no SOA in Answer or Authority)
+// ---------------------------------------------------------------------------
+
+func TestNOTIFYSlaveHandler_HandleNOTIFY_SerialFromLocalZone(t *testing.T) {
+	zones := make(map[string]*zone.Zone)
+	z := zone.NewZone("example.com.")
+	z.SOA = &zone.SOARecord{
+		MName:  "ns1.example.com.",
+		RName:  "admin.example.com.",
+		Serial: 300,
+	}
+	zones["example.com."] = z
+
+	handler := NewNOTIFYSlaveHandler(zones)
+
+	origin, _ := protocol.ParseName("example.com.")
+
+	// No SOA in Answer or Authority - should fall back to local zone SOA
+	req := &protocol.Message{
+		Header: protocol.Header{
+			QDCount: 1,
+			Flags:   protocol.Flags{Opcode: protocol.OpcodeNotify},
+		},
+		Questions: []*protocol.Question{
+			{Name: origin, QType: protocol.TypeSOA, QClass: protocol.ClassIN},
+		},
+	}
+
+	resp, err := handler.HandleNOTIFY(req, net.ParseIP("127.0.0.1"))
+	if err != nil {
+		t.Fatalf("HandleNOTIFY() error = %v", err)
+	}
+	if resp.Header.Flags.RCODE != protocol.RcodeSuccess {
+		t.Errorf("Expected RcodeSuccess, got %d", resp.Header.Flags.RCODE)
+	}
+
+	// Local zone serial is 300, current zone serial is also 300, so receivedSerial <= z.SOA.Serial
+	// This means needsUpdate=false, so nothing on the channel
+	select {
+	case <-handler.GetNotifyChannel():
+		t.Error("Expected no NOTIFY event since serial didn't increase")
+	default:
+		// Expected - no update needed
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HandleNOTIFY - same serial should not trigger update
+// ---------------------------------------------------------------------------
+
+func TestNOTIFYSlaveHandler_HandleNOTIFY_SameSerial_NoUpdate(t *testing.T) {
+	zones := make(map[string]*zone.Zone)
+	z := zone.NewZone("example.com.")
+	z.SOA = &zone.SOARecord{Serial: 100}
+	zones["example.com."] = z
+
+	handler := NewNOTIFYSlaveHandler(zones)
+
+	origin, _ := protocol.ParseName("example.com.")
+	mname, _ := protocol.ParseName("ns1.example.com.")
+	rname, _ := protocol.ParseName("admin.example.com.")
+
+	// Same serial as current zone
+	soaRR := &protocol.ResourceRecord{
+		Name:  origin,
+		Type:  protocol.TypeSOA,
+		Class: protocol.ClassIN,
+		TTL:   86400,
+		Data: &protocol.RDataSOA{
+			MName: mname, RName: rname,
+			Serial: 100, Refresh: 3600, // Same serial as local zone
+		},
+	}
+
+	req := &protocol.Message{
+		Header: protocol.Header{
+			QDCount: 1,
+			ANCount: 1,
+			Flags:   protocol.Flags{Opcode: protocol.OpcodeNotify},
+		},
+		Questions: []*protocol.Question{
+			{Name: origin, QType: protocol.TypeSOA, QClass: protocol.ClassIN},
+		},
+		Answers: []*protocol.ResourceRecord{soaRR},
+	}
+
+	resp, err := handler.HandleNOTIFY(req, net.ParseIP("127.0.0.1"))
+	if err != nil {
+		t.Fatalf("HandleNOTIFY() error = %v", err)
+	}
+	if resp.Header.Flags.RCODE != protocol.RcodeSuccess {
+		t.Errorf("Expected RcodeSuccess, got %d", resp.Header.Flags.RCODE)
+	}
+
+	// Same serial, no update should be sent
+	select {
+	case <-handler.GetNotifyChannel():
+		t.Error("Expected no NOTIFY event for same serial")
+	default:
+		// Expected
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HandleNOTIFY - zone without SOA (nil check)
+// ---------------------------------------------------------------------------
+
+func TestNOTIFYSlaveHandler_HandleNOTIFY_ZoneWithoutSOA(t *testing.T) {
+	zones := make(map[string]*zone.Zone)
+	z := zone.NewZone("example.com.")
+	z.SOA = nil
+	zones["example.com."] = z
+
+	handler := NewNOTIFYSlaveHandler(zones)
+
+	origin, _ := protocol.ParseName("example.com.")
+
+	// No SOA in request, no SOA in zone
+	req := &protocol.Message{
+		Header: protocol.Header{
+			QDCount: 1,
+			Flags:   protocol.Flags{Opcode: protocol.OpcodeNotify},
+		},
+		Questions: []*protocol.Question{
+			{Name: origin, QType: protocol.TypeSOA, QClass: protocol.ClassIN},
+		},
+	}
+
+	resp, err := handler.HandleNOTIFY(req, net.ParseIP("127.0.0.1"))
+	if err != nil {
+		t.Fatalf("HandleNOTIFY() error = %v", err)
+	}
+	if resp.Header.Flags.RCODE != protocol.RcodeSuccess {
+		t.Errorf("Expected RcodeSuccess, got %d", resp.Header.Flags.RCODE)
+	}
+
+	// No serial available, but serialCheck is nil and z.SOA is nil,
+	// so needsUpdate stays true (serial 0 with nil SOA skips the else-if)
+	select {
+	case notifyReq := <-handler.GetNotifyChannel():
+		if notifyReq.Serial != 0 {
+			t.Errorf("Expected serial 0, got %d", notifyReq.Serial)
+		}
+	case <-time.After(time.Second):
+		t.Error("Expected NOTIFY event since no SOA means needsUpdate=true")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HandleNOTIFY - zone without SOA, with serial in Answer
+// ---------------------------------------------------------------------------
+
+func TestNOTIFYSlaveHandler_HandleNOTIFY_ZoneWithoutSOA_WithSerial(t *testing.T) {
+	zones := make(map[string]*zone.Zone)
+	z := zone.NewZone("example.com.")
+	z.SOA = nil
+	zones["example.com."] = z
+
+	handler := NewNOTIFYSlaveHandler(zones)
+
+	origin, _ := protocol.ParseName("example.com.")
+	mname, _ := protocol.ParseName("ns1.example.com.")
+	rname, _ := protocol.ParseName("admin.example.com.")
+
+	soaRR := &protocol.ResourceRecord{
+		Name:  origin,
+		Type:  protocol.TypeSOA,
+		Class: protocol.ClassIN,
+		TTL:   86400,
+		Data: &protocol.RDataSOA{
+			MName: mname, RName: rname,
+			Serial: 500, Refresh: 3600,
+		},
+	}
+
+	req := &protocol.Message{
+		Header: protocol.Header{
+			QDCount: 1,
+			ANCount: 1,
+			Flags:   protocol.Flags{Opcode: protocol.OpcodeNotify},
+		},
+		Questions: []*protocol.Question{
+			{Name: origin, QType: protocol.TypeSOA, QClass: protocol.ClassIN},
+		},
+		Answers: []*protocol.ResourceRecord{soaRR},
+	}
+
+	resp, err := handler.HandleNOTIFY(req, net.ParseIP("127.0.0.1"))
+	if err != nil {
+		t.Fatalf("HandleNOTIFY() error = %v", err)
+	}
+	if resp.Header.Flags.RCODE != protocol.RcodeSuccess {
+		t.Errorf("Expected RcodeSuccess, got %d", resp.Header.Flags.RCODE)
+	}
+
+	select {
+	case notifyReq := <-handler.GetNotifyChannel():
+		if notifyReq.Serial != 500 {
+			t.Errorf("Expected serial 500, got %d", notifyReq.Serial)
+		}
+	case <-time.After(time.Second):
+		t.Error("Expected NOTIFY event for new serial")
+	}
+}
