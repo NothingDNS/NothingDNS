@@ -2,6 +2,7 @@ package dnssec
 
 import (
 	"bytes"
+	"os"
 	"testing"
 	"time"
 
@@ -394,5 +395,292 @@ func TestToLower(t *testing.T) {
 		if result != tt.expected {
 			t.Errorf("toLower(%q) = %q, want %q", tt.input, result, tt.expected)
 		}
+	}
+}
+
+func TestTrustAnchorMatchesDNSKEY(t *testing.T) {
+	// Create an anchor with a public key
+	pubKey := []byte{0x01, 0x02, 0x03, 0x04}
+	anchor := &TrustAnchor{
+		Zone:      "example.com.",
+		KeyTag:    12345,
+		Algorithm: protocol.AlgorithmRSASHA256,
+		PublicKey: pubKey,
+		ValidFrom: time.Now().Add(-time.Hour),
+	}
+
+	// Create matching DNSKEY - need correct key tag
+	dnskey := &protocol.RDataDNSKEY{
+		Flags:     protocol.DNSKEYFlagZone | protocol.DNSKEYFlagSEP,
+		Protocol:  3,
+		Algorithm: protocol.AlgorithmRSASHA256,
+		PublicKey: pubKey,
+	}
+
+	// Calculate actual key tag and update anchor
+	tag := protocol.CalculateKeyTag(dnskey.Flags, dnskey.Algorithm, dnskey.PublicKey)
+	anchor.KeyTag = tag
+
+	// Test matching
+	result := anchor.MatchesDNSKEY(dnskey)
+	if !result {
+		t.Error("MatchesDNSKEY should return true for matching DNSKEY")
+	}
+
+	// Test with nil PublicKey in anchor
+	anchor2 := &TrustAnchor{
+		Zone:      "example.com.",
+		KeyTag:    tag,
+		Algorithm: protocol.AlgorithmRSASHA256,
+		PublicKey: nil,
+	}
+	if anchor2.MatchesDNSKEY(dnskey) {
+		t.Error("MatchesDNSKEY should return false when anchor has nil PublicKey")
+	}
+
+	// Test with wrong algorithm
+	dnskey2 := &protocol.RDataDNSKEY{
+		Flags:     protocol.DNSKEYFlagZone | protocol.DNSKEYFlagSEP,
+		Protocol:  3,
+		Algorithm: protocol.AlgorithmECDSAP256SHA256,
+		PublicKey: pubKey,
+	}
+	if anchor.MatchesDNSKEY(dnskey2) {
+		t.Error("MatchesDNSKEY should return false for wrong algorithm")
+	}
+}
+
+func TestCalculateDSDigestSHA1(t *testing.T) {
+	dnskey := &protocol.RDataDNSKEY{
+		Flags:     protocol.DNSKEYFlagZone,
+		Protocol:  3,
+		Algorithm: protocol.AlgorithmRSASHA256,
+		PublicKey: []byte{0x01, 0x02, 0x03, 0x04},
+	}
+
+	digest, err := calculateDSDigestSHA1("example.com.", dnskey)
+	if err != nil {
+		t.Fatalf("calculateDSDigestSHA1 failed: %v", err)
+	}
+	// SHA-1 produces 20 bytes
+	if len(digest) != 20 {
+		t.Errorf("Expected 20 bytes for SHA-1 digest, got %d", len(digest))
+	}
+}
+
+func TestCalculateDSDigestSHA384(t *testing.T) {
+	dnskey := &protocol.RDataDNSKEY{
+		Flags:     protocol.DNSKEYFlagZone,
+		Protocol:  3,
+		Algorithm: protocol.AlgorithmRSASHA256,
+		PublicKey: []byte{0x01, 0x02, 0x03, 0x04},
+	}
+
+	digest, err := calculateDSDigestSHA384("example.com.", dnskey)
+	if err != nil {
+		t.Fatalf("calculateDSDigestSHA384 failed: %v", err)
+	}
+	// SHA-384 produces 48 bytes
+	if len(digest) != 48 {
+		t.Errorf("Expected 48 bytes for SHA-384 digest, got %d", len(digest))
+	}
+}
+
+func TestParseXMLTime(t *testing.T) {
+	tests := []struct {
+		input    string
+		hasError bool
+	}{
+		{"2024-01-01T00:00:00+00:00", false},
+		{"2024-12-31T23:59:59Z", false},
+		{"invalid-time", true},
+		{"", true},
+	}
+
+	for _, tt := range tests {
+		_, err := parseXMLTime(tt.input)
+		if tt.hasError && err == nil {
+			t.Errorf("parseXMLTime(%q) should return error", tt.input)
+		}
+		if !tt.hasError && err != nil {
+			t.Errorf("parseXMLTime(%q) should not return error: %v", tt.input, err)
+		}
+	}
+}
+
+func TestDSFromDNSKEY(t *testing.T) {
+	dnskey := &protocol.RDataDNSKEY{
+		Flags:     protocol.DNSKEYFlagZone | protocol.DNSKEYFlagSEP,
+		Protocol:  3,
+		Algorithm: protocol.AlgorithmRSASHA256,
+		PublicKey: []byte{0x01, 0x02, 0x03, 0x04, 0x05},
+	}
+
+	// Test SHA-256 (type 2)
+	ds, err := DSFromDNSKEY("example.com.", dnskey, 2)
+	if err != nil {
+		t.Fatalf("DSFromDNSKEY failed: %v", err)
+	}
+	if ds.Algorithm != protocol.AlgorithmRSASHA256 {
+		t.Errorf("Algorithm mismatch: got %d", ds.Algorithm)
+	}
+	if ds.DigestType != 2 {
+		t.Errorf("DigestType mismatch: got %d", ds.DigestType)
+	}
+	if len(ds.Digest) != 32 { // SHA-256 = 32 bytes
+		t.Errorf("Expected 32 byte digest, got %d", len(ds.Digest))
+	}
+
+	// Test SHA-1 (type 1)
+	ds1, err := DSFromDNSKEY("example.com.", dnskey, 1)
+	if err != nil {
+		t.Fatalf("DSFromDNSKEY(SHA1) failed: %v", err)
+	}
+	if len(ds1.Digest) != 20 { // SHA-1 = 20 bytes
+		t.Errorf("Expected 20 byte digest for SHA-1, got %d", len(ds1.Digest))
+	}
+
+	// Test SHA-384 (type 4)
+	ds384, err := DSFromDNSKEY("example.com.", dnskey, 4)
+	if err != nil {
+		t.Fatalf("DSFromDNSKEY(SHA384) failed: %v", err)
+	}
+	if len(ds384.Digest) != 48 { // SHA-384 = 48 bytes
+		t.Errorf("Expected 48 byte digest for SHA-384, got %d", len(ds384.Digest))
+	}
+
+	// Test unsupported digest type
+	_, err = DSFromDNSKEY("example.com.", dnskey, 99)
+	if err == nil {
+		t.Error("Expected error for unsupported digest type")
+	}
+}
+
+func TestTrustAnchorStoreLoadFromFile(t *testing.T) {
+	// Create a temporary XML file
+	xmlContent := `<?xml version="1.0" encoding="UTF-8"?>
+<TrustAnchor id="test" source="test">
+  <Zone>test.example.</Zone>
+  <KeyDigest id="1" validFrom="2024-01-01T00:00:00+00:00">
+    <KeyTag>12345</KeyTag>
+    <Algorithm>8</Algorithm>
+    <DigestType>2</DigestType>
+    <Digest>E06D44B80B8F1D39A95C0B0D7C65D08458E880409BBC683457104237C7F8EC8D</Digest>
+  </KeyDigest>
+</TrustAnchor>`
+
+	tmpFile, err := os.CreateTemp("", "trust-anchor-*.xml")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString(xmlContent); err != nil {
+		t.Fatalf("Failed to write temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	// Test LoadFromFile
+	store := NewTrustAnchorStore()
+	err = store.LoadFromFile(tmpFile.Name())
+	if err != nil {
+		t.Fatalf("LoadFromFile failed: %v", err)
+	}
+
+	// Verify anchor was loaded
+	anchors := store.GetAnchorsForZone("test.example.")
+	if len(anchors) != 1 {
+		t.Errorf("Expected 1 anchor, got %d", len(anchors))
+	}
+	if anchors[0].KeyTag != 12345 {
+		t.Errorf("Expected KeyTag 12345, got %d", anchors[0].KeyTag)
+	}
+
+	// Test loading non-existent file
+	err = store.LoadFromFile("/nonexistent/file.xml")
+	if err == nil {
+		t.Error("Expected error for non-existent file")
+	}
+}
+
+func TestTrustAnchorStoreLoadFromFileInvalidXML(t *testing.T) {
+	// Create a temporary file with invalid XML
+	tmpFile, err := os.CreateTemp("", "trust-anchor-invalid-*.xml")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString("this is not valid XML"); err != nil {
+		t.Fatalf("Failed to write temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	store := NewTrustAnchorStore()
+	err = store.LoadFromFile(tmpFile.Name())
+	if err == nil {
+		t.Error("Expected error for invalid XML")
+	}
+}
+
+func TestTrustAnchorStoreLoadFromFileInvalidDigest(t *testing.T) {
+	// Create a temporary XML file with invalid hex digest
+	xmlContent := `<?xml version="1.0" encoding="UTF-8"?>
+<TrustAnchor id="test" source="test">
+  <Zone>test.example.</Zone>
+  <KeyDigest id="1" validFrom="2024-01-01T00:00:00+00:00">
+    <KeyTag>12345</KeyTag>
+    <Algorithm>8</Algorithm>
+    <DigestType>2</DigestType>
+    <Digest>NOT-VALID-HEX</Digest>
+  </KeyDigest>
+</TrustAnchor>`
+
+	tmpFile, err := os.CreateTemp("", "trust-anchor-baddigest-*.xml")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString(xmlContent); err != nil {
+		t.Fatalf("Failed to write temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	store := NewTrustAnchorStore()
+	err = store.LoadFromFile(tmpFile.Name())
+	if err == nil {
+		t.Error("Expected error for invalid hex digest")
+	}
+}
+
+func TestTrustAnchorStoreLoadFromFileInvalidTime(t *testing.T) {
+	// Create a temporary XML file with invalid time
+	xmlContent := `<?xml version="1.0" encoding="UTF-8"?>
+<TrustAnchor id="test" source="test">
+  <Zone>test.example.</Zone>
+  <KeyDigest id="1" validFrom="invalid-time">
+    <KeyTag>12345</KeyTag>
+    <Algorithm>8</Algorithm>
+    <DigestType>2</DigestType>
+    <Digest>E06D44B80B8F1D39A95C0B0D7C65D08458E880409BBC683457104237C7F8EC8D</Digest>
+  </KeyDigest>
+</TrustAnchor>`
+
+	tmpFile, err := os.CreateTemp("", "trust-anchor-badtime-*.xml")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString(xmlContent); err != nil {
+		t.Fatalf("Failed to write temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	store := NewTrustAnchorStore()
+	err = store.LoadFromFile(tmpFile.Name())
+	if err == nil {
+		t.Error("Expected error for invalid time format")
 	}
 }

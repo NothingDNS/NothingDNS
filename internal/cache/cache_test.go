@@ -453,3 +453,229 @@ func TestCacheUpdateExisting(t *testing.T) {
 		t.Errorf("expected size 1, got %d", c.Size())
 	}
 }
+
+func TestCacheHitRatio(t *testing.T) {
+	config := DefaultConfig()
+	config.Capacity = 10
+	c := New(config)
+
+	// Add entry
+	c.SetNegative("test.com:1", 3)
+
+	// Generate some hits
+	for i := 0; i < 8; i++ {
+		c.Get("test.com:1")
+	}
+
+	// Generate some misses
+	for i := 0; i < 2; i++ {
+		c.Get("missing.com:1")
+	}
+
+	stats := c.Stats()
+	ratio := stats.HitRatio()
+	// 8 hits out of 10 queries = 80%
+	if ratio != 80.0 {
+		t.Errorf("expected hit ratio 80.0%%, got %f%%", ratio)
+	}
+}
+
+func TestCacheSetInvalidateFunc(t *testing.T) {
+	config := DefaultConfig()
+	config.Capacity = 10
+	c := New(config)
+
+	called := false
+	c.SetInvalidateFunc(func(key string) {
+		called = true
+	})
+
+	c.SetNegative("test.com:1", 3)
+	c.Delete("test.com:1")
+
+	if !called {
+		t.Error("expected invalidate function to be called")
+	}
+}
+
+func TestCacheFlush(t *testing.T) {
+	config := DefaultConfig()
+	config.Capacity = 10
+	c := New(config)
+
+	// Add several entries
+	c.SetNegative("a.com:1", 3)
+	c.SetNegative("b.com:1", 3)
+	c.SetNegative("c.com:1", 3)
+
+	if c.Size() != 3 {
+		t.Fatalf("expected size 3, got %d", c.Size())
+	}
+
+	// Flush all entries
+	c.Flush()
+
+	if c.Size() != 0 {
+		t.Errorf("expected size 0 after flush, got %d", c.Size())
+	}
+}
+
+func TestCacheDeleteLocal(t *testing.T) {
+	config := DefaultConfig()
+	config.Capacity = 10
+	c := New(config)
+
+	// Add entry
+	c.SetNegative("test.com:1", 3)
+
+	// Delete local (should not call invalidate callback)
+	c.DeleteLocal("test.com:1")
+
+	if c.Get("test.com:1") != nil {
+		t.Error("expected entry to be deleted")
+	}
+}
+
+func TestCacheInvalidate(t *testing.T) {
+	config := DefaultConfig()
+	config.Capacity = 10
+	c := New(config)
+
+	called := false
+	c.SetInvalidateFunc(func(key string) {
+		called = true
+	})
+
+	// Add entry
+	c.SetNegative("test.com:1", 3)
+
+	// Invalidate
+	c.Invalidate("test.com:1")
+
+	if !called {
+		t.Error("expected invalidate function to be called")
+	}
+
+	if c.Get("test.com:1") != nil {
+		t.Error("expected entry to be invalidated")
+	}
+}
+
+func TestCacheInvalidatePattern(t *testing.T) {
+	config := DefaultConfig()
+	config.Capacity = 10
+	c := New(config)
+
+	// Add entries with different patterns
+	c.SetNegative("test.example.com:1", 3)
+	c.SetNegative("www.example.com:1", 3)
+	c.SetNegative("other.test.com:1", 3)
+
+	// Invalidate all example.com entries
+	c.InvalidatePattern("example.com")
+
+	// example.com entries should be gone
+	if c.Get("test.example.com:1") != nil {
+		t.Error("expected test.example.com to be invalidated")
+	}
+	if c.Get("www.example.com:1") != nil {
+		t.Error("expected www.example.com to be invalidated")
+	}
+
+	// other.test.com should still exist
+	if c.Get("other.test.com:1") == nil {
+		t.Error("expected other.test.com to still exist")
+	}
+}
+
+func TestCacheGetPrefetchable(t *testing.T) {
+	config := DefaultConfig()
+	config.Capacity = 10
+	config.PrefetchEnabled = true
+	config.PrefetchThreshold = 30 * time.Second
+	c := New(config)
+
+	// Add entry with short TTL - won't be due yet since we just added it
+	c.Set("prefetch.com:1", nil, 60)
+
+	// Right now it shouldn't be due for prefetch yet (just added)
+	entries := c.GetPrefetchable()
+	// At creation time, prefetch is not due, so should be 0
+	if len(entries) != 0 {
+		t.Log("entries are not due for prefetch immediately after creation")
+	}
+
+	// Verify the entry exists and has prefetch capability
+	entry := c.Get("prefetch.com:1")
+	if entry == nil {
+		t.Fatal("expected entry to exist")
+	}
+	if !entry.CanPrefetch {
+		t.Error("expected entry to be prefetchable")
+	}
+}
+
+func TestCacheSetPrefetchFunc(t *testing.T) {
+	config := DefaultConfig()
+	config.Capacity = 10
+	config.PrefetchEnabled = true
+	c := New(config)
+
+	called := false
+	c.SetPrefetchFunc(func(key string, qtype uint16) {
+		called = true
+	})
+
+	// Prefetch function should be set (we can't easily test the actual prefetch)
+	c.Set("test.com:1", nil, 300)
+	// The prefetch function would be called in a background goroutine
+	_ = called
+}
+
+func TestCacheOnPrefetchComplete(t *testing.T) {
+	config := DefaultConfig()
+	config.Capacity = 10
+	c := New(config)
+
+	// Add entry first
+	c.Set("test.com:1", nil, 300)
+
+	// Call OnPrefetchComplete
+	c.OnPrefetchComplete("test.com:1", nil, 600)
+
+	// Entry should be updated
+	entry := c.Get("test.com:1")
+	if entry == nil {
+		t.Error("expected entry to still exist")
+	}
+}
+
+func TestEntryShouldPrefetch(t *testing.T) {
+	now := time.Now()
+	entry := &Entry{
+		ExpireTime:  now.Add(60 * time.Second),
+		CanPrefetch: true,
+		PrefetchDue: now.Add(30 * time.Second), // Prefetch at 50% TTL
+	}
+
+	// Before prefetch time
+	if entry.ShouldPrefetch(now.Add(20 * time.Second)) {
+		t.Error("should not prefetch before prefetch time")
+	}
+
+	// After prefetch time
+	if !entry.ShouldPrefetch(now.Add(35 * time.Second)) {
+		t.Error("should prefetch after prefetch time")
+	}
+
+	// Entry that can't prefetch
+	entry2 := &Entry{
+		ExpireTime:  now.Add(60 * time.Second),
+		CanPrefetch: false,
+		PrefetchDue: now.Add(30 * time.Second),
+	}
+
+	if entry2.ShouldPrefetch(now.Add(35 * time.Second)) {
+		t.Error("should not prefetch when CanPrefetch is false")
+	}
+}

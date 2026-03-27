@@ -182,3 +182,53 @@ func TestBatchDecoderPosition(t *testing.T) {
 		t.Error("Expected pos to advance after Next")
 	}
 }
+
+// TestTLVEncoderEncodeWithType tests EncodeWithType method
+func TestTLVEncoderEncodeWithType(t *testing.T) {
+	var buf bytes.Buffer
+	encoder := NewTLVEncoder(&buf)
+
+	err := encoder.EncodeWithType(TypeRecord, []byte("test data"))
+	if err != nil {
+		t.Fatalf("EncodeWithType failed: %v", err)
+	}
+
+	// Verify the data was written
+	if buf.Len() == 0 {
+		t.Error("Expected data to be written to buffer")
+	}
+
+	// Decode to verify
+	decoder := NewTLVDecoder(&buf)
+	tlv, err := decoder.Decode()
+	if err != nil {
+		t.Fatalf("Decode failed: %v", err)
+	}
+
+	if tlv.Type != TypeRecord {
+		t.Errorf("Expected type %d, got %d", TypeRecord, tlv.Type)
+	}
+	if string(tlv.Value) != "test data" {
+		t.Errorf("Expected value 'test data', got %q", string(tlv.Value))
+	}
+}
+
+// TestTLVDecoderDecodeType tests DecodeType method
+func TestTLVDecoderDecodeType(t *testing.T) {
+	// Encode some data
+	var buf bytes.Buffer
+	encoder := NewTLVEncoder(&buf)
+	encoder.EncodeWithType(TypeZone, []byte("zone data"))
+
+	decoder := NewTLVDecoder(&buf)
+
+	// Use DecodeType to peek at the type
+	typ, err := decoder.DecodeType()
+	if err != nil {
+		t.Fatalf("DecodeType failed: %v", err)
+	}
+
+	if typ != TypeZone {
+		t.Errorf("Expected type %d, got %d", TypeZone, typ)
+	}
+}

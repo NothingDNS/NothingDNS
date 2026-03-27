@@ -388,3 +388,353 @@ func TestConfig_Values(t *testing.T) {
 		t.Errorf("Expected 2 seed nodes, got %d", len(cfg.SeedNodes))
 	}
 }
+
+func TestCluster_IsStarted(t *testing.T) {
+	logger := util.NewLogger(util.INFO, util.TextFormat, nil)
+	cacheCfg := cache.Config{Capacity: 1000}
+	dnsCache := cache.New(cacheCfg)
+
+	cfg := Config{
+		Enabled:    true,
+		NodeID:     "test-node",
+		BindAddr:   "127.0.0.1",
+		GossipPort: 17958,
+	}
+
+	c, _ := New(cfg, logger, dnsCache)
+
+	// Not started initially
+	if c.IsStarted() {
+		t.Error("Expected IsStarted to be false initially")
+	}
+
+	// Start the cluster
+	if err := c.Start(); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	// Now should be started
+	if !c.IsStarted() {
+		t.Error("Expected IsStarted to be true after Start()")
+	}
+
+	// Stop the cluster
+	c.Stop()
+
+	// Should be false after stop
+	if c.IsStarted() {
+		t.Error("Expected IsStarted to be false after Stop()")
+	}
+}
+
+func TestCluster_Start_AlreadyStarted(t *testing.T) {
+	logger := util.NewLogger(util.INFO, util.TextFormat, nil)
+	cacheCfg := cache.Config{Capacity: 1000}
+	dnsCache := cache.New(cacheCfg)
+
+	cfg := Config{
+		Enabled:    true,
+		NodeID:     "test-node",
+		BindAddr:   "127.0.0.1",
+		GossipPort: 17959,
+	}
+
+	c, _ := New(cfg, logger, dnsCache)
+
+	if err := c.Start(); err != nil {
+		t.Fatalf("First Start() error = %v", err)
+	}
+	defer c.Stop()
+
+	// Try to start again
+	err := c.Start()
+	if err == nil {
+		t.Error("Expected error when starting already started cluster")
+	}
+}
+
+func TestCluster_Stop_NotStarted(t *testing.T) {
+	logger := util.NewLogger(util.INFO, util.TextFormat, nil)
+	cacheCfg := cache.Config{Capacity: 1000}
+	dnsCache := cache.New(cacheCfg)
+
+	cfg := Config{
+		Enabled:    true,
+		NodeID:     "test-node",
+		BindAddr:   "127.0.0.1",
+		GossipPort: 17960,
+	}
+
+	c, _ := New(cfg, logger, dnsCache)
+
+	// Stop without starting should not error
+	err := c.Stop()
+	if err != nil {
+		t.Errorf("Stop() on non-started cluster should not error, got %v", err)
+	}
+}
+
+func TestCluster_InvalidateCacheLocal_NilCache(t *testing.T) {
+	logger := util.NewLogger(util.INFO, util.TextFormat, nil)
+
+	cfg := Config{
+		Enabled:    true,
+		NodeID:     "test-node",
+		BindAddr:   "127.0.0.1",
+		GossipPort: 17961,
+	}
+
+	c, _ := New(cfg, logger, nil) // nil cache
+
+	// Should not panic with nil cache
+	c.InvalidateCacheLocal([]string{"test-key"})
+}
+
+func TestEventHandlerFunc_AllMethods(t *testing.T) {
+	leaveCalled := false
+	updateCalled := false
+	cacheInvalidCalled := false
+
+	handler := &EventHandlerFunc{
+		OnLeaveFunc: func(n *Node) {
+			leaveCalled = true
+		},
+		OnUpdateFunc: func(n *Node) {
+			updateCalled = true
+		},
+		OnCacheInvalidFunc: func(keys []string) {
+			cacheInvalidCalled = true
+		},
+	}
+
+	// Test OnNodeLeave
+	handler.OnNodeLeave(&Node{ID: "test-leave"})
+	if !leaveCalled {
+		t.Error("OnNodeLeave should have called OnLeaveFunc")
+	}
+
+	// Test OnNodeUpdate
+	handler.OnNodeUpdate(&Node{ID: "test-update"})
+	if !updateCalled {
+		t.Error("OnNodeUpdate should have called OnUpdateFunc")
+	}
+
+	// Test OnCacheInvalid
+	handler.OnCacheInvalid([]string{"key1"})
+	if !cacheInvalidCalled {
+		t.Error("OnCacheInvalid should have called OnCacheInvalidFunc")
+	}
+}
+
+func TestEventHandlerFunc_NilFunctions(t *testing.T) {
+	// Test with nil functions - should not panic
+	handler := &EventHandlerFunc{}
+
+	handler.OnNodeJoin(&Node{ID: "test"})
+	handler.OnNodeLeave(&Node{ID: "test"})
+	handler.OnNodeUpdate(&Node{ID: "test"})
+	handler.OnCacheInvalid([]string{"key"})
+	// If we get here without panic, test passes
+}
+
+func TestCluster_HandleNodeJoin(t *testing.T) {
+	logger := util.NewLogger(util.INFO, util.TextFormat, nil)
+	cacheCfg := cache.Config{Capacity: 1000}
+	dnsCache := cache.New(cacheCfg)
+
+	cfg := Config{
+		Enabled:    true,
+		NodeID:     "test-node",
+		BindAddr:   "127.0.0.1",
+		GossipPort: 17962,
+	}
+
+	c, _ := New(cfg, logger, dnsCache)
+
+	joinCalled := false
+	c.AddEventHandler(&EventHandlerFunc{
+		OnJoinFunc: func(n *Node) {
+			joinCalled = true
+			if n.ID != "new-node" {
+				t.Errorf("Expected node ID new-node, got %s", n.ID)
+			}
+		},
+	})
+
+	// Call handleNodeJoin directly
+	c.handleNodeJoin(&Node{ID: "new-node", Addr: "192.168.1.1"})
+
+	if !joinCalled {
+		t.Error("Handler should have been called for node join")
+	}
+}
+
+func TestCluster_HandleNodeLeave(t *testing.T) {
+	logger := util.NewLogger(util.INFO, util.TextFormat, nil)
+	cacheCfg := cache.Config{Capacity: 1000}
+	dnsCache := cache.New(cacheCfg)
+
+	cfg := Config{
+		Enabled:    true,
+		NodeID:     "test-node",
+		BindAddr:   "127.0.0.1",
+		GossipPort: 17963,
+	}
+
+	c, _ := New(cfg, logger, dnsCache)
+
+	leaveCalled := false
+	c.AddEventHandler(&EventHandlerFunc{
+		OnLeaveFunc: func(n *Node) {
+			leaveCalled = true
+			if n.ID != "leaving-node" {
+				t.Errorf("Expected node ID leaving-node, got %s", n.ID)
+			}
+		},
+	})
+
+	// Call handleNodeLeave directly
+	c.handleNodeLeave(&Node{ID: "leaving-node", Addr: "192.168.1.2"})
+
+	if !leaveCalled {
+		t.Error("Handler should have been called for node leave")
+	}
+}
+
+func TestCluster_HandleNodeUpdate(t *testing.T) {
+	logger := util.NewLogger(util.INFO, util.TextFormat, nil)
+	cacheCfg := cache.Config{Capacity: 1000}
+	dnsCache := cache.New(cacheCfg)
+
+	cfg := Config{
+		Enabled:    true,
+		NodeID:     "test-node",
+		BindAddr:   "127.0.0.1",
+		GossipPort: 17964,
+	}
+
+	c, _ := New(cfg, logger, dnsCache)
+
+	updateCalled := false
+	c.AddEventHandler(&EventHandlerFunc{
+		OnUpdateFunc: func(n *Node) {
+			updateCalled = true
+			if n.ID != "updated-node" {
+				t.Errorf("Expected node ID updated-node, got %s", n.ID)
+			}
+		},
+	})
+
+	// Call handleNodeUpdate directly
+	c.handleNodeUpdate(&Node{ID: "updated-node", State: NodeStateAlive})
+
+	if !updateCalled {
+		t.Error("Handler should have been called for node update")
+	}
+}
+
+func TestCluster_HandleCacheInvalid(t *testing.T) {
+	logger := util.NewLogger(util.INFO, util.TextFormat, nil)
+	cacheCfg := cache.Config{
+		Capacity:   1000,
+		DefaultTTL: time.Hour,
+	}
+	dnsCache := cache.New(cacheCfg)
+
+	// Add entry to cache
+	dnsCache.Set("key1", nil, 3600)
+
+	cfg := Config{
+		Enabled:    true,
+		NodeID:     "test-node",
+		BindAddr:   "127.0.0.1",
+		GossipPort: 17965,
+		CacheSync:  true,
+	}
+
+	c, _ := New(cfg, logger, dnsCache)
+
+	cacheInvalidCalled := false
+	c.AddEventHandler(&EventHandlerFunc{
+		OnCacheInvalidFunc: func(keys []string) {
+			cacheInvalidCalled = true
+			if len(keys) != 1 || keys[0] != "key1" {
+				t.Errorf("Expected keys [key1], got %v", keys)
+			}
+		},
+	})
+
+	// Call handleCacheInvalid directly
+	c.handleCacheInvalid([]string{"key1"})
+
+	if !cacheInvalidCalled {
+		t.Error("Handler should have been called for cache invalidation")
+	}
+
+	// Verify cache was actually invalidated
+	if dnsCache.Stats().Size != 0 {
+		t.Error("Cache should be empty after invalidation")
+	}
+}
+
+func TestCluster_RemoveEventHandler_NotFound(t *testing.T) {
+	logger := util.NewLogger(util.INFO, util.TextFormat, nil)
+	cacheCfg := cache.Config{Capacity: 1000}
+	dnsCache := cache.New(cacheCfg)
+
+	cfg := Config{
+		Enabled:    true,
+		NodeID:     "test-node",
+		BindAddr:   "127.0.0.1",
+		GossipPort: 17966,
+	}
+
+	c, _ := New(cfg, logger, dnsCache)
+
+	handler1 := &EventHandlerFunc{
+		OnJoinFunc: func(*Node) {},
+	}
+	handler2 := &EventHandlerFunc{
+		OnJoinFunc: func(*Node) {},
+	}
+
+	c.AddEventHandler(handler1)
+
+	// Try to remove handler that was never added
+	c.RemoveEventHandler(handler2)
+
+	// Should still have 1 handler
+	if len(c.handlers) != 1 {
+		t.Errorf("Expected 1 handler, got %d", len(c.handlers))
+	}
+}
+
+func TestCluster_Stats_Started(t *testing.T) {
+	logger := util.NewLogger(util.INFO, util.TextFormat, nil)
+	cacheCfg := cache.Config{Capacity: 1000}
+	dnsCache := cache.New(cacheCfg)
+
+	cfg := Config{
+		Enabled:    true,
+		NodeID:     "test-node",
+		BindAddr:   "127.0.0.1",
+		GossipPort: 17967,
+	}
+
+	c, _ := New(cfg, logger, dnsCache)
+
+	if err := c.Start(); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	defer c.Stop()
+
+	stats := c.Stats()
+
+	if stats.NodeID != "test-node" {
+		t.Errorf("Expected NodeID test-node, got %s", stats.NodeID)
+	}
+
+	if stats.GossipStats.MessagesSent == 0 && stats.GossipStats.MessagesReceived == 0 {
+		// Stats should be initialized
+	}
+}

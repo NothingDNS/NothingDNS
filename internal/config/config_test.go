@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -399,4 +400,1132 @@ func TestExpandEnvVars(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestUnmarshalYAMLDNSSEC(t *testing.T) {
+	input := `
+dnssec:
+  enabled: true
+  ignore_time: true
+  trust_anchor: /etc/dns/root-anchors.xml
+`
+
+	cfg, err := UnmarshalYAML(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !cfg.DNSSEC.Enabled {
+		t.Error("expected DNSSEC to be enabled")
+	}
+	if !cfg.DNSSEC.IgnoreTime {
+		t.Error("expected IgnoreTime to be true")
+	}
+	if cfg.DNSSEC.TrustAnchor != "/etc/dns/root-anchors.xml" {
+		t.Errorf("expected trust anchor path, got %q", cfg.DNSSEC.TrustAnchor)
+	}
+}
+
+func TestUnmarshalYAMLMetrics(t *testing.T) {
+	input := `
+metrics:
+  enabled: true
+  bind: ":9153"
+  path: /metrics
+`
+
+	cfg, err := UnmarshalYAML(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !cfg.Metrics.Enabled {
+		t.Error("expected metrics to be enabled")
+	}
+	if cfg.Metrics.Bind != ":9153" {
+		t.Errorf("expected bind :9153, got %q", cfg.Metrics.Bind)
+	}
+	if cfg.Metrics.Path != "/metrics" {
+		t.Errorf("expected path /metrics, got %q", cfg.Metrics.Path)
+	}
+}
+
+func TestUnmarshalYAMLCluster(t *testing.T) {
+	input := `
+cluster:
+  enabled: true
+  bind_addr: 0.0.0.0
+  gossip_port: 7946
+  seed_nodes:
+    - 192.168.1.2:7946
+    - 192.168.1.3:7946
+`
+
+	cfg, err := UnmarshalYAML(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !cfg.Cluster.Enabled {
+		t.Error("expected cluster to be enabled")
+	}
+	if cfg.Cluster.BindAddr != "0.0.0.0" {
+		t.Errorf("expected bind_addr, got %q", cfg.Cluster.BindAddr)
+	}
+	if len(cfg.Cluster.SeedNodes) != 2 {
+		t.Errorf("expected 2 seed nodes, got %d", len(cfg.Cluster.SeedNodes))
+	}
+}
+
+func TestUnmarshalYAMLBlocklist(t *testing.T) {
+	input := `
+blocklist:
+  enabled: true
+  files:
+    - /etc/dns/blocklists/ads.txt
+    - /etc/dns/blocklists/malware.txt
+`
+
+	cfg, err := UnmarshalYAML(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !cfg.Blocklist.Enabled {
+		t.Error("expected blocklist to be enabled")
+	}
+	if len(cfg.Blocklist.Files) != 2 {
+		t.Errorf("expected 2 files, got %d", len(cfg.Blocklist.Files))
+	}
+}
+
+func TestUnmarshalYAMLSlaveZones(t *testing.T) {
+	input := `
+slave_zones:
+  - zone_name: example.com.
+    masters:
+      - 192.168.1.100:53
+    transfer_type: ixfr
+    tsig_key_name: transfer-key
+    tsig_secret: secret123
+`
+
+	cfg, err := UnmarshalYAML(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(cfg.SlaveZones) != 1 {
+		t.Fatalf("expected 1 slave zone, got %d", len(cfg.SlaveZones))
+	}
+
+	zone := cfg.SlaveZones[0]
+	if zone.ZoneName != "example.com." {
+		t.Errorf("expected zone name, got %q", zone.ZoneName)
+	}
+	if len(zone.Masters) != 1 {
+		t.Errorf("expected 1 master, got %d", len(zone.Masters))
+	}
+	if zone.TransferType != "ixfr" {
+		t.Errorf("expected transfer type ixfr, got %q", zone.TransferType)
+	}
+}
+
+func TestUnmarshalYAMLResolution(t *testing.T) {
+	input := `
+resolution:
+  timeout: 5s
+  recursive: true
+  max_depth: 15
+`
+
+	cfg, err := UnmarshalYAML(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.Resolution.Timeout != "5s" {
+		t.Errorf("expected timeout 5s, got %q", cfg.Resolution.Timeout)
+	}
+	if !cfg.Resolution.Recursive {
+		t.Error("expected recursive to be true")
+	}
+	if cfg.Resolution.MaxDepth != 15 {
+		t.Errorf("expected max_depth 15, got %d", cfg.Resolution.MaxDepth)
+	}
+}
+
+func TestUnmarshalYAMLEmpty(t *testing.T) {
+	cfg, err := UnmarshalYAML("")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should return defaults
+	if cfg.Server.Port != 53 {
+		t.Errorf("expected default port 53, got %d", cfg.Server.Port)
+	}
+}
+
+func TestUnmarshalYAMLServerTLS(t *testing.T) {
+	input := `
+server:
+  tls:
+    enabled: true
+    cert_file: /etc/ssl/cert.pem
+    key_file: /etc/ssl/key.pem
+`
+
+	cfg, err := UnmarshalYAML(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !cfg.Server.TLS.Enabled {
+		t.Error("expected TLS to be enabled")
+	}
+	if cfg.Server.TLS.CertFile != "/etc/ssl/cert.pem" {
+		t.Errorf("expected TLS cert path, got %q", cfg.Server.TLS.CertFile)
+	}
+}
+
+func TestUnmarshalYAMLHTTPDoH(t *testing.T) {
+	input := `
+server:
+  http:
+    enabled: true
+    bind: ":8080"
+    doh_enabled: true
+    doh_path: /dns-query
+`
+
+	cfg, err := UnmarshalYAML(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !cfg.Server.HTTP.Enabled {
+		t.Error("expected HTTP to be enabled")
+	}
+	if !cfg.Server.HTTP.DoHEnabled {
+		t.Error("expected DoH to be enabled")
+	}
+	if cfg.Server.HTTP.DoHPath != "/dns-query" {
+		t.Errorf("expected DoH path, got %q", cfg.Server.HTTP.DoHPath)
+	}
+}
+
+func TestUnmarshalYAMLUpstreamAnycast(t *testing.T) {
+	input := `
+upstream:
+  strategy: round_robin
+  servers:
+    - 1.1.1.1:53
+  anycast_groups:
+    - anycast_ip: 10.0.0.1
+      backends:
+        - physical_ip: 192.168.1.1
+          port: 53
+          region: us-east-1
+`
+
+	cfg, err := UnmarshalYAML(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.Upstream.Strategy != "round_robin" {
+		t.Errorf("expected strategy, got %q", cfg.Upstream.Strategy)
+	}
+	if len(cfg.Upstream.AnycastGroups) != 1 {
+		t.Errorf("expected 1 anycast group, got %d", len(cfg.Upstream.AnycastGroups))
+	}
+}
+
+func TestGetString(t *testing.T) {
+	input := `
+server:
+  port: 5353
+`
+	cfg, err := UnmarshalYAML(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The getString function is internal - test via UnmarshalYAML
+	if cfg.Server.Port != 5353 {
+		t.Errorf("expected port 5353, got %d", cfg.Server.Port)
+	}
+}
+
+func TestConfigValidation(t *testing.T) {
+	// Test valid config
+	cfg := &Config{
+		Server: ServerConfig{
+			Port: 53,
+			Bind: []string{"0.0.0.0"},
+		},
+		Upstream: UpstreamConfig{
+			Servers:  []string{"1.1.1.1:53"},
+			Strategy: "random",
+		},
+		Cache: CacheConfig{
+			Enabled:    true,
+			Size:       10000,
+			DefaultTTL: 300,
+			MinTTL:     10,
+			MaxTTL:     3600,
+		},
+		Logging: LoggingConfig{
+			Level:  "info",
+			Format: "text",
+		},
+	}
+
+	err := cfg.Validate()
+	if err != nil {
+		t.Errorf("valid config should pass validation: %v", err)
+	}
+}
+
+func TestIsValidHostname(t *testing.T) {
+	tests := []struct {
+		hostname string
+		want     bool
+	}{
+		{"example.com", true},
+		{"sub.example.com", true},
+		{"123.domain", true},
+		{"-invalid.com", false},
+		{"invalid-.com", false},
+		{"", false},
+		{"a", true},
+		{strings.Repeat("a", 64), false}, // label too long
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.hostname, func(t *testing.T) {
+			if got := isValidHostname(tt.hostname); got != tt.want {
+				t.Errorf("isValidHostname(%q) = %v, want %v", tt.hostname, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsValidLabel(t *testing.T) {
+	tests := []struct {
+		label string
+		want  bool
+	}{
+		{"example", true},
+		{"sub-domain", true},
+		{"123", true},
+		{"-invalid", false},
+		{"invalid-", false},
+		{"", false},
+		{"a", true},
+		{strings.Repeat("a", 64), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.label, func(t *testing.T) {
+			if got := isValidLabel(tt.label); got != tt.want {
+				t.Errorf("isValidLabel(%q) = %v, want %v", tt.label, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTokenString(t *testing.T) {
+	// Test token String method
+	tok := Token{Type: TokenColon, Value: ":", Line: 1, Col: 1}
+	s := tok.String()
+	if s == "" {
+		t.Error("Token.String() should not be empty")
+	}
+
+	// Test different token types
+	tests := []struct {
+		tokenType TokenType
+		value     string
+	}{
+		{TokenEOF, "EOF"},
+		{TokenString, "test"},
+		{TokenNumber, "123"},
+		{TokenColon, ":"},
+		{TokenDash, "-"},
+		{TokenNewline, "\\n"},
+	}
+
+	for _, tt := range tests {
+		tok := Token{Type: tt.tokenType, Value: tt.value}
+		s := tok.String()
+		if s == "" {
+			t.Errorf("Token.String() for %v should not be empty", tt.tokenType)
+		}
+	}
+}
+
+func TestParserExpect(t *testing.T) {
+	// Test expect function - NewParser takes a string input
+	input := "key: value"
+	p := NewParser(input)
+
+	// Expect a string token
+	err := p.expect(TokenString)
+	if err != nil {
+		t.Errorf("expect should succeed for correct token type: %v", err)
+	}
+
+	// Now at colon, expect wrong type
+	err = p.expect(TokenNumber)
+	if err == nil {
+		t.Error("expect should fail for wrong token type")
+	}
+}
+
+func TestReloadHandlerStart(t *testing.T) {
+	// Test Start method
+	h := NewReloadHandler()
+
+	// Start the handler
+	h.Start()
+
+	// Cleanup
+	h.Stop()
+}
+
+func TestLogLevelReloaderReload(t *testing.T) {
+	// Test LogLevelReloader.Reload method
+	// Create a mock callback
+	var calledLevel string
+	cb := func(level string) error {
+		calledLevel = level
+		return nil
+	}
+
+	reloader := NewLogLevelReloader("info", cb, nil)
+	if reloader == nil {
+		t.Fatal("NewLogLevelReloader returned nil")
+	}
+
+	// Verify initial level
+	if reloader.GetLevel() != "info" {
+		t.Errorf("GetLevel() = %q, want info", reloader.GetLevel())
+	}
+
+	// Reload with new level
+	err := reloader.Reload("debug")
+	if err != nil {
+		t.Errorf("Reload should succeed: %v", err)
+	}
+
+	// Verify level changed
+	if reloader.GetLevel() != "debug" {
+		t.Errorf("GetLevel() = %q, want debug", reloader.GetLevel())
+	}
+
+	if calledLevel != "debug" {
+		t.Errorf("callback called with %q, want debug", calledLevel)
+	}
+}
+
+func TestParserToInterface(t *testing.T) {
+	// Test toInterface via Parse which calls it internally
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"simple scalar", "key: value"},
+		{"list", "items:\n  - a\n  - b"},
+		{"nested map", "outer:\n  inner: value"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := UnmarshalYAML(tt.input)
+			if err != nil {
+				t.Errorf("UnmarshalYAML failed: %v", err)
+			}
+		})
+	}
+}
+
+func TestTokenizerReadTag(t *testing.T) {
+	// Test tag handling via tokenizer
+	input := "!!str value"
+	tok := NewTokenizer(input)
+	tokens := tok.TokenizeAll()
+
+	// Should have processed the tag
+	if len(tokens) == 0 {
+		t.Error("Expected tokens")
+	}
+}
+
+func TestTokenizerReadAnchor(t *testing.T) {
+	// Test anchor handling via tokenizer
+	input := "key: &anchor value"
+	tok := NewTokenizer(input)
+	tokens := tok.TokenizeAll()
+
+	// Should have processed the anchor
+	if len(tokens) == 0 {
+		t.Error("Expected tokens")
+	}
+}
+
+func TestTokenizerReadAlias(t *testing.T) {
+	// Test alias handling via tokenizer
+	input := "key: *alias"
+	tok := NewTokenizer(input)
+	tokens := tok.TokenizeAll()
+
+	// Should have processed the alias
+	if len(tokens) == 0 {
+		t.Error("Expected tokens")
+	}
+}
+
+// TestGetStringHelper tests the getString helper function using real YAML parsing
+func TestGetStringHelper(t *testing.T) {
+	// Use the full UnmarshalYAML which properly parses YAML
+	input := `
+server:
+  port: 5353
+`
+	cfg, err := UnmarshalYAML(input)
+	if err != nil {
+		t.Fatalf("UnmarshalYAML error: %v", err)
+	}
+
+	// The getString is used internally during unmarshal
+	if cfg.Server.Port != 5353 {
+		t.Errorf("Server.Port = %d, want 5353", cfg.Server.Port)
+	}
+}
+
+// TestNodeToInterfaceMethods tests the Node.toInterface method
+func TestNodeToInterfaceMethods(t *testing.T) {
+	// Test scalar node
+	scalar := &Node{Type: NodeScalar, Value: "hello"}
+	result := scalar.toInterface()
+	if result != "hello" {
+		t.Errorf("scalar toInterface = %v, want hello", result)
+	}
+
+	// Test sequence node
+	seq := &Node{
+		Type: NodeSequence,
+		Children: []*Node{
+			{Type: NodeScalar, Value: "a"},
+			{Type: NodeScalar, Value: "b"},
+		},
+	}
+	result = seq.toInterface()
+	arr, ok := result.([]interface{})
+	if !ok {
+		t.Fatalf("sequence toInterface should return []interface{}, got %T", result)
+	}
+	if len(arr) != 2 {
+		t.Errorf("sequence length = %d, want 2", len(arr))
+	}
+
+	// Test unknown node type
+	unknown := &Node{Type: 99}
+	result = unknown.toInterface()
+	if result != nil {
+		t.Errorf("unknown toInterface = %v, want nil", result)
+	}
+}
+
+func TestValidateUpstreamWithAnycast(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  *Config
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name: "valid anycast group",
+			config: &Config{
+				Upstream: UpstreamConfig{
+					Strategy: "random",
+					AnycastGroups: []AnycastGroupConfig{
+						{
+							AnycastIP: "10.0.0.1",
+							Backends: []AnycastBackendConfig{
+								{PhysicalIP: "192.168.1.1", Port: 53, Weight: 100},
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "missing anycast_ip",
+			config: &Config{
+				Upstream: UpstreamConfig{
+					Strategy: "random",
+					AnycastGroups: []AnycastGroupConfig{
+						{
+							AnycastIP: "",
+							Backends: []AnycastBackendConfig{
+								{PhysicalIP: "192.168.1.1", Port: 53, Weight: 100},
+							},
+						},
+					},
+				},
+			},
+			wantErr: true,
+			errMsg:  "anycast_ip is required",
+		},
+		{
+			name: "invalid anycast_ip",
+			config: &Config{
+				Upstream: UpstreamConfig{
+					Strategy: "random",
+					AnycastGroups: []AnycastGroupConfig{
+						{
+							AnycastIP: "invalid-ip",
+							Backends: []AnycastBackendConfig{
+								{PhysicalIP: "192.168.1.1", Port: 53, Weight: 100},
+							},
+						},
+					},
+				},
+			},
+			wantErr: true,
+			errMsg:  "must be a valid IP address",
+		},
+		{
+			name: "missing backends",
+			config: &Config{
+				Upstream: UpstreamConfig{
+					Strategy: "random",
+					AnycastGroups: []AnycastGroupConfig{
+						{
+							AnycastIP: "10.0.0.1",
+							Backends:  []AnycastBackendConfig{},
+						},
+					},
+				},
+			},
+			wantErr: true,
+			errMsg:  "at least one backend",
+		},
+		{
+			name: "invalid physical_ip",
+			config: &Config{
+				Upstream: UpstreamConfig{
+					Strategy: "random",
+					AnycastGroups: []AnycastGroupConfig{
+						{
+							AnycastIP: "10.0.0.1",
+							Backends: []AnycastBackendConfig{
+								{PhysicalIP: "invalid", Port: 53, Weight: 100},
+							},
+						},
+					},
+				},
+			},
+			wantErr: true,
+			errMsg:  "must be a valid IP address",
+		},
+		{
+			name: "invalid port",
+			config: &Config{
+				Upstream: UpstreamConfig{
+					Strategy: "random",
+					AnycastGroups: []AnycastGroupConfig{
+						{
+							AnycastIP: "10.0.0.1",
+							Backends: []AnycastBackendConfig{
+								{PhysicalIP: "192.168.1.1", Port: 0, Weight: 100},
+							},
+						},
+					},
+				},
+			},
+			wantErr: true,
+			errMsg:  "must be between 1-65535",
+		},
+		{
+			name: "invalid weight",
+			config: &Config{
+				Upstream: UpstreamConfig{
+					Strategy: "random",
+					AnycastGroups: []AnycastGroupConfig{
+						{
+							AnycastIP: "10.0.0.1",
+							Backends: []AnycastBackendConfig{
+								{PhysicalIP: "192.168.1.1", Port: 53, Weight: 150},
+							},
+						},
+					},
+				},
+			},
+			wantErr: true,
+			errMsg:  "must be between 0-100",
+		},
+		{
+			name: "invalid strategy",
+			config: &Config{
+				Upstream: UpstreamConfig{
+					Strategy: "invalid",
+					Servers:  []string{"8.8.8.8"},
+				},
+			},
+			wantErr: true,
+			errMsg:  "invalid strategy",
+		},
+		{
+			name: "no servers or anycast groups",
+			config: &Config{
+				Upstream: UpstreamConfig{
+					Strategy:      "random",
+					Servers:       []string{},
+					AnycastGroups: []AnycastGroupConfig{},
+				},
+			},
+			wantErr: true,
+			errMsg:  "at least one server or anycast group",
+		},
+		{
+			name: "invalid topology weight",
+			config: &Config{
+				Upstream: UpstreamConfig{
+					Strategy: "random",
+					Servers:  []string{"8.8.8.8"},
+					Topology: TopologyConfig{Weight: 150},
+				},
+			},
+			wantErr: true,
+			errMsg:  "weight",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errors := tt.config.Validate()
+			hasErr := len(errors) > 0 && containsAny(errors, tt.errMsg)
+			if tt.wantErr && !hasErr {
+				t.Errorf("expected error containing %q, got %v", tt.errMsg, errors)
+			}
+			if !tt.wantErr && len(errors) > 0 {
+				// Check if errors are unrelated to upstream
+				for _, e := range errors {
+					if strings.Contains(e, "upstream") {
+						t.Errorf("unexpected upstream error: %s", e)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestValidateDNSSEC(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  *Config
+		wantErr bool
+	}{
+		{
+			name: "DNSSEC disabled",
+			config: &Config{
+				DNSSEC: DNSSECConfig{Enabled: false},
+			},
+			wantErr: false,
+		},
+		{
+			name: "DNSSEC enabled with trust anchor",
+			config: &Config{
+				DNSSEC: DNSSECConfig{
+					Enabled:     true,
+					TrustAnchor: "/nonexistent/file.xml",
+				},
+			},
+			wantErr: false, // Trust anchor non-existence is just a warning
+		},
+		{
+			name: "DNSSEC enabled without trust anchor",
+			config: &Config{
+				DNSSEC: DNSSECConfig{
+					Enabled:     true,
+					TrustAnchor: "",
+				},
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errors := tt.config.Validate()
+			var dnssecErrors []string
+			for _, e := range errors {
+				if strings.Contains(e, "dnssec") {
+					dnssecErrors = append(dnssecErrors, e)
+				}
+			}
+			if tt.wantErr && len(dnssecErrors) == 0 {
+				t.Errorf("expected DNSSEC error, got %v", errors)
+			}
+			if !tt.wantErr && len(dnssecErrors) > 0 {
+				t.Errorf("unexpected DNSSEC error: %v", dnssecErrors)
+			}
+		})
+	}
+}
+
+func TestValidateCluster(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  *Config
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name: "cluster disabled",
+			config: &Config{
+				Cluster: ClusterConfig{Enabled: false},
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid cluster",
+			config: &Config{
+				Cluster: ClusterConfig{
+					Enabled:     true,
+					GossipPort:  7946,
+					Weight:      50,
+					SeedNodes:   []string{"node1:7946"},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid gossip port",
+			config: &Config{
+				Cluster: ClusterConfig{
+					Enabled:     true,
+					GossipPort:  0,
+				},
+			},
+			wantErr: true,
+			errMsg:  "invalid gossip_port",
+		},
+		{
+			name: "negative weight",
+			config: &Config{
+				Cluster: ClusterConfig{
+					Enabled: true,
+					Weight:  -1,
+				},
+			},
+			wantErr: true,
+			errMsg:  "weight cannot be negative",
+		},
+		{
+			name: "empty seed node",
+			config: &Config{
+				Cluster: ClusterConfig{
+					Enabled:   true,
+					SeedNodes: []string{""},
+				},
+			},
+			wantErr: true,
+			errMsg:  "seed node cannot be empty",
+		},
+		{
+			name: "invalid seed node format",
+			config: &Config{
+				Cluster: ClusterConfig{
+					Enabled:   true,
+					SeedNodes: []string{"invalid-node"},
+				},
+			},
+			wantErr: true,
+			errMsg:  "expected host:port format",
+		},
+		{
+			name: "seed node invalid port",
+			config: &Config{
+				Cluster: ClusterConfig{
+					Enabled:   true,
+					SeedNodes: []string{"node1:invalid"},
+				},
+			},
+			wantErr: true,
+			errMsg:  "invalid port",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errors := tt.config.Validate()
+			var clusterErrors []string
+			for _, e := range errors {
+				if strings.Contains(e, "cluster") {
+					clusterErrors = append(clusterErrors, e)
+				}
+			}
+			if tt.wantErr {
+				if len(clusterErrors) == 0 {
+					t.Errorf("expected cluster error, got %v", errors)
+				} else if !containsAny(clusterErrors, tt.errMsg) {
+					t.Errorf("expected error containing %q, got %v", tt.errMsg, clusterErrors)
+				}
+			} else {
+				if len(clusterErrors) > 0 {
+					t.Errorf("unexpected cluster error: %v", clusterErrors)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateSlaveZones(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  *Config
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name:   "no slave zones",
+			config: &Config{},
+			wantErr: false,
+		},
+		{
+			name: "valid slave zone",
+			config: &Config{
+				SlaveZones: []SlaveZoneConfig{
+					{
+						ZoneName:     "example.com.",
+						Masters:      []string{"192.168.1.1:53"},
+						TransferType: "axfr",
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "missing zone name",
+			config: &Config{
+				SlaveZones: []SlaveZoneConfig{
+					{
+						ZoneName: "",
+						Masters:  []string{"192.168.1.1:53"},
+					},
+				},
+			},
+			wantErr: true,
+			errMsg:  "zone_name is required",
+		},
+		{
+			name: "no masters",
+			config: &Config{
+				SlaveZones: []SlaveZoneConfig{
+					{
+						ZoneName: "example.com.",
+						Masters:  []string{},
+					},
+				},
+			},
+			wantErr: true,
+			errMsg:  "at least one master server",
+		},
+		{
+			name: "invalid transfer type",
+			config: &Config{
+				SlaveZones: []SlaveZoneConfig{
+					{
+						ZoneName:     "example.com.",
+						Masters:      []string{"192.168.1.1:53"},
+						TransferType: "invalid",
+					},
+				},
+			},
+			wantErr: true,
+			errMsg:  "invalid transfer_type",
+		},
+		{
+			name: "negative max retries",
+			config: &Config{
+				SlaveZones: []SlaveZoneConfig{
+					{
+						ZoneName:   "example.com.",
+						Masters:    []string{"192.168.1.1:53"},
+						MaxRetries: -1,
+					},
+				},
+			},
+			wantErr: true,
+			errMsg:  "max_retries cannot be negative",
+		},
+		{
+			name: "invalid master address",
+			config: &Config{
+				SlaveZones: []SlaveZoneConfig{
+					{
+						ZoneName: "example.com.",
+						Masters:  []string{"invalid:address:format"},
+					},
+				},
+			},
+			wantErr: true,
+			errMsg:  "invalid master address",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errors := tt.config.Validate()
+			var slaveErrors []string
+			for _, e := range errors {
+				if strings.Contains(e, "slave_zones") {
+					slaveErrors = append(slaveErrors, e)
+				}
+			}
+			if tt.wantErr {
+				if len(slaveErrors) == 0 {
+					t.Errorf("expected slave_zones error, got %v", errors)
+				} else if !containsAny(slaveErrors, tt.errMsg) {
+					t.Errorf("expected error containing %q, got %v", tt.errMsg, slaveErrors)
+				}
+			} else {
+				if len(slaveErrors) > 0 {
+					t.Errorf("unexpected slave_zones error: %v", slaveErrors)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateBlocklist(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  *Config
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name: "blocklist disabled",
+			config: &Config{
+				Blocklist: BlocklistConfig{Enabled: false},
+			},
+			wantErr: false,
+		},
+		{
+			name: "blocklist enabled empty files",
+			config: &Config{
+				Blocklist: BlocklistConfig{
+					Enabled: true,
+					Files:   []string{},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "blocklist empty file path",
+			config: &Config{
+				Blocklist: BlocklistConfig{
+					Enabled: true,
+					Files:   []string{""},
+				},
+			},
+			wantErr: true,
+			errMsg:  "file path cannot be empty",
+		},
+		{
+			name: "blocklist nonexistent file",
+			config: &Config{
+				Blocklist: BlocklistConfig{
+					Enabled: true,
+					Files:   []string{"/nonexistent/blocklist.txt"},
+				},
+			},
+			wantErr: true,
+			errMsg:  "does not exist",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errors := tt.config.Validate()
+			var blocklistErrors []string
+			for _, e := range errors {
+				if strings.Contains(e, "blocklist") {
+					blocklistErrors = append(blocklistErrors, e)
+				}
+			}
+			if tt.wantErr {
+				if len(blocklistErrors) == 0 {
+					t.Errorf("expected blocklist error, got %v", errors)
+				} else if !containsAny(blocklistErrors, tt.errMsg) {
+					t.Errorf("expected error containing %q, got %v", tt.errMsg, blocklistErrors)
+				}
+			} else {
+				if len(blocklistErrors) > 0 {
+					t.Errorf("unexpected blocklist error: %v", blocklistErrors)
+				}
+			}
+		})
+	}
+}
+
+func TestNodeGetSlice(t *testing.T) {
+	// Create a node with a sequence (mapping uses alternating key-value children)
+	node := &Node{
+		Type: NodeMapping,
+		Children: []*Node{
+			{Type: NodeScalar, Value: "items"}, // key
+			{
+				Type: NodeSequence, // value
+				Children: []*Node{
+					{Type: NodeScalar, Value: "a"},
+					{Type: NodeScalar, Value: "b"},
+				},
+			},
+		},
+	}
+
+	items := node.GetSlice("items")
+	if items == nil {
+		t.Fatal("GetSlice returned nil")
+	}
+	if len(items) != 2 {
+		t.Errorf("GetSlice length = %d, want 2", len(items))
+	}
+
+	// Test non-existent key
+	nonExistent := node.GetSlice("nonexistent")
+	if nonExistent != nil {
+		t.Errorf("GetSlice for non-existent key should return nil, got %v", nonExistent)
+	}
+
+	// Test GetSlice on sequence with empty key
+	seqNode := &Node{
+		Type: NodeSequence,
+		Children: []*Node{
+			{Type: NodeScalar, Value: "x"},
+			{Type: NodeScalar, Value: "y"},
+		},
+	}
+	seqChildren := seqNode.GetSlice("")
+	if len(seqChildren) != 2 {
+		t.Errorf("GetSlice('') on sequence = %d children, want 2", len(seqChildren))
+	}
+}
+
+// containsAny checks if any string in slice contains substr
+func containsAny(slice []string, substr string) bool {
+	for _, s := range slice {
+		if strings.Contains(s, substr) {
+			return true
+		}
+	}
+	return false
 }

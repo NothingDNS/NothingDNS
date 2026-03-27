@@ -391,3 +391,186 @@ func TestClientInfoIP(t *testing.T) {
 		})
 	}
 }
+
+// TestTruncateRRSet tests the truncateRRSet function.
+func TestTruncateRRSet(t *testing.T) {
+	name, _ := protocol.ParseName("example.com.")
+
+	tests := []struct {
+		name     string
+		answers  []*protocol.ResourceRecord
+		maxSize  int
+		expected int // expected number of records
+	}{
+		{
+			name:     "empty answers",
+			answers:  nil,
+			maxSize:  512,
+			expected: 0,
+		},
+		{
+			name:     "zero max size",
+			answers:  []*protocol.ResourceRecord{{Name: name, Type: protocol.TypeA, Data: &protocol.RDataA{}}},
+			maxSize:  0,
+			expected: 0,
+		},
+		{
+			name:     "negative max size",
+			answers:  []*protocol.ResourceRecord{{Name: name, Type: protocol.TypeA, Data: &protocol.RDataA{}}},
+			maxSize:  -1,
+			expected: 0,
+		},
+		{
+			name: "nil data in answer",
+			answers: []*protocol.ResourceRecord{
+				{Name: name, Type: protocol.TypeA, Data: nil},
+			},
+			maxSize:  512,
+			expected: 0,
+		},
+		{
+			name: "single small record",
+			answers: []*protocol.ResourceRecord{
+				{Name: name, Type: protocol.TypeA, Data: &protocol.RDataA{Address: [4]byte{1, 2, 3, 4}}},
+			},
+			maxSize:  512,
+			expected: 1,
+		},
+		{
+			name: "multiple records small max",
+			answers: []*protocol.ResourceRecord{
+				{Name: name, Type: protocol.TypeA, Data: &protocol.RDataA{Address: [4]byte{1, 2, 3, 4}}},
+				{Name: name, Type: protocol.TypeA, Data: &protocol.RDataA{Address: [4]byte{5, 6, 7, 8}}},
+			},
+			maxSize:  30, // Small enough to only fit one
+			expected: 1,
+		},
+		{
+			name: "multiple records fit all",
+			answers: []*protocol.ResourceRecord{
+				{Name: name, Type: protocol.TypeA, Data: &protocol.RDataA{Address: [4]byte{1, 2, 3, 4}}},
+				{Name: name, Type: protocol.TypeA, Data: &protocol.RDataA{Address: [4]byte{5, 6, 7, 8}}},
+			},
+			maxSize:  512,
+			expected: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := truncateRRSet(tt.answers, tt.maxSize)
+			if len(result) != tt.expected {
+				t.Errorf("truncateRRSet() returned %d records, want %d", len(result), tt.expected)
+			}
+		})
+	}
+}
+
+// TestUDPResponseWriterDoubleWrite tests that writing twice returns an error.
+func TestUDPResponseWriterDoubleWrite(t *testing.T) {
+	var called int
+	handler := HandlerFunc(func(w ResponseWriter, req *protocol.Message) {
+		resp := &protocol.Message{
+			Header: protocol.Header{
+				ID:    req.Header.ID,
+				Flags: protocol.NewResponseFlags(protocol.RcodeSuccess),
+			},
+		}
+
+		// First write should succeed
+		_, err := w.Write(resp)
+		if err != nil {
+			t.Errorf("First write failed: %v", err)
+		}
+
+		// Second write should fail
+		_, err = w.Write(resp)
+		if err == nil {
+			t.Error("Second write should return error")
+		}
+		called++
+	})
+
+	server := NewUDPServer("127.0.0.1:0", handler)
+	if err := server.Listen(); err != nil {
+		t.Fatalf("Failed to listen: %v", err)
+	}
+	defer server.Stop()
+
+	go server.Serve()
+	time.Sleep(10 * time.Millisecond)
+
+	addr := server.Addr()
+	client, err := net.DialUDP("udp", nil, addr.(*net.UDPAddr))
+	if err != nil {
+		t.Fatalf("Failed to dial: %v", err)
+	}
+	defer client.Close()
+
+	query, _ := protocol.NewQuery(0x1234, "example.com.", protocol.TypeA)
+	buf := make([]byte, 512)
+	n, _ := query.Pack(buf)
+	client.Write(buf[:n])
+
+	client.SetReadDeadline(time.Now().Add(time.Second))
+	respBuf := make([]byte, 512)
+	client.Read(respBuf)
+
+	if called != 1 {
+		t.Errorf("Handler called %d times, want 1", called)
+	}
+}
+
+// TestUDPServerStats tests the Stats method.
+func TestUDPServerStats(t *testing.T) {
+	handler := HandlerFunc(func(w ResponseWriter, req *protocol.Message) {
+		resp := &protocol.Message{
+			Header: protocol.Header{
+				ID:    req.Header.ID,
+				Flags: protocol.NewResponseFlags(protocol.RcodeSuccess),
+			},
+		}
+		w.Write(resp)
+	})
+
+	server := NewUDPServer("127.0.0.1:0", handler)
+	if err := server.Listen(); err != nil {
+		t.Fatalf("Failed to listen: %v", err)
+	}
+	defer server.Stop()
+
+	// Check initial stats
+	stats := server.Stats()
+	if stats.Workers <= 0 {
+		t.Errorf("Initial workers = %d, want > 0", stats.Workers)
+	}
+
+	go server.Serve()
+	time.Sleep(10 * time.Millisecond)
+
+	// Get server address and query it
+	addr := server.Addr()
+	client, err := net.DialUDP("udp", nil, addr.(*net.UDPAddr))
+	if err != nil {
+		t.Fatalf("Failed to dial: %v", err)
+	}
+	defer client.Close()
+
+	query, _ := protocol.NewQuery(0x1234, "example.com.", protocol.TypeA)
+	buf := make([]byte, 512)
+	n, _ := query.Pack(buf)
+	client.Write(buf[:n])
+
+	client.SetReadDeadline(time.Now().Add(time.Second))
+	respBuf := make([]byte, 512)
+	client.Read(respBuf)
+
+	// Check stats after query
+	stats = server.Stats()
+	if stats.PacketsReceived < 1 {
+		t.Errorf("PacketsReceived = %d, want at least 1", stats.PacketsReceived)
+	}
+	if stats.PacketsSent < 1 {
+		t.Errorf("PacketsSent = %d, want at least 1", stats.PacketsSent)
+	}
+}

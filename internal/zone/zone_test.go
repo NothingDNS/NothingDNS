@@ -398,3 +398,128 @@ func TestParseFileErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestManager_NewManager(t *testing.T) {
+	m := NewManager()
+	if m == nil {
+		t.Fatal("NewManager returned nil")
+	}
+	if m.zones == nil {
+		t.Error("zones map not initialized")
+	}
+	if m.files == nil {
+		t.Error("files map not initialized")
+	}
+}
+
+func TestManager_LoadZone(t *testing.T) {
+	m := NewManager()
+
+	z := NewZone("example.com.")
+	z.SOA = &SOARecord{Name: "example.com."}
+	z.NS = []NSRecord{{Name: "ns1.example.com."}}
+
+	m.LoadZone(z, "/path/to/zone")
+
+	// Test Get
+	got, ok := m.Get("example.com.")
+	if !ok {
+		t.Fatal("expected to find zone")
+	}
+	if got.Origin != "example.com." {
+		t.Errorf("expected origin example.com., got %s", got.Origin)
+	}
+
+	// Test Count
+	if m.Count() != 1 {
+		t.Errorf("expected count 1, got %d", m.Count())
+	}
+}
+
+func TestManager_List(t *testing.T) {
+	m := NewManager()
+
+	z1 := NewZone("example.com.")
+	z1.SOA = &SOARecord{Name: "example.com."}
+	z1.NS = []NSRecord{{Name: "ns1.example.com."}}
+
+	z2 := NewZone("test.com.")
+	z2.SOA = &SOARecord{Name: "test.com."}
+	z2.NS = []NSRecord{{Name: "ns1.test.com."}}
+
+	m.LoadZone(z1, "/path/to/example.zone")
+	m.LoadZone(z2, "/path/to/test.zone")
+
+	list := m.List()
+	if len(list) != 2 {
+		t.Errorf("expected 2 zones, got %d", len(list))
+	}
+
+	// Verify it's a copy
+	list["new.com."] = NewZone("new.com.")
+	if m.Count() != 2 {
+		t.Error("modifying List() result should not affect manager")
+	}
+}
+
+func TestManager_Remove(t *testing.T) {
+	m := NewManager()
+
+	z := NewZone("example.com.")
+	z.SOA = &SOARecord{Name: "example.com."}
+	z.NS = []NSRecord{{Name: "ns1.example.com."}}
+
+	m.LoadZone(z, "/path/to/zone")
+
+	if m.Count() != 1 {
+		t.Fatal("expected 1 zone before remove")
+	}
+
+	m.Remove("example.com.")
+
+	if m.Count() != 0 {
+		t.Errorf("expected 0 zones after remove, got %d", m.Count())
+	}
+
+	_, ok := m.Get("example.com.")
+	if ok {
+		t.Error("expected zone to be removed")
+	}
+}
+
+func TestManager_Reload_NotFound(t *testing.T) {
+	m := NewManager()
+
+	err := m.Reload("nonexistent.com.")
+	if err == nil {
+		t.Error("expected error for non-existent zone")
+	}
+}
+
+func TestZone_LookupAll(t *testing.T) {
+	z := NewZone("example.com.")
+	z.Records["www.example.com."] = []Record{
+		{Type: "A", RData: "192.0.2.1"},
+		{Type: "A", RData: "192.0.2.2"},
+		{Type: "AAAA", RData: "2001:db8::1"},
+		{Type: "MX", RData: "10 mail.example.com."},
+	}
+
+	// Test getting all record types
+	records := z.LookupAll("www.example.com.")
+	if len(records) != 4 {
+		t.Errorf("expected 4 records, got %d", len(records))
+	}
+
+	// Test case insensitivity
+	recordsUpper := z.LookupAll("WWW.EXAMPLE.COM.")
+	if len(recordsUpper) != 4 {
+		t.Errorf("expected 4 records with case insensitive lookup, got %d", len(recordsUpper))
+	}
+
+	// Test non-existent name
+	recordsEmpty := z.LookupAll("nonexistent.example.com.")
+	if len(recordsEmpty) != 0 {
+		t.Errorf("expected 0 records for non-existent name, got %d", len(recordsEmpty))
+	}
+}

@@ -257,3 +257,190 @@ func TestMaskIP(t *testing.T) {
 		t.Errorf("MaskIP(192.168.1.123, 24) = %s, want 192.168.1.0", masked.String())
 	}
 }
+
+// TestParseIP tests the ParseIP function
+func TestParseIP(t *testing.T) {
+	tests := []struct {
+		input    string
+		isNil    bool
+	}{
+		{"192.168.1.1", false},
+		{"::1", false},
+		{"invalid", true},
+		{"", true},
+	}
+
+	for _, tc := range tests {
+		result := ParseIP(tc.input)
+		if (result == nil) != tc.isNil {
+			t.Errorf("ParseIP(%q) nil = %v, want %v", tc.input, result == nil, tc.isNil)
+		}
+	}
+}
+
+// TestIPToBytes tests the IPToBytes function
+func TestIPToBytes(t *testing.T) {
+	// IPv4
+	ip4 := net.ParseIP("192.168.1.1")
+	bytes4 := IPToBytes(ip4)
+	if len(bytes4) != 4 {
+		t.Errorf("IPv4 bytes length = %d, want 4", len(bytes4))
+	}
+
+	// IPv6
+	ip6 := net.ParseIP("2001:db8::1")
+	bytes6 := IPToBytes(ip6)
+	if len(bytes6) != 16 {
+		t.Errorf("IPv6 bytes length = %d, want 16", len(bytes6))
+	}
+}
+
+// TestIPToString tests the IPToString function
+func TestIPToString(t *testing.T) {
+	tests := []struct {
+		ip       net.IP
+		expected string
+	}{
+		{net.ParseIP("192.168.1.1"), "192.168.1.1"},
+		{net.ParseIP("::1"), "::1"},
+		{nil, ""},
+	}
+
+	for _, tc := range tests {
+		result := IPToString(tc.ip)
+		if result != tc.expected {
+			t.Errorf("IPToString(%v) = %q, want %q", tc.ip, result, tc.expected)
+		}
+	}
+}
+
+// TestIPRangeContains tests the IPRange.Contains method
+func TestIPRangeContains(t *testing.T) {
+	// IPv4 range
+	r4 := &IPRange{
+		Start: net.ParseIP("192.168.1.0"),
+		End:   net.ParseIP("192.168.1.255"),
+	}
+
+	tests := []struct {
+		ip       string
+		expected bool
+	}{
+		{"192.168.1.1", true},
+		{"192.168.1.128", true},
+		{"192.168.1.255", true},
+		{"192.168.2.1", false},
+		{"10.0.0.1", false},
+		{"::1", false}, // IPv6 in IPv4 range
+	}
+
+	for _, tc := range tests {
+		ip := net.ParseIP(tc.ip)
+		result := r4.Contains(ip)
+		if result != tc.expected {
+			t.Errorf("IPRange.Contains(%q) = %v, want %v", tc.ip, result, tc.expected)
+		}
+	}
+
+	// IPv6 range
+	r6 := &IPRange{
+		Start: net.ParseIP("2001:db8::1"),
+		End:   net.ParseIP("2001:db8::ffff"),
+	}
+
+	if !r6.Contains(net.ParseIP("2001:db8::100")) {
+		t.Error("IPv6 range should contain address in range")
+	}
+	if r6.Contains(net.ParseIP("192.168.1.1")) {
+		t.Error("IPv6 range should not contain IPv4 address")
+	}
+}
+
+// TestBytesCompare tests the bytesCompare function
+func TestBytesCompare(t *testing.T) {
+	tests := []struct {
+		a, b     []byte
+		expected int
+	}{
+		{[]byte{1, 2, 3}, []byte{1, 2, 3}, 0},
+		{[]byte{1, 2, 3}, []byte{1, 2, 4}, -1},
+		{[]byte{1, 2, 4}, []byte{1, 2, 3}, 1},
+		{[]byte{1, 2}, []byte{1, 2, 3}, -1},
+		{[]byte{1, 2, 3}, []byte{1, 2}, 1},
+	}
+
+	for _, tc := range tests {
+		result := bytesCompare(tc.a, tc.b)
+		if result != tc.expected {
+			t.Errorf("bytesCompare(%v, %v) = %d, want %d", tc.a, tc.b, result, tc.expected)
+		}
+	}
+}
+
+// TestCIDRString tests the CIDR.String method
+func TestCIDRString(t *testing.T) {
+	cidr, err := ParseCIDR("192.168.1.0/24")
+	if err != nil {
+		t.Fatalf("ParseCIDR error: %v", err)
+	}
+
+	result := cidr.String()
+	if result != "192.168.1.0/24" {
+		t.Errorf("CIDR.String() = %q, want %q", result, "192.168.1.0/24")
+	}
+}
+
+// TestIsMulticast tests the IsMulticast function
+func TestIsMulticast(t *testing.T) {
+	tests := []struct {
+		ip       string
+		expected bool
+	}{
+		{"224.0.0.1", true},
+		{"239.255.255.255", true},
+		{"192.168.1.1", false},
+		{"ff00::1", true},
+		{"ff02::1", true},
+		{"2001:db8::1", false},
+	}
+
+	for _, tc := range tests {
+		ip := net.ParseIP(tc.ip)
+		result := IsMulticast(ip)
+		if result != tc.expected {
+			t.Errorf("IsMulticast(%q) = %v, want %v", tc.ip, result, tc.expected)
+		}
+	}
+}
+
+// TestGetIPFamily tests the GetIPFamily function
+func TestGetIPFamily(t *testing.T) {
+	tests := []struct {
+		ip       string
+		expected IPFamily
+	}{
+		{"192.168.1.1", IPv4},
+		{"::1", IPv6},
+		{"2001:db8::1", IPv6},
+	}
+
+	for _, tc := range tests {
+		ip := net.ParseIP(tc.ip)
+		result := GetIPFamily(ip)
+		if result != tc.expected {
+			t.Errorf("GetIPFamily(%q) = %d, want %d", tc.ip, result, tc.expected)
+		}
+	}
+}
+
+// TestNewPooledBufferSized tests NewPooledBufferSized
+func TestNewPooledBufferSized(t *testing.T) {
+	buf := NewPooledBufferSized(1024)
+	if buf == nil {
+		t.Error("NewPooledBufferSized should not return nil")
+	}
+	if buf.Cap() < 1024 {
+		t.Errorf("Buffer cap = %d, want at least 1024", buf.Cap())
+	}
+	buf.Release()
+}

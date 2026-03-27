@@ -404,3 +404,146 @@ func mustParseName(s string) *protocol.Name {
 	}
 	return n
 }
+
+func TestRDataTSIG_Type(t *testing.T) {
+	rdata := &RDataTSIG{Raw: []byte("test")}
+	if rdata.Type() != protocol.TypeTSIG {
+		t.Errorf("Expected Type %d, got %d", protocol.TypeTSIG, rdata.Type())
+	}
+}
+
+func TestRDataTSIG_Pack(t *testing.T) {
+	raw := []byte("test-tsig-data")
+	rdata := &RDataTSIG{Raw: raw}
+
+	buf := make([]byte, 100)
+	n, err := rdata.Pack(buf, 0)
+	if err != nil {
+		t.Fatalf("Pack() error = %v", err)
+	}
+	if n != len(raw) {
+		t.Errorf("Expected %d bytes packed, got %d", len(raw), n)
+	}
+	if !bytes.Equal(buf[:n], raw) {
+		t.Error("Packed data doesn't match")
+	}
+
+	// Test with offset
+	n2, err := rdata.Pack(buf, 10)
+	if err != nil {
+		t.Fatalf("Pack() with offset error = %v", err)
+	}
+	if !bytes.Equal(buf[10:10+n2], raw) {
+		t.Error("Packed data with offset doesn't match")
+	}
+
+	// Test buffer too small
+	smallBuf := make([]byte, 5)
+	_, err = rdata.Pack(smallBuf, 0)
+	if err == nil {
+		t.Error("Expected error for small buffer")
+	}
+}
+
+func TestRDataTSIG_Unpack(t *testing.T) {
+	raw := []byte("test-tsig-data")
+	buf := make([]byte, 100)
+	copy(buf, raw)
+
+	rdata := &RDataTSIG{}
+	n, err := rdata.Unpack(buf, 0, uint16(len(raw)))
+	if err != nil {
+		t.Fatalf("Unpack() error = %v", err)
+	}
+	if n != len(raw) {
+		t.Errorf("Expected %d bytes unpacked, got %d", len(raw), n)
+	}
+	if !bytes.Equal(rdata.Raw, raw) {
+		t.Error("Unpacked data doesn't match")
+	}
+
+	// Test with offset
+	rdata2 := &RDataTSIG{}
+	copy(buf[10:], raw)
+	_, err = rdata2.Unpack(buf, 10, uint16(len(raw)))
+	if err != nil {
+		t.Fatalf("Unpack() with offset error = %v", err)
+	}
+	if !bytes.Equal(rdata2.Raw, raw) {
+		t.Error("Unpacked data with offset doesn't match")
+	}
+
+	// Test buffer too small
+	rdata3 := &RDataTSIG{}
+	_, err = rdata3.Unpack(buf, 90, 20)
+	if err == nil {
+		t.Error("Expected error for buffer too small")
+	}
+}
+
+func TestRDataTSIG_Len(t *testing.T) {
+	rdata := &RDataTSIG{Raw: []byte("12345")}
+	if rdata.Len() != 5 {
+		t.Errorf("Expected Len 5, got %d", rdata.Len())
+	}
+
+	rdata2 := &RDataTSIG{Raw: []byte{}}
+	if rdata2.Len() != 0 {
+		t.Errorf("Expected Len 0, got %d", rdata2.Len())
+	}
+}
+
+func TestRDataTSIG_Copy(t *testing.T) {
+	rdata := &RDataTSIG{Raw: []byte("test-data")}
+
+	copy := rdata.Copy().(*RDataTSIG)
+	if !bytes.Equal(copy.Raw, rdata.Raw) {
+		t.Error("Copy data doesn't match")
+	}
+
+	// Modify copy and ensure original is unchanged
+	copy.Raw[0] = 'X'
+	if rdata.Raw[0] == 'X' {
+		t.Error("Modifying copy affected original")
+	}
+
+	// Test nil copy
+	var nilRdata *RDataTSIG
+	nilCopy := nilRdata.Copy()
+	if nilCopy != nil {
+		t.Error("Expected nil copy for nil RDataTSIG")
+	}
+}
+
+func TestHmacAlgorithm(t *testing.T) {
+	// Test all supported algorithms
+	algorithms := []string{
+		HmacSHA256,
+		HmacSHA384,
+		HmacSHA512,
+		HmacSHA1,
+		"unknown-algorithm",
+	}
+
+	for _, alg := range algorithms {
+		fn := hmacAlgorithm(alg)
+		if fn == nil {
+			t.Errorf("hmacAlgorithm(%s) returned nil", alg)
+		} else {
+			result := fn()
+			// Just ensure it doesn't panic and returns something
+			if result == nil && alg != HmacSHA1 {
+				t.Errorf("hmacAlgorithm(%s) function returned nil", alg)
+			}
+		}
+	}
+}
+
+func TestRDataTSIG_String_Invalid(t *testing.T) {
+	// Test with invalid raw data
+	rdata := &RDataTSIG{Raw: []byte{0xFF, 0xFE, 0xFD}} // Invalid TSIG data
+	str := rdata.String()
+	if !strings.Contains(str, "invalid") {
+		t.Errorf("Expected string to contain 'invalid', got %s", str)
+	}
+}
