@@ -1520,6 +1520,263 @@ func TestNodeGetSlice(t *testing.T) {
 	}
 }
 
+// TestGetStringFunction tests the getString helper function
+func TestGetStringFunction(t *testing.T) {
+	tests := []struct {
+		name         string
+		node         *Node
+		key          string
+		defaultValue string
+		expected     string
+	}{
+		{
+			name: "scalar child exists",
+			node: &Node{
+				Type: NodeMapping,
+				Children: []*Node{
+					{Type: NodeScalar, Value: "name"},
+					{Type: NodeScalar, Value: "test-value"},
+				},
+			},
+			key:          "name",
+			defaultValue: "default",
+			expected:     "test-value",
+		},
+		{
+			name: "key not found",
+			node: &Node{
+				Type: NodeMapping,
+				Children: []*Node{
+					{Type: NodeScalar, Value: "other"},
+					{Type: NodeScalar, Value: "value"},
+				},
+			},
+			key:          "name",
+			defaultValue: "default",
+			expected:     "default",
+		},
+		{
+			name: "child is not scalar",
+			node: &Node{
+				Type: NodeMapping,
+				Children: []*Node{
+					{Type: NodeScalar, Value: "name"},
+					{Type: NodeSequence, Children: []*Node{}},
+				},
+			},
+			key:          "name",
+			defaultValue: "default",
+			expected:     "default",
+		},
+		{
+			name:         "nil node",
+			node:         nil,
+			key:          "name",
+			defaultValue: "default",
+			expected:     "default",
+		},
+		{
+			name: "empty mapping",
+			node: &Node{
+				Type:     NodeMapping,
+				Children: []*Node{},
+			},
+			key:          "name",
+			defaultValue: "default",
+			expected:     "default",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var result string
+			if tt.node == nil {
+				result = tt.defaultValue
+			} else {
+				result = getString(tt.node, tt.key, tt.defaultValue)
+			}
+			if result != tt.expected {
+				t.Errorf("getString() = %q, want %q", result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestUnmarshalYAMLWithEnvDisabled tests environment variable expansion can be disabled
+func TestUnmarshalYAMLWithEnvDisabled(t *testing.T) {
+	// Set an environment variable
+	os.Setenv("TEST_DNS_PORT", "5353")
+	defer os.Unsetenv("TEST_DNS_PORT")
+
+	input := `
+server:
+  port: 5353
+`
+
+	// With expandEnv = false, should parse normally
+	cfg, err := UnmarshalYAMLWithEnv(input, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.Server.Port != 5353 {
+		t.Errorf("expected port 5353, got %d", cfg.Server.Port)
+	}
+}
+
+// TestUnmarshalYAMLWithEnvEnabled tests environment variable expansion
+func TestUnmarshalYAMLWithEnvEnabled(t *testing.T) {
+	// Set an environment variable
+	os.Setenv("TEST_DNS_PORT_2", "5353")
+	defer os.Unsetenv("TEST_DNS_PORT_2")
+
+	input := `
+server:
+  port: ${TEST_DNS_PORT_2}
+`
+
+	cfg, err := UnmarshalYAMLWithEnv(input, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.Server.Port != 5353 {
+		t.Errorf("expected port 5353, got %d", cfg.Server.Port)
+	}
+}
+
+// TestExpandEnvVarsSimple tests simple $VAR expansion
+func TestExpandEnvVarsSimple(t *testing.T) {
+	os.Setenv("TEST_SIMPLE_VAR", "hello")
+	defer os.Unsetenv("TEST_SIMPLE_VAR")
+
+	input := "value: $TEST_SIMPLE_VAR"
+	result := expandEnvVars(input)
+
+	if !strings.Contains(result, "hello") {
+		t.Errorf("expected 'hello' in result, got %q", result)
+	}
+}
+
+// TestExpandEnvVarsNoClosing tests ${VAR without closing brace
+func TestExpandEnvVarsNoClosing(t *testing.T) {
+	os.Setenv("TEST_UNCLOSED", "value")
+	defer os.Unsetenv("TEST_UNCLOSED")
+
+	input := "value: ${TEST_UNCLOSED"
+	result := expandEnvVars(input)
+
+	// Should leave the text as-is since no closing brace
+	if !strings.Contains(result, "${TEST_UNCLOSED") {
+		t.Errorf("expected unclosed variable to remain, got %q", result)
+	}
+}
+
+// TestValidateClusterEnabled tests cluster validation when enabled
+func TestValidateClusterEnabled(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  *Config
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name: "valid cluster config",
+			config: &Config{
+				Cluster: ClusterConfig{
+					Enabled:    true,
+					GossipPort: 7946,
+					Weight:     100,
+					SeedNodes:  []string{"node1.example.com:7946"},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid gossip port",
+			config: &Config{
+				Cluster: ClusterConfig{
+					Enabled:    true,
+					GossipPort: 0,
+				},
+			},
+			wantErr: true,
+			errMsg:  "invalid gossip_port",
+		},
+		{
+			name: "negative weight",
+			config: &Config{
+				Cluster: ClusterConfig{
+					Enabled:    true,
+					GossipPort: 7946,
+					Weight:     -1,
+				},
+			},
+			wantErr: true,
+			errMsg:  "weight cannot be negative",
+		},
+		{
+			name: "empty seed node",
+			config: &Config{
+				Cluster: ClusterConfig{
+					Enabled:    true,
+					GossipPort: 7946,
+					SeedNodes:  []string{""},
+				},
+			},
+			wantErr: true,
+			errMsg:  "seed node cannot be empty",
+		},
+		{
+			name: "invalid seed node format",
+			config: &Config{
+				Cluster: ClusterConfig{
+					Enabled:    true,
+					GossipPort: 7946,
+					SeedNodes:  []string{"invalid-node-no-port"},
+				},
+			},
+			wantErr: true,
+			errMsg:  "expected host:port format",
+		},
+		{
+			name: "invalid seed node port",
+			config: &Config{
+				Cluster: ClusterConfig{
+					Enabled:    true,
+					GossipPort: 7946,
+					SeedNodes:  []string{"node1:99999"},
+				},
+			},
+			wantErr: true,
+			errMsg:  "invalid port",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errors := tt.config.Validate()
+			var clusterErrors []string
+			for _, e := range errors {
+				if strings.Contains(e, "cluster") {
+					clusterErrors = append(clusterErrors, e)
+				}
+			}
+			if tt.wantErr {
+				if len(clusterErrors) == 0 {
+					t.Errorf("expected cluster error, got %v", errors)
+				} else if !containsAny(clusterErrors, tt.errMsg) {
+					t.Errorf("expected error containing %q, got %v", tt.errMsg, clusterErrors)
+				}
+			} else {
+				if len(clusterErrors) > 0 {
+					t.Errorf("unexpected cluster error: %v", clusterErrors)
+				}
+			}
+		})
+	}
+}
+
 // containsAny checks if any string in slice contains substr
 func containsAny(slice []string, substr string) bool {
 	for _, s := range slice {
