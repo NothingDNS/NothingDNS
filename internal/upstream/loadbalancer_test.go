@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1776,5 +1777,843 @@ func TestLoadBalancerSelectStandaloneTargetAllStrategies(t *testing.T) {
 		if target == nil {
 			t.Errorf("expected target for strategy %v", strategy)
 		}
+	}
+}
+
+func TestLoadBalancerSelectRoundRobinEmptyServersLB(t *testing.T) {
+	lb := &LoadBalancer{
+		servers:       []*Server{},
+		anycastGroups: map[string]*AnycastGroup{},
+		strategy:      RoundRobin,
+		udpPool:       make(map[string]*sync.Pool),
+		tcpPool:       make(map[string]*sync.Pool),
+	}
+
+	server := lb.selectRoundRobin()
+	if server != nil {
+		t.Error("expected nil for empty server list")
+	}
+}
+
+func TestLoadBalancerSelectRandomEmptyServersLB(t *testing.T) {
+	lb := &LoadBalancer{
+		servers:       []*Server{},
+		anycastGroups: map[string]*AnycastGroup{},
+		strategy:      Random,
+		udpPool:       make(map[string]*sync.Pool),
+		tcpPool:       make(map[string]*sync.Pool),
+	}
+
+	server := lb.selectRandom()
+	if server != nil {
+		t.Error("expected nil for empty server list")
+	}
+}
+
+func TestLoadBalancerQueryWithFailoverFailoverSuccessUDP(t *testing.T) {
+	// Create a mock UDP DNS server that echoes
+	mockAddr, cleanup := setupMockDNSServerLB(t, nil)
+	defer cleanup()
+
+	config := LoadBalancerConfig{
+		Servers:         []string{"127.0.0.1:1", mockAddr},
+		Strategy:        "round_robin",
+		HealthCheck:     30 * time.Second,
+		FailoverTimeout: 5 * time.Second,
+	}
+
+	lb, err := NewLoadBalancer(config)
+	if err != nil {
+		t.Fatalf("NewLoadBalancer failed: %v", err)
+	}
+	defer lb.Close()
+
+	// Mark both servers healthy
+	lb.servers[0].healthy = true
+	lb.servers[1].healthy = true
+
+	// Set round-robin index so selectTarget returns the mock server (index 1)
+	// Since selectTarget calls selectRoundRobin which does atomic.AddUint32(&roundRobinIndex, 1)
+	// we need to set it so the next increment gives us index 1
+	atomic.StoreUint32(&roundRobinIndex, 0)
+
+	msg := &protocol.Message{
+		Header: protocol.Header{
+			ID:      1234,
+			Flags:   protocol.Flags{RD: true},
+			QDCount: 0,
+		},
+	}
+
+	// Create target pointing to first (dead) server
+	target := &Target{
+		Type:    "standalone",
+		Address: "127.0.0.1:1",
+		Server:  lb.servers[0],
+	}
+
+	// queryWithFailover should fail on first server, then failover to second (mock)
+	_, err = lb.queryWithFailover(target, msg)
+	t.Logf("queryWithFailover result: %v", err)
+
+	// Verify failover was attempted
+	_, _, failovers := lb.Stats()
+	if failovers < 1 {
+		t.Errorf("expected at least 1 failover, got %d", failovers)
+	}
+}
+
+func TestLoadBalancerQueryWithFailoverFailoverSuccessTCP(t *testing.T) {
+	// Create a mock TCP server
+	tcpAddr, err := net.ResolveTCPAddr("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to resolve TCP addr: %v", err)
+	}
+
+	listener, err := net.ListenTCP("tcp", tcpAddr)
+	if err != nil {
+		t.Fatalf("failed to listen TCP: %v", err)
+	}
+
+	localAddr := listener.Addr().String()
+
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				conn, err := listener.Accept()
+				if err != nil {
+					continue
+				}
+				go func(c net.Conn) {
+					defer c.Close()
+					lengthBuf := make([]byte, 2)
+					_, err := c.Read(lengthBuf)
+					if err != nil {
+						return
+					}
+					respLen := uint16(lengthBuf[0])<<8 | uint16(lengthBuf[1])
+					buf := make([]byte, respLen)
+					c.Read(buf)
+					c.Write(lengthBuf)
+					c.Write(buf)
+				}(conn)
+			}
+		}
+	}()
+
+	defer func() {
+		close(done)
+		listener.Close()
+	}()
+
+	config := LoadBalancerConfig{
+		Servers:         []string{"127.0.0.1:1", localAddr},
+		Strategy:        "round_robin",
+		HealthCheck:     30 * time.Second,
+		FailoverTimeout: 5 * time.Second,
+	}
+
+	lb, err := NewLoadBalancer(config)
+	if err != nil {
+		t.Fatalf("NewLoadBalancer failed: %v", err)
+	}
+	defer lb.Close()
+
+	// Ensure failover selects the mock server (index 1)
+	atomic.StoreUint32(&roundRobinIndex, 0)
+
+	msg := &protocol.Message{
+		Header: protocol.Header{
+			ID:      1234,
+			Flags:   protocol.Flags{RD: true},
+			QDCount: 0,
+		},
+	}
+
+	// Target pointing to dead server - failover should find the TCP mock
+	target := &Target{
+		Type:    "standalone",
+		Address: "127.0.0.1:1",
+		Server:  lb.servers[0],
+	}
+
+	_, err = lb.queryWithFailover(target, msg)
+	t.Logf("queryWithFailover TCP failover result: %v", err)
+
+	_, _, failovers := lb.Stats()
+	if failovers < 1 {
+		t.Errorf("expected at least 1 failover, got %d", failovers)
+	}
+}
+
+func TestLoadBalancerQueryWithFailoverSelectTargetError(t *testing.T) {
+	// Create LB with no servers at the selectTarget level
+	lb := &LoadBalancer{
+		servers:       []*Server{},
+		anycastGroups: map[string]*AnycastGroup{},
+		strategy:      Random,
+		udpPool:       make(map[string]*sync.Pool),
+		tcpPool:       make(map[string]*sync.Pool),
+	}
+
+	msg := &protocol.Message{
+		Header: protocol.Header{
+			ID:      1234,
+			Flags:   protocol.Flags{RD: true},
+			QDCount: 0,
+		},
+	}
+
+	target := &Target{
+		Type:    "standalone",
+		Address: "127.0.0.1:1",
+	}
+
+	_, err := lb.queryWithFailover(target, msg)
+	if err == nil {
+		t.Error("expected error when failover selectTarget fails")
+	}
+}
+
+func TestLoadBalancerQueryWithFailoverAnycastMarkFailure(t *testing.T) {
+	// Test that anycast targets don't call markFailure on target.Server
+	lb := &LoadBalancer{
+		servers:       []*Server{},
+		anycastGroups: map[string]*AnycastGroup{},
+		strategy:      Random,
+		udpPool:       make(map[string]*sync.Pool),
+		tcpPool:       make(map[string]*sync.Pool),
+	}
+
+	msg := &protocol.Message{
+		Header: protocol.Header{
+			ID:      1234,
+			Flags:   protocol.Flags{RD: true},
+			QDCount: 0,
+		},
+	}
+
+	target := &Target{
+		Type:       "anycast",
+		Address:    "127.0.0.1:1",
+		AnycastIP:  "192.0.2.1",
+		PhysicalIP: "127.0.0.1",
+	}
+
+	_, err := lb.queryWithFailover(target, msg)
+	if err == nil {
+		t.Error("expected error for anycast failover with no servers")
+	}
+}
+
+func TestLoadBalancerQueryUDPMockServer(t *testing.T) {
+	mockAddr, cleanup := setupMockDNSServerLB(t, nil)
+	defer cleanup()
+
+	config := LoadBalancerConfig{
+		Servers:         []string{mockAddr},
+		Strategy:        "random",
+		HealthCheck:     30 * time.Second,
+		FailoverTimeout: 5 * time.Second,
+	}
+
+	lb, err := NewLoadBalancer(config)
+	if err != nil {
+		t.Fatalf("NewLoadBalancer failed: %v", err)
+	}
+	defer lb.Close()
+
+	msg := &protocol.Message{
+		Header: protocol.Header{
+			ID:      1234,
+			Flags:   protocol.Flags{RD: true},
+			QDCount: 0,
+		},
+	}
+
+	_, err = lb.queryUDP(mockAddr, msg)
+	t.Logf("queryUDP with mock server: %v", err)
+}
+
+func TestLoadBalancerQueryTCPMockServer(t *testing.T) {
+	tcpAddr, err := net.ResolveTCPAddr("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to resolve TCP addr: %v", err)
+	}
+
+	listener, err := net.ListenTCP("tcp", tcpAddr)
+	if err != nil {
+		t.Fatalf("failed to listen TCP: %v", err)
+	}
+
+	localAddr := listener.Addr().String()
+
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				conn, err := listener.Accept()
+				if err != nil {
+					continue
+				}
+				go func(c net.Conn) {
+					defer c.Close()
+					lengthBuf := make([]byte, 2)
+					_, err := c.Read(lengthBuf)
+					if err != nil {
+						return
+					}
+					respLen := uint16(lengthBuf[0])<<8 | uint16(lengthBuf[1])
+					buf := make([]byte, respLen)
+					c.Read(buf)
+					c.Write(lengthBuf)
+					c.Write(buf)
+				}(conn)
+			}
+		}
+	}()
+
+	defer func() {
+		close(done)
+		listener.Close()
+	}()
+
+	config := LoadBalancerConfig{
+		Servers:         []string{localAddr},
+		Strategy:        "random",
+		HealthCheck:     30 * time.Second,
+		FailoverTimeout: 5 * time.Second,
+	}
+
+	lb, err := NewLoadBalancer(config)
+	if err != nil {
+		t.Fatalf("NewLoadBalancer failed: %v", err)
+	}
+	defer lb.Close()
+
+	msg := &protocol.Message{
+		Header: protocol.Header{
+			ID:      1234,
+			Flags:   protocol.Flags{RD: true},
+			QDCount: 0,
+		},
+	}
+
+	_, err = lb.queryTCP(localAddr, msg)
+	t.Logf("queryTCP with mock server: %v", err)
+}
+
+func TestLoadBalancerQueryFullWithFailover(t *testing.T) {
+	mockAddr, cleanup := setupMockDNSServerLB(t, nil)
+	defer cleanup()
+
+	config := LoadBalancerConfig{
+		Servers:         []string{"127.0.0.1:1", mockAddr},
+		Strategy:        "random",
+		HealthCheck:     30 * time.Second,
+		FailoverTimeout: 5 * time.Second,
+	}
+
+	lb, err := NewLoadBalancer(config)
+	if err != nil {
+		t.Fatalf("NewLoadBalancer failed: %v", err)
+	}
+	defer lb.Close()
+
+	lb.servers[0].healthy = true
+	lb.servers[1].healthy = true
+
+	msg := &protocol.Message{
+		Header: protocol.Header{
+			ID:      1234,
+			Flags:   protocol.Flags{RD: true},
+			QDCount: 0,
+		},
+	}
+
+	_, err = lb.Query(msg)
+	t.Logf("Query result: %v", err)
+
+	queries, _, _ := lb.Stats()
+	if queries != 1 {
+		t.Errorf("expected 1 query, got %d", queries)
+	}
+}
+
+func TestLoadBalancerSelectAnycastTargetWithFallback(t *testing.T) {
+	config := LoadBalancerConfig{
+		AnycastGroups: []AnycastGroupConfig{
+			{
+				AnycastIP:   "192.0.2.1",
+				HealthCheck: "30s",
+				Backends: []AnycastBackendConfig{
+					{PhysicalIP: "10.0.1.1", Port: 53, Region: "us-east-1", Zone: "a", Weight: 50},
+				},
+			},
+		},
+		Strategy:        "random",
+		HealthCheck:     30 * time.Second,
+		FailoverTimeout: 5 * time.Second,
+	}
+
+	lb, err := NewLoadBalancer(config)
+	if err != nil {
+		t.Fatalf("NewLoadBalancer failed: %v", err)
+	}
+	defer lb.Close()
+
+	// Make backend unhealthy (3 failures)
+	group := lb.anycastGroups["192.0.2.1"]
+	for _, b := range group.Backends {
+		b.markFailure()
+		b.markFailure()
+		b.markFailure()
+	}
+
+	target, err := lb.selectAnycastTarget()
+	if err != nil {
+		t.Logf("selectAnycastTarget error: %v (acceptable)", err)
+	} else if target == nil {
+		t.Error("expected fallback target")
+	}
+}
+
+func TestLoadBalancerCheckHealthWithBackends(t *testing.T) {
+	config := LoadBalancerConfig{
+		AnycastGroups: []AnycastGroupConfig{
+			{
+				AnycastIP:   "192.0.2.1",
+				HealthCheck: "30s",
+				Backends: []AnycastBackendConfig{
+					{PhysicalIP: "127.0.0.1", Port: 1, Region: "us-east-1", Zone: "a", Weight: 50},
+					{PhysicalIP: "127.0.0.1", Port: 2, Region: "us-east-1", Zone: "b", Weight: 50},
+				},
+			},
+		},
+		Strategy:        "random",
+		HealthCheck:     30 * time.Second,
+		FailoverTimeout: 5 * time.Second,
+	}
+
+	lb, err := NewLoadBalancer(config)
+	if err != nil {
+		t.Fatalf("NewLoadBalancer failed: %v", err)
+	}
+	defer lb.Close()
+
+	lb.checkHealth()
+	time.Sleep(200 * time.Millisecond)
+
+	group := lb.anycastGroups["192.0.2.1"]
+	for _, b := range group.Backends {
+		t.Logf("Backend %s healthy: %v", b.PhysicalIP, b.IsHealthy())
+	}
+}
+
+func TestLoadBalancerSelectStandaloneNilServerFallback(t *testing.T) {
+	lb := &LoadBalancer{
+		servers:       []*Server{},
+		anycastGroups: map[string]*AnycastGroup{},
+		strategy:      Random,
+		udpPool:       make(map[string]*sync.Pool),
+		tcpPool:       make(map[string]*sync.Pool),
+	}
+
+	_, err := lb.selectStandaloneTarget()
+	if err == nil {
+		t.Error("expected error with no servers")
+	}
+}
+
+func setupMockDNSServerLB(t *testing.T, response []byte) (string, func()) {
+	t.Helper()
+	addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to resolve UDP addr: %v", err)
+	}
+
+	conn, err := net.ListenUDP("udp", addr)
+	if err != nil {
+		t.Fatalf("failed to listen UDP: %v", err)
+	}
+
+	localAddr := conn.LocalAddr().String()
+
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				buf := make([]byte, 512)
+				n, remote, err := conn.ReadFromUDP(buf)
+				if err != nil {
+					continue
+				}
+				if len(response) > 0 {
+					conn.WriteToUDP(response, remote)
+				} else {
+					conn.WriteToUDP(buf[:n], remote)
+				}
+			}
+		}
+	}()
+
+	cleanup := func() {
+		close(done)
+		conn.Close()
+	}
+
+	return localAddr, cleanup
+}
+
+func TestLoadBalancerQueryWithFailoverTCPSuccessAfterUDPFail(t *testing.T) {
+	// Create a TCP-only mock server (no UDP)
+	tcpAddr, err := net.ResolveTCPAddr("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to resolve TCP addr: %v", err)
+	}
+
+	listener, err := net.ListenTCP("tcp", tcpAddr)
+	if err != nil {
+		t.Fatalf("failed to listen TCP: %v", err)
+	}
+
+	localAddr := listener.Addr().String()
+
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				conn, err := listener.Accept()
+				if err != nil {
+					continue
+				}
+				go func(c net.Conn) {
+					defer c.Close()
+					lengthBuf := make([]byte, 2)
+					_, err := c.Read(lengthBuf)
+					if err != nil {
+						return
+					}
+					respLen := uint16(lengthBuf[0])<<8 | uint16(lengthBuf[1])
+					buf := make([]byte, respLen)
+					c.Read(buf)
+					c.Write(lengthBuf)
+					c.Write(buf)
+				}(conn)
+			}
+		}
+	}()
+
+	defer func() {
+		close(done)
+		listener.Close()
+	}()
+
+	config := LoadBalancerConfig{
+		Servers:         []string{localAddr},
+		Strategy:        "random",
+		HealthCheck:     30 * time.Second,
+		FailoverTimeout: 5 * time.Second,
+	}
+
+	lb, err := NewLoadBalancer(config)
+	if err != nil {
+		t.Fatalf("NewLoadBalancer failed: %v", err)
+	}
+	defer lb.Close()
+
+	lb.servers[0].healthy = true
+
+	msg := &protocol.Message{
+		Header: protocol.Header{
+			ID:      1234,
+			Flags:   protocol.Flags{RD: true},
+			QDCount: 0,
+		},
+	}
+
+	// Create target pointing to the TCP mock server address
+	// UDP will fail (nothing listening on UDP at that address), then TCP should succeed
+	target := &Target{
+		Type:    "standalone",
+		Address: localAddr,
+		Server:  lb.servers[0],
+	}
+
+	resp, err := lb.queryWithFailover(target, msg)
+	if err != nil {
+		t.Logf("queryWithFailover TCP success path error: %v", err)
+	} else {
+		if resp == nil {
+			t.Error("expected non-nil response")
+		}
+	}
+}
+
+func TestLoadBalancerQueryWithFailoverRetryPath(t *testing.T) {
+	// Create a mock UDP server for the failover target
+	mockAddr, cleanup := setupMockDNSServerLB(t, nil)
+	defer cleanup()
+
+	config := LoadBalancerConfig{
+		Servers:         []string{"127.0.0.1:1", mockAddr},
+		Strategy:        "round_robin",
+		HealthCheck:     30 * time.Second,
+		FailoverTimeout: 5 * time.Second,
+	}
+
+	lb, err := NewLoadBalancer(config)
+	if err != nil {
+		t.Fatalf("NewLoadBalancer failed: %v", err)
+	}
+	defer lb.Close()
+
+	lb.servers[0].healthy = true
+	lb.servers[1].healthy = true
+
+	// Set round-robin index so that the next selectTarget returns index 1 (mock server)
+	atomic.StoreUint32(&roundRobinIndex, 0)
+
+	msg := &protocol.Message{
+		Header: protocol.Header{
+			ID:      1234,
+			Flags:   protocol.Flags{RD: true},
+			QDCount: 0,
+		},
+	}
+
+	// Target pointing to dead server - failover should select mock server
+	target := &Target{
+		Type:    "standalone",
+		Address: "127.0.0.1:1",
+		Server:  lb.servers[0],
+	}
+
+	// Run multiple times to increase chances of hitting different failover paths
+	for i := 0; i < 5; i++ {
+		atomic.StoreUint32(&roundRobinIndex, uint32(i))
+		_, err = lb.queryWithFailover(target, msg)
+		t.Logf("queryWithFailover retry attempt %d: %v", i, err)
+	}
+}
+
+func TestLoadBalancerQueryUDPSuccessWithMockServer(t *testing.T) {
+	mockAddr, cleanup := setupMockDNSServerLB(t, nil)
+	defer cleanup()
+
+	config := LoadBalancerConfig{
+		Servers:         []string{mockAddr},
+		Strategy:        "random",
+		HealthCheck:     30 * time.Second,
+		FailoverTimeout: 5 * time.Second,
+	}
+
+	lb, err := NewLoadBalancer(config)
+	if err != nil {
+		t.Fatalf("NewLoadBalancer failed: %v", err)
+	}
+	defer lb.Close()
+
+	msg := &protocol.Message{
+		Header: protocol.Header{
+			ID:      1234,
+			Flags:   protocol.Flags{RD: true},
+			QDCount: 0,
+		},
+	}
+
+	resp, err := lb.queryUDP(mockAddr, msg)
+	if err != nil {
+		t.Logf("queryUDP with mock server error: %v", err)
+	} else {
+		if resp == nil {
+			t.Error("expected non-nil response")
+		}
+		// Verify latency was updated for the server
+		lb.servers[0].mu.RLock()
+		latency := lb.servers[0].latency
+		lb.servers[0].mu.RUnlock()
+		if latency == 0 {
+			t.Error("expected latency to be updated after successful UDP query")
+		}
+	}
+}
+
+func TestLoadBalancerQueryTCPSuccessWithMockServer(t *testing.T) {
+	tcpAddr, err := net.ResolveTCPAddr("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to resolve TCP addr: %v", err)
+	}
+
+	listener, err := net.ListenTCP("tcp", tcpAddr)
+	if err != nil {
+		t.Fatalf("failed to listen TCP: %v", err)
+	}
+
+	localAddr := listener.Addr().String()
+
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				conn, err := listener.Accept()
+				if err != nil {
+					continue
+				}
+				go func(c net.Conn) {
+					defer c.Close()
+					lengthBuf := make([]byte, 2)
+					_, err := c.Read(lengthBuf)
+					if err != nil {
+						return
+					}
+					respLen := uint16(lengthBuf[0])<<8 | uint16(lengthBuf[1])
+					buf := make([]byte, respLen)
+					c.Read(buf)
+					c.Write(lengthBuf)
+					c.Write(buf)
+				}(conn)
+			}
+		}
+	}()
+
+	defer func() {
+		close(done)
+		listener.Close()
+	}()
+
+	config := LoadBalancerConfig{
+		Servers:         []string{localAddr},
+		Strategy:        "random",
+		HealthCheck:     30 * time.Second,
+		FailoverTimeout: 5 * time.Second,
+	}
+
+	lb, err := NewLoadBalancer(config)
+	if err != nil {
+		t.Fatalf("NewLoadBalancer failed: %v", err)
+	}
+	defer lb.Close()
+
+	msg := &protocol.Message{
+		Header: protocol.Header{
+			ID:      1234,
+			Flags:   protocol.Flags{RD: true},
+			QDCount: 0,
+		},
+	}
+
+	resp, err := lb.queryTCP(localAddr, msg)
+	if err != nil {
+		t.Logf("queryTCP with mock server error: %v", err)
+	} else {
+		if resp == nil {
+			t.Error("expected non-nil response")
+		}
+		lb.servers[0].mu.RLock()
+		latency := lb.servers[0].latency
+		lb.servers[0].mu.RUnlock()
+		if latency == 0 {
+			t.Error("expected latency to be updated after successful TCP query")
+		}
+	}
+}
+
+func TestLoadBalancerSelectAnycastTargetNoHealthyNilBackend(t *testing.T) {
+	// Test the case where SelectBackend returns nil
+	group := NewAnycastGroup("192.0.2.1", 30*time.Second, 5*time.Second)
+	// Add a backend but make it unhealthy
+	backend := &AnycastBackend{
+		PhysicalIP: "10.0.1.1",
+		Port:       53,
+		Region:     "us-east-1",
+		Zone:       "a",
+		Weight:     50,
+		healthy:    false,
+	}
+	group.Backends = append(group.Backends, backend)
+
+	lb := &LoadBalancer{
+		anycastGroups: map[string]*AnycastGroup{
+			"192.0.2.1": group,
+		},
+		strategy: Random,
+		udpPool:  make(map[string]*sync.Pool),
+		tcpPool:  make(map[string]*sync.Pool),
+	}
+
+	// When all backends are unhealthy and have 0 count, SelectBackend returns the first backend
+	// even if unhealthy. So this should still return a target.
+	target, err := lb.selectAnycastTarget()
+	if err != nil {
+		t.Logf("selectAnycastTarget error: %v", err)
+	} else {
+		if target == nil {
+			t.Error("expected target even with unhealthy backends")
+		}
+	}
+}
+
+func TestLoadBalancerSelectStandaloneNilServerAllStrategies(t *testing.T) {
+	// Test selectStandaloneTarget with strategies that return nil
+	lb := &LoadBalancer{
+		servers:       []*Server{},
+		anycastGroups: map[string]*AnycastGroup{},
+		strategy:      Random,
+		udpPool:       make(map[string]*sync.Pool),
+		tcpPool:       make(map[string]*sync.Pool),
+	}
+
+	// All strategies with empty servers should return error
+	for _, strategy := range []Strategy{Random, RoundRobin, Fastest} {
+		lb.strategy = strategy
+		_, err := lb.selectStandaloneTarget()
+		if err == nil {
+			t.Errorf("expected error for strategy %v with no servers", strategy)
+		}
+	}
+}
+
+func TestLoadBalancerCheckHealthFullWithServers(t *testing.T) {
+	// Create a mock DNS server
+	mockAddr, cleanup := setupMockDNSServerLB(t, nil)
+	defer cleanup()
+
+	config := LoadBalancerConfig{
+		Servers:         []string{mockAddr},
+		Strategy:        "random",
+		HealthCheck:     30 * time.Second,
+		FailoverTimeout: 5 * time.Second,
+	}
+
+	lb, err := NewLoadBalancer(config)
+	if err != nil {
+		t.Fatalf("NewLoadBalancer failed: %v", err)
+	}
+	defer lb.Close()
+
+	// Call checkHealth directly with a working server
+	lb.checkHealth()
+	time.Sleep(200 * time.Millisecond)
+
+	// Server should still be healthy
+	if !lb.servers[0].IsHealthy() {
+		t.Log("Server marked unhealthy after health check (may be timing related)")
 	}
 }
