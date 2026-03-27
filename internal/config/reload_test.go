@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"os"
 	"testing"
 )
 
@@ -306,5 +307,400 @@ func TestNilCallbackSafe(t *testing.T) {
 	rateReloader := NewRateLimitReloader(nil, logger)
 	if err := rateReloader.Reload(); err != nil {
 		t.Errorf("Unexpected error: %v", err)
+	}
+}
+
+func TestReloadManagerConfigReload(t *testing.T) {
+	// Create a temporary config file
+	tmpFile, err := os.CreateTemp("", "config-*.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	configContent := []byte("server:\n  port: 5353\n")
+	if _, err := tmpFile.Write(configContent); err != nil {
+		t.Fatal(err)
+	}
+	tmpFile.Close()
+
+	logger := &MockLogger{}
+	handler := NewReloadHandler()
+	cfg := DefaultConfig()
+	manager := NewReloadManager(handler, tmpFile.Name(), cfg)
+	manager.SetLogger(logger)
+	manager.SetupAll()
+
+	// Trigger reload
+	errs := handler.Reload()
+	if len(errs) > 0 {
+		t.Errorf("Unexpected errors: %v", errs)
+	}
+	if len(logger.infos) == 0 {
+		t.Error("Expected info log about config reload")
+	}
+}
+
+func TestReloadManagerConfigReloadEmptyPath(t *testing.T) {
+	logger := &MockLogger{}
+	handler := NewReloadHandler()
+	cfg := DefaultConfig()
+	manager := NewReloadManager(handler, "", cfg)
+	manager.SetLogger(logger)
+
+	// Setup just the config reload callback
+	handler.Register("config", manager.reloadConfig)
+
+	errs := handler.Reload()
+	if len(errs) > 0 {
+		t.Errorf("Unexpected errors for empty path: %v", errs)
+	}
+}
+
+func TestReloadManagerConfigReloadBadFile(t *testing.T) {
+	logger := &MockLogger{}
+	handler := NewReloadHandler()
+	cfg := DefaultConfig()
+	manager := NewReloadManager(handler, "/nonexistent/path/config.yaml", cfg)
+	manager.SetLogger(logger)
+
+	handler.Register("config", manager.reloadConfig)
+
+	errs := handler.Reload()
+	if len(errs) == 0 {
+		t.Error("Expected error for nonexistent config file")
+	}
+	if len(logger.errors) == 0 {
+		t.Error("Expected error log about failed config read")
+	}
+}
+
+func TestReloadManagerConfigReloadInvalidYAML(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "config-bad-*.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	// Write invalid YAML content
+	tmpFile.WriteString("server:\n  port: not_a_number\ninvalid: {:\n")
+	tmpFile.Close()
+
+	logger := &MockLogger{}
+	handler := NewReloadHandler()
+	cfg := DefaultConfig()
+	manager := NewReloadManager(handler, tmpFile.Name(), cfg)
+	manager.SetLogger(logger)
+
+	handler.Register("config", manager.reloadConfig)
+
+	errs := handler.Reload()
+	if len(errs) == 0 {
+		t.Error("Expected error for invalid YAML")
+	}
+}
+
+func TestReloadManagerConfigReloadValidationFails(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "config-invalid-*.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	// Write a config that will fail validation (empty bind, port 0)
+	tmpFile.WriteString("server:\n  port: 0\n")
+	tmpFile.Close()
+
+	logger := &MockLogger{}
+	handler := NewReloadHandler()
+	cfg := DefaultConfig()
+	manager := NewReloadManager(handler, tmpFile.Name(), cfg)
+	manager.SetLogger(logger)
+
+	handler.Register("config", manager.reloadConfig)
+
+	errs := handler.Reload()
+	if len(errs) == 0 {
+		t.Error("Expected error for config validation failure")
+	}
+}
+
+func TestReloadManagerConfigReloadNoLogger(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "config-nolog-*.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	tmpFile.WriteString("server:\n  port: 5353\n")
+	tmpFile.Close()
+
+	handler := NewReloadHandler()
+	cfg := DefaultConfig()
+	manager := NewReloadManager(handler, tmpFile.Name(), cfg)
+	// No logger set
+
+	handler.Register("config", manager.reloadConfig)
+
+	errs := handler.Reload()
+	if len(errs) > 0 {
+		t.Errorf("Unexpected errors: %v", errs)
+	}
+}
+
+func TestReloadZonesError(t *testing.T) {
+	logger := &MockLogger{}
+	handler := NewReloadHandler()
+	cfg := DefaultConfig()
+	manager := NewReloadManager(handler, "", cfg)
+	manager.SetLogger(logger)
+
+	testErr := errors.New("zone reload error")
+	manager.SetZoneManager(&MockZoneManager{reloadError: testErr})
+
+	handler.Register("zones", manager.reloadZones)
+
+	errs := handler.Reload()
+	if len(errs) == 0 {
+		t.Error("Expected zone reload error")
+	}
+	if len(logger.errors) == 0 {
+		t.Error("Expected error log")
+	}
+}
+
+func TestReloadZonesNoManager(t *testing.T) {
+	logger := &MockLogger{}
+	handler := NewReloadHandler()
+	cfg := DefaultConfig()
+	manager := NewReloadManager(handler, "", cfg)
+	manager.SetLogger(logger)
+	// No zone manager set
+
+	handler.Register("zones", manager.reloadZones)
+
+	errs := handler.Reload()
+	if len(errs) > 0 {
+		t.Errorf("Unexpected errors: %v", errs)
+	}
+}
+
+func TestReloadBlocklistError(t *testing.T) {
+	logger := &MockLogger{}
+	handler := NewReloadHandler()
+	cfg := DefaultConfig()
+	manager := NewReloadManager(handler, "", cfg)
+	manager.SetLogger(logger)
+
+	testErr := errors.New("blocklist reload error")
+	manager.SetBlocklist(&MockBlocklist{reloadError: testErr})
+
+	handler.Register("blocklist", manager.reloadBlocklist)
+
+	errs := handler.Reload()
+	if len(errs) == 0 {
+		t.Error("Expected blocklist reload error")
+	}
+	if len(logger.errors) == 0 {
+		t.Error("Expected error log")
+	}
+}
+
+func TestReloadBlocklistNoBlocklist(t *testing.T) {
+	logger := &MockLogger{}
+	handler := NewReloadHandler()
+	cfg := DefaultConfig()
+	manager := NewReloadManager(handler, "", cfg)
+	manager.SetLogger(logger)
+	// No blocklist set
+
+	handler.Register("blocklist", manager.reloadBlocklist)
+
+	errs := handler.Reload()
+	if len(errs) > 0 {
+		t.Errorf("Unexpected errors: %v", errs)
+	}
+}
+
+func TestTLSReloaderWithFiles(t *testing.T) {
+	// Create temp files for cert and key
+	certFile, err := os.CreateTemp("", "cert-*.pem")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(certFile.Name())
+	certFile.Close()
+
+	keyFile, err := os.CreateTemp("", "key-*.pem")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(keyFile.Name())
+	keyFile.Close()
+
+	logger := &MockLogger{}
+	reloader := NewTLSReloader(certFile.Name(), keyFile.Name(), logger)
+
+	err = reloader.Reload()
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+	if len(logger.infos) == 0 {
+		t.Error("Expected info log about TLS reload")
+	}
+}
+
+func TestTLSReloaderNonexistentCert(t *testing.T) {
+	logger := &MockLogger{}
+	reloader := NewTLSReloader("/nonexistent/cert.pem", "", logger)
+
+	err := reloader.Reload()
+	if err == nil {
+		t.Error("Expected error for nonexistent cert file")
+	}
+}
+
+func TestTLSReloaderNonexistentKey(t *testing.T) {
+	certFile, err := os.CreateTemp("", "cert-*.pem")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(certFile.Name())
+	certFile.Close()
+
+	logger := &MockLogger{}
+	reloader := NewTLSReloader(certFile.Name(), "/nonexistent/key.pem", logger)
+
+	err = reloader.Reload()
+	if err == nil {
+		t.Error("Expected error for nonexistent key file")
+	}
+}
+
+func TestTLSReloaderNoLogger(t *testing.T) {
+	reloader := NewTLSReloader("", "", nil)
+	err := reloader.Reload()
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+}
+
+func TestLogLevelReloaderCallbackError(t *testing.T) {
+	testErr := errors.New("callback error")
+	reloader := NewLogLevelReloader("info", func(level string) error {
+		return testErr
+	}, nil)
+
+	err := reloader.SetLevel("debug")
+	if err != testErr {
+		t.Errorf("Expected callback error, got %v", err)
+	}
+}
+
+func TestLogLevelReloaderNoCallback(t *testing.T) {
+	reloader := NewLogLevelReloader("info", nil, nil)
+	err := reloader.SetLevel("debug")
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+	if reloader.GetLevel() != "debug" {
+		t.Errorf("Expected level 'debug', got %q", reloader.GetLevel())
+	}
+}
+
+func TestLogLevelReloaderReloadViaManager(t *testing.T) {
+	var calledLevel string
+	reloader := NewLogLevelReloader("info", func(level string) error {
+		calledLevel = level
+		return nil
+	}, nil)
+
+	err := reloader.Reload("warn")
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+	if calledLevel != "warn" {
+		t.Errorf("Expected 'warn', got %q", calledLevel)
+	}
+	if reloader.GetLevel() != "warn" {
+		t.Errorf("Expected level 'warn', got %q", reloader.GetLevel())
+	}
+}
+
+func TestRateLimitReloaderError(t *testing.T) {
+	logger := &MockLogger{}
+	testErr := errors.New("rate limit error")
+
+	reloader := NewRateLimitReloader(func() error {
+		return testErr
+	}, logger)
+
+	err := reloader.Reload()
+	if err != testErr {
+		t.Errorf("Expected testErr, got %v", err)
+	}
+	if len(logger.errors) == 0 {
+		t.Error("Expected error log")
+	}
+}
+
+func TestRateLimitReloaderSuccess(t *testing.T) {
+	logger := &MockLogger{}
+	reloadCount := 0
+
+	reloader := NewRateLimitReloader(func() error {
+		reloadCount++
+		return nil
+	}, logger)
+
+	err := reloader.Reload()
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+	if reloadCount != 1 {
+		t.Errorf("Expected 1 reload, got %d", reloadCount)
+	}
+	if len(logger.infos) == 0 {
+		t.Error("Expected info log")
+	}
+}
+
+func TestACLReloaderWithLogger(t *testing.T) {
+	logger := &MockLogger{}
+
+	reloader := NewACLReloader(func() error {
+		return nil
+	}, logger)
+
+	err := reloader.Reload()
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+	if len(logger.infos) == 0 {
+		t.Error("Expected info log about ACL reload")
+	}
+}
+
+func TestReloadManagerReloadLoggingWithLogger(t *testing.T) {
+	logger := &MockLogger{}
+	handler := NewReloadHandler()
+	manager := NewReloadManager(handler, "", nil)
+	manager.SetLogger(logger)
+	manager.SetupAll()
+
+	errs := handler.Reload()
+	if len(errs) > 0 {
+		t.Errorf("Unexpected errors: %v", errs)
+	}
+}
+
+func TestReloadManagerReloadLoggingNoLogger(t *testing.T) {
+	handler := NewReloadHandler()
+	manager := NewReloadManager(handler, "", nil)
+	manager.SetupAll()
+
+	errs := handler.Reload()
+	if len(errs) > 0 {
+		t.Errorf("Unexpected errors: %v", errs)
 	}
 }

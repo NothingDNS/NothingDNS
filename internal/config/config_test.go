@@ -1786,3 +1786,952 @@ func containsAny(slice []string, substr string) bool {
 	}
 	return false
 }
+
+// --- Additional coverage tests for low-coverage functions ---
+
+// TestTokenTypeStringAll tests all token type string representations
+func TestTokenTypeStringAll(t *testing.T) {
+	tests := []struct {
+		tt       TokenType
+		expected string
+	}{
+		{TokenEOF, "EOF"},
+		{TokenError, "ERROR"},
+		{TokenIndent, "INDENT"},
+		{TokenDedent, "DEDENT"},
+		{TokenNewline, "NEWLINE"},
+		{TokenColon, "COLON"},
+		{TokenDash, "DASH"},
+		{TokenComma, "COMMA"},
+		{TokenLBrace, "LBRACE"},
+		{TokenRBrace, "RBRACE"},
+		{TokenLBracket, "LBRACKET"},
+		{TokenRBracket, "RBRACKET"},
+		{TokenString, "STRING"},
+		{TokenNumber, "NUMBER"},
+		{TokenBool, "BOOL"},
+		{TokenNull, "NULL"},
+		{TokenComment, "COMMENT"},
+		{TokenAnchor, "ANCHOR"},
+		{TokenAlias, "ALIAS"},
+		{TokenTag, "TAG"},
+		{TokenPipe, "PIPE"},
+		{TokenGreater, "GREATER"},
+		{TokenType(999), "UNKNOWN"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.expected, func(t *testing.T) {
+			if got := tt.tt.String(); got != tt.expected {
+				t.Errorf("TokenType(%d).String() = %q, want %q", tt.tt, got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestTokenStringAllTypes tests the Token.String() method for all types
+func TestTokenStringAllTypes(t *testing.T) {
+	tests := []struct {
+		name     string
+		token    Token
+		expected string
+	}{
+		{"EOF", Token{Type: TokenEOF, Value: ""}, "EOF"},
+		{"String", Token{Type: TokenString, Value: "hello"}, "STRING(hello)"},
+		{"Number", Token{Type: TokenNumber, Value: "42"}, "NUMBER(42)"},
+		{"Bool", Token{Type: TokenBool, Value: "true"}, "BOOL(true)"},
+		{"Colon", Token{Type: TokenColon, Value: ":"}, "COLON"},
+		{"Dash", Token{Type: TokenDash, Value: "-"}, "DASH"},
+		{"Newline", Token{Type: TokenNewline, Value: "\n"}, "NEWLINE"},
+		{"Indent", Token{Type: TokenIndent, Value: ""}, "INDENT"},
+		{"Dedent", Token{Type: TokenDedent, Value: ""}, "DEDENT"},
+		{"LBrace", Token{Type: TokenLBrace, Value: "{"}, "LBRACE"},
+		{"RBrace", Token{Type: TokenRBrace, Value: "}"}, "RBRACE"},
+		{"LBracket", Token{Type: TokenLBracket, Value: "["}, "LBRACKET"},
+		{"RBracket", Token{Type: TokenRBracket, Value: "]"}, "RBRACKET"},
+		{"Comma", Token{Type: TokenComma, Value: ","}, "COMMA"},
+		{"Null", Token{Type: TokenNull, Value: ""}, "NULL"},
+		{"Comment", Token{Type: TokenComment, Value: "test"}, "COMMENT"},
+		{"Anchor", Token{Type: TokenAnchor, Value: "&a"}, "ANCHOR"},
+		{"Alias", Token{Type: TokenAlias, Value: "*a"}, "ALIAS"},
+		{"Tag", Token{Type: TokenTag, Value: "!t"}, "TAG"},
+		{"Pipe", Token{Type: TokenPipe, Value: "|"}, "PIPE"},
+		{"Greater", Token{Type: TokenGreater, Value: ">"}, "GREATER"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.token.String(); got != tt.expected {
+				t.Errorf("Token.String() = %q, want %q", got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestNodeToInterfaceMapping tests toInterface for mapping nodes
+func TestNodeToInterfaceMapping(t *testing.T) {
+	// Test mapping node conversion
+	node := &Node{
+		Type: NodeMapping,
+		Children: []*Node{
+			{Type: NodeScalar, Value: "name"},
+			{Type: NodeScalar, Value: "test"},
+			{Type: NodeScalar, Value: "count"},
+			{Type: NodeScalar, Value: "42"},
+		},
+	}
+
+	result := node.toInterface()
+	m, ok := result.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected map[string]interface{}, got %T", result)
+	}
+	if m["name"] != "test" {
+		t.Errorf("expected name 'test', got %v", m["name"])
+	}
+	if m["count"] != "42" {
+		t.Errorf("expected count '42', got %v", m["count"])
+	}
+}
+
+// TestNodeGetStringSliceNonSequence tests getStringSlice on non-sequence node
+func TestNodeGetStringSliceNonSequence(t *testing.T) {
+	node := &Node{Type: NodeScalar, Value: "hello"}
+	result := node.getStringSlice()
+	if result != nil {
+		t.Errorf("expected nil for scalar node, got %v", result)
+	}
+}
+
+// TestNodeGetStringSliceMixedChildren tests getStringSlice with mixed children
+func TestNodeGetStringSliceMixedChildren(t *testing.T) {
+	node := &Node{
+		Type: NodeSequence,
+		Children: []*Node{
+			{Type: NodeScalar, Value: "a"},
+			{Type: NodeMapping, Children: []*Node{}},
+			{Type: NodeScalar, Value: "b"},
+		},
+	}
+
+	result := node.getStringSlice()
+	if len(result) != 2 {
+		t.Errorf("expected 2 strings, got %d: %v", len(result), result)
+	}
+}
+
+// TestUnmarshalToConfigNonMapping tests unmarshalToConfig with non-mapping root
+func TestUnmarshalToConfigNonMapping(t *testing.T) {
+	node := &Node{Type: NodeScalar, Value: "test"}
+	cfg := DefaultConfig()
+	err := unmarshalToConfig(node, cfg)
+	if err == nil {
+		t.Error("expected error for non-mapping root")
+	}
+}
+
+// TestUnmarshalToConfigErrorPaths tests unmarshalToConfig error paths
+func TestUnmarshalToConfigErrorPaths(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "server with non-mapping value",
+			input: `server: "not a mapping"`,
+		},
+		{
+			name:  "upstream with non-mapping value",
+			input: `upstream: "not a mapping"`,
+		},
+		{
+			name:  "cache with non-mapping value",
+			input: `cache: "not a mapping"`,
+		},
+		{
+			name:  "logging with non-mapping value",
+			input: `logging: "not a mapping"`,
+		},
+		{
+			name:  "metrics with non-mapping value",
+			input: `metrics: "not a mapping"`,
+		},
+		{
+			name:  "dnssec with non-mapping value",
+			input: `dnssec: "not a mapping"`,
+		},
+		{
+			name:  "blocklist with non-mapping value",
+			input: `blocklist: "not a mapping"`,
+		},
+		{
+			name:  "cluster with non-mapping value",
+			input: `cluster: "not a mapping"`,
+		},
+		{
+			name:  "resolution with non-mapping value",
+			input: `resolution: "not a mapping"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := UnmarshalYAML(tt.input)
+			if err == nil {
+				t.Error("expected error for non-mapping section value")
+			}
+		})
+	}
+}
+
+// TestUnmarshalResolutionEmptyTimeout tests unmarshalResolution default timeout
+func TestUnmarshalResolutionEmptyTimeout(t *testing.T) {
+	input := `
+resolution:
+  recursive: true
+`
+	cfg, err := UnmarshalYAML(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Resolution.Timeout != "5s" {
+		t.Errorf("expected default timeout '5s', got %q", cfg.Resolution.Timeout)
+	}
+}
+
+// TestUnmarshalUpstreamDefaults tests unmarshalUpstream default values
+func TestUnmarshalUpstreamDefaults(t *testing.T) {
+	input := `
+upstream:
+  servers:
+    - 1.1.1.1:53
+`
+	cfg, err := UnmarshalYAML(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Upstream.Strategy != "random" {
+		t.Errorf("expected default strategy 'random', got %q", cfg.Upstream.Strategy)
+	}
+	if cfg.Upstream.HealthCheck != "30s" {
+		t.Errorf("expected default health_check '30s', got %q", cfg.Upstream.HealthCheck)
+	}
+	if cfg.Upstream.FailoverTimeout != "5s" {
+		t.Errorf("expected default failover_timeout '5s', got %q", cfg.Upstream.FailoverTimeout)
+	}
+}
+
+// TestUnmarshalUpstreamWithTopology tests unmarshalUpstream with topology section
+func TestUnmarshalUpstreamWithTopology(t *testing.T) {
+	input := `
+upstream:
+  servers:
+    - 1.1.1.1:53
+  topology:
+    region: us-east-1
+    zone: a
+    weight: 50
+`
+	cfg, err := UnmarshalYAML(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Upstream.Topology.Region != "us-east-1" {
+		t.Errorf("expected region 'us-east-1', got %q", cfg.Upstream.Topology.Region)
+	}
+	if cfg.Upstream.Topology.Zone != "a" {
+		t.Errorf("expected zone 'a', got %q", cfg.Upstream.Topology.Zone)
+	}
+	if cfg.Upstream.Topology.Weight != 50 {
+		t.Errorf("expected weight 50, got %d", cfg.Upstream.Topology.Weight)
+	}
+}
+
+// TestUnmarshalClusterWithScalarSeedNode tests unmarshalCluster with scalar seed_nodes
+func TestUnmarshalClusterWithScalarSeedNode(t *testing.T) {
+	input := `
+cluster:
+  enabled: true
+  seed_nodes: 192.168.1.2:7946
+`
+	cfg, err := UnmarshalYAML(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.Cluster.SeedNodes) != 1 || cfg.Cluster.SeedNodes[0] != "192.168.1.2:7946" {
+		t.Errorf("expected single seed node, got %v", cfg.Cluster.SeedNodes)
+	}
+}
+
+// TestValidateZonesEmptyPath tests validation of empty zone paths
+func TestValidateZonesEmptyPath(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Zones = []string{""}
+	errors := cfg.Validate()
+	found := false
+	for _, e := range errors {
+		if strings.Contains(e, "zone file path cannot be empty") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected zone empty path error, got %v", errors)
+	}
+}
+
+// TestValidateMetricsEnabledEmptyPath tests metrics enabled with empty path
+func TestValidateMetricsEnabledEmptyPath(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Metrics.Enabled = true
+	cfg.Metrics.Path = ""
+	errors := cfg.Validate()
+	found := false
+	for _, e := range errors {
+		if strings.Contains(e, "metrics: path cannot be empty") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected metrics empty path error, got %v", errors)
+	}
+}
+
+// TestValidateCacheNegativeTTL tests negative cache TTL validation
+func TestValidateCacheNegativeTTL(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Cache.NegativeTTL = -1
+	errors := cfg.Validate()
+	found := false
+	for _, e := range errors {
+		if strings.Contains(e, "negative_ttl cannot be negative") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected negative TTL error, got %v", errors)
+	}
+}
+
+// TestValidateCacheNegativeMaxTTL tests negative max TTL validation
+func TestValidateCacheNegativeMaxTTL(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Cache.MaxTTL = -1
+	errors := cfg.Validate()
+	found := false
+	for _, e := range errors {
+		if strings.Contains(e, "max_ttl cannot be negative") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected negative max TTL error, got %v", errors)
+	}
+}
+
+// TestValidateCacheNegativeDefaultTTL tests negative default TTL validation
+func TestValidateCacheNegativeDefaultTTL(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Cache.DefaultTTL = -1
+	errors := cfg.Validate()
+	found := false
+	for _, e := range errors {
+		if strings.Contains(e, "default_ttl cannot be negative") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected negative default TTL error, got %v", errors)
+	}
+}
+
+// TestValidateClusterEmptyHostSeedNode tests cluster validation with empty host in seed node
+func TestValidateClusterEmptyHostSeedNode(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Cluster.Enabled = true
+	cfg.Cluster.SeedNodes = []string{":7946"}
+	errors := cfg.Validate()
+	found := false
+	for _, e := range errors {
+		if strings.Contains(e, "has empty host") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected empty host error, got %v", errors)
+	}
+}
+
+// TestIsValidIP tests IP validation
+func TestIsValidIP(t *testing.T) {
+	tests := []struct {
+		ip   string
+		want bool
+	}{
+		{"192.168.1.1", true},
+		{"::1", true},
+		{"2001:db8::1", true},
+		{"not-an-ip", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.ip, func(t *testing.T) {
+			if got := isValidIP(tt.ip); got != tt.want {
+				t.Errorf("isValidIP(%q) = %v, want %v", tt.ip, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestIsValidHostnameLong tests hostname that is too long
+func TestIsValidHostnameLong(t *testing.T) {
+	longHost := strings.Repeat("a", 254)
+	if isValidHostname(longHost) {
+		t.Error("expected hostname > 253 chars to be invalid")
+	}
+}
+
+// --- Additional coverage tests ---
+
+// TestUnmarshalLoggingWithLevelAndFormat tests that unmarshalLogging correctly
+// reads level and format when they are explicitly set (not falling through to defaults).
+func TestUnmarshalLoggingWithLevelAndFormat(t *testing.T) {
+	tests := []struct {
+		name          string
+		input         string
+		wantLevel     string
+		wantFormat    string
+		wantOutput    string
+		wantQueryLog  bool
+		wantQueryFile string
+	}{
+		{
+			name: "level and format explicitly set",
+			input: `
+logging:
+  level: warn
+  format: json
+  output: stderr
+  query_log: true
+  query_log_file: /tmp/queries.log
+`,
+			wantLevel:     "warn",
+			wantFormat:    "json",
+			wantOutput:    "stderr",
+			wantQueryLog:  true,
+			wantQueryFile: "/tmp/queries.log",
+		},
+		{
+			name: "level and format set to error and text",
+			input: `
+logging:
+  level: error
+  format: text
+  output: /var/log/dns.log
+`,
+			wantLevel:     "error",
+			wantFormat:    "text",
+			wantOutput:    "/var/log/dns.log",
+			wantQueryLog:  false,
+			wantQueryFile: "",
+		},
+		{
+			name: "empty logging section uses defaults",
+			input: `
+logging: {}
+`,
+			wantLevel:     "info",
+			wantFormat:    "text",
+			wantOutput:    "stdout",
+			wantQueryLog:  false,
+			wantQueryFile: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := UnmarshalYAML(tt.input)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if cfg.Logging.Level != tt.wantLevel {
+				t.Errorf("Logging.Level = %q, want %q", cfg.Logging.Level, tt.wantLevel)
+			}
+			if cfg.Logging.Format != tt.wantFormat {
+				t.Errorf("Logging.Format = %q, want %q", cfg.Logging.Format, tt.wantFormat)
+			}
+			if cfg.Logging.Output != tt.wantOutput {
+				t.Errorf("Logging.Output = %q, want %q", cfg.Logging.Output, tt.wantOutput)
+			}
+			if cfg.Logging.QueryLog != tt.wantQueryLog {
+				t.Errorf("Logging.QueryLog = %v, want %v", cfg.Logging.QueryLog, tt.wantQueryLog)
+			}
+			if cfg.Logging.QueryLogFile != tt.wantQueryFile {
+				t.Errorf("Logging.QueryLogFile = %q, want %q", cfg.Logging.QueryLogFile, tt.wantQueryFile)
+			}
+		})
+	}
+}
+
+// TestUnmarshalMetricsWithBindAndPath tests that unmarshalMetrics correctly
+// reads bind and path when they are explicitly set (not falling through to defaults).
+func TestUnmarshalMetricsWithBindAndPath(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantBind  string
+		wantPath  string
+		wantEnabled bool
+	}{
+		{
+			name: "bind and path explicitly set",
+			input: `
+metrics:
+  enabled: true
+  bind: ":1234"
+  path: /custom-metrics
+`,
+			wantBind:    ":1234",
+			wantPath:    "/custom-metrics",
+			wantEnabled: true,
+		},
+		{
+			name: "bind and path use defaults when empty",
+			input: `
+metrics:
+  enabled: false
+`,
+			wantBind:    ":9153",
+			wantPath:    "/metrics",
+			wantEnabled: false,
+		},
+		{
+			name: "empty metrics section uses defaults",
+			input: `
+metrics: {}
+`,
+			wantBind:    ":9153",
+			wantPath:    "/metrics",
+			wantEnabled: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := UnmarshalYAML(tt.input)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if cfg.Metrics.Bind != tt.wantBind {
+				t.Errorf("Metrics.Bind = %q, want %q", cfg.Metrics.Bind, tt.wantBind)
+			}
+			if cfg.Metrics.Path != tt.wantPath {
+				t.Errorf("Metrics.Path = %q, want %q", cfg.Metrics.Path, tt.wantPath)
+			}
+			if cfg.Metrics.Enabled != tt.wantEnabled {
+				t.Errorf("Metrics.Enabled = %v, want %v", cfg.Metrics.Enabled, tt.wantEnabled)
+			}
+		})
+	}
+}
+
+// TestGetStringSliceScalarValue tests the getStringSlice helper function's path
+// where the child node is a scalar value instead of a sequence.
+func TestGetStringSliceScalarValue(t *testing.T) {
+	tests := []struct {
+		name         string
+		node         *Node
+		key          string
+		defaultValue []string
+		expected     []string
+	}{
+		{
+			name: "scalar value returned as single-element slice",
+			node: &Node{
+				Type: NodeMapping,
+				Children: []*Node{
+					{Type: NodeScalar, Value: "servers"},
+					{Type: NodeScalar, Value: "1.1.1.1:53"},
+				},
+			},
+			key:          "servers",
+			defaultValue: []string{"default"},
+			expected:     []string{"1.1.1.1:53"},
+		},
+		{
+			name: "sequence value returned as slice",
+			node: &Node{
+				Type: NodeMapping,
+				Children: []*Node{
+					{Type: NodeScalar, Value: "servers"},
+					{
+						Type: NodeSequence,
+						Children: []*Node{
+							{Type: NodeScalar, Value: "1.1.1.1:53"},
+							{Type: NodeScalar, Value: "8.8.8.8:53"},
+						},
+					},
+				},
+			},
+			key:          "servers",
+			defaultValue: nil,
+			expected:     []string{"1.1.1.1:53", "8.8.8.8:53"},
+		},
+		{
+			name: "key not found returns default",
+			node: &Node{
+				Type: NodeMapping,
+				Children: []*Node{
+					{Type: NodeScalar, Value: "other"},
+					{Type: NodeScalar, Value: "value"},
+				},
+			},
+			key:          "servers",
+			defaultValue: []string{"fallback"},
+			expected:     []string{"fallback"},
+		},
+		{
+			name: "mapping child falls through to default",
+			node: &Node{
+				Type: NodeMapping,
+				Children: []*Node{
+					{Type: NodeScalar, Value: "servers"},
+					{Type: NodeMapping, Children: []*Node{}},
+				},
+			},
+			key:          "servers",
+			defaultValue: []string{"fallback"},
+			expected:     []string{"fallback"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := getStringSlice(tt.node, tt.key, tt.defaultValue)
+			if !reflect.DeepEqual(result, tt.expected) {
+				t.Errorf("getStringSlice() = %v, want %v", result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestGetStringSliceScalarViaYAML tests the scalar-as-slice path via full YAML unmarshal.
+// This exercises getStringSlice with a scalar value for a normally sequence-typed field.
+func TestGetStringSliceScalarViaYAML(t *testing.T) {
+	input := `
+upstream:
+  servers: 1.1.1.1:53
+  strategy: random
+`
+	cfg, err := UnmarshalYAML(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.Upstream.Servers) != 1 || cfg.Upstream.Servers[0] != "1.1.1.1:53" {
+		t.Errorf("Upstream.Servers = %v, want [1.1.1.1:53]", cfg.Upstream.Servers)
+	}
+}
+
+// TestValidateCachePrefetchThresholdZero tests that cache validation catches
+// prefetch enabled with a threshold of 0.
+func TestValidateCachePrefetchThresholdZero(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  *Config
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name: "prefetch enabled with threshold 0",
+			config: &Config{
+				Cache: CacheConfig{
+					Enabled:           true,
+					Size:              10000,
+					DefaultTTL:        300,
+					MinTTL:            10,
+					MaxTTL:            3600,
+					Prefetch:          true,
+					PrefetchThreshold: 0,
+				},
+			},
+			wantErr: true,
+			errMsg:  "prefetch_threshold must be at least 1",
+		},
+		{
+			name: "prefetch enabled with valid threshold",
+			config: &Config{
+				Cache: CacheConfig{
+					Enabled:           true,
+					Size:              10000,
+					DefaultTTL:        300,
+					MinTTL:            10,
+					MaxTTL:            3600,
+					Prefetch:          true,
+					PrefetchThreshold: 60,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "prefetch disabled with threshold 0 is fine",
+			config: &Config{
+				Cache: CacheConfig{
+					Enabled:           true,
+					Size:              10000,
+					DefaultTTL:        300,
+					MinTTL:            10,
+					MaxTTL:            3600,
+					Prefetch:          false,
+					PrefetchThreshold: 0,
+				},
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errors := tt.config.Validate()
+			var cacheErrors []string
+			for _, e := range errors {
+				if strings.Contains(e, "cache") {
+					cacheErrors = append(cacheErrors, e)
+				}
+			}
+			if tt.wantErr {
+				if len(cacheErrors) == 0 {
+					t.Errorf("expected cache error, got %v", errors)
+				} else if !containsAny(cacheErrors, tt.errMsg) {
+					t.Errorf("expected error containing %q, got %v", tt.errMsg, cacheErrors)
+				}
+			} else {
+				if len(cacheErrors) > 0 {
+					t.Errorf("unexpected cache error: %v", cacheErrors)
+				}
+			}
+		})
+	}
+}
+
+// TestNodeGetOnNonMapping tests that Node.Get returns nil when called on a non-mapping node.
+func TestNodeGetOnNonMapping(t *testing.T) {
+	tests := []struct {
+		name string
+		node *Node
+		key  string
+	}{
+		{
+			name: "scalar node returns nil",
+			node: &Node{Type: NodeScalar, Value: "hello"},
+			key:  "anything",
+		},
+		{
+			name: "sequence node returns nil",
+			node: &Node{
+				Type: NodeSequence,
+				Children: []*Node{
+					{Type: NodeScalar, Value: "a"},
+				},
+			},
+			key: "anything",
+		},
+		{
+			name: "document node returns nil",
+			node: &Node{Type: NodeDocument},
+			key:  "anything",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.node.Get(tt.key)
+			if result != nil {
+				t.Errorf("Get() on non-mapping node = %v, want nil", result)
+			}
+		})
+	}
+}
+
+// TestNodeGetBoolAlternateValues tests Node.GetBool with "yes", "on", "no", "off" values.
+func TestNodeGetBoolAlternateValues(t *testing.T) {
+	tests := []struct {
+		name     string
+		node     *Node
+		key      string
+		expected bool
+	}{
+		{
+			name: "yes value returns true",
+			node: &Node{
+				Type: NodeMapping,
+				Children: []*Node{
+					{Type: NodeScalar, Value: "flag"},
+					{Type: NodeScalar, Value: "yes"},
+				},
+			},
+			key:      "flag",
+			expected: true,
+		},
+		{
+			name: "on value returns true",
+			node: &Node{
+				Type: NodeMapping,
+				Children: []*Node{
+					{Type: NodeScalar, Value: "flag"},
+					{Type: NodeScalar, Value: "on"},
+				},
+			},
+			key:      "flag",
+			expected: true,
+		},
+		{
+			name: "no value returns false",
+			node: &Node{
+				Type: NodeMapping,
+				Children: []*Node{
+					{Type: NodeScalar, Value: "flag"},
+					{Type: NodeScalar, Value: "no"},
+				},
+			},
+			key:      "flag",
+			expected: false,
+		},
+		{
+			name: "off value returns false",
+			node: &Node{
+				Type: NodeMapping,
+				Children: []*Node{
+					{Type: NodeScalar, Value: "flag"},
+					{Type: NodeScalar, Value: "off"},
+				},
+			},
+			key:      "flag",
+			expected: false,
+		},
+		{
+			name: "true value returns true",
+			node: &Node{
+				Type: NodeMapping,
+				Children: []*Node{
+					{Type: NodeScalar, Value: "flag"},
+					{Type: NodeScalar, Value: "true"},
+				},
+			},
+			key:      "flag",
+			expected: true,
+		},
+		{
+			name: "unknown value returns false",
+			node: &Node{
+				Type: NodeMapping,
+				Children: []*Node{
+					{Type: NodeScalar, Value: "flag"},
+					{Type: NodeScalar, Value: "maybe"},
+				},
+			},
+			key:      "flag",
+			expected: false,
+		},
+		{
+			name: "missing key returns false",
+			node: &Node{
+				Type: NodeMapping,
+				Children: []*Node{
+					{Type: NodeScalar, Value: "other"},
+					{Type: NodeScalar, Value: "true"},
+				},
+			},
+			key:      "flag",
+			expected: false,
+		},
+		{
+			name: "non-scalar child returns false",
+			node: &Node{
+				Type: NodeMapping,
+				Children: []*Node{
+					{Type: NodeScalar, Value: "flag"},
+					{Type: NodeSequence, Children: []*Node{}},
+				},
+			},
+			key:      "flag",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.node.GetBool(tt.key)
+			if result != tt.expected {
+				t.Errorf("GetBool(%q) = %v, want %v", tt.key, result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestNodeGetIntNonScalarChild tests that Node.GetInt returns 0 for a non-scalar child.
+func TestNodeGetIntNonScalarChild(t *testing.T) {
+	tests := []struct {
+		name     string
+		node     *Node
+		key      string
+		expected int
+	}{
+		{
+			name: "mapping child returns 0",
+			node: &Node{
+				Type: NodeMapping,
+				Children: []*Node{
+					{Type: NodeScalar, Value: "count"},
+					{Type: NodeMapping, Children: []*Node{}},
+				},
+			},
+			key:      "count",
+			expected: 0,
+		},
+		{
+			name: "sequence child returns 0",
+			node: &Node{
+				Type: NodeMapping,
+				Children: []*Node{
+					{Type: NodeScalar, Value: "count"},
+					{Type: NodeSequence, Children: []*Node{}},
+				},
+			},
+			key:      "count",
+			expected: 0,
+		},
+		{
+			name: "missing key returns 0",
+			node: &Node{
+				Type: NodeMapping,
+				Children: []*Node{
+					{Type: NodeScalar, Value: "other"},
+					{Type: NodeScalar, Value: "42"},
+				},
+			},
+			key:      "count",
+			expected: 0,
+		},
+		{
+			name: "scalar child returns parsed value",
+			node: &Node{
+				Type: NodeMapping,
+				Children: []*Node{
+					{Type: NodeScalar, Value: "count"},
+					{Type: NodeScalar, Value: "42"},
+				},
+			},
+			key:      "count",
+			expected: 42,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.node.GetInt(tt.key)
+			if result != tt.expected {
+				t.Errorf("GetInt(%q) = %d, want %d", tt.key, result, tt.expected)
+			}
+		})
+	}
+}

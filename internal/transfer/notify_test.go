@@ -2,6 +2,7 @@ package transfer
 
 import (
 	"net"
+	"strings"
 	"testing"
 	"time"
 

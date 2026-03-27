@@ -1,7 +1,9 @@
 package transfer
 
 import (
+	"fmt"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -601,4 +603,387 @@ func TestAXFRClient_buildAXFRRequest_SigningError(t *testing.T) {
 	// Let's check the actual behavior
 	_ = req
 	_ = err
+}
+
+// ---------------------------------------------------------------------------
+// createSOARR - error paths (invalid MName / RName)
+// ---------------------------------------------------------------------------
+
+func TestAXFRServer_createSOARR_InvalidMName(t *testing.T) {
+	server := NewAXFRServer(make(map[string]*zone.Zone))
+	origin, _ := protocol.ParseName("example.com.")
+
+	// MName with a label exceeding 63 chars will cause ParseName to fail
+	longLabel := strings.Repeat("a", 70)
+	soa := &zone.SOARecord{
+		MName:   longLabel + ".example.com.",
+		RName:   "admin.example.com.",
+		Serial:  2024010101,
+		Refresh: 3600,
+		Retry:   600,
+		Expire:  604800,
+		Minimum: 86400,
+	}
+
+	_, err := server.createSOARR(soa, origin)
+	if err == nil {
+		t.Error("Expected error for MName with label exceeding 63 chars")
+	}
+}
+
+func TestAXFRServer_createSOARR_InvalidRName(t *testing.T) {
+	server := NewAXFRServer(make(map[string]*zone.Zone))
+	origin, _ := protocol.ParseName("example.com.")
+
+	// RName with a label exceeding 63 chars will cause ParseName to fail
+	longLabel := strings.Repeat("a", 70)
+	soa := &zone.SOARecord{
+		MName:   "ns1.example.com.",
+		RName:   longLabel + ".example.com.",
+		Serial:  2024010101,
+		Refresh: 3600,
+		Retry:   600,
+		Expire:  604800,
+		Minimum: 86400,
+	}
+
+	_, err := server.createSOARR(soa, origin)
+	if err == nil {
+		t.Error("Expected error for RName with label exceeding 63 chars")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AXFRClient.sendMessage via net.Pipe
+// ---------------------------------------------------------------------------
+
+func TestAXFRClient_sendMessage_Success(t *testing.T) {
+	client := NewAXFRClient("ns1.example.com:53")
+
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	msg := &protocol.Message{
+		Header: protocol.Header{
+			ID:      0x1234,
+			QDCount: 1,
+		},
+		Questions: []*protocol.Question{
+			{
+				Name:   mustParseName("example.com."),
+				QType:  protocol.TypeAXFR,
+				QClass: protocol.ClassIN,
+			},
+		},
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- client.sendMessage(clientConn, msg)
+	}()
+
+	lengthBuf := make([]byte, 2)
+	_, err := serverConn.Read(lengthBuf)
+	if err != nil {
+		t.Fatalf("Failed to read length prefix: %v", err)
+	}
+	msgLen := int(lengthBuf[0])<<8 | int(lengthBuf[1])
+
+	msgBuf := make([]byte, msgLen)
+	_, err = serverConn.Read(msgBuf)
+	if err != nil {
+		t.Fatalf("Failed to read message: %v", err)
+	}
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("sendMessage returned error: %v", err)
+	}
+}
+
+func TestAXFRClient_sendMessage_WriteError(t *testing.T) {
+	client := NewAXFRClient("ns1.example.com:53")
+
+	clientConn, _ := net.Pipe()
+	clientConn.Close()
+
+	msg := &protocol.Message{
+		Header: protocol.Header{
+			ID:      0x1234,
+			QDCount: 1,
+		},
+		Questions: []*protocol.Question{
+			{
+				Name:   mustParseName("example.com."),
+				QType:  protocol.TypeAXFR,
+				QClass: protocol.ClassIN,
+			},
+		},
+	}
+
+	err := client.sendMessage(clientConn, msg)
+	if err == nil {
+		t.Error("Expected error writing to closed connection")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// mockConn for testing receiveAXFRResponse with mock data
+// ---------------------------------------------------------------------------
+
+type mockConn struct {
+	writeErr error
+	readErr  error
+	readData []byte
+	readPos  int
+	closed   bool
+}
+
+func (m *mockConn) Read(b []byte) (int, error) {
+	if m.readErr != nil {
+		return 0, m.readErr
+	}
+	if m.readPos >= len(m.readData) {
+		return 0, net.ErrClosed
+	}
+	n := copy(b, m.readData[m.readPos:])
+	m.readPos += n
+	return n, nil
+}
+
+func (m *mockConn) Write(b []byte) (int, error) {
+	if m.writeErr != nil {
+		return 0, m.writeErr
+	}
+	return len(b), nil
+}
+
+func (m *mockConn) Close() error                                      { m.closed = true; return nil }
+func (m *mockConn) LocalAddr() net.Addr                               { return &net.TCPAddr{} }
+func (m *mockConn) RemoteAddr() net.Addr                              { return &net.TCPAddr{} }
+func (m *mockConn) SetDeadline(t time.Time) error                     { return nil }
+func (m *mockConn) SetReadDeadline(t time.Time) error                 { return nil }
+func (m *mockConn) SetWriteDeadline(t time.Time) error                { return nil }
+
+// ---------------------------------------------------------------------------
+// AXFRClient.receiveAXFRResponse - various response scenarios via mockConn
+// ---------------------------------------------------------------------------
+
+func TestAXFRClient_receiveAXFRResponse_InvalidMsgLen(t *testing.T) {
+	client := NewAXFRClient("ns1.example.com:53")
+	conn := &mockConn{readData: []byte{0x00, 0x00}}
+	_, err := client.receiveAXFRResponse(conn, nil)
+	if err == nil {
+		t.Error("Expected error for zero message length")
+	}
+}
+
+func TestAXFRClient_receiveAXFRResponse_ErrorResponseMock(t *testing.T) {
+	client := NewAXFRClient("ns1.example.com:53")
+
+	respMsg := &protocol.Message{
+		Header: protocol.Header{
+			ID:      0x1234,
+			QDCount: 1,
+			Flags: protocol.Flags{
+				QR:    true,
+				RCODE: protocol.RcodeRefused,
+			},
+		},
+		Questions: []*protocol.Question{
+			{
+				Name:   mustParseName("example.com."),
+				QType:  protocol.TypeAXFR,
+				QClass: protocol.ClassIN,
+			},
+		},
+	}
+
+	buf := make([]byte, 65535)
+	n, _ := respMsg.Pack(buf)
+	data := make([]byte, 2+n)
+	data[0] = byte(n >> 8)
+	data[1] = byte(n)
+	copy(data[2:], buf[:n])
+
+	conn := &mockConn{readData: data}
+	_, err := client.receiveAXFRResponse(conn, nil)
+	if err == nil {
+		t.Error("Expected error for non-success RCODE")
+	}
+}
+
+func TestAXFRClient_receiveAXFRResponse_ReadErrorBeforeSOA(t *testing.T) {
+	client := NewAXFRClient("ns1.example.com:53")
+	conn := &mockConn{readErr: fmt.Errorf("connection reset")}
+	_, err := client.receiveAXFRResponse(conn, nil)
+	if err == nil {
+		t.Error("Expected error for read failure")
+	}
+}
+
+func TestAXFRClient_receiveAXFRResponse_SuccessfulTransferMock(t *testing.T) {
+	client := NewAXFRClient("ns1.example.com:53")
+
+	origin := mustParseName("example.com.")
+	mname, _ := protocol.ParseName("ns1.example.com.")
+	rname, _ := protocol.ParseName("admin.example.com.")
+
+	soaData := &protocol.RDataSOA{
+		MName: mname, RName: rname,
+		Serial: 2024010101, Refresh: 3600, Retry: 600, Expire: 604800, Minimum: 86400,
+	}
+	soaRR := &protocol.ResourceRecord{
+		Name: origin, Type: protocol.TypeSOA, Class: protocol.ClassIN, TTL: 86400, Data: soaData,
+	}
+	aRR := &protocol.ResourceRecord{
+		Name: mustParseName("www.example.com."), Type: protocol.TypeA,
+		Class: protocol.ClassIN, TTL: 3600,
+		Data: &protocol.RDataA{Address: [4]byte{192, 0, 2, 1}},
+	}
+
+	msg1 := &protocol.Message{
+		Header: protocol.Header{
+			ID: 0x1234, Flags: protocol.Flags{QR: true, RCODE: protocol.RcodeSuccess},
+		},
+		Answers: []*protocol.ResourceRecord{soaRR, aRR},
+	}
+	msg2 := &protocol.Message{
+		Header: protocol.Header{
+			ID: 0x1235, Flags: protocol.Flags{QR: true, RCODE: protocol.RcodeSuccess},
+		},
+		Answers: []*protocol.ResourceRecord{soaRR},
+	}
+
+	var allData []byte
+	for _, msg := range []*protocol.Message{msg1, msg2} {
+		buf := make([]byte, 65535)
+		n, _ := msg.Pack(buf)
+		allData = append(allData, byte(n>>8), byte(n))
+		allData = append(allData, buf[:n]...)
+	}
+
+	conn := &mockConn{readData: allData}
+	records, err := client.receiveAXFRResponse(conn, nil)
+	if err != nil {
+		t.Fatalf("receiveAXFRResponse() error = %v", err)
+	}
+	if len(records) != 3 {
+		t.Errorf("Expected 3 records, got %d", len(records))
+	}
+}
+
+func TestAXFRClient_receiveAXFRResponse_UnpackErrorMock(t *testing.T) {
+	client := NewAXFRClient("ns1.example.com:53")
+	data := []byte{0x00, 0x10}
+	data = append(data, make([]byte, 16)...)
+	conn := &mockConn{readData: data}
+	_, err := client.receiveAXFRResponse(conn, nil)
+	if err == nil {
+		t.Error("Expected error for unpack failure")
+	}
+}
+
+func TestAXFRClient_receiveAXFRResponse_LargeMessageLength(t *testing.T) {
+	client := NewAXFRClient("ns1.example.com:53")
+	conn := &mockConn{readData: []byte{0xFF, 0xFF}}
+	_, err := client.receiveAXFRResponse(conn, nil)
+	if err == nil {
+		t.Error("Expected error for very large message length")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AXFRClient.Transfer with mock TCP server
+// ---------------------------------------------------------------------------
+
+func TestAXFRClient_Transfer_WithTCPServer(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to listen: %v", err)
+	}
+	defer listener.Close()
+
+	addr := listener.Addr().String()
+
+	origin, _ := protocol.ParseName("example.com.")
+	mname, _ := protocol.ParseName("ns1.example.com.")
+	rname, _ := protocol.ParseName("admin.example.com.")
+
+	soaRR := &protocol.ResourceRecord{
+		Name:  origin,
+		Type:  protocol.TypeSOA,
+		Class: protocol.ClassIN,
+		TTL:   86400,
+		Data: &protocol.RDataSOA{
+			MName: mname, RName: rname,
+			Serial: 2024010101, Refresh: 3600, Retry: 600, Expire: 604800, Minimum: 86400,
+		},
+	}
+	aRR := &protocol.ResourceRecord{
+		Name:  mustParseName("www.example.com."),
+		Type:  protocol.TypeA,
+		Class: protocol.ClassIN,
+		TTL:   3600,
+		Data:  &protocol.RDataA{Address: [4]byte{192, 0, 2, 1}},
+	}
+
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		lengthBuf := make([]byte, 2)
+		conn.Read(lengthBuf)
+		reqLen := int(lengthBuf[0])<<8 | int(lengthBuf[1])
+		reqBuf := make([]byte, reqLen)
+		conn.Read(reqBuf)
+
+		msg1 := &protocol.Message{
+			Header: protocol.Header{
+				Flags: protocol.Flags{QR: true, RCODE: protocol.RcodeSuccess},
+			},
+			Answers: []*protocol.ResourceRecord{soaRR, aRR},
+		}
+		axfrSendTCPMessage(conn, msg1, t)
+
+		msg2 := &protocol.Message{
+			Header: protocol.Header{
+				Flags: protocol.Flags{QR: true, RCODE: protocol.RcodeSuccess},
+			},
+			Answers: []*protocol.ResourceRecord{soaRR},
+		}
+		axfrSendTCPMessage(conn, msg2, t)
+	}()
+
+	axfrClient := NewAXFRClient(addr, WithAXFRTimeout(5*time.Second))
+	records, err := axfrClient.Transfer("example.com.", nil)
+	if err != nil {
+		t.Fatalf("Transfer returned error: %v", err)
+	}
+	if len(records) != 3 {
+		t.Errorf("Expected 3 records, got %d", len(records))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Helper: send a DNS message over TCP with length prefix
+// ---------------------------------------------------------------------------
+
+func axfrSendTCPMessage(conn net.Conn, msg *protocol.Message, t *testing.T) {
+	t.Helper()
+	buf := make([]byte, 65535)
+	n, err := msg.Pack(buf)
+	if err != nil {
+		t.Fatalf("Failed to pack message: %v", err)
+	}
+	lengthPrefix := []byte{byte(n >> 8), byte(n)}
+	if _, err := conn.Write(lengthPrefix); err != nil {
+		t.Fatalf("Failed to write length prefix: %v", err)
+	}
+	if _, err := conn.Write(buf[:n]); err != nil {
+		t.Fatalf("Failed to write message: %v", err)
+	}
 }

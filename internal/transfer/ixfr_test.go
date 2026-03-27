@@ -3,6 +3,7 @@ package transfer
 import (
 	"bytes"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -983,5 +984,366 @@ func TestIXFRServer_HandleIXFR_FallbackToAXFR(t *testing.T) {
 	// Should have AXFR format (SOA at start and end)
 	if len(records) < 2 {
 		t.Errorf("Expected at least 2 records, got %d", len(records))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// IXFRClient.sendMessage via net.Pipe
+// ---------------------------------------------------------------------------
+
+func TestIXFRClient_sendMessage_Success(t *testing.T) {
+	client := NewIXFRClient("ns1.example.com:53")
+
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	msg := &protocol.Message{
+		Header: protocol.Header{
+			ID:      0x5678,
+			QDCount: 1,
+		},
+		Questions: []*protocol.Question{
+			{
+				Name:   mustParseName("example.com."),
+				QType:  protocol.TypeIXFR,
+				QClass: protocol.ClassIN,
+			},
+		},
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- client.sendMessage(clientConn, msg)
+	}()
+
+	lengthBuf := make([]byte, 2)
+	_, err := serverConn.Read(lengthBuf)
+	if err != nil {
+		t.Fatalf("Failed to read length prefix: %v", err)
+	}
+	msgLen := int(lengthBuf[0])<<8 | int(lengthBuf[1])
+
+	msgBuf := make([]byte, msgLen)
+	_, err = serverConn.Read(msgBuf)
+	if err != nil {
+		t.Fatalf("Failed to read message: %v", err)
+	}
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("sendMessage returned error: %v", err)
+	}
+}
+
+func TestIXFRClient_sendMessage_WriteError(t *testing.T) {
+	client := NewIXFRClient("ns1.example.com:53")
+
+	clientConn, _ := net.Pipe()
+	clientConn.Close()
+
+	msg := &protocol.Message{
+		Header: protocol.Header{
+			ID:      0x5678,
+			QDCount: 1,
+		},
+		Questions: []*protocol.Question{
+			{
+				Name:   mustParseName("example.com."),
+				QType:  protocol.TypeIXFR,
+				QClass: protocol.ClassIN,
+			},
+		},
+	}
+
+	err := client.sendMessage(clientConn, msg)
+	if err == nil {
+		t.Error("Expected error writing to closed connection")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// IXFRClient.receiveIXFRResponse via net.Pipe - single SOA
+// ---------------------------------------------------------------------------
+
+func TestIXFRClient_receiveIXFRResponse_SingleSOA(t *testing.T) {
+	client := NewIXFRClient("ns1.example.com:53")
+
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	origin, _ := protocol.ParseName("example.com.")
+	mname, _ := protocol.ParseName("ns1.example.com.")
+	rname, _ := protocol.ParseName("admin.example.com.")
+
+	soaRR := &protocol.ResourceRecord{
+		Name:  origin,
+		Type:  protocol.TypeSOA,
+		Class: protocol.ClassIN,
+		TTL:   86400,
+		Data: &protocol.RDataSOA{
+			MName:   mname,
+			RName:   rname,
+			Serial:  2024010101,
+			Refresh: 3600,
+		},
+	}
+
+	go func() {
+		msg1 := &protocol.Message{
+			Header: protocol.Header{
+				Flags: protocol.Flags{QR: true, RCODE: protocol.RcodeSuccess},
+			},
+			Answers: []*protocol.ResourceRecord{soaRR},
+		}
+		ixfrSendTCPMessage(serverConn, msg1, t)
+
+		msg2 := &protocol.Message{
+			Header: protocol.Header{
+				Flags: protocol.Flags{QR: true, RCODE: protocol.RcodeSuccess},
+			},
+			Answers: []*protocol.ResourceRecord{soaRR},
+		}
+		ixfrSendTCPMessage(serverConn, msg2, t)
+	}()
+
+	records, err := client.receiveIXFRResponse(clientConn, nil)
+	if err != nil {
+		t.Fatalf("receiveIXFRResponse returned error: %v", err)
+	}
+	if len(records) != 2 {
+		t.Errorf("Expected 2 SOA records, got %d", len(records))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// IXFRClient.receiveIXFRResponse - server error
+// ---------------------------------------------------------------------------
+
+func TestIXFRClient_receiveIXFRResponse_ServerError(t *testing.T) {
+	client := NewIXFRClient("ns1.example.com:53")
+
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	go func() {
+		msg := &protocol.Message{
+			Header: protocol.Header{
+				Flags: protocol.Flags{QR: true, RCODE: protocol.RcodeRefused},
+			},
+		}
+		ixfrSendTCPMessage(serverConn, msg, t)
+	}()
+
+	_, err := client.receiveIXFRResponse(clientConn, nil)
+	if err == nil {
+		t.Fatal("Expected error for server refusal")
+	}
+	if !strings.Contains(err.Error(), "rcode") {
+		t.Errorf("Expected rcode error, got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// IXFRClient.receiveIXFRResponse - read error (connection closed)
+// ---------------------------------------------------------------------------
+
+func TestIXFRClient_receiveIXFRResponse_ReadError(t *testing.T) {
+	client := NewIXFRClient("ns1.example.com:53")
+
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+
+	serverConn.Close()
+
+	_, err := client.receiveIXFRResponse(clientConn, nil)
+	if err == nil {
+		t.Error("Expected error for closed connection")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// IXFRClient.receiveIXFRResponse - invalid message length
+// ---------------------------------------------------------------------------
+
+func TestIXFRClient_receiveIXFRResponse_InvalidLength(t *testing.T) {
+	client := NewIXFRClient("ns1.example.com:53")
+
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	go func() {
+		serverConn.Write([]byte{0, 0})
+		serverConn.Close()
+	}()
+
+	_, err := client.receiveIXFRResponse(clientConn, nil)
+	if err == nil {
+		t.Error("Expected error for zero message length")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// IXFRClient.receiveIXFRResponse - unpack error (garbage data)
+// ---------------------------------------------------------------------------
+
+func TestIXFRClient_receiveIXFRResponse_UnpackError(t *testing.T) {
+	client := NewIXFRClient("ns1.example.com:53")
+
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	go func() {
+		serverConn.Write([]byte{0, 10})
+		serverConn.Write([]byte{0xFF, 0xFE, 0xFD, 0xFC, 0xFB, 0xFA, 0xF9, 0xF8, 0xF7, 0xF6})
+		serverConn.Close()
+	}()
+
+	_, err := client.receiveIXFRResponse(clientConn, nil)
+	if err == nil {
+		t.Error("Expected error for garbage data")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// IXFRClient.Transfer with mock TCP server
+// ---------------------------------------------------------------------------
+
+func TestIXFRClient_Transfer_WithTCPServer(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to listen: %v", err)
+	}
+	defer listener.Close()
+
+	addr := listener.Addr().String()
+
+	origin, _ := protocol.ParseName("example.com.")
+	mname, _ := protocol.ParseName("ns1.example.com.")
+	rname, _ := protocol.ParseName("admin.example.com.")
+
+	soaRR := &protocol.ResourceRecord{
+		Name:  origin,
+		Type:  protocol.TypeSOA,
+		Class: protocol.ClassIN,
+		TTL:   86400,
+		Data: &protocol.RDataSOA{
+			MName:   mname,
+			RName:   rname,
+			Serial:  2024010101,
+			Refresh: 3600,
+		},
+	}
+
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		lengthBuf := make([]byte, 2)
+		conn.Read(lengthBuf)
+		reqLen := int(lengthBuf[0])<<8 | int(lengthBuf[1])
+		reqBuf := make([]byte, reqLen)
+		conn.Read(reqBuf)
+
+		msg1 := &protocol.Message{
+			Header: protocol.Header{
+				Flags: protocol.Flags{QR: true, RCODE: protocol.RcodeSuccess},
+			},
+			Answers: []*protocol.ResourceRecord{soaRR},
+		}
+		ixfrSendTCPMessage(conn, msg1, t)
+
+		msg2 := &protocol.Message{
+			Header: protocol.Header{
+				Flags: protocol.Flags{QR: true, RCODE: protocol.RcodeSuccess},
+			},
+			Answers: []*protocol.ResourceRecord{soaRR},
+		}
+		ixfrSendTCPMessage(conn, msg2, t)
+	}()
+
+	client := NewIXFRClient(addr, WithIXFRTimeout(5*time.Second))
+	records, err := client.Transfer("example.com.", 2024010101, nil)
+	if err != nil {
+		t.Fatalf("Transfer returned error: %v", err)
+	}
+	if len(records) < 1 {
+		t.Errorf("Expected at least 1 record, got %d", len(records))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// IXFRClient.receiveIXFRResponse - too large response safety check
+// ---------------------------------------------------------------------------
+
+func TestIXFRClient_receiveIXFRResponse_TooLarge(t *testing.T) {
+	client := NewIXFRClient("ns1.example.com:53")
+
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+
+	origin, _ := protocol.ParseName("example.com.")
+
+	nonSOARR := &protocol.ResourceRecord{
+		Name:  origin,
+		Type:  protocol.TypeA,
+		Class: protocol.ClassIN,
+		TTL:   3600,
+		Data:  &protocol.RDataA{Address: [4]byte{192, 0, 2, 1}},
+	}
+
+	go func() {
+		defer serverConn.Close()
+		for i := 0; i < 500001; i++ {
+			msg := &protocol.Message{
+				Header: protocol.Header{
+					Flags: protocol.Flags{QR: true, RCODE: protocol.RcodeSuccess},
+				},
+				Answers: []*protocol.ResourceRecord{nonSOARR},
+			}
+			buf := make([]byte, 65535)
+			n, err := msg.Pack(buf)
+			if err != nil {
+				return
+			}
+			lengthPrefix := []byte{byte(n >> 8), byte(n)}
+			if _, err := serverConn.Write(lengthPrefix); err != nil {
+				return
+			}
+			if _, err := serverConn.Write(buf[:n]); err != nil {
+				return
+			}
+		}
+	}()
+
+	_, err := client.receiveIXFRResponse(clientConn, nil)
+	if err == nil {
+		t.Error("Expected error for too large response")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Helper: send a DNS message over TCP with length prefix
+// ---------------------------------------------------------------------------
+
+func ixfrSendTCPMessage(conn net.Conn, msg *protocol.Message, t *testing.T) {
+	t.Helper()
+	buf := make([]byte, 65535)
+	n, err := msg.Pack(buf)
+	if err != nil {
+		t.Fatalf("Failed to pack message: %v", err)
+	}
+	lengthPrefix := []byte{byte(n >> 8), byte(n)}
+	if _, err := conn.Write(lengthPrefix); err != nil {
+		t.Fatalf("Failed to write length prefix: %v", err)
+	}
+	if _, err := conn.Write(buf[:n]); err != nil {
+		t.Fatalf("Failed to write message: %v", err)
 	}
 }
