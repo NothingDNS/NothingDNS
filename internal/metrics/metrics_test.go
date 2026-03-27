@@ -194,6 +194,117 @@ func TestRecordMetricsWhenDisabled(t *testing.T) {
 	m.RecordCacheMiss()
 	m.RecordBlocklistBlock()
 	m.RecordUpstreamQuery("8.8.8.8:53")
+	m.SetClusterMetrics(5, 3, true, 100, 200)
+}
+
+func TestSetClusterMetrics(t *testing.T) {
+	cfg := Config{
+		Enabled: true,
+		Bind:    "127.0.0.1:19158",
+		Path:    "/metrics",
+	}
+
+	m := New(cfg)
+
+	// Set cluster metrics with healthy=true
+	m.SetClusterMetrics(5, 3, true, 100, 200)
+
+	// Start server and verify metrics output
+	if err := m.Start(); err != nil {
+		t.Fatalf("Failed to start metrics server: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	resp, err := http.Get("http://127.0.0.1:19158/metrics")
+	if err != nil {
+		t.Fatalf("Failed to get metrics: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("Failed to read body: %v", err)
+	}
+
+	bodyStr := string(body)
+
+	// Verify cluster node count
+	if !strings.Contains(bodyStr, "nothingdns_cluster_nodes_total 5") {
+		t.Errorf("Expected cluster_nodes_total to be 5, got:\n%s", bodyStr)
+	}
+
+	// Verify cluster alive count
+	if !strings.Contains(bodyStr, "nothingdns_cluster_nodes_alive 3") {
+		t.Errorf("Expected cluster_nodes_alive to be 3, got:\n%s", bodyStr)
+	}
+
+	// Verify healthy=1 when healthy=true
+	if !strings.Contains(bodyStr, "nothingdns_cluster_healthy 1") {
+		t.Errorf("Expected cluster_healthy to be 1, got:\n%s", bodyStr)
+	}
+
+	// Verify gossip sent
+	if !strings.Contains(bodyStr, "nothingdns_cluster_gossip_messages_sent_total 100") {
+		t.Errorf("Expected gossip_messages_sent_total to be 100, got:\n%s", bodyStr)
+	}
+
+	// Verify gossip received
+	if !strings.Contains(bodyStr, "nothingdns_cluster_gossip_messages_received_total 200") {
+		t.Errorf("Expected gossip_messages_received_total to be 200, got:\n%s", bodyStr)
+	}
+
+	m.Stop()
+}
+
+func TestSetClusterMetricsUnhealthy(t *testing.T) {
+	cfg := Config{
+		Enabled: true,
+		Bind:    "127.0.0.1:19159",
+		Path:    "/metrics",
+	}
+
+	m := New(cfg)
+
+	// Set cluster metrics with healthy=false
+	m.SetClusterMetrics(10, 2, false, 50, 75)
+
+	// Start server and verify metrics output
+	if err := m.Start(); err != nil {
+		t.Fatalf("Failed to start metrics server: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	resp, err := http.Get("http://127.0.0.1:19159/metrics")
+	if err != nil {
+		t.Fatalf("Failed to get metrics: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("Failed to read body: %v", err)
+	}
+
+	bodyStr := string(body)
+
+	// Verify healthy=0 when healthy=false
+	if !strings.Contains(bodyStr, "nothingdns_cluster_healthy 0") {
+		t.Errorf("Expected cluster_healthy to be 0, got:\n%s", bodyStr)
+	}
+
+	// Verify node count
+	if !strings.Contains(bodyStr, "nothingdns_cluster_nodes_total 10") {
+		t.Errorf("Expected cluster_nodes_total to be 10, got:\n%s", bodyStr)
+	}
+
+	// Verify alive count
+	if !strings.Contains(bodyStr, "nothingdns_cluster_nodes_alive 2") {
+		t.Errorf("Expected cluster_nodes_alive to be 2, got:\n%s", bodyStr)
+	}
+
+	m.Stop()
 }
 
 func TestDefaultPath(t *testing.T) {

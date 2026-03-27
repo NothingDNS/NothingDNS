@@ -2735,3 +2735,137 @@ func TestNodeGetIntNonScalarChild(t *testing.T) {
 		})
 	}
 }
+
+// --- Additional coverage for config.go uncovered lines ---
+
+// TestUnmarshalSlaveZoneDefaultTransferType tests slave zone with empty transfer_type defaults to "ixfr" (line 571)
+func TestUnmarshalSlaveZoneDefaultTransferType(t *testing.T) {
+	input := `
+slave_zones:
+  - zone_name: example.com.
+    masters:
+      - 192.168.1.100:53
+`
+	cfg, err := UnmarshalYAML(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.SlaveZones) != 1 {
+		t.Fatalf("expected 1 slave zone, got %d", len(cfg.SlaveZones))
+	}
+	if cfg.SlaveZones[0].TransferType != "ixfr" {
+		t.Errorf("expected default transfer_type 'ixfr', got %q", cfg.SlaveZones[0].TransferType)
+	}
+}
+
+// TestUnmarshalSlaveZoneScalarMasters tests slave zone with scalar masters value (line 590)
+func TestUnmarshalSlaveZoneScalarMasters(t *testing.T) {
+	input := `
+slave_zones:
+  - zone_name: example.com.
+    masters: 192.168.1.100:53
+    transfer_type: axfr
+`
+	cfg, err := UnmarshalYAML(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.SlaveZones) != 1 {
+		t.Fatalf("expected 1 slave zone, got %d", len(cfg.SlaveZones))
+	}
+	if len(cfg.SlaveZones[0].Masters) != 1 {
+		t.Errorf("expected 1 master, got %d", len(cfg.SlaveZones[0].Masters))
+	}
+	if cfg.SlaveZones[0].Masters[0] != "192.168.1.100:53" {
+		t.Errorf("expected master '192.168.1.100:53', got %q", cfg.SlaveZones[0].Masters[0])
+	}
+}
+
+// TestUnmarshalHTTPDefaultDoHPath tests HTTP without doh_path defaults to "/dns-query" (line 628)
+func TestUnmarshalHTTPDefaultDoHPath(t *testing.T) {
+	input := `
+server:
+  http:
+    enabled: true
+    bind: ":8080"
+`
+	cfg, err := UnmarshalYAML(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.Server.HTTP.Enabled {
+		t.Error("expected HTTP to be enabled")
+	}
+	if cfg.Server.HTTP.DoHPath != "/dns-query" {
+		t.Errorf("expected default DoHPath '/dns-query', got %q", cfg.Server.HTTP.DoHPath)
+	}
+}
+
+// TestValidateUpstreamServerNoPort tests validation of server without port (line 975)
+func TestValidateUpstreamServerNoPort(t *testing.T) {
+	cfg := &Config{
+		Upstream: UpstreamConfig{
+			Strategy: "random",
+			Servers:  []string{"8.8.8.8"},
+		},
+	}
+	errors := cfg.Validate()
+	// Server without port should still be valid
+	var upstreamErrors []string
+	for _, e := range errors {
+		if strings.Contains(e, "upstream") {
+			upstreamErrors = append(upstreamErrors, e)
+		}
+	}
+	if len(upstreamErrors) > 0 {
+		t.Errorf("unexpected upstream errors: %v", upstreamErrors)
+	}
+}
+
+// TestValidateUpstreamInvalidServerPort tests invalid server port
+func TestValidateUpstreamInvalidServerPort(t *testing.T) {
+	cfg := &Config{
+		Upstream: UpstreamConfig{
+				Strategy: "random",
+				Servers:  []string{"8.8.8.8:99999"},
+		},
+	}
+	errors := cfg.Validate()
+	found := false
+	for _, e := range errors {
+		if strings.Contains(e, "invalid server address") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected invalid server address error, got %v", errors)
+	}
+}
+
+// TestValidateUpstreamWithAnycastNoServers tests upstream with anycast groups but no servers (should pass)
+func TestValidateUpstreamWithAnycastNoServers(t *testing.T) {
+	cfg := &Config{
+		Upstream: UpstreamConfig{
+			Strategy: "random",
+			Servers:  []string{},
+			AnycastGroups: []AnycastGroupConfig{
+				{
+					AnycastIP: "10.0.0.1",
+					Backends: []AnycastBackendConfig{
+						{PhysicalIP: "192.168.1.1", Port: 53, Weight: 100},
+					},
+				},
+			},
+		},
+	}
+	errors := cfg.Validate()
+	var upstreamErrors []string
+	for _, e := range errors {
+		if strings.Contains(e, "upstream") {
+			upstreamErrors = append(upstreamErrors, e)
+		}
+	}
+	if len(upstreamErrors) > 0 {
+		t.Errorf("unexpected upstream errors with anycast groups: %v", upstreamErrors)
+	}
+}
