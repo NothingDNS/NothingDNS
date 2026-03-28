@@ -193,16 +193,9 @@ func TestHandleZoneReload_Success(t *testing.T) {
 	// Create a temporary zone file so Reload can re-read it.
 	zoneContent := `$ORIGIN testzone.com.
 $TTL 3600
-
-@   IN  SOA ns1.testzone.com. admin.testzone.com. (
-            2024010101  ; Serial
-            3600        ; Refresh
-            1800        ; Retry
-            604800      ; Expire
-            86400 )     ; Minimum TTL
-
-@       IN  NS      ns1.testzone.com.
-@       IN  A       10.0.0.1
+@ IN SOA ns1 hostmaster 2024010101 3600 900 604800 86400
+@ IN NS ns1
+@ IN A 10.0.0.1
 `
 	tmpDir := t.TempDir()
 	zonePath := filepath.Join(tmpDir, "testzone.com.zone")
