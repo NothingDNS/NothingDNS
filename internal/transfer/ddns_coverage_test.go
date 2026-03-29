@@ -633,15 +633,27 @@ func TestApplyUpdate_PreconditionPass_ThenApply(t *testing.T) {
 func TestCheckPrerequisiteOnZone_ExistsValue(t *testing.T) {
 	z := newTestZoneWithRecords()
 
-	// PrecondExistsValue is not handled by checkPrerequisiteOnZone (falls through),
-	// so it should return nil (no error) regardless.
+	// PrecondExistsValue checks that a specific record exists with matching RData.
+	// Test with matching record: www.example.com. A 192.0.2.1
 	err := checkPrerequisiteOnZone(z, UpdatePrerequisite{
 		Name:      "www.example.com.",
 		Type:      protocol.TypeA,
 		Condition: PrecondExistsValue,
+		RData:     "192.0.2.1",
 	})
 	if err != nil {
-		t.Errorf("PrecondExistsValue should be a no-op in checkPrerequisiteOnZone: %v", err)
+		t.Errorf("PrecondExistsValue should succeed for existing record: %v", err)
+	}
+
+	// Test with non-matching RData
+	err = checkPrerequisiteOnZone(z, UpdatePrerequisite{
+		Name:      "www.example.com.",
+		Type:      protocol.TypeA,
+		Condition: PrecondExistsValue,
+		RData:     "99.99.99.99",
+	})
+	if err == nil {
+		t.Error("PrecondExistsValue should fail for non-existing record value")
 	}
 }
 

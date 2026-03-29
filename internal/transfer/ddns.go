@@ -382,6 +382,15 @@ func checkPrerequisiteOnZone(z *zone.Zone, precond UpdatePrerequisite) error {
 		if zoneNameExists(z, precond.Name) {
 			return fmt.Errorf("prerequisite failed: name in use")
 		}
+	case PrecondExistsValue:
+		if precond.RData != "" {
+			if !zoneRecordExists(z, precond.Name, precond.Type, precond.RData) {
+				return fmt.Errorf("prerequisite failed: specific RR does not exist")
+			}
+		} else if !zoneTypeExists(z, precond.Name, precond.Type) {
+			// When RData is empty, fall back to type-existence check
+			return fmt.Errorf("prerequisite failed: RRset does not exist")
+		}
 	}
 	return nil
 }

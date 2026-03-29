@@ -273,6 +273,8 @@ func createRData(rrtype uint16) RData {
 		return &RDataNSEC3{}
 	case TypeNSEC3PARAM:
 		return &RDataNSEC3PARAM{}
+	case TypeOPT:
+		return &RDataOPT{}
 	default:
 		return nil
 	}

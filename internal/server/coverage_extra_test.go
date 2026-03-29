@@ -207,11 +207,9 @@ func TestTCPServerHandleMessageEDNS0WithECS(t *testing.T) {
 	if receivedClientInfo.EDNS0UDPSize != 4096 {
 		t.Errorf("EDNS0UDPSize = %d, want 4096", receivedClientInfo.EDNS0UDPSize)
 	}
-	// ClientSubnet is nil because UnpackMessage does not register TypeOPT in createRData,
-	// so after pack/unpack the OPT record's Data is *RDataRaw, not *RDataOPT.
-	// The ECS option bytes are preserved in the raw data but the type assertion fails.
-	if receivedClientInfo.ClientSubnet != nil {
-		t.Error("ClientSubnet should be nil since TypeOPT is not registered in createRData")
+	// With TypeOPT registered in createRData, the ECS option is properly parsed
+	if receivedClientInfo.ClientSubnet == nil {
+		t.Error("ClientSubnet should not be nil since ECS data was valid")
 	}
 }
 
@@ -1113,10 +1111,9 @@ func TestUDPServerHandleRequestEDNS0WithECS(t *testing.T) {
 	if receivedClientInfo.EDNS0UDPSize != 4096 {
 		t.Errorf("EDNS0UDPSize = %d, want 4096", receivedClientInfo.EDNS0UDPSize)
 	}
-	// ClientSubnet is nil because UnpackMessage does not register TypeOPT in createRData,
-	// so after pack/unpack the OPT record's Data is *RDataRaw, not *RDataOPT.
-	if receivedClientInfo.ClientSubnet != nil {
-		t.Error("ClientSubnet should be nil since TypeOPT is not registered in createRData")
+	// With TypeOPT registered in createRData, the ECS option is properly parsed
+	if receivedClientInfo.ClientSubnet == nil {
+		t.Error("ClientSubnet should not be nil since ECS data was valid")
 	}
 }
 
