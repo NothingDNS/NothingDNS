@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"net"
@@ -234,6 +235,22 @@ func run() error {
 		logger.Infof("Loaded zone %s with %d records", z.Origin, len(z.Records))
 	}
 
+	// Initialize zone signers if DNSSEC signing is enabled
+	zoneSigners := make(map[string]*dnssec.Signer)
+	if cfg.DNSSEC.Enabled && cfg.DNSSEC.Signing.Enabled {
+		for origin, z := range zones {
+			signer, err := loadZoneSigner(z, cfg.DNSSEC.Signing)
+			if err != nil {
+				logger.Warnf("Failed to load zone signer for %s: %v", origin, err)
+				continue
+			}
+			if signer != nil {
+				zoneSigners[origin] = signer
+				logger.Infof("Zone signer loaded for %s (%d keys)", origin, len(signer.GetKeys()))
+			}
+		}
+	}
+
 	// Initialize blocklist
 	bl := blocklist.New(blocklist.Config{
 		Enabled: cfg.Blocklist.Enabled,
@@ -418,7 +435,7 @@ func run() error {
 		blocklist:     bl,
 		metrics:       metricsCollector,
 		validator:     validator,
-		zoneSigners:   make(map[string]*dnssec.Signer),
+		zoneSigners:   zoneSigners,
 		cluster:       clusterMgr,
 		axfrServer:    axfrServer,
 		ixfrServer:    ixfrServer,
@@ -642,6 +659,50 @@ func loadZoneFile(path string) (*zone.Zone, error) {
 	return z, nil
 }
 
+// loadZoneSigner creates a DNSSEC signer for a zone from config.
+func loadZoneSigner(z *zone.Zone, signingCfg config.SigningConfig) (*dnssec.Signer, error) {
+	if !signingCfg.Enabled {
+		return nil, nil
+	}
+
+	signerCfg := dnssec.DefaultSignerConfig()
+
+	if signingCfg.SignatureValidity != "" {
+		if d, err := time.ParseDuration(signingCfg.SignatureValidity); err == nil {
+			signerCfg.SignatureValidity = d
+		}
+	}
+
+	if signingCfg.NSEC3 != nil {
+		signerCfg.NSEC3Enabled = true
+		signerCfg.NSEC3Iterations = signingCfg.NSEC3.Iterations
+		if signingCfg.NSEC3.Salt != "" {
+			salt, err := hex.DecodeString(signingCfg.NSEC3.Salt)
+			if err != nil {
+				return nil, fmt.Errorf("parsing NSEC3 salt: %w", err)
+			}
+			signerCfg.NSEC3Salt = salt
+		}
+	}
+
+	signer := dnssec.NewSigner(z.Origin, signerCfg)
+
+	// Generate key pairs from config
+	for _, keyConfig := range signingCfg.Keys {
+		if keyConfig.PrivateKey == "" {
+			continue
+		}
+
+		isKSK := keyConfig.Type == "ksk"
+		_, err := signer.GenerateKeyPair(keyConfig.Algorithm, isKSK)
+		if err != nil {
+			return nil, fmt.Errorf("generating key pair: %w", err)
+		}
+	}
+
+	return signer, nil
+}
+
 // ServeDNS implements the server.Handler interface.
 func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Message) {
 	// Check if we have questions
@@ -815,13 +876,21 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 	qname := q.Name.String()
 	qtype := q.QType
 
+	// Check if client wants DNSSEC (DO bit in OPT record)
+	wantsDNSSEC := hasDOBit(r)
+
 	// Look up records
 	records := z.Lookup(qname, typeToString(qtype))
 	if len(records) == 0 {
 		// Check for CNAME
 		cnameRecords := z.Lookup(qname, "CNAME")
 		if len(cnameRecords) > 0 {
-			resp := h.buildResponse(r, cnameRecords)
+			var resp *protocol.Message
+			if signer, ok := h.zoneSigners[z.Origin]; ok && wantsDNSSEC {
+				resp = h.buildSignedResponse(r, cnameRecords, signer, true)
+			} else {
+				resp = h.buildResponse(r, cnameRecords)
+			}
 			if h.metrics != nil {
 				h.metrics.RecordResponse(protocol.RcodeSuccess)
 			}
@@ -831,7 +900,14 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 		return false
 	}
 
-	resp := h.buildResponse(r, records)
+	// Use signed response if signer available for this zone
+	var resp *protocol.Message
+	if signer, ok := h.zoneSigners[z.Origin]; ok && wantsDNSSEC {
+		resp = h.buildSignedResponse(r, records, signer, true)
+	} else {
+		resp = h.buildResponse(r, records)
+	}
+
 	if h.metrics != nil {
 		h.metrics.RecordResponse(protocol.RcodeSuccess)
 	}

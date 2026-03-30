@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -238,8 +239,70 @@ func (r *RDataRRSIG) SignerNameString() string {
 }
 
 // RRSIGForRRSet returns the canonical wire format data to be signed.
-// This is used when creating signatures.
+// This is used when creating signatures per RFC 4034 Section 5.
 func RRSIGForRRSet(rrsig *RDataRRSIG, rrset []*ResourceRecord) ([]byte, error) {
-	// Implementation in crypto.go - placeholder here
-	return nil, nil
+	if len(rrset) == 0 {
+		return nil, fmt.Errorf("empty RRSet")
+	}
+
+	var data []byte
+
+	// RRSIG RDATA (without signature):
+	// Type Covered | Algorithm | Labels | Original TTL | Expiration | Inception | Key Tag | Signer Name
+	data = append(data, byte(rrsig.TypeCovered>>8), byte(rrsig.TypeCovered))
+	data = append(data, rrsig.Algorithm)
+	data = append(data, rrsig.Labels)
+	data = append(data, byte(rrsig.OriginalTTL>>24), byte(rrsig.OriginalTTL>>16),
+		byte(rrsig.OriginalTTL>>8), byte(rrsig.OriginalTTL))
+	data = append(data, byte(rrsig.Expiration>>24), byte(rrsig.Expiration>>16),
+		byte(rrsig.Expiration>>8), byte(rrsig.Expiration))
+	data = append(data, byte(rrsig.Inception>>24), byte(rrsig.Inception>>16),
+		byte(rrsig.Inception>>8), byte(rrsig.Inception))
+	data = append(data, byte(rrsig.KeyTag>>8), byte(rrsig.KeyTag))
+	data = append(data, canonicalWireName(rrsig.SignerName.String())...)
+
+	// RRSet in canonical form (sorted, one RR at a time):
+	// Owner Name | Type | Class | TTL | RDLENGTH | RDATA
+	for _, rr := range rrset {
+		data = append(data, canonicalWireName(rr.Name.String())...)
+		data = append(data, byte(rr.Type>>8), byte(rr.Type))
+		data = append(data, byte(rr.Class>>8), byte(rr.Class))
+		data = append(data, byte(rrsig.OriginalTTL>>24), byte(rrsig.OriginalTTL>>16),
+			byte(rrsig.OriginalTTL>>8), byte(rrsig.OriginalTTL))
+
+		if rr.Data != nil {
+			buf := make([]byte, 65535)
+			n, err := rr.Data.Pack(buf, 0)
+			if err != nil {
+				continue
+			}
+			rdata := buf[:n]
+			data = append(data, byte(len(rdata)>>8), byte(len(rdata)))
+			data = append(data, rdata...)
+		} else {
+			data = append(data, 0, 0)
+		}
+	}
+
+	return data, nil
+}
+
+// canonicalWireName converts a DNS name to canonical lowercase wire format.
+func canonicalWireName(name string) []byte {
+	name = strings.ToLower(strings.TrimSpace(name))
+	name = strings.TrimSuffix(name, ".")
+	if name == "" || name == "." {
+		return []byte{0}
+	}
+
+	var wire []byte
+	for _, label := range strings.Split(name, ".") {
+		if label == "" {
+			continue
+		}
+		wire = append(wire, byte(len(label)))
+		wire = append(wire, []byte(label)...)
+	}
+	wire = append(wire, 0)
+	return wire
 }

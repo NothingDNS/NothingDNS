@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"strings"
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
 )
@@ -518,11 +519,32 @@ func NSEC3Hash(name string, algorithm uint8, iterations uint16, salt []byte) ([]
 	return hash, nil
 }
 
-// toWireFormat converts a domain name to wire format (lowercase labels).
+// toWireFormat converts a domain name to DNS wire format (lowercase, length-prefixed labels).
+// Wire format: [len1][label1][len2][label2]...[0]
+// The name is first lowercased.
 func toWireFormat(name string) ([]byte, error) {
-	// This is a simplified implementation
-	// Real implementation would use proper label packing
-	return []byte(name), nil
+	name = strings.ToLower(strings.TrimSpace(name))
+	// Remove trailing dot
+	name = strings.TrimSuffix(name, ".")
+	// Handle root
+	if name == "" || name == "." {
+		return []byte{0}, nil
+	}
+
+	var wire []byte
+	labels := strings.Split(name, ".")
+	for _, label := range labels {
+		if label == "" {
+			continue
+		}
+		if len(label) > 63 {
+			return nil, fmt.Errorf("label too long: %q", label)
+		}
+		wire = append(wire, byte(len(label)))
+		wire = append(wire, []byte(label)...)
+	}
+	wire = append(wire, 0) // null terminator
+	return wire, nil
 }
 
 // EncodeToString encodes bytes to base64.
