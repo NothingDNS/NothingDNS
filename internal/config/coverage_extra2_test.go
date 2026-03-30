@@ -1872,3 +1872,114 @@ func TestBlockSeq_DefaultEmptyValueExplicit(t *testing.T) {
 	// May or may not error; the goal is covering the default branch
 	t.Logf("Result: %v", err)
 }
+
+// --- Additional tests targeting remaining uncovered lines ---
+
+// TestParseMapping_FlowRootTrailingNewlines tests ParseMapping with a flow
+// mapping root that has trailing newlines.
+// Exercises parser.go line 76-78: trailing newline skip in ParseMapping.
+func TestParseMapping_FlowRootTrailingNewlines(t *testing.T) {
+	parser := NewParser("{a: 1}\n\n\n")
+	node, err := parser.ParseMapping()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if node.GetString("a") != "1" {
+		t.Errorf("expected a='1', got %q", node.GetString("a"))
+	}
+}
+
+// TestParseMapping_TrailingContentAfterFlowMap tests ParseMapping with
+// trailing content after a flow mapping (line 80-82).
+func TestParseMapping_TrailingContentAfterFlowMap(t *testing.T) {
+	input := "{a: 1} extra"
+	parser := NewParser(input)
+	_, err := parser.ParseMapping()
+	if err == nil {
+		t.Error("expected error for trailing content after flow mapping")
+	}
+}
+
+// TestParseFlowMapping_NestedError tests parseFlowMapping with a nested
+// parseFlowMapping that returns an error (unterminated).
+// Exercises parser.go lines 652-654: error return from nested parse.
+func TestParseFlowMapping_NestedError(t *testing.T) {
+	input := "{key: {bad"
+	parser := NewParser(input)
+	_, err := parser.ParseMapping()
+	if err == nil {
+		t.Error("expected error for unterminated nested flow mapping")
+	}
+}
+
+// TestParseFlowSequence_NestedError tests parseFlowSequence with a nested
+// parseFlowMapping that returns an error (unterminated).
+// Exercises parser.go lines 696-698: error return from nested parse.
+func TestParseFlowSequence_NestedError(t *testing.T) {
+	input := "[{bad"
+	parser := NewParser(input)
+	_, err := parser.ParseMapping()
+	if err == nil {
+		t.Error("expected error for unterminated nested flow mapping in sequence")
+	}
+}
+
+// --- Targeted tests for remaining uncovered paths ---
+
+// TestParseMapping_MultipleNewlinesBetweenKeys tests parseMapping where
+// multiple consecutive newlines appear between key-value pairs.
+// Exercises parser.go lines 161-163: newline skipping loop.
+func TestParseMapping_MultipleNewlinesBetweenKeys(t *testing.T) {
+	input := "a: 1\n\n\nb: 2"
+	parser := NewParser(input)
+	node, err := parser.ParseMapping()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if node.GetString("a") != "1" {
+		t.Errorf("expected a='1', got %q", node.GetString("a"))
+	}
+	if node.GetString("b") != "2" {
+		t.Errorf("expected b='2', got %q", node.GetString("b"))
+	}
+}
+
+// TestParseMapping_DedentBelowEntryInNested tests parseMapping where DEDENT
+// causes the mapping to exit because indent drops below entry level.
+// Exercises parser.go lines 174-176.
+func TestParseMapping_DedentBelowEntryInNested(t *testing.T) {
+	input := "root:\n  child: val\nother: data"
+	parser := NewParser(input)
+	node, err := parser.ParseMapping()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	root := node.Get("root")
+	if root == nil {
+		t.Fatal("expected root node")
+	}
+	if root.GetString("child") != "val" {
+		t.Errorf("expected child='val', got %q", root.GetString("child"))
+	}
+}
+
+// TestParseFlowSequence_NestedFlowMapError tests parseFlowSequence where
+// a nested parseFlowMapping returns an error.
+// Exercises parser.go lines 696-698.
+func TestParseFlowSequence_NestedFlowMapError(t *testing.T) {
+	input := "[{bad"
+	parser := NewParser(input)
+	_, err := parser.ParseMapping()
+	if err == nil {
+		t.Error("expected error for unterminated nested flow mapping in sequence")
+	}
+}
+
+// The following paths involve TokenIndent being produced by the tokenizer in
+// positions where the current tokenizer implementation does not produce them
+// (e.g., after a colon on the same line). These code paths are defensive
+// branches that cannot be triggered through normal token sequences.
+
+func TestUnreachablePaths_Skip(t *testing.T) {
+	t.Skip("These parser.go code paths require TokenIndent after a colon on the same line, which the tokenizer never produces. They are defensive branches that cannot be reached through normal inputs.")
+}

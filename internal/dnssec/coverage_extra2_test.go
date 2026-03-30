@@ -555,3 +555,261 @@ func TestValidateDelegation_WrongDSType(t *testing.T) {
 		t.Error("expected false when DS Data is wrong type")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// crypto.go:66-68 - parseRSAPublicKey with 3-byte exponent length and short data
+// Exercises the branch where keyData[0]==0 (3-byte exp length) and len<4.
+// ---------------------------------------------------------------------------
+
+func TestParseRSAPublicKey_ThreeByteExpLenTooShort(t *testing.T) {
+	// keyData[0] == 0 means 3-byte exponent length, but data is only 3 bytes
+	_, err := parseRSAPublicKey([]byte{0x00, 0x00, 0x01})
+	if err == nil {
+		t.Error("expected error for 3-byte exponent length with too-short data")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// crypto.go:81-83 - parseRSAPublicKey with data where modulus is missing
+// Constructs key data where offset lands exactly at len(keyData), meaning
+// no modulus bytes remain.
+// ---------------------------------------------------------------------------
+
+func TestParseRSAPublicKey_NoModulus(t *testing.T) {
+	// Need len(keyData) >= 3 to pass the first check.
+	// keyData[0]=2 means expLen=2, offset=1.
+	// Then offset+expLen=3 == len(keyData), so exponent read succeeds.
+	// Then offset=3, and offset >= len(keyData)=3, triggering "missing modulus".
+	_, err := parseRSAPublicKey([]byte{0x02, 0x01, 0x03})
+	if err == nil {
+		t.Error("expected error for RSA key missing modulus")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// crypto.go:442-445 - packRSAPublicKey large exponent branch
+// The standard RSA key E=65537 fits in <256 bytes. The large exponent branch
+// requires an exponent >= 256 bytes, which is practically impossible with
+// standard RSA keys since E is an int. Mark as unreachable for normal use.
+// ---------------------------------------------------------------------------
+
+func TestPackRSAPublicKey_LargeExponentBranch(t *testing.T) {
+	t.Skip("exponent >= 256 bytes branch is unreachable with standard RSA keys (E is int, max ~8 bytes)")
+}
+
+// ---------------------------------------------------------------------------
+// crypto.go:314-316 - signECDSA error from ecdsa.Sign
+// ecdsa.Sign can only fail if the random source fails. This is unreachable
+// with crypto/rand.Reader.
+// ---------------------------------------------------------------------------
+
+func TestSignECDSA_SignError(t *testing.T) {
+	t.Skip("ecdsa.Sign error path requires random source failure, unreachable with crypto/rand.Reader")
+}
+
+// ---------------------------------------------------------------------------
+// crypto.go:366-368 - generateRSAKeyPair error from rsa.GenerateKey
+// rsa.GenerateKey can only fail if the random source fails.
+// ---------------------------------------------------------------------------
+
+func TestGenerateRSAKeyPair_Error(t *testing.T) {
+	t.Skip("rsa.GenerateKey error path requires random source failure, unreachable with crypto/rand.Reader")
+}
+
+// ---------------------------------------------------------------------------
+// crypto.go:390-392 - generateECDSAKeyPair error from ecdsa.GenerateKey
+// ecdsa.GenerateKey can only fail if the random source fails.
+// ---------------------------------------------------------------------------
+
+func TestGenerateECDSAKeyPair_Error(t *testing.T) {
+	t.Skip("ecdsa.GenerateKey error path requires random source failure, unreachable with crypto/rand.Reader")
+}
+
+// ---------------------------------------------------------------------------
+// crypto.go:403-405 - generateEd25519KeyPair error from ed25519.GenerateKey
+// ed25519.GenerateKey can only fail if the random source fails.
+// ---------------------------------------------------------------------------
+
+func TestGenerateEd25519KeyPair_Error(t *testing.T) {
+	t.Skip("ed25519.GenerateKey error path requires random source failure, unreachable with crypto/rand.Reader")
+}
+
+// ---------------------------------------------------------------------------
+// crypto.go:500-502 - NSEC3Hash toWireFormat error
+// toWireFormat always returns nil error (simplified implementation).
+// ---------------------------------------------------------------------------
+
+func TestNSEC3Hash_ToWireFormatError(t *testing.T) {
+	t.Skip("toWireFormat always returns nil error in current implementation")
+}
+
+// ---------------------------------------------------------------------------
+// crypto.go:542-544 - GenerateSalt error from io.ReadFull
+// io.ReadFull(rand.Reader) can only fail if the random source fails or length<=0.
+// With length>0 and crypto/rand.Reader this is unreachable.
+// ---------------------------------------------------------------------------
+
+func TestGenerateSalt_Error(t *testing.T) {
+	t.Skip("GenerateSalt error path requires random source failure, unreachable with crypto/rand.Reader and positive length")
+}
+
+// ---------------------------------------------------------------------------
+// signer.go:113-115 - Signer.GenerateKeyPair error from PackDNSKEYPublicKey
+// PackDNSKEYPublicKey fails if key type doesn't match algorithm. This requires
+// GenerateKeyPair to return a key whose type doesn't match the algorithm, which
+// is impossible with the current implementation.
+// ---------------------------------------------------------------------------
+
+func TestSigner_GenerateKeyPair_PackError(t *testing.T) {
+	t.Skip("PackDNSKEYPublicKey error in GenerateKeyPair is unreachable: key type always matches algorithm")
+}
+
+// ---------------------------------------------------------------------------
+// signer.go:188-190 - SignZone error from SignRRSet when signing DNSKEY RRSet
+// signer.go:211-213 - SignZone error from SignRRSet for other RRSet
+// signer.go:233-235 - SignZone error from SignRRSet for NSEC records
+// These require SignRRSet to fail, which requires SignData to fail, which
+// requires crypto/rand to fail.
+// ---------------------------------------------------------------------------
+
+func TestSignZone_SignRRSetError(t *testing.T) {
+	t.Skip("SignRRSet error paths in SignZone require crypto/rand failure")
+}
+
+// ---------------------------------------------------------------------------
+// signer.go:282-284 - SignRRSet error from SignData
+// SignData can only fail if there's an algorithm mismatch (which can't happen
+// since key.Algorithm matches) or if the underlying crypto operation fails
+// (requires random source failure).
+// ---------------------------------------------------------------------------
+
+func TestSignRRSet_SignDataError(t *testing.T) {
+	t.Skip("SignData error in SignRRSet requires crypto/rand failure")
+}
+
+// ---------------------------------------------------------------------------
+// trustanchor.go:406-408 - DSFromDNSKEY error from digest calculation
+// calculateDSDigestWithHash always returns nil error. This path is unreachable.
+// ---------------------------------------------------------------------------
+
+func TestDSFromDNSKEY_DigestCalcError(t *testing.T) {
+	t.Skip("calculateDSDigestWithHash always returns nil error, so DSFromDNSKEY err check is unreachable")
+}
+
+// ---------------------------------------------------------------------------
+// trustanchor.go:471-472 - canonicalWireName with empty label in splitLabels
+// splitLabels("example.com.") returns ["example", "com"], never empty labels.
+// The empty label skip can happen with names like "example..com." which
+// produce an empty string between the dots.
+// ---------------------------------------------------------------------------
+
+func TestCanonicalWireName_EmptyLabelSkip(t *testing.T) {
+	result := canonicalWireName("example..com.")
+	// The empty label between "example" and "com" should be skipped
+	// Expected: [7, 'e','x','a','m','p','l','e', 3, 'c','o','m', 0]
+	if len(result) == 0 {
+		t.Error("expected non-empty result from canonicalWireName")
+	}
+	// Should end with root label terminator (0)
+	if result[len(result)-1] != 0 {
+		t.Error("expected root label terminator")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// validator.go:296-297 - validateMessage empty rrSet continue
+// groupRecordsByRRSet skips RRSIG records, so an answers section with only
+// RRSIG records will produce an empty rrSet for the RRSIG entry itself
+// (since it's already skipped). Create a message with only RRSIG in answers
+// and an answer with TypeA that gets grouped.
+// ---------------------------------------------------------------------------
+
+func TestValidateMessage_EmptyRRSetContinue(t *testing.T) {
+	v := NewValidator(DefaultValidatorConfig(), nil, nil)
+
+	// Create a message where answers contain only RRSIG records
+	// groupRecordsByRRSet will skip them, producing no rrSets to validate
+	signerName, _ := protocol.ParseName("example.com.")
+	answers := []*protocol.ResourceRecord{
+		{
+			Name:  signerName,
+			Type:  protocol.TypeRRSIG,
+			Class: protocol.ClassIN,
+			TTL:   300,
+			Data: &protocol.RDataRRSIG{
+				TypeCovered: protocol.TypeA,
+				Algorithm:   protocol.AlgorithmECDSAP256SHA256,
+				Labels:      2,
+				OriginalTTL: 300,
+				Expiration:  uint32(time.Now().Add(24 * time.Hour).Unix()),
+				Inception:   uint32(time.Now().Add(-1 * time.Hour).Unix()),
+				KeyTag:      12345,
+				SignerName:  signerName,
+				Signature:   make([]byte, 64),
+			},
+		},
+	}
+
+	msg := &protocol.Message{
+		Header: protocol.Header{},
+		Answers: answers,
+	}
+
+	chain := []*chainLink{{zone: "example.com.", validated: true}}
+	result := v.validateMessage(context.Background(), msg, "example.com.", chain)
+	// With only RRSIGs in answers (no actual data records), no rrSets are found,
+	// and no RRSIG matching will work, but the function should still reach the end.
+	// Since RequireDNSSEC is false, it should return Secure (no answer groups to validate).
+	if result != ValidationSecure {
+		t.Errorf("expected SECURE for message with only RRSIG records, got %s", result)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// validator.go:426-427 - canonicalizeRR empty label skip (root name ".")
+// When canonicalizing a record with a root name, the labels splitting produces
+// an empty string, which should be skipped.
+// ---------------------------------------------------------------------------
+
+func TestCanonicalizeRR_RootNameEmptyLabel(t *testing.T) {
+	v := NewValidator(DefaultValidatorConfig(), nil, nil)
+
+	rootName, _ := protocol.ParseName(".")
+	rr := &protocol.ResourceRecord{
+		Name:  rootName,
+		Type:  protocol.TypeA,
+		Class: protocol.ClassIN,
+		TTL:   300,
+		Data:  &protocol.RDataA{Address: [4]byte{127, 0, 0, 1}},
+	}
+
+	result := v.canonicalizeRR(rr, 3600)
+	if len(result) == 0 {
+		t.Error("canonicalizeRR should return non-empty result for root name")
+	}
+	// The result should still contain the root label terminator (0 byte)
+	found := false
+	for _, b := range result {
+		if b == 0 {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("canonicalizeRR result should contain null terminator for root name")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// validator.go:548-552 - validateNSEC exact match with HasType check
+// The HasType check at lines 548-552 requires:
+// 1. nameInRange(queryName, owner, next) returns true
+// 2. owner == queryName
+// Since nameInRange checks name > owner && name < next, and owner == queryName,
+// name > owner is false when name == owner. So this code path is logically
+// unreachable with the current implementation of nameInRange.
+// ---------------------------------------------------------------------------
+
+func TestValidateNSEC_ExactMatchHasTypeCheck(t *testing.T) {
+	t.Skip("HasType check in validateNSEC is logically unreachable: owner==queryName means nameInRange always returns false")
+}
