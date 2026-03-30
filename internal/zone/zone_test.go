@@ -243,10 +243,6 @@ www IN A 192.0.2.1
 }
 
 func TestParseFileContinuation(t *testing.T) {
-	// Multi-line SOA with parentheses is a known limitation
-	// The basic parser doesn't join lines inside parentheses
-	t.Skip("Multi-line SOA records with parentheses not yet supported")
-
 	zoneContent := `
 $ORIGIN example.com.
 $TTL 3600

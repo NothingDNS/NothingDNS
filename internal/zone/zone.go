@@ -179,16 +179,49 @@ type parser struct {
 	lineNum    int
 	zone       *Zone
 	lastOwner  string // Last seen owner name (for continuation lines)
+	parenDepth int    // Parenthesis nesting depth for multi-line records
+	lineBuf    string // Accumulated line content across parenthesized spans
+	lineStart  int    // Line number where the current multi-line record started
 }
 
 // parse performs the actual parsing.
 func (p *parser) parse() (*Zone, error) {
 	for p.scanner.Scan() {
 		p.lineNum++
-		line := p.scanner.Text()
+		rawLine := p.scanner.Text()
+		line := strings.TrimSpace(rawLine)
 
-		// Trim whitespace
-		line = strings.TrimSpace(line)
+		// If we're inside a parenthesized multi-line record, accumulate lines
+		if p.parenDepth > 0 {
+			// Strip comments from continuation line
+			if idx := strings.Index(line, ";"); idx >= 0 {
+				line = strings.TrimSpace(line[:idx])
+			}
+			if line == "" {
+				continue
+			}
+			p.lineBuf += " " + line
+			for _, ch := range line {
+				if ch == '(' {
+					p.parenDepth++
+				} else if ch == ')' {
+					p.parenDepth--
+				}
+			}
+			if p.parenDepth <= 0 {
+				// Multi-line record complete — parse the joined line
+				p.parenDepth = 0
+				combined := p.lineBuf
+				p.lineBuf = ""
+				combined = strings.ReplaceAll(combined, "(", " ")
+				combined = strings.ReplaceAll(combined, ")", " ")
+				combined = strings.Join(strings.Fields(combined), " ")
+				if err := p.parseRecord(combined); err != nil {
+					return nil, fmt.Errorf("%s:%d: %w", p.filename, p.lineStart, err)
+				}
+			}
+			continue
+		}
 
 		// Skip empty lines and comments
 		if line == "" || strings.HasPrefix(line, ";") {
@@ -203,6 +236,21 @@ func (p *parser) parse() (*Zone, error) {
 			continue
 		}
 
+		// Check if this line opens a multi-line record
+		hasOpen := strings.Contains(line, "(")
+		hasClose := strings.Contains(line, ")")
+		if hasOpen && !hasClose {
+			// Start accumulating a multi-line record
+			p.parenDepth = 1
+			p.lineStart = p.lineNum
+			// Strip comments from first line
+			if idx := strings.Index(line, ";"); idx >= 0 {
+				line = strings.TrimSpace(line[:idx])
+			}
+			p.lineBuf = line
+			continue
+		}
+
 		// Parse resource record
 		if err := p.parseRecord(line); err != nil {
 			return nil, fmt.Errorf("%s:%d: %w", p.filename, p.lineNum, err)
@@ -211,6 +259,11 @@ func (p *parser) parse() (*Zone, error) {
 
 	if err := p.scanner.Err(); err != nil {
 		return nil, fmt.Errorf("%s: read error: %w", p.filename, err)
+	}
+
+	// Handle unclosed parenthesis
+	if p.parenDepth > 0 {
+		return nil, fmt.Errorf("%s:%d: unclosed parenthesis", p.filename, p.lineStart)
 	}
 
 	return p.zone, nil
@@ -417,7 +470,7 @@ func parseFields(line string) []string {
 	var current strings.Builder
 	inQuotes := false
 
-	for i, r := range line {
+	for _, r := range line {
 		switch r {
 		case '"':
 			if inQuotes {
@@ -451,7 +504,6 @@ func parseFields(line string) []string {
 		case ')':
 			// End of multi-line record
 		default:
-			_ = i // Avoid unused variable warning
 			current.WriteRune(r)
 		}
 	}
