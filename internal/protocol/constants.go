@@ -1,6 +1,8 @@
 // Package protocol implements the DNS wire protocol per RFC 1035 and related RFCs.
 package protocol
 
+import "strconv"
+
 // DNS Opcodes defined in RFC 1035 and extensions.
 const (
 	OpcodeQuery  = 0 // Standard query
@@ -275,7 +277,7 @@ func TypeString(t uint16) string {
 	if s, ok := TypeToString[t]; ok {
 		return s
 	}
-	return "TYPE" + string(rune(t))
+	return "TYPE" + strconv.Itoa(int(t))
 }
 
 // ClassString returns the string representation of a class.
@@ -283,7 +285,7 @@ func ClassString(c uint16) string {
 	if s, ok := ClassToString[c]; ok {
 		return s
 	}
-	return "CLASS" + string(rune(c))
+	return "CLASS" + strconv.Itoa(int(c))
 }
 
 // RcodeString returns the string representation of an RCODE.
@@ -291,5 +293,5 @@ func RcodeString(r int) string {
 	if s, ok := RcodeToString[r]; ok {
 		return s
 	}
-	return "RCODE" + string(rune(r))
+	return "RCODE" + strconv.Itoa(r)
 }

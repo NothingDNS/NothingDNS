@@ -1,0 +1,135 @@
+# NothingDNS Configuration
+# See https://github.com/nothingdns/nothingdns for documentation
+
+server:
+  bind:
+    - 0.0.0.0
+    - "::"
+  port: 53
+  udp_workers: 0   # 0 = auto (NumCPU * 4)
+  tcp_workers: 0   # 0 = auto (NumCPU * 2)
+
+  tls:
+    enabled: false
+    cert_file: /etc/nothingdns/tls/server.crt
+    key_file: /etc/nothingdns/tls/server.key
+    bind: ":853"
+
+  http:
+    enabled: true
+    bind: ":8080"
+    auth_token: ""  # Set for API authentication
+    doh_enabled: false
+    doh_path: /dns-query
+
+resolution:
+  recursive: false
+  root_hints: ""
+  max_depth: 10
+  timeout: 5s
+  edns0_buffer_size: 4096
+
+upstream:
+  servers:
+    - 8.8.8.8:53
+    - 8.8.4.4:53
+    - 1.1.1.1:53
+  strategy: random    # random, round_robin, fastest
+  health_check: 30s
+  failover_timeout: 5s
+
+  # Anycast groups for advanced load balancing (optional)
+  # anycast_groups: []
+  #   - anycast_ip: 10.0.0.1
+  #     backends:
+  #       - physical_ip: 10.1.0.1
+  #         port: 53
+  #         region: us-east-1
+  #         weight: 100
+
+  topology:
+    region: ""
+    zone: ""
+    weight: 100
+
+cache:
+  enabled: true
+  size: 10000
+  default_ttl: 300
+  max_ttl: 86400
+  min_ttl: 5
+  negative_ttl: 60
+  prefetch: false
+  prefetch_threshold: 60
+
+logging:
+  level: info        # debug, info, warn, error, fatal
+  format: text       # text, json
+  output: stdout     # stdout, stderr
+  query_log: false
+  query_log_file: ""
+
+metrics:
+  enabled: false
+  bind: ":9153"
+  path: /metrics
+
+dnssec:
+  enabled: false
+  trust_anchor: ""
+  ignore_time: false
+  require_dnssec: false
+
+  signing:
+    enabled: false
+    signature_validity: "720h"  # 30 days
+    keys: []
+      # - private_key: /etc/nothingdns/keys/ksk.pem
+      #   type: ksk
+      #   algorithm: 13  # ECDSAP256SHA256
+      # - private_key: /etc/nothingdns/keys/zsk.pem
+      #   type: zsk
+      #   algorithm: 13
+    # nsec3:
+    #   iterations: 10
+    #   salt: ""
+    #   opt_out: false
+
+cluster:
+  enabled: false
+  node_id: ""
+  bind_addr: ""
+  gossip_port: 7946
+  region: ""
+  zone: ""
+  weight: 100
+  seed_nodes: []
+  cache_sync: true
+
+blocklist:
+  enabled: false
+  files: []
+    # - /etc/nothingdns/blocklists/ad-blocklist.txt
+
+zones: []
+  # - /etc/nothingdns/zones/example.com.zone
+
+acl: []
+  # - name: "allow-local"
+  #   action: allow
+  #   networks:
+  #     - 127.0.0.0/8
+  #     - ::1/128
+  #   types:
+  #     - ANY
+
+slave_zones: []
+  # - zone_name: "slave.example.com."
+  #   masters:
+  #     - 192.168.1.1:53
+  #   transfer_type: ixfr
+  #   tsig_key_name: ""
+  #   tsig_secret: ""
+  #   timeout: 30s
+  #   retry_interval: 5m
+  #   max_retries: 3

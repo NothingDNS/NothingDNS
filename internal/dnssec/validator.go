@@ -591,10 +591,21 @@ func extractNSEC3Hash(owner string) string {
 }
 
 // nameInRange checks if a name falls between owner and next (in canonical order).
+// It handles both the normal case and NSEC wrap-around where the last record
+// in the zone has a next domain name that is lexicographically before the owner,
+// meaning the range covers names from owner to the end of the zone AND from the
+// beginning of the zone up to next.
 func nameInRange(name, owner, next string) bool {
-	// Simplified implementation
-	// Full implementation would use canonical DNS name ordering
-	return name > owner && name < next
+	if owner < next {
+		// Normal case: name must be strictly between owner and next
+		return name > owner && name < next
+	}
+	if owner > next {
+		// Wrap-around case: name is in range if it is after owner OR before next
+		return name > owner || name < next
+	}
+	// owner == next: single NSEC covering entire zone; any name except owner is in range
+	return name != owner
 }
 
 // groupRecordsByRRSet groups records by name and type.

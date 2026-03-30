@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -91,18 +92,21 @@ type integratedHandler struct {
 	logger        *util.Logger
 	cache         *cache.Cache
 	upstream      *upstream.Client
-	loadBalancer  *upstream.LoadBalancer        // NEW: Load balancer with anycast support
+	loadBalancer  *upstream.LoadBalancer
 	zones         map[string]*zone.Zone
 	blocklist     *blocklist.Blocklist
 	metrics       *metrics.MetricsCollector
-	validator     *dnssec.Validator             // NEW: DNSSEC validator
-	zoneSigners   map[string]*dnssec.Signer     // NEW: Zone signers for authoritative zones
-	cluster       *cluster.Cluster              // NEW: Cluster manager
-	axfrServer    *transfer.AXFRServer          // NEW: AXFR server for zone transfers
-	ixfrServer    *transfer.IXFRServer          // NEW: IXFR server for incremental zone transfers
-	notifyHandler *transfer.NOTIFYSlaveHandler  // NEW: NOTIFY handler for slave servers
-	ddnsHandler   *transfer.DynamicDNSHandler   // NEW: Dynamic DNS handler for updates
-	slaveManager  *transfer.SlaveManager        // NEW: Slave zone manager for automatic zone transfers
+	validator     *dnssec.Validator
+	zoneSigners   map[string]*dnssec.Signer
+	cluster       *cluster.Cluster
+	axfrServer    *transfer.AXFRServer
+	ixfrServer    *transfer.IXFRServer
+	notifyHandler *transfer.NOTIFYSlaveHandler
+	ddnsHandler   *transfer.DynamicDNSHandler
+	slaveManager  *transfer.SlaveManager
+
+	notifyOnce sync.Once
+	updateOnce sync.Once
 }
 
 func main() {
@@ -225,6 +229,7 @@ func run() error {
 
 	// Load zone files
 	zones := make(map[string]*zone.Zone)
+	zoneFiles := make(map[string]string) // origin -> file path mapping
 	for _, zoneFile := range cfg.Zones {
 		z, err := loadZoneFile(zoneFile)
 		if err != nil {
@@ -232,6 +237,7 @@ func run() error {
 			continue
 		}
 		zones[z.Origin] = z
+		zoneFiles[z.Origin] = zoneFile
 		logger.Infof("Loaded zone %s with %d records", z.Origin, len(z.Records))
 	}
 
@@ -366,16 +372,10 @@ func run() error {
 		}
 	}
 
-	// Initialize zone manager
+	// Initialize zone manager (use already-loaded zones to avoid duplicate parsing)
 	zoneManager := zone.NewManager()
-	for _, zoneFile := range cfg.Zones {
-		z, err := loadZoneFile(zoneFile)
-		if err != nil {
-			logger.Warnf("Failed to load zone file %s: %v", zoneFile, err)
-			continue
-		}
-		zoneManager.LoadZone(z, zoneFile)
-		logger.Infof("Loaded zone %s with %d records", z.Origin, len(z.Records))
+	for origin, z := range zones {
+		zoneManager.LoadZone(z, zoneFiles[origin])
 	}
 
 	// Initialize AXFR server for zone transfers
@@ -454,6 +454,8 @@ func run() error {
 				logger.Warnf("Failed to reload zone file %s: %v", zoneFile, err)
 				continue
 			}
+			zones[z.Origin] = z
+			zoneFiles[z.Origin] = zoneFile
 			zoneManager.LoadZone(z, zoneFile)
 			logger.Infof("Reloaded zone %s", z.Origin)
 		}
@@ -596,6 +598,8 @@ func run() error {
 					continue
 				}
 				zones[z.Origin] = z
+				zoneFiles[z.Origin] = zoneFile
+				zoneManager.LoadZone(z, zoneFile)
 				logger.Infof("Reloaded zone %s", z.Origin)
 			}
 			// Reload blocklist
@@ -1058,8 +1062,8 @@ func (h *integratedHandler) handleNOTIFY(w server.ResponseWriter, r *protocol.Me
 		h.metrics.RecordResponse(resp.Header.Flags.RCODE)
 	}
 
-	// Start a goroutine to listen for NOTIFY events and trigger zone transfers
-	go h.processNotifyEvents()
+	// Start a goroutine to listen for NOTIFY events and trigger zone transfers (once)
+	h.notifyOnce.Do(func() { go h.processNotifyEvents() })
 }
 
 // processNotifyEvents listens for NOTIFY events and triggers zone transfers.
@@ -1112,8 +1116,8 @@ func (h *integratedHandler) handleUPDATE(w server.ResponseWriter, r *protocol.Me
 		h.metrics.RecordResponse(resp.Header.Flags.RCODE)
 	}
 
-	// Start a goroutine to listen for update events and apply changes
-	go h.processUpdateEvents()
+	// Start a goroutine to listen for update events and apply changes (once)
+	h.updateOnce.Do(func() { go h.processUpdateEvents() })
 }
 
 // processUpdateEvents listens for update events and applies changes to zones.
@@ -1209,7 +1213,9 @@ func reply(w server.ResponseWriter, query, response *protocol.Message) {
 	if len(response.Questions) == 0 {
 		response.Questions = query.Questions
 	}
-	w.Write(response)
+	if _, err := w.Write(response); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to write response: %v\n", err)
+	}
 }
 
 // sendError sends an error response.
@@ -1221,7 +1227,9 @@ func sendError(w server.ResponseWriter, query *protocol.Message, rcode uint8) {
 		},
 		Questions: query.Questions,
 	}
-	w.Write(resp)
+	if _, err := w.Write(resp); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to write error response: %v\n", err)
+	}
 }
 
 // isSubdomain checks if child is a subdomain of parent.
@@ -1245,54 +1253,15 @@ func canonicalize(name string) string {
 
 // typeToString converts a DNS type number to string.
 func typeToString(qtype uint16) string {
-	switch qtype {
-	case protocol.TypeA:
-		return "A"
-	case protocol.TypeAAAA:
-		return "AAAA"
-	case protocol.TypeCNAME:
-		return "CNAME"
-	case protocol.TypeMX:
-		return "MX"
-	case protocol.TypeNS:
-		return "NS"
-	case protocol.TypeTXT:
-		return "TXT"
-	case protocol.TypePTR:
-		return "PTR"
-	case protocol.TypeSOA:
-		return "SOA"
-	case protocol.TypeSRV:
-		return "SRV"
-	default:
-		return "UNKNOWN"
-	}
+	return protocol.TypeString(qtype)
 }
 
 // stringToType converts a type string to DNS type number.
 func stringToType(s string) uint16 {
-	switch strings.ToUpper(s) {
-	case "A":
-		return protocol.TypeA
-	case "AAAA":
-		return protocol.TypeAAAA
-	case "CNAME":
-		return protocol.TypeCNAME
-	case "MX":
-		return protocol.TypeMX
-	case "NS":
-		return protocol.TypeNS
-	case "TXT":
-		return protocol.TypeTXT
-	case "PTR":
-		return protocol.TypePTR
-	case "SOA":
-		return protocol.TypeSOA
-	case "SRV":
-		return protocol.TypeSRV
-	default:
-		return 0
+	if t, ok := protocol.StringToType[strings.ToUpper(s)]; ok {
+		return t
 	}
+	return 0
 }
 
 // parseRData parses RData string based on record type.
@@ -1331,8 +1300,79 @@ func parseRData(rtype, rdata string) protocol.RData {
 		}
 	case "TXT":
 		return &protocol.RDataTXT{Strings: []string{rdata}}
+	case "SOA":
+		return parseSOARData(rdata)
+	case "SRV":
+		return parseSRVRData(rdata)
+	case "CAA":
+		return parseCAARData(rdata)
 	}
 	return nil
+}
+
+// parseSOARData parses SOA RData: "mname rname serial refresh retry expire minimum"
+func parseSOARData(rdata string) protocol.RData {
+	fields := strings.Fields(rdata)
+	if len(fields) < 7 {
+		return nil
+	}
+	mname, err := protocol.ParseName(fields[0])
+	if err != nil {
+		return nil
+	}
+	rname, err := protocol.ParseName(fields[1])
+	if err != nil {
+		return nil
+	}
+	serial, _ := strconv.ParseUint(fields[2], 10, 32)
+	refresh, _ := strconv.ParseUint(fields[3], 10, 32)
+	retry, _ := strconv.ParseUint(fields[4], 10, 32)
+	expire, _ := strconv.ParseUint(fields[5], 10, 32)
+	minimum, _ := strconv.ParseUint(fields[6], 10, 32)
+	return &protocol.RDataSOA{
+		MName:   mname,
+		RName:   rname,
+		Serial:  uint32(serial),
+		Refresh: uint32(refresh),
+		Retry:   uint32(retry),
+		Expire:  uint32(expire),
+		Minimum: uint32(minimum),
+	}
+}
+
+// parseSRVRData parses SRV RData: "priority weight port target"
+func parseSRVRData(rdata string) protocol.RData {
+	fields := strings.Fields(rdata)
+	if len(fields) < 4 {
+		return nil
+	}
+	priority, _ := strconv.ParseUint(fields[0], 10, 16)
+	weight, _ := strconv.ParseUint(fields[1], 10, 16)
+	port, _ := strconv.ParseUint(fields[2], 10, 16)
+	target, err := protocol.ParseName(fields[3])
+	if err != nil {
+		return nil
+	}
+	return &protocol.RDataSRV{
+		Priority: uint16(priority),
+		Weight:   uint16(weight),
+		Port:     uint16(port),
+		Target:   target,
+	}
+}
+
+// parseCAARData parses CAA RData: "flags tag value"
+func parseCAARData(rdata string) protocol.RData {
+	fields := strings.Fields(rdata)
+	if len(fields) < 3 {
+		return nil
+	}
+	flags, _ := strconv.ParseUint(fields[0], 10, 8)
+	return &protocol.RDataCAA{
+		Flags: uint8(flags),
+		Tag:   fields[1],
+		Value: strings.Join(fields[2:], " "),
+	}
 }
 
 // extractTTL extracts a reasonable TTL from a response.

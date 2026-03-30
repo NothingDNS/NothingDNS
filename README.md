@@ -81,15 +81,17 @@ server:
   port: 5353
   bind:
     - 0.0.0.0
-  tls_enabled: false
+  tls:
+    enabled: false
+
+resolution:
+  timeout: "5s"
 
 upstream:
   strategy: round_robin
   servers:
     - 1.1.1.1:53
     - 8.8.8.8:53
-  timeout: 5
-  tls_preferred: true
 
 cache:
   size: 10000
@@ -110,11 +112,14 @@ zones:
 
 acl:
   - action: allow
-    cidr: 127.0.0.1/32
+    networks:
+      - 127.0.0.1/32
   - action: allow
-    cidr: 10.0.0.0/8
+    networks:
+      - 10.0.0.0/8
   - action: deny
-    cidr: 0.0.0.0/0
+    networks:
+      - 0.0.0.0/0
 ```
 
 ## Zone File Format
@@ -579,7 +584,6 @@ cluster:
 - **round_robin** - Rotate through upstream servers
 - **random** - Random selection
 - **fastest** - Use the fastest responding server
-- **backup** - Use primary unless it fails
 
 ## Docker
 
@@ -661,7 +665,6 @@ server:
   http:
     enabled: true
     bind: "0.0.0.0:8080"
-    dashboard: true
 ```
 
 Access the dashboard at `http://localhost:8080/`
@@ -679,9 +682,9 @@ NothingDNS provides a Model Context Protocol (MCP) server for AI assistant integ
 
 ```yaml
 server:
-  mcp:
+  http:
     enabled: true
-    transport: stdio  # or "sse" for HTTP Server-Sent Events
+    bind: "0.0.0.0:8080"
 ```
 
 ### Available MCP Tools
@@ -703,15 +706,7 @@ server:
 
 ## Storage & Persistence
 
-NothingDNS includes a built-in key-value store with WAL support:
-
-```yaml
-storage:
-  enabled: true
-  path: /var/lib/nothingdns/data
-  wal_enabled: true
-  sync_interval: 5s
-```
+NothingDNS includes a built-in key-value store with WAL support.
 
 ### Features
 
