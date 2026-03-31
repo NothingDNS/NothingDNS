@@ -3,6 +3,7 @@ package upstream
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"sync"
@@ -411,7 +412,7 @@ func (c *Client) queryTCP(server *Server, msg *protocol.Message) (*protocol.Mess
 
 	// Read length prefix
 	lengthBuf = make([]byte, 2)
-	if _, err := conn.Read(lengthBuf); err != nil {
+	if _, err := io.ReadFull(conn, lengthBuf); err != nil {
 		return nil, fmt.Errorf("read length: %w", err)
 	}
 	respLen := uint16(lengthBuf[0])<<8 | uint16(lengthBuf[1])
@@ -421,7 +422,7 @@ func (c *Client) queryTCP(server *Server, msg *protocol.Message) (*protocol.Mess
 	}
 
 	// Read response
-	_, err = conn.Read(buf[:respLen])
+	_, err = io.ReadFull(conn, buf[:respLen])
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
