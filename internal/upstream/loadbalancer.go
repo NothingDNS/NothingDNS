@@ -642,10 +642,11 @@ func (lb *LoadBalancer) checkHealth() {
 	// Check standalone servers
 	for _, server := range lb.servers {
 		go func(s *Server) {
-			_, err := lb.queryUDP(s.Address, msg)
+			query := *msg // copy to avoid data race on Pack
+			_, err := lb.queryUDP(s.Address, &query)
 			if err != nil {
 				log.Printf("health check UDP failed for %s: %v, trying TCP", s.Address, err)
-				_, err = lb.queryTCP(s.Address, msg)
+				_, err = lb.queryTCP(s.Address, &query)
 			}
 			// queryUDP/TCP already mark success/failure
 		}(server)
@@ -655,10 +656,11 @@ func (lb *LoadBalancer) checkHealth() {
 	for _, group := range lb.anycastGroups {
 		for _, backend := range group.Backends {
 			go func(b *AnycastBackend) {
-				_, err := lb.queryUDP(b.Address(), msg)
+				query := *msg // copy to avoid data race on Pack
+				_, err := lb.queryUDP(b.Address(), &query)
 				if err != nil {
 					log.Printf("health check UDP failed for anycast %s: %v, trying TCP", b.Address(), err)
-					_, err = lb.queryTCP(b.Address(), msg)
+					_, err = lb.queryTCP(b.Address(), &query)
 				}
 				if err != nil {
 					b.markFailure()
