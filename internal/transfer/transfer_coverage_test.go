@@ -1388,8 +1388,8 @@ func TestParseRData_TXT_Coverage(t *testing.T) {
 func TestAXFRClient_sendMessage_WriteBodyError(t *testing.T) {
 	client := NewAXFRClient("ns1.example.com:53")
 
-	// Use a conn that allows the first write but fails on the second
-	conn := &partialWriteConn{}
+	// Use a conn that fails on write
+	conn := &failingWriteConn{}
 	msg := &protocol.Message{
 		Header: protocol.Header{ID: 0x1234, QDCount: 1},
 		Questions: []*protocol.Question{
@@ -1398,29 +1398,21 @@ func TestAXFRClient_sendMessage_WriteBodyError(t *testing.T) {
 	}
 	err := client.sendMessage(conn, msg)
 	if err == nil {
-		t.Error("Expected error when second write fails")
+		t.Error("Expected error when write fails")
 	}
 }
 
-// partialWriteConn allows first write but fails on second
-type partialWriteConn struct {
-	writeCount int
-}
+// failingWriteConn fails on write
+type failingWriteConn struct{}
 
-func (p *partialWriteConn) Read(b []byte) (int, error)         { return 0, net.ErrClosed }
-func (p *partialWriteConn) Write(b []byte) (int, error) {
-	p.writeCount++
-	if p.writeCount == 1 {
-		return len(b), nil // length prefix succeeds
-	}
-	return 0, fmt.Errorf("write failed on second call")
-}
-func (p *partialWriteConn) Close() error                      { return nil }
-func (p *partialWriteConn) LocalAddr() net.Addr               { return &net.TCPAddr{} }
-func (p *partialWriteConn) RemoteAddr() net.Addr              { return &net.TCPAddr{} }
-func (p *partialWriteConn) SetDeadline(t time.Time) error     { return nil }
-func (p *partialWriteConn) SetReadDeadline(t time.Time) error { return nil }
-func (p *partialWriteConn) SetWriteDeadline(t time.Time) error { return nil }
+func (p *failingWriteConn) Read(b []byte) (int, error)                       { return 0, net.ErrClosed }
+func (p *failingWriteConn) Write(b []byte) (int, error)                      { return 0, fmt.Errorf("write failed") }
+func (p *failingWriteConn) Close() error                                      { return nil }
+func (p *failingWriteConn) LocalAddr() net.Addr                               { return &net.TCPAddr{} }
+func (p *failingWriteConn) RemoteAddr() net.Addr                              { return &net.TCPAddr{} }
+func (p *failingWriteConn) SetDeadline(t time.Time) error                     { return nil }
+func (p *failingWriteConn) SetReadDeadline(t time.Time) error                 { return nil }
+func (p *failingWriteConn) SetWriteDeadline(t time.Time) error                { return nil }
 
 // ---------------------------------------------------------------------------
 // AXFRClient.receiveAXFRResponse - read msg body error
@@ -1437,12 +1429,12 @@ func TestAXFRClient_receiveAXFRResponse_ReadBodyError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// IXFRClient.sendMessage - write error on second write (body)
+// IXFRClient.sendMessage - write error
 // ---------------------------------------------------------------------------
 
 func TestIXFRClient_sendMessage_WriteBodyError(t *testing.T) {
 	client := NewIXFRClient("ns1.example.com:53")
-	conn := &partialWriteConn{}
+	conn := &failingWriteConn{}
 	msg := &protocol.Message{
 		Header: protocol.Header{ID: 0x1234, QDCount: 1},
 		Questions: []*protocol.Question{
@@ -1451,7 +1443,7 @@ func TestIXFRClient_sendMessage_WriteBodyError(t *testing.T) {
 	}
 	err := client.sendMessage(conn, msg)
 	if err == nil {
-		t.Error("Expected error when second write fails")
+		t.Error("Expected error when write fails")
 	}
 }
 

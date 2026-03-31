@@ -290,7 +290,10 @@ func SignMessage(msg *protocol.Message, key *TSIGKey, fudge uint16) (*protocol.R
 	}
 
 	// Create TSIG resource record
-	keyName, _ := protocol.ParseName(key.Name)
+	keyName, err := protocol.ParseName(key.Name)
+	if err != nil {
+		return nil, fmt.Errorf("invalid TSIG key name %q: %w", key.Name, err)
+	}
 	tsigRR := &protocol.ResourceRecord{
 		Name:  keyName,
 		Type:  protocol.TypeTSIG,
@@ -403,9 +406,15 @@ func buildSignedData(msg *protocol.Message, previousMAC []byte, algorithm string
 
 	// Write TSIG variables
 	// Algorithm name (wire format)
-	algoName, _ := protocol.ParseName(algorithm)
+	algoName, err := protocol.ParseName(algorithm)
+	if err != nil {
+		return nil, fmt.Errorf("invalid TSIG algorithm name %q: %w", algorithm, err)
+	}
 	algoBytes := make([]byte, 256)
-	algoLen, _ := protocol.PackName(algoName, algoBytes, 0, nil)
+	algoLen, err := protocol.PackName(algoName, algoBytes, 0, nil)
+	if err != nil {
+		return nil, fmt.Errorf("packing TSIG algorithm name: %w", err)
+	}
 	buf.Write(algoBytes[:algoLen])
 
 	// Time signed (48 bits)

@@ -133,9 +133,18 @@ func (s *NOTIFYSender) buildNOTIFYRequest(zoneName string, serial uint32) (*prot
 	}
 
 	// Add SOA record in Answer section
-	origin, _ := protocol.ParseName(zoneName)
-	mname, _ := protocol.ParseName("ns1." + zoneName)
-	rname, _ := protocol.ParseName("admin." + zoneName)
+	origin, err := protocol.ParseName(zoneName)
+	if err != nil {
+		return nil, fmt.Errorf("invalid zone name %q: %w", zoneName, err)
+	}
+	mname, err := protocol.ParseName("ns1." + zoneName)
+	if err != nil {
+		return nil, fmt.Errorf("invalid mname: %w", err)
+	}
+	rname, err := protocol.ParseName("admin." + zoneName)
+	if err != nil {
+		return nil, fmt.Errorf("invalid rname: %w", err)
+	}
 
 	soaData := &protocol.RDataSOA{
 		MName:   mname,

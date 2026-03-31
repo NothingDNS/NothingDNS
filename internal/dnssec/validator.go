@@ -496,11 +496,17 @@ func canonicalSort(rrs []*protocol.ResourceRecord) {
 
 		// Compare RDATA (packed)
 		bufI := make([]byte, 65535)
-		nI, _ := rrs[i].Data.Pack(bufI, 0)
+		nI, errI := rrs[i].Data.Pack(bufI, 0)
+		if errI != nil {
+			return false
+		}
 		rdataI := bufI[:nI]
 
 		bufJ := make([]byte, 65535)
-		nJ, _ := rrs[j].Data.Pack(bufJ, 0)
+		nJ, errJ := rrs[j].Data.Pack(bufJ, 0)
+		if errJ != nil {
+			return true
+		}
 		rdataJ := bufJ[:nJ]
 
 		return string(rdataI) < string(rdataJ)

@@ -200,7 +200,7 @@ func (h *DynamicDNSHandler) HandleUpdate(req *protocol.Message, clientIP net.IP)
 	select {
 	case h.updateChan <- updateReq:
 	default:
-		// Channel full
+		return h.createUpdateResponse(req, protocol.RcodeRefused), nil
 	}
 
 	// Return success response

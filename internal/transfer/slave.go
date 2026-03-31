@@ -281,9 +281,9 @@ func (sm *SlaveManager) handleNotify(req *NOTIFYRequest) {
 		return
 	}
 
-	// Check if serial is newer
+	// Check if serial is newer using RFC 1982 serial number arithmetic
 	lastSerial := slaveZone.GetLastSerial()
-	if req.Serial <= lastSerial {
+	if !serialIsNewer(req.Serial, lastSerial) {
 		// Zone is up to date
 		return
 	}

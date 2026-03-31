@@ -516,28 +516,30 @@ func parseFields(line string) []string {
 }
 
 // isType checks if a field is a valid record type.
+var recordTypes = map[string]bool{
+	"A": true, "AAAA": true, "CNAME": true, "MX": true, "NS": true,
+	"PTR": true, "SOA": true, "SRV": true, "TXT": true, "CAA": true,
+	"DNSKEY": true, "DS": true, "NSEC": true, "RRSIG": true,
+	"TLSA": true, "SSHFP": true, "SPF": true, "DKIM": true,
+	"AFSDB": true, "APL": true, "CERT": true, "DHCID": true,
+	"DNAME": true, "HINFO": true, "HIP": true, "IPSECKEY": true,
+	"KEY": true, "KX": true, "LOC": true, "NAPTR": true,
+	"NSEC3": true, "NSEC3PARAM": true, "OPENPGPKEY": true,
+	"RP": true, "SIG": true, "TA": true, "TKEY": true,
+	"TSIG": true, "URI": true, "ZONEMD": true,
+}
+
 func isType(field string) bool {
-	types := map[string]bool{
-		"A": true, "AAAA": true, "CNAME": true, "MX": true, "NS": true,
-		"PTR": true, "SOA": true, "SRV": true, "TXT": true, "CAA": true,
-		"DNSKEY": true, "DS": true, "NSEC": true, "RRSIG": true,
-		"TLSA": true, "SSHFP": true, "SPF": true, "DKIM": true,
-		"AFSDB": true, "APL": true, "CERT": true, "DHCID": true,
-		"DNAME": true, "HINFO": true, "HIP": true, "IPSECKEY": true,
-		"KEY": true, "KX": true, "LOC": true, "NAPTR": true,
-		"NSEC3": true, "NSEC3PARAM": true, "OPENPGPKEY": true,
-		"RP": true, "SIG": true, "TA": true, "TKEY": true,
-		"TSIG": true, "URI": true, "ZONEMD": true,
-	}
-	return types[strings.ToUpper(field)]
+	return recordTypes[strings.ToUpper(field)]
+}
+
+var recordClasses = map[string]bool{
+	"IN": true, "CS": true, "CH": true, "HS": true,
 }
 
 // isClass checks if a field is a valid class.
 func isClass(field string) bool {
-	classes := map[string]bool{
-		"IN": true, "CS": true, "CH": true, "HS": true,
-	}
-	return classes[strings.ToUpper(field)]
+	return recordClasses[strings.ToUpper(field)]
 }
 
 // parseTTL parses a TTL value (integer or with suffix like 1h, 1d, 1w).

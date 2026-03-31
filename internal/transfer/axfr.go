@@ -3,6 +3,7 @@ package transfer
 import (
 	"crypto/rand"
 	"fmt"
+	"io"
 	"net"
 	"sort"
 	"strings"
@@ -493,24 +494,18 @@ func (c *AXFRClient) buildAXFRRequest(zoneName string, key *TSIGKey) (*protocol.
 
 // sendMessage sends a DNS message over TCP
 func (c *AXFRClient) sendMessage(conn net.Conn, msg *protocol.Message) error {
-	// Pack message
-	buf := make([]byte, 65535)
-	n, err := msg.Pack(buf)
+	// Pack message into buffer with 2-byte length prefix at the start
+	buf := make([]byte, 2+65535)
+	n, err := msg.Pack(buf[2:])
 	if err != nil {
 		return err
 	}
 
-	// TCP requires 2-byte length prefix
-	lengthPrefix := []byte{byte(n >> 8), byte(n)}
-	if _, err := conn.Write(lengthPrefix); err != nil {
-		return err
-	}
-
-	if _, err := conn.Write(buf[:n]); err != nil {
-		return err
-	}
-
-	return nil
+	// Write length prefix + message in a single Write call
+	buf[0] = byte(n >> 8)
+	buf[1] = byte(n)
+	_, err = conn.Write(buf[:2+n])
+	return err
 }
 
 // receiveAXFRResponse receives AXFR response records over TCP
@@ -525,7 +520,7 @@ func (c *AXFRClient) receiveAXFRResponse(conn net.Conn, key *TSIGKey) ([]*protoc
 
 		// Read 2-byte length prefix
 		lengthBuf := make([]byte, 2)
-		if _, err := conn.Read(lengthBuf); err != nil {
+		if _, err := io.ReadFull(conn, lengthBuf); err != nil {
 			if soaCount >= 2 {
 				// We got a complete transfer
 				break
@@ -540,7 +535,7 @@ func (c *AXFRClient) receiveAXFRResponse(conn net.Conn, key *TSIGKey) ([]*protoc
 
 		// Read message
 		msgBuf := make([]byte, msgLen)
-		if _, err := conn.Read(msgBuf); err != nil {
+		if _, err := io.ReadFull(conn, msgBuf); err != nil {
 			return nil, fmt.Errorf("reading message: %w", err)
 		}
 

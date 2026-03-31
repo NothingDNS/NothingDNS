@@ -133,9 +133,9 @@ func TestHandleUpdate_UpdateChannelFull_Observable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HandleUpdate: %v", err)
 	}
-	// Should still succeed even with full channel
-	if resp.Header.Flags.RCODE != protocol.RcodeSuccess {
-		t.Errorf("expected RcodeSuccess even with full channel, got %d", resp.Header.Flags.RCODE)
+	// Should refuse when channel is full
+	if resp.Header.Flags.RCODE != protocol.RcodeRefused {
+		t.Errorf("expected RcodeRefused when channel is full, got %d", resp.Header.Flags.RCODE)
 	}
 }
 

@@ -439,22 +439,16 @@ func (c *IXFRClient) buildIXFRRequest(zoneName string, currentSerial uint32, key
 
 // sendMessage sends a DNS message over TCP
 func (c *IXFRClient) sendMessage(conn net.Conn, msg *protocol.Message) error {
-	buf := make([]byte, 65535)
-	n, err := msg.Pack(buf)
+	buf := make([]byte, 2+65535)
+	n, err := msg.Pack(buf[2:])
 	if err != nil {
 		return err
 	}
 
-	lengthPrefix := []byte{byte(n >> 8), byte(n)}
-	if _, err := conn.Write(lengthPrefix); err != nil {
-		return err
-	}
-
-	if _, err := conn.Write(buf[:n]); err != nil {
-		return err
-	}
-
-	return nil
+	buf[0] = byte(n >> 8)
+	buf[1] = byte(n)
+	_, err = conn.Write(buf[:2+n])
+	return err
 }
 
 // receiveIXFRResponse receives IXFR response records over TCP

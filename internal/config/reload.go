@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 )
 
@@ -116,9 +117,9 @@ func (h *ReloadHandler) Components() []string {
 
 // ReloadManager provides typed reload methods
 type ReloadManager struct {
-	handler      *ReloadHandler
-	configPath   string
-	config       *Config
+	handler    *ReloadHandler
+	configPath string
+	config     atomic.Pointer[Config]
 	zoneManager  ZoneReloader
 	blocklist    BlocklistReloader
 	logger       Logger
@@ -143,11 +144,12 @@ type Logger interface {
 
 // NewReloadManager creates a reload manager
 func NewReloadManager(handler *ReloadHandler, configPath string, cfg *Config) *ReloadManager {
-	return &ReloadManager{
+	m := &ReloadManager{
 		handler:    handler,
 		configPath: configPath,
-		config:     cfg,
 	}
+	m.config.Store(cfg)
+	return m
 }
 
 // SetZoneManager sets the zone manager
@@ -204,9 +206,8 @@ func (m *ReloadManager) reloadConfig() error {
 		return fmt.Errorf("config validation failed")
 	}
 
-	// Update config (atomic swap would be needed for thread-safety)
-	// For now, we just update the reference
-	m.config = newCfg
+	// Update config atomically
+	m.config.Store(newCfg)
 
 	if m.logger != nil {
 		m.logger.Info("Configuration reloaded")
