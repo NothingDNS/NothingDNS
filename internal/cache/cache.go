@@ -355,7 +355,6 @@ func (c *Cache) Invalidate(key string) {
 // Pattern uses prefix matching (e.g., "example.com" matches "www.example.com:A")
 func (c *Cache) InvalidatePattern(pattern string) []string {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	var invalidated []string
 	for key := range c.entries {
@@ -365,11 +364,15 @@ func (c *Cache) InvalidatePattern(pattern string) []string {
 			if entry, exists := c.entries[key]; exists {
 				c.removeEntry(entry)
 				invalidated = append(invalidated, key)
-				// Notify invalidation callback
-				if c.invalidateFunc != nil {
-					c.invalidateFunc(key)
-				}
 			}
+		}
+	}
+	c.mu.Unlock()
+
+	// Notify invalidation callback outside lock to prevent deadlock
+	if c.invalidateFunc != nil {
+		for _, key := range invalidated {
+			c.invalidateFunc(key)
 		}
 	}
 	return invalidated

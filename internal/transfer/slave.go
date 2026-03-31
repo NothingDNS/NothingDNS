@@ -336,11 +336,36 @@ func (sm *SlaveManager) performZoneTransfer(zoneName string) {
 
 // performIXFR performs an incremental zone transfer.
 func (sm *SlaveManager) performIXFR(ctx context.Context, client *IXFRClient, slaveZone *SlaveZone) ([]*protocol.ResourceRecord, error) {
-	// This is a simplified implementation
-	// In production, you'd want to use the IXFR client properly
+	master := slaveZone.Config.Masters[0]
 
-	// For now, fall back to AXFR
-	return nil, fmt.Errorf("IXFR not fully implemented, falling back to AXFR")
+	// Create IXFR client if not provided
+	if client == nil {
+		client = NewIXFRClient(master, WithIXFRTimeout(slaveZone.Config.Timeout))
+		if sm.keyStore != nil {
+			client = NewIXFRClient(master, WithIXFRTimeout(slaveZone.Config.Timeout), WithIXFRKeyStore(sm.keyStore))
+		}
+	}
+
+	// Get TSIG key if configured
+	var tsigKey *TSIGKey
+	if slaveZone.Config.TSIGKeyName != "" && sm.keyStore != nil {
+		var ok bool
+		tsigKey, ok = sm.keyStore.GetKey(slaveZone.Config.TSIGKeyName)
+		if !ok {
+			return nil, fmt.Errorf("TSIG key %q not found", slaveZone.Config.TSIGKeyName)
+		}
+	}
+
+	// Get current serial
+	lastSerial := slaveZone.GetLastSerial()
+
+	// Perform IXFR transfer
+	records, err := client.Transfer(slaveZone.Config.ZoneName, lastSerial, tsigKey)
+	if err != nil {
+		return nil, fmt.Errorf("IXFR transfer failed: %w", err)
+	}
+
+	return records, nil
 }
 
 // performAXFR performs a full zone transfer.

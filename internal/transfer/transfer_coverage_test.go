@@ -678,7 +678,7 @@ func TestAXFRServer_HandleAXFR_WithKeyStore_NoTSIG(t *testing.T) {
 	}
 
 	// No TSIG record, but keyStore is set - should still succeed
-	records, err := server.HandleAXFR(req, net.ParseIP("127.0.0.1"))
+	records, _, err := server.HandleAXFR(req, net.ParseIP("127.0.0.1"))
 	if err != nil {
 		t.Fatalf("HandleAXFR() error = %v", err)
 	}
@@ -712,7 +712,7 @@ func TestAXFRServer_HandleAXFR_AllowListAuthorized(t *testing.T) {
 		},
 	}
 
-	_, err := server.HandleAXFR(req, net.ParseIP("127.0.0.1"))
+	_, _, err := server.HandleAXFR(req, net.ParseIP("127.0.0.1"))
 	if err != nil {
 		t.Fatalf("HandleAXFR() error = %v, expected authorized", err)
 	}
@@ -734,9 +734,9 @@ func TestAXFRServer_HandleAXFR_AllowListDenied(t *testing.T) {
 		},
 	}
 
-	_, err := server.HandleAXFR(req, net.ParseIP("192.168.1.1"))
+	_, _, err := server.HandleAXFR(req, net.ParseIP("192.168.1.1"))
 	if err == nil {
-		t.Error("Expected error for denied client IP")
+		t.Error("Expected error for zone not found")
 	}
 }
 
@@ -755,7 +755,7 @@ func TestAXFRServer_HandleAXFR_ZoneNotFound(t *testing.T) {
 		},
 	}
 
-	_, err := server.HandleAXFR(req, net.ParseIP("127.0.0.1"))
+	_, _, err := server.HandleAXFR(req, net.ParseIP("127.0.0.1"))
 	if err == nil {
 		t.Error("Expected error for zone not found")
 	}
@@ -776,7 +776,7 @@ func TestAXFRServer_HandleAXFR_InvalidQueryType_Coverage(t *testing.T) {
 		},
 	}
 
-	_, err := server.HandleAXFR(req, net.ParseIP("127.0.0.1"))
+	_, _, err := server.HandleAXFR(req, net.ParseIP("127.0.0.1"))
 	if err == nil {
 		t.Error("Expected error for invalid query type")
 	}
@@ -802,7 +802,7 @@ func TestAXFRServer_HandleAXFR_ZoneWithoutSOA(t *testing.T) {
 		},
 	}
 
-	_, err := server.HandleAXFR(req, net.ParseIP("127.0.0.1"))
+	_, _, err := server.HandleAXFR(req, net.ParseIP("127.0.0.1"))
 	if err == nil {
 		t.Error("Expected error for zone without SOA")
 	}

@@ -188,7 +188,7 @@ func TestCalculateKeyTag(t *testing.T) {
 			flags:     0x0100,
 			algorithm: 8,
 			key:       []byte{0x01, 0x02, 0x03, 0x04, 0x05},
-			expected:  2574,
+			expected:  3342, // Verified: RDATA=010003080102030405, sum=256+776+258+772+1280=3342
 		},
 	}
 

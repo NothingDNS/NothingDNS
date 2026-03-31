@@ -949,7 +949,7 @@ func (h *integratedHandler) handleAXFR(w server.ResponseWriter, r *protocol.Mess
 	clientIP := clientInfo.IP()
 
 	// Handle AXFR using the AXFR server
-	records, err := h.axfrServer.HandleAXFR(r, clientIP)
+	records, tsigKey, err := h.axfrServer.HandleAXFR(r, clientIP)
 	if err != nil {
 		h.logger.Warnf("AXFR failed for %s: %v", qname, err)
 		sendError(w, r, protocol.RcodeRefused)
@@ -959,12 +959,9 @@ func (h *integratedHandler) handleAXFR(w server.ResponseWriter, r *protocol.Mess
 	// Send AXFR response as multiple messages
 	// Per RFC 5936: SOA + all zone records + SOA
 	// Each message is sent separately over TCP
+	// Per RFC 2845: sign the first and last messages with TSIG if key was used
 
-	// We need to batch records into messages that fit within TCP size limits
-	// For simplicity, we'll send each record in its own message (inefficient but correct)
-	// A production implementation would batch multiple records per message
-
-	for _, rr := range records {
+	for i, rr := range records {
 		resp := &protocol.Message{
 			Header: protocol.Header{
 				ID:    r.Header.ID,
@@ -972,6 +969,16 @@ func (h *integratedHandler) handleAXFR(w server.ResponseWriter, r *protocol.Mess
 			},
 			Questions: r.Questions,
 			Answers:   []*protocol.ResourceRecord{rr},
+		}
+
+		// Sign first and last messages per RFC 2845
+		if tsigKey != nil && (i == 0 || i == len(records)-1) {
+			tsigRR, signErr := transfer.SignMessage(resp, tsigKey, 300)
+			if signErr != nil {
+				h.logger.Warnf("Failed to sign AXFR response: %v", signErr)
+			} else {
+				resp.Additionals = append(resp.Additionals, tsigRR)
+			}
 		}
 
 		if _, err := w.Write(resp); err != nil {

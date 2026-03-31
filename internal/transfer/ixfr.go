@@ -2,6 +2,7 @@ package transfer
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"sync"
@@ -268,8 +269,14 @@ func (s *IXFRServer) generateIncrementalIXFR(z *zone.Zone, clientSerial uint32) 
 
 // createSOAWithSerial creates an SOA record with a specific serial number
 func (s *IXFRServer) createSOAWithSerial(soa *zone.SOARecord, origin *protocol.Name, serial uint32) *protocol.ResourceRecord {
-	mname, _ := protocol.ParseName(soa.MName)
-	rname, _ := protocol.ParseName(soa.RName)
+	mname, merr := protocol.ParseName(soa.MName)
+	if merr != nil {
+		mname = &protocol.Name{Labels: []string{}, FQDN: true}
+	}
+	rname, rerr := protocol.ParseName(soa.RName)
+	if rerr != nil {
+		rname = &protocol.Name{Labels: []string{}, FQDN: true}
+	}
 
 	soaData := &protocol.RDataSOA{
 		MName:   mname,
@@ -400,7 +407,10 @@ func (c *IXFRClient) buildIXFRRequest(zoneName string, currentSerial uint32, key
 	}
 
 	// Add SOA record to Authority section with current serial
-	origin, _ := protocol.ParseName(zoneName)
+	origin, err2 := protocol.ParseName(zoneName)
+	if err2 != nil {
+		return nil, fmt.Errorf("parsing zone name for SOA: %w", err2)
+	}
 	mname, _ := protocol.ParseName("ns1." + zoneName)
 	rname, _ := protocol.ParseName("admin." + zoneName)
 
@@ -458,10 +468,12 @@ func (c *IXFRClient) receiveIXFRResponse(conn net.Conn, key *TSIGKey) ([]*protoc
 	previousMAC := []byte{}
 
 	for {
-		conn.SetReadDeadline(time.Now().Add(c.timeout))
+		if err := conn.SetReadDeadline(time.Now().Add(c.timeout)); err != nil {
+			return nil, fmt.Errorf("setting read deadline: %w", err)
+		}
 
 		lengthBuf := make([]byte, 2)
-		if _, err := conn.Read(lengthBuf); err != nil {
+		if _, err := io.ReadFull(conn, lengthBuf); err != nil {
 			if soaCount >= 2 {
 				break
 			}
@@ -474,7 +486,7 @@ func (c *IXFRClient) receiveIXFRResponse(conn net.Conn, key *TSIGKey) ([]*protoc
 		}
 
 		msgBuf := make([]byte, msgLen)
-		if _, err := conn.Read(msgBuf); err != nil {
+		if _, err := io.ReadFull(conn, msgBuf); err != nil {
 			return nil, fmt.Errorf("reading message: %w", err)
 		}
 

@@ -129,7 +129,7 @@ func TestAXFRServer_HandleAXFR_NoZone(t *testing.T) {
 	}
 
 	clientIP := net.ParseIP("127.0.0.1")
-	_, err := server.HandleAXFR(req, clientIP)
+	_, _, err := server.HandleAXFR(req, clientIP)
 
 	if err == nil {
 		t.Error("Expected error for non-existent zone")
@@ -160,7 +160,7 @@ func TestAXFRServer_HandleAXFR_NoSOA(t *testing.T) {
 	}
 
 	clientIP := net.ParseIP("127.0.0.1")
-	_, err := server.HandleAXFR(req, clientIP)
+	_, _, err := server.HandleAXFR(req, clientIP)
 
 	if err == nil {
 		t.Error("Expected error for zone without SOA")
@@ -208,7 +208,7 @@ func TestAXFRServer_HandleAXFR_Success(t *testing.T) {
 	}
 
 	clientIP := net.ParseIP("127.0.0.1")
-	records, err := server.HandleAXFR(req, clientIP)
+	records, _, err := server.HandleAXFR(req, clientIP)
 
 	if err != nil {
 		t.Fatalf("HandleAXFR() error = %v", err)
@@ -259,7 +259,7 @@ func TestAXFRServer_HandleAXFR_InvalidQueryType(t *testing.T) {
 	}
 
 	clientIP := net.ParseIP("127.0.0.1")
-	_, err := server.HandleAXFR(req, clientIP)
+	_, _, err := server.HandleAXFR(req, clientIP)
 
 	if err == nil {
 		t.Error("Expected error for non-AXFR query type")
@@ -295,7 +295,7 @@ func TestAXFRServer_HandleAXFR_NotAllowed(t *testing.T) {
 
 	// Client IP not in allowlist
 	clientIP := net.ParseIP("10.0.0.1")
-	_, err := server.HandleAXFR(req, clientIP)
+	_, _, err := server.HandleAXFR(req, clientIP)
 
 	if err == nil {
 		t.Error("Expected error for unauthorized client")

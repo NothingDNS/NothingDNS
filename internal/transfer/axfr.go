@@ -99,21 +99,22 @@ func (s *AXFRServer) IsAllowed(clientIP net.IP) bool {
 }
 
 // HandleAXFR handles an AXFR request message
-// Returns the AXFR response records
-func (s *AXFRServer) HandleAXFR(req *protocol.Message, clientIP net.IP) ([]*protocol.ResourceRecord, error) {
+// Returns the AXFR response records and the TSIG key used to verify the request (if any).
+// Callers should use the returned key to sign response messages per RFC 2845.
+func (s *AXFRServer) HandleAXFR(req *protocol.Message, clientIP net.IP) ([]*protocol.ResourceRecord, *TSIGKey, error) {
 	// Check if client is allowed
 	if !s.IsAllowed(clientIP) {
-		return nil, fmt.Errorf("client %s not authorized for AXFR", clientIP)
+		return nil, nil, fmt.Errorf("client %s not authorized for AXFR", clientIP)
 	}
 
 	// Validate request
 	if len(req.Questions) != 1 {
-		return nil, fmt.Errorf("AXFR requires exactly one question")
+		return nil, nil, fmt.Errorf("AXFR requires exactly one question")
 	}
 
 	question := req.Questions[0]
 	if question.QType != protocol.TypeAXFR {
-		return nil, fmt.Errorf("invalid query type for AXFR: %d", question.QType)
+		return nil, nil, fmt.Errorf("invalid query type for AXFR: %d", question.QType)
 	}
 
 	zoneName := question.Name.String()
@@ -121,33 +122,35 @@ func (s *AXFRServer) HandleAXFR(req *protocol.Message, clientIP net.IP) ([]*prot
 	// Get the zone
 	z, ok := s.zones[strings.ToLower(zoneName)]
 	if !ok {
-		return nil, fmt.Errorf("zone %s not found", zoneName)
+		return nil, nil, fmt.Errorf("zone %s not found", zoneName)
 	}
 
 	// Verify TSIG if present
+	var tsigKey *TSIGKey
 	if s.keyStore != nil && hasTSIG(req) {
 		keyName, err := getTSIGKeyName(req)
 		if err != nil {
-			return nil, fmt.Errorf("getting TSIG key name: %w", err)
+			return nil, nil, fmt.Errorf("getting TSIG key name: %w", err)
 		}
 
 		key, ok := s.keyStore.GetKey(keyName)
 		if !ok {
-			return nil, fmt.Errorf("TSIG key not found: %s", keyName)
+			return nil, nil, fmt.Errorf("TSIG key not found: %s", keyName)
 		}
 
 		if err := VerifyMessage(req, key, nil); err != nil {
-			return nil, fmt.Errorf("TSIG verification failed: %w", err)
+			return nil, nil, fmt.Errorf("TSIG verification failed: %w", err)
 		}
+		tsigKey = key
 	}
 
 	// Generate AXFR response
 	records, err := s.generateAXFRRecords(z)
 	if err != nil {
-		return nil, fmt.Errorf("generating AXFR records: %w", err)
+		return nil, nil, fmt.Errorf("generating AXFR records: %w", err)
 	}
 
-	return records, nil
+	return records, tsigKey, nil
 }
 
 // generateAXFRRecords generates the AXFR response records for a zone
@@ -516,7 +519,9 @@ func (c *AXFRClient) receiveAXFRResponse(conn net.Conn, key *TSIGKey) ([]*protoc
 
 	for {
 		// Set read timeout
-		conn.SetReadDeadline(time.Now().Add(c.timeout))
+		if err := conn.SetReadDeadline(time.Now().Add(c.timeout)); err != nil {
+			return nil, fmt.Errorf("setting read deadline: %w", err)
+		}
 
 		// Read 2-byte length prefix
 		lengthBuf := make([]byte, 2)

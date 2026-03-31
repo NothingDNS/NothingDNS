@@ -214,7 +214,7 @@ func TestAXFRServer_HandleAXFR_TSIGKeyNameError_Extra5(t *testing.T) {
 		},
 	}
 
-	_, err := server.HandleAXFR(req, net.ParseIP("127.0.0.1"))
+	_, _, err := server.HandleAXFR(req, net.ParseIP("127.0.0.1"))
 	if err == nil {
 		t.Error("expected error for TSIG key name extraction failure")
 	}
@@ -252,7 +252,7 @@ func TestAXFRServer_HandleAXFR_TSIGKeyNotFound_Extra5(t *testing.T) {
 		},
 	}
 
-	_, err := server.HandleAXFR(req, net.ParseIP("127.0.0.1"))
+	_, _, err := server.HandleAXFR(req, net.ParseIP("127.0.0.1"))
 	if err == nil {
 		t.Error("expected error for TSIG key not found")
 	}

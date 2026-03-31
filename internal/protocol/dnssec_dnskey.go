@@ -255,29 +255,30 @@ func (r *RDataDNSKEY) CalculateKeyTag() uint16 {
 }
 
 // CalculateKeyTag computes the key tag from DNSKEY components.
-// This implements the algorithm from RFC 4034 Appendix B.
+// This implements the algorithm from RFC 4034 Appendix B:
+// treat the RDATA (flags + protocol + algorithm + publickey) as a
+// sequence of 16-bit big-endian numbers, sum them with carry folding.
 func CalculateKeyTag(flags uint16, algorithm uint8, publicKey []byte) uint16 {
-	var keyTag uint32
+	// Build wire-format RDATA
+	rdata := make([]byte, 4+len(publicKey))
+	PutUint16(rdata[0:], flags)
+	rdata[2] = 3 // protocol (always 3 for DNSKEY)
+	rdata[3] = algorithm
+	copy(rdata[4:], publicKey)
 
-	// Add flags
-	keyTag += uint32(flags)
-
-	// Add algorithm
-	keyTag += uint32(algorithm)
-
-	// Add public key bytes
-	for i, b := range publicKey {
-		if i&1 == 1 {
-			keyTag += uint32(b)
-		} else {
-			keyTag += uint32(b) << 8
-		}
+	var sum uint32
+	for i := 0; i < len(rdata)-1; i += 2 {
+		sum += uint32(rdata[i])<<8 | uint32(rdata[i+1])
+	}
+	// If odd length, pad with zero
+	if len(rdata)%2 != 0 {
+		sum += uint32(rdata[len(rdata)-1]) << 8
 	}
 
-	// Add high 16 bits to low 16 bits
-	keyTag += keyTag >> 16
+	// Fold carry
+	sum += sum >> 16
 
-	return uint16(keyTag & 0xFFFF)
+	return uint16(sum & 0xFFFF)
 }
 
 // base64Encode encodes bytes to base64 (helper for String()).

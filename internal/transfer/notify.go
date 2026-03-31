@@ -73,7 +73,9 @@ func (s *NOTIFYSender) SendNOTIFY(zoneName string, serial uint32, slaveAddr stri
 	}
 
 	// Wait for response
-	conn.SetReadDeadline(time.Now().Add(s.timeout))
+	if err := conn.SetReadDeadline(time.Now().Add(s.timeout)); err != nil {
+		return fmt.Errorf("setting read deadline: %w", err)
+	}
 	respBuf := make([]byte, 65535)
 	n, err = conn.Read(respBuf)
 	if err != nil {
@@ -275,11 +277,15 @@ func (h *NOTIFYSlaveHandler) HandleNOTIFY(req *protocol.Message, clientIP net.IP
 }
 
 // createNOTIFYResponse creates a NOTIFY response message
+// Per RFC 1996 Section 3: the response MUST have QR=1, Opcode=NOTIFY, and AA=1.
 func (h *NOTIFYSlaveHandler) createNOTIFYResponse(req *protocol.Message, rcode uint8) *protocol.Message {
+	flags := protocol.NewResponseFlags(rcode)
+	flags.AA = true
+	flags.Opcode = protocol.OpcodeNotify
 	return &protocol.Message{
 		Header: protocol.Header{
 			ID:    req.Header.ID,
-			Flags: protocol.NewResponseFlags(rcode),
+			Flags: flags,
 		},
 		Questions: req.Questions,
 	}

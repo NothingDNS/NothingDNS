@@ -2,6 +2,7 @@ package transfer
 
 import (
 	"context"
+	"io"
 	"net"
 	"strings"
 	"testing"
@@ -319,6 +320,10 @@ func TestIXFRServer_generateIncrementalIXFR_JournalGap_CoverageExtra4(t *testing
 // ---------------------------------------------------------------------------
 
 func TestSlaveManager_performAXFR_Success_CoverageExtra4(t *testing.T) {
+	// This test can be flaky under load due to TCP timing; skip in short mode
+	if testing.Short() {
+		t.Skip("skipping flaky integration test in short mode")
+	}
 	// Set up a real AXFR server with a zone
 	z := zone.NewZone("axfrsuccess.example.com.")
 	z.SOA = &zone.SOARecord{
@@ -337,24 +342,28 @@ func TestSlaveManager_performAXFR_Success_CoverageExtra4(t *testing.T) {
 	go func() {
 		conn, err := listener.Accept()
 		if err != nil {
+			t.Logf("server accept error: %v", err)
 			return
 		}
 		defer conn.Close()
 
-		// Read the request
+		// Read the request using io.ReadFull for reliable TCP reads
 		lengthBuf := make([]byte, 2)
-		if _, err := conn.Read(lengthBuf); err != nil {
+		if _, err := io.ReadFull(conn, lengthBuf); err != nil {
+			t.Logf("server read length error: %v", err)
 			return
 		}
 		reqLen := int(lengthBuf[0])<<8 | int(lengthBuf[1])
 		reqBuf := make([]byte, reqLen)
-		if _, err := conn.Read(reqBuf); err != nil {
+		if _, err := io.ReadFull(conn, reqBuf); err != nil {
+			t.Logf("server read body error: %v", err)
 			return
 		}
 
 		// Generate AXFR response records
 		records, err := axfrServer.generateAXFRRecords(z)
 		if err != nil {
+			t.Logf("server generateAXFRRecords error: %v", err)
 			return
 		}
 
@@ -369,11 +378,19 @@ func TestSlaveManager_performAXFR_Success_CoverageExtra4(t *testing.T) {
 		buf := make([]byte, 65535)
 		n, err := resp.Pack(buf)
 		if err != nil {
+			t.Logf("server pack error: %v", err)
 			return
 		}
-		lengthPrefix := []byte{byte(n >> 8), byte(n)}
-		conn.Write(lengthPrefix)
-		conn.Write(buf[:n])
+		// Single atomic write: length prefix + message body
+		sendBuf := make([]byte, 2+n)
+		sendBuf[0] = byte(n >> 8)
+		sendBuf[1] = byte(n)
+		copy(sendBuf[2:], buf[:n])
+		if _, err := conn.Write(sendBuf); err != nil {
+			t.Logf("server write error: %v", err)
+			return
+		}
+		t.Logf("server sent %d records, %d bytes", len(records), n)
 	}()
 
 	// Create SlaveManager with the test server

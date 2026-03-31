@@ -181,7 +181,10 @@ func (s *TLSServer) handleConnection(conn net.Conn) {
 	}
 
 	// Perform TLS handshake with timeout
-	tlsConn.SetDeadline(time.Now().Add(TLSReadTimeout))
+	if err := tlsConn.SetDeadline(time.Now().Add(TLSReadTimeout)); err != nil {
+		atomic.AddUint64(&s.errors, 1)
+		return
+	}
 	if err := tlsConn.Handshake(); err != nil {
 		atomic.AddUint64(&s.errors, 1)
 		return
@@ -191,7 +194,10 @@ func (s *TLSServer) handleConnection(conn net.Conn) {
 	// Handle DNS messages over the TLS connection
 	for {
 		// Set read timeout
-		tlsConn.SetReadDeadline(time.Now().Add(TLSReadTimeout))
+		if err := tlsConn.SetReadDeadline(time.Now().Add(TLSReadTimeout)); err != nil {
+			atomic.AddUint64(&s.errors, 1)
+			return
+		}
 
 		// Read and process message using the same format as TCP
 		if !s.handleMessage(tlsConn) {

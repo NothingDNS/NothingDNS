@@ -505,7 +505,7 @@ func TestAXFRServer_HandleAXFR_ACLRefused(t *testing.T) {
 		},
 	}
 
-	_, err := s.HandleAXFR(req, net.ParseIP("192.168.1.1"))
+	_, _, err := s.HandleAXFR(req, net.ParseIP("192.168.1.1"))
 	if err == nil {
 		t.Error("expected error for ACL refused")
 	}

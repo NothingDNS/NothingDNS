@@ -169,7 +169,10 @@ func (s *Signer) SignZone(records []*protocol.ResourceRecord) ([]*protocol.Resou
 	// Generate DNSKEY records from our keys if not present
 	if len(dnskeyRRs) == 0 {
 		for _, key := range s.keys {
-			name, _ := protocol.ParseName(s.zone)
+			name, err := protocol.ParseName(s.zone)
+			if err != nil {
+				return nil, fmt.Errorf("parsing zone name %q: %w", s.zone, err)
+			}
 			dnskeyRR := &protocol.ResourceRecord{
 				Name:  name,
 				Type:  protocol.TypeDNSKEY,
@@ -272,7 +275,10 @@ func (s *Signer) SignRRSet(rrSet []*protocol.ResourceRecord, key *SigningKey, in
 	labels := uint8(len(splitLabels(ownerName)))
 
 	// Create RRSIG record
-	signerName, _ := protocol.ParseName(s.zone)
+	signerName, err := protocol.ParseName(s.zone)
+	if err != nil {
+		return nil, fmt.Errorf("parsing zone name %q: %w", s.zone, err)
+	}
 
 	rrsig := &protocol.RDataRRSIG{
 		TypeCovered: rrtype,
@@ -298,7 +304,10 @@ func (s *Signer) SignRRSet(rrSet []*protocol.ResourceRecord, key *SigningKey, in
 	rrsig.Signature = signature
 
 	// Create the RRSIG resource record
-	owner, _ := protocol.ParseName(ownerName)
+	owner, ownerErr := protocol.ParseName(ownerName)
+	if ownerErr != nil {
+		return nil, fmt.Errorf("parsing owner name %q: %w", ownerName, ownerErr)
+	}
 	rrsigRR := &protocol.ResourceRecord{
 		Name:  owner,
 		Type:  protocol.TypeRRSIG,
@@ -410,8 +419,14 @@ func (s *Signer) generateNSEC(records []*protocol.ResourceRecord) []*protocol.Re
 		sort.Slice(types, func(i, j int) bool { return types[i] < types[j] })
 
 		// Create NSEC record
-		owner, _ := protocol.ParseName(name)
-		next, _ := protocol.ParseName(nextName)
+		owner, ownerErr := protocol.ParseName(name)
+		if ownerErr != nil {
+			continue
+		}
+		next, nextErr := protocol.ParseName(nextName)
+		if nextErr != nil {
+			continue
+		}
 
 		nsec := &protocol.RDataNSEC{
 			NextDomain: next,
@@ -496,7 +511,10 @@ func (s *Signer) generateNSEC3(records []*protocol.ResourceRecord) []*protocol.R
 
 		// Owner name is <hash>.<zone>
 		ownerName := hn.hashed + "." + s.zone
-		owner, _ := protocol.ParseName(ownerName)
+		owner, ownerErr := protocol.ParseName(ownerName)
+		if ownerErr != nil {
+			continue
+		}
 
 		nsec3RR := &protocol.ResourceRecord{
 			Name:  owner,

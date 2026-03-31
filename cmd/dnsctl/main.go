@@ -676,7 +676,9 @@ func cmdDig(args []string) error {
 	}
 	defer conn.Close()
 
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		return fmt.Errorf("setting deadline: %w", err)
+	}
 	if _, err := conn.Write(buf[:n]); err != nil {
 		return fmt.Errorf("sending query: %w", err)
 	}

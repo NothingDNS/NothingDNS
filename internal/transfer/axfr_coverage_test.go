@@ -255,7 +255,7 @@ func TestAXFRServer_HandleAXFR_MultipleQuestions(t *testing.T) {
 		},
 	}
 
-	_, err := server.HandleAXFR(req, net.ParseIP("127.0.0.1"))
+	_, _, err := server.HandleAXFR(req, net.ParseIP("127.0.0.1"))
 	if err == nil {
 		t.Error("Expected error for multiple questions")
 	}
@@ -298,7 +298,7 @@ func TestAXFRServer_HandleAXFR_TSIGKeyNotFound(t *testing.T) {
 		Additionals: []*protocol.ResourceRecord{tsigRR},
 	}
 
-	_, err := server.HandleAXFR(req, net.ParseIP("127.0.0.1"))
+	_, _, err := server.HandleAXFR(req, net.ParseIP("127.0.0.1"))
 	if err == nil {
 		t.Error("Expected error for TSIG key not found")
 	}
@@ -348,7 +348,7 @@ func TestAXFRServer_HandleAXFR_WithTSIG(t *testing.T) {
 	}
 	req.Additionals = append(req.Additionals, tsigRR)
 
-	records, err := server.HandleAXFR(req, net.ParseIP("127.0.0.1"))
+	records, _, err := server.HandleAXFR(req, net.ParseIP("127.0.0.1"))
 	if err != nil {
 		t.Fatalf("HandleAXFR() error = %v", err)
 	}
@@ -487,7 +487,7 @@ func TestAXFRServer_HandleAXFR_TSIGVerificationFailure(t *testing.T) {
 		Additionals: []*protocol.ResourceRecord{tsigRR},
 	}
 
-	_, err := server.HandleAXFR(req, net.ParseIP("127.0.0.1"))
+	_, _, err := server.HandleAXFR(req, net.ParseIP("127.0.0.1"))
 	if err == nil {
 		t.Error("Expected error for TSIG verification failure")
 	}
@@ -525,7 +525,7 @@ func TestAXFRServer_HandleAXFR_GetTSIGKeyNameError(t *testing.T) {
 	}
 
 	// This should succeed since there's no TSIG record
-	_, err := server.HandleAXFR(req, net.ParseIP("127.0.0.1"))
+	_, _, err := server.HandleAXFR(req, net.ParseIP("127.0.0.1"))
 	if err != nil {
 		// This is expected since the zone exists
 	}
