@@ -337,9 +337,91 @@ func TestGroupRecordsByRRSet(t *testing.T) {
 }
 
 func TestValidatorBuildChain(t *testing.T) {
-	// Skip - buildChain requires valid trust anchor and resolver
-	// The function panics with nil anchor, which is expected behavior
-	t.Skip("buildChain requires valid trust anchor setup")
+	// Test delegation validation failure: DS exists but doesn't match child DNSKEY
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("Failed to generate ECDSA key: %v", err)
+	}
+
+	pub := &PublicKey{Algorithm: protocol.AlgorithmECDSAP256SHA256, Key: &privKey.PublicKey}
+	keyData, err := packECDSAPublicKey(pub)
+	if err != nil {
+		t.Fatalf("Failed to pack public key: %v", err)
+	}
+
+	parentDnskey := &protocol.RDataDNSKEY{
+		Flags:     protocol.DNSKEYFlagZone | protocol.DNSKEYFlagSEP,
+		Protocol:  3,
+		Algorithm: protocol.AlgorithmECDSAP256SHA256,
+		PublicKey: keyData,
+	}
+
+	parentKeyTag := protocol.CalculateKeyTag(parentDnskey.Flags, parentDnskey.Algorithm, parentDnskey.PublicKey)
+	parentDigest := calculateDSDigestFromDNSKEY("com.", parentDnskey, 2)
+
+	anchor := &TrustAnchor{
+		Zone:       "com.",
+		KeyTag:     parentKeyTag,
+		Algorithm:  protocol.AlgorithmECDSAP256SHA256,
+		DigestType: 2,
+		Digest:     parentDigest,
+		ValidFrom:  time.Now().Add(-time.Hour),
+	}
+
+	// Create a child DNSKEY that doesn't match the DS record
+	childDnskey := &protocol.RDataDNSKEY{
+		Flags:     protocol.DNSKEYFlagZone | protocol.DNSKEYFlagSEP,
+		Protocol:  3,
+		Algorithm: protocol.AlgorithmECDSAP256SHA256,
+		PublicKey: []byte{0xDE, 0xAD, 0xBE, 0xEF}, // different key
+	}
+
+	childName, _ := protocol.ParseName("example.")
+	parentName, _ := protocol.ParseName("com.")
+
+	// DS record with wrong digest (won't match child DNSKEY)
+	dsRecords := []*protocol.ResourceRecord{
+		{
+			Name: childName,
+			Type: protocol.TypeDS,
+			Data: &protocol.RDataDS{
+				KeyTag:     60000, // wrong key tag
+				Algorithm:  protocol.AlgorithmECDSAP256SHA256,
+				DigestType: 2,
+				Digest:     []byte{0xFF, 0xFF}, // wrong digest
+			},
+		},
+	}
+
+	mock := &mockResolver{
+		responses: map[string]*protocol.Message{
+			"com.|" + strconv.Itoa(int(protocol.TypeDNSKEY)): {
+				Answers: []*protocol.ResourceRecord{
+					{Name: parentName, Type: protocol.TypeDNSKEY, Data: parentDnskey},
+				},
+			},
+			"example.|" + strconv.Itoa(int(protocol.TypeDS)): {
+				Answers: dsRecords,
+			},
+			"example.|" + strconv.Itoa(int(protocol.TypeDNSKEY)): {
+				Answers: []*protocol.ResourceRecord{
+					{Name: childName, Type: protocol.TypeDNSKEY, Data: childDnskey},
+				},
+			},
+		},
+	}
+
+	store := NewTrustAnchorStore()
+	store.AddAnchor(anchor)
+
+	config := DefaultValidatorConfig()
+	v := NewValidator(config, store, mock)
+
+	// buildChain should fail because DS doesn't match child DNSKEY
+	_, err = v.buildChain(context.Background(), anchor, []string{"example"})
+	if err == nil {
+		t.Error("Expected error when delegation validation fails (DS doesn't match child DNSKEY)")
+	}
 }
 
 func TestValidatorToLowerBytes(t *testing.T) {

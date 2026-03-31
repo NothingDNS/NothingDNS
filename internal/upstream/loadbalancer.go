@@ -3,6 +3,7 @@ package upstream
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -415,6 +416,7 @@ func (lb *LoadBalancer) queryWithFailover(target *Target, msg *protocol.Message)
 	}
 
 	// If UDP fails or truncates, try TCP
+	log.Printf("loadbalancer UDP query failed for %s: %v, trying TCP", target.Address, err)
 	resp, err = lb.queryTCP(target.Address, msg)
 	if err == nil {
 		return resp, nil
@@ -437,6 +439,7 @@ func (lb *LoadBalancer) queryWithFailover(target *Target, msg *protocol.Message)
 	// Retry with failover target
 	resp, retryErr := lb.queryUDP(failoverTarget.Address, msg)
 	if retryErr != nil {
+		log.Printf("loadbalancer failover UDP failed for %s: %v, trying TCP", failoverTarget.Address, retryErr)
 		resp, retryErr = lb.queryTCP(failoverTarget.Address, msg)
 	}
 
@@ -634,6 +637,7 @@ func (lb *LoadBalancer) checkHealth() {
 		go func(s *Server) {
 			_, err := lb.queryUDP(s.Address, msg)
 			if err != nil {
+				log.Printf("health check UDP failed for %s: %v, trying TCP", s.Address, err)
 				_, err = lb.queryTCP(s.Address, msg)
 			}
 			// queryUDP/TCP already mark success/failure
@@ -646,6 +650,7 @@ func (lb *LoadBalancer) checkHealth() {
 			go func(b *AnycastBackend) {
 				_, err := lb.queryUDP(b.Address(), msg)
 				if err != nil {
+					log.Printf("health check UDP failed for anycast %s: %v, trying TCP", b.Address(), err)
 					_, err = lb.queryTCP(b.Address(), msg)
 				}
 				if err != nil {
