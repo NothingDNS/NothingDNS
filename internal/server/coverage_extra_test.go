@@ -139,10 +139,10 @@ func TestTCPServerHandleConnectionIncompleteBody(t *testing.T) {
 // ==============================================================================
 
 func TestTCPServerHandleMessageEDNS0WithECS(t *testing.T) {
-	var receivedClientInfo *ClientInfo
+	infoCh := make(chan *ClientInfo, 1)
 
 	handler := HandlerFunc(func(w ResponseWriter, req *protocol.Message) {
-		receivedClientInfo = w.ClientInfo()
+		infoCh <- w.ClientInfo()
 		w.Write(&protocol.Message{
 			Header: protocol.Header{
 				ID:    req.Header.ID,
@@ -198,6 +198,13 @@ func TestTCPServerHandleMessageEDNS0WithECS(t *testing.T) {
 	respBuf := make([]byte, respLen)
 	io.ReadFull(client, respBuf)
 
+	var receivedClientInfo *ClientInfo
+	select {
+	case receivedClientInfo = <-infoCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for handler")
+	}
+
 	if receivedClientInfo == nil {
 		t.Fatal("ClientInfo should not be nil")
 	}
@@ -218,10 +225,10 @@ func TestTCPServerHandleMessageEDNS0WithECS(t *testing.T) {
 // ==============================================================================
 
 func TestTCPServerHandleMessageEDNS0InvalidECS(t *testing.T) {
-	var receivedClientInfo *ClientInfo
+	infoCh := make(chan *ClientInfo, 1)
 
 	handler := HandlerFunc(func(w ResponseWriter, req *protocol.Message) {
-		receivedClientInfo = w.ClientInfo()
+		infoCh <- w.ClientInfo()
 		w.Write(&protocol.Message{
 			Header: protocol.Header{
 				ID:    req.Header.ID,
@@ -276,6 +283,13 @@ func TestTCPServerHandleMessageEDNS0InvalidECS(t *testing.T) {
 	respLen := binary.BigEndian.Uint16(lengthBuf[:])
 	respBuf := make([]byte, respLen)
 	io.ReadFull(client, respBuf)
+
+	var receivedClientInfo *ClientInfo
+	select {
+	case receivedClientInfo = <-infoCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for handler")
+	}
 
 	if receivedClientInfo == nil {
 		t.Fatal("ClientInfo should not be nil")
@@ -596,10 +610,10 @@ func TestTLSServerProcessMessageWithEDNS0(t *testing.T) {
 	cert := generateTestTLSCert(t)
 	tlsConfig := &tls.Config{Certificates: []tls.Certificate{cert}}
 
-	var receivedClientInfo *ClientInfo
+	infoCh := make(chan *ClientInfo, 1)
 
 	handler := HandlerFunc(func(w ResponseWriter, req *protocol.Message) {
-		receivedClientInfo = w.ClientInfo()
+		infoCh <- w.ClientInfo()
 		w.Write(&protocol.Message{
 			Header: protocol.Header{
 				ID:    req.Header.ID,
@@ -639,6 +653,13 @@ func TestTLSServerProcessMessageWithEDNS0(t *testing.T) {
 	respLen := binary.BigEndian.Uint16(lengthBuf[:])
 	respBuf := make([]byte, respLen)
 	io.ReadFull(conn, respBuf)
+
+	var receivedClientInfo *ClientInfo
+	select {
+	case receivedClientInfo = <-infoCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for handler")
+	}
 
 	if receivedClientInfo == nil {
 		t.Fatal("ClientInfo should not be nil")
@@ -772,7 +793,7 @@ func TestTLSResponseWriterDoubleWriteIntegration(t *testing.T) {
 	cert := generateTestTLSCert(t)
 	tlsConfig := &tls.Config{Certificates: []tls.Certificate{cert}}
 
-	var writeErrors []error
+	errCh := make(chan error, 1)
 
 	handler := HandlerFunc(func(w ResponseWriter, req *protocol.Message) {
 		resp := &protocol.Message{
@@ -783,7 +804,7 @@ func TestTLSResponseWriterDoubleWriteIntegration(t *testing.T) {
 		}
 		w.Write(resp)
 		_, err := w.Write(resp)
-		writeErrors = append(writeErrors, err)
+		errCh <- err
 	})
 
 	server := NewTLSServerWithWorkers("127.0.0.1:0", handler, tlsConfig, 1)
@@ -816,7 +837,13 @@ func TestTLSResponseWriterDoubleWriteIntegration(t *testing.T) {
 	io.ReadFull(conn, respBuf)
 
 	// Verify second write produced an error
-	if len(writeErrors) == 0 || writeErrors[0] == nil {
+	var writeErr error
+	select {
+	case writeErr = <-errCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for handler")
+	}
+	if writeErr == nil {
 		t.Error("Second write should return an error")
 	}
 }
@@ -1044,10 +1071,10 @@ func TestUDPServerReaderGenericError(t *testing.T) {
 // ==============================================================================
 
 func TestUDPServerHandleRequestEDNS0WithECS(t *testing.T) {
-	var receivedClientInfo *ClientInfo
+	infoCh := make(chan *ClientInfo, 1)
 
 	handler := HandlerFunc(func(w ResponseWriter, req *protocol.Message) {
-		receivedClientInfo = w.ClientInfo()
+		infoCh <- w.ClientInfo()
 		w.Write(&protocol.Message{
 			Header: protocol.Header{
 				ID:    req.Header.ID,
@@ -1102,6 +1129,12 @@ func TestUDPServerHandleRequestEDNS0WithECS(t *testing.T) {
 		t.Fatalf("Failed to read response: %v", err)
 	}
 
+	var receivedClientInfo *ClientInfo
+	select {
+	case receivedClientInfo = <-infoCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for handler")
+	}
 	if receivedClientInfo == nil {
 		t.Fatal("ClientInfo should not be nil")
 	}
@@ -1122,10 +1155,10 @@ func TestUDPServerHandleRequestEDNS0WithECS(t *testing.T) {
 // ==============================================================================
 
 func TestUDPServerHandleRequestEDNS0InvalidECS(t *testing.T) {
-	var receivedClientInfo *ClientInfo
+	infoCh := make(chan *ClientInfo, 1)
 
 	handler := HandlerFunc(func(w ResponseWriter, req *protocol.Message) {
-		receivedClientInfo = w.ClientInfo()
+		infoCh <- w.ClientInfo()
 		w.Write(&protocol.Message{
 			Header: protocol.Header{
 				ID:    req.Header.ID,
@@ -1174,6 +1207,12 @@ func TestUDPServerHandleRequestEDNS0InvalidECS(t *testing.T) {
 	client.SetReadDeadline(time.Now().Add(time.Second))
 	respBuf := make([]byte, 512)
 	n, _ = client.Read(respBuf)
+
+	var receivedClientInfo *ClientInfo
+	select {
+	case receivedClientInfo = <-infoCh:
+	case <-time.After(time.Second):
+	}
 
 	if receivedClientInfo != nil && receivedClientInfo.ClientSubnet != nil {
 		t.Error("ClientSubnet should be nil for invalid ECS data")
@@ -1684,10 +1723,10 @@ func TestTCPServerHandleConnectionNonEOFReadError(t *testing.T) {
 // ==============================================================================
 
 func TestTCPServerHandleMessageEDNS0ECSExtract(t *testing.T) {
-	var receivedClientInfo *ClientInfo
+	infoCh := make(chan *ClientInfo, 1)
 
 	handler := HandlerFunc(func(w ResponseWriter, req *protocol.Message) {
-		receivedClientInfo = w.ClientInfo()
+		infoCh <- w.ClientInfo()
 		w.Write(&protocol.Message{
 			Header: protocol.Header{
 				ID:    req.Header.ID,
@@ -1750,6 +1789,13 @@ func TestTCPServerHandleMessageEDNS0ECSExtract(t *testing.T) {
 	respBuf := make([]byte, respLen)
 	io.ReadFull(clientConn, respBuf)
 
+	var receivedClientInfo *ClientInfo
+	select {
+	case receivedClientInfo = <-infoCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for handler")
+	}
+
 	if receivedClientInfo == nil {
 		t.Fatal("ClientInfo should not be nil")
 	}
@@ -1769,10 +1815,10 @@ func TestTCPServerHandleMessageEDNS0ECSExtract(t *testing.T) {
 // ==============================================================================
 
 func TestTCPServerHandleMessageEDNS0NoECS(t *testing.T) {
-	var receivedClientInfo *ClientInfo
+	infoCh := make(chan *ClientInfo, 1)
 
 	handler := HandlerFunc(func(w ResponseWriter, req *protocol.Message) {
-		receivedClientInfo = w.ClientInfo()
+		infoCh <- w.ClientInfo()
 		w.Write(&protocol.Message{
 			Header: protocol.Header{
 				ID:    req.Header.ID,
@@ -1829,6 +1875,13 @@ func TestTCPServerHandleMessageEDNS0NoECS(t *testing.T) {
 	respLen := binary.BigEndian.Uint16(lengthBuf[:])
 	respBuf := make([]byte, respLen)
 	io.ReadFull(clientConn, respBuf)
+
+	var receivedClientInfo *ClientInfo
+	select {
+	case receivedClientInfo = <-infoCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for handler")
+	}
 
 	if receivedClientInfo == nil {
 		t.Fatal("ClientInfo should not be nil")
@@ -2303,10 +2356,10 @@ func TestUDPServerReaderCtxDoneDuringSend(t *testing.T) {
 // ==============================================================================
 
 func TestUDPServerHandleRequestEDNS0ECSExtract(t *testing.T) {
-	var receivedClientInfo *ClientInfo
+	infoCh := make(chan *ClientInfo, 1)
 
 	handler := HandlerFunc(func(w ResponseWriter, req *protocol.Message) {
-		receivedClientInfo = w.ClientInfo()
+		infoCh <- w.ClientInfo()
 		w.Write(&protocol.Message{
 			Header: protocol.Header{
 				ID:    req.Header.ID,
@@ -2364,6 +2417,13 @@ func TestUDPServerHandleRequestEDNS0ECSExtract(t *testing.T) {
 	}
 	server.handleRequest(req)
 
+	var receivedClientInfo *ClientInfo
+	select {
+	case receivedClientInfo = <-infoCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for handler")
+	}
+
 	if receivedClientInfo == nil {
 		t.Fatal("ClientInfo should not be nil")
 	}
@@ -2382,10 +2442,10 @@ func TestUDPServerHandleRequestEDNS0ECSExtract(t *testing.T) {
 // ==============================================================================
 
 func TestUDPServerHandleRequestEDNS0NoECSOption(t *testing.T) {
-	var receivedClientInfo *ClientInfo
+	infoCh := make(chan *ClientInfo, 1)
 
 	handler := HandlerFunc(func(w ResponseWriter, req *protocol.Message) {
-		receivedClientInfo = w.ClientInfo()
+		infoCh <- w.ClientInfo()
 		w.Write(&protocol.Message{
 			Header: protocol.Header{
 				ID:    req.Header.ID,
@@ -2439,6 +2499,13 @@ func TestUDPServerHandleRequestEDNS0NoECSOption(t *testing.T) {
 		n:    n,
 	}
 	server.handleRequest(req)
+
+	var receivedClientInfo *ClientInfo
+	select {
+	case receivedClientInfo = <-infoCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for handler")
+	}
 
 	if receivedClientInfo == nil {
 		t.Fatal("ClientInfo should not be nil")
@@ -2545,10 +2612,10 @@ func TestTLSServerProcessMessageDirectEDNS0(t *testing.T) {
 	cert := generateTLSCertForCoverage(t)
 	tlsConfig := &tls.Config{Certificates: []tls.Certificate{cert}}
 
-	var receivedClientInfo *ClientInfo
+	infoCh := make(chan *ClientInfo, 1)
 
 	handler := HandlerFunc(func(w ResponseWriter, req *protocol.Message) {
-		receivedClientInfo = w.ClientInfo()
+		infoCh <- w.ClientInfo()
 		w.Write(&protocol.Message{
 			Header: protocol.Header{
 				ID:    req.Header.ID,
@@ -2622,6 +2689,13 @@ func TestTLSServerProcessMessageDirectEDNS0(t *testing.T) {
 	respLen := binary.BigEndian.Uint16(lengthBuf[:])
 	respBuf := make([]byte, respLen)
 	io.ReadFull(conn, respBuf)
+
+	var receivedClientInfo *ClientInfo
+	select {
+	case receivedClientInfo = <-infoCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for handler")
+	}
 
 	if receivedClientInfo == nil {
 		t.Fatal("ClientInfo should not be nil")

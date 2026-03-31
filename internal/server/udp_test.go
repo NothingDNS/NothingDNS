@@ -2,6 +2,7 @@ package server
 
 import (
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -112,10 +113,10 @@ func TestUDPServerBasicQuery(t *testing.T) {
 
 // TestUDPServerWithEDNS0 tests UDP with EDNS0 OPT record.
 func TestUDPServerWithEDNS0(t *testing.T) {
-	var receivedClientInfo *ClientInfo
+	infoCh := make(chan *ClientInfo, 1)
 
 	handler := HandlerFunc(func(w ResponseWriter, req *protocol.Message) {
-		receivedClientInfo = w.ClientInfo()
+		infoCh <- w.ClientInfo()
 
 		resp := &protocol.Message{
 			Header: protocol.Header{
@@ -171,6 +172,13 @@ func TestUDPServerWithEDNS0(t *testing.T) {
 	}
 
 	// Verify EDNS0 was detected
+	var receivedClientInfo *ClientInfo
+	select {
+	case receivedClientInfo = <-infoCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for handler")
+	}
+
 	if receivedClientInfo == nil {
 		t.Fatal("ClientInfo should not be nil")
 	}
@@ -234,10 +242,10 @@ func TestUDPServerInvalidMessage(t *testing.T) {
 
 // TestUDPServerMultipleQueries tests multiple sequential queries.
 func TestUDPServerMultipleQueries(t *testing.T) {
-	requestCount := 0
+	var requestCount atomic.Int32
 
 	handler := HandlerFunc(func(w ResponseWriter, req *protocol.Message) {
-		requestCount++
+		requestCount.Add(1)
 		resp := &protocol.Message{
 			Header: protocol.Header{
 				ID:    req.Header.ID,
@@ -281,8 +289,8 @@ func TestUDPServerMultipleQueries(t *testing.T) {
 		}
 	}
 
-	if requestCount != 10 {
-		t.Errorf("Expected 10 requests, got %d", requestCount)
+	if requestCount.Load() != 10 {
+		t.Errorf("Expected 10 requests, got %d", requestCount.Load())
 	}
 }
 
@@ -468,7 +476,7 @@ func TestTruncateRRSet(t *testing.T) {
 
 // TestUDPResponseWriterDoubleWrite tests that writing twice returns an error.
 func TestUDPResponseWriterDoubleWrite(t *testing.T) {
-	var called int
+	var called atomic.Int32
 	handler := HandlerFunc(func(w ResponseWriter, req *protocol.Message) {
 		resp := &protocol.Message{
 			Header: protocol.Header{
@@ -488,7 +496,7 @@ func TestUDPResponseWriterDoubleWrite(t *testing.T) {
 		if err == nil {
 			t.Error("Second write should return error")
 		}
-		called++
+		called.Add(1)
 	})
 
 	server := NewUDPServer("127.0.0.1:0", handler)
@@ -516,8 +524,8 @@ func TestUDPResponseWriterDoubleWrite(t *testing.T) {
 	respBuf := make([]byte, 512)
 	client.Read(respBuf)
 
-	if called != 1 {
-		t.Errorf("Handler called %d times, want 1", called)
+	if called.Load() != 1 {
+		t.Errorf("Handler called %d times, want 1", called.Load())
 	}
 }
 

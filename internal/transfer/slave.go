@@ -464,6 +464,10 @@ func (sm *SlaveManager) scheduleRetry(zoneName string) {
 		return
 	}
 
-	time.Sleep(slaveZone.Config.RetryInterval)
-	sm.performZoneTransfer(zoneName)
+	select {
+	case <-time.After(slaveZone.Config.RetryInterval):
+		sm.performZoneTransfer(zoneName)
+	case <-sm.stopChan:
+		// Manager is stopping, abort retry
+	}
 }

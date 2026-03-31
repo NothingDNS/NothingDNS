@@ -128,12 +128,24 @@ func (s *UDPServer) Serve() error {
 		go s.worker(requestChan)
 	}
 
-	// Start reader goroutine
-	s.wg.Add(1)
-	go s.reader(requestChan)
+	// Start reader goroutine with its own WaitGroup so we can wait for it
+	// to finish before closing requestChan.
+	var readerWg sync.WaitGroup
+	readerWg.Add(1)
+	go s.reader(requestChan, &readerWg)
 
 	// Wait for shutdown
 	<-s.ctx.Done()
+
+	// Close the connection to unblock the reader from ReadFromUDP.
+	if s.conn != nil {
+		s.conn.Close()
+	}
+
+	// Wait for the reader to stop sending on requestChan.
+	readerWg.Wait()
+
+	// Now safe to close - workers will drain and exit.
 	close(requestChan)
 	s.wg.Wait()
 
@@ -148,8 +160,8 @@ type udpRequest struct {
 }
 
 // reader reads packets from the UDP socket and dispatches to workers.
-func (s *UDPServer) reader(requestChan chan<- *udpRequest) {
-	defer s.wg.Done()
+func (s *UDPServer) reader(requestChan chan<- *udpRequest, readerWg *sync.WaitGroup) {
+	defer readerWg.Done()
 
 	for {
 		select {
@@ -180,13 +192,12 @@ func (s *UDPServer) reader(requestChan chan<- *udpRequest) {
 
 		atomic.AddUint64(&s.packetsReceived, 1)
 
-		// Send to workers (non-blocking with timeout)
+		// Send to workers (non-blocking with ctx check)
 		select {
 		case requestChan <- &udpRequest{data: buf, addr: addr, n: n}:
 		case <-s.ctx.Done():
 			s.bufferPool.Put(bufPtr)
 			return
-			// If channel is full, drop the packet to avoid blocking
 		}
 	}
 }

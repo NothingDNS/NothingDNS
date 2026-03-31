@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
 	"github.com/nothingdns/nothingdns/internal/zone"
@@ -77,8 +78,10 @@ type UpdateResponse struct {
 // RFC 2136 - Dynamic Updates in the Domain Name System
 type DynamicDNSHandler struct {
 	zones      map[string]*zone.Zone
+	zonesMu    sync.RWMutex
 	keyStore   *KeyStore
 	acl        map[string][]*net.IPNet // zone -> allowed networks
+	aclMu      sync.RWMutex
 	updateChan chan *UpdateRequest
 }
 
@@ -100,13 +103,17 @@ func (h *DynamicDNSHandler) SetKeyStore(ks *KeyStore) {
 // AddACL adds an allowed network for a zone
 func (h *DynamicDNSHandler) AddACL(zoneName string, network *net.IPNet) {
 	zoneName = strings.ToLower(zoneName)
+	h.aclMu.Lock()
 	h.acl[zoneName] = append(h.acl[zoneName], network)
+	h.aclMu.Unlock()
 }
 
 // IsAllowed checks if a client IP is allowed to update a zone
 func (h *DynamicDNSHandler) IsAllowed(zoneName string, clientIP net.IP) bool {
 	zoneName = strings.ToLower(zoneName)
+	h.aclMu.RLock()
 	networks, ok := h.acl[zoneName]
+	h.aclMu.RUnlock()
 	if !ok || len(networks) == 0 {
 		// No ACL means allow all (but TSIG still required)
 		return true
@@ -141,7 +148,9 @@ func (h *DynamicDNSHandler) HandleUpdate(req *protocol.Message, clientIP net.IP)
 	zoneName := strings.ToLower(zoneQuestion.Name.String())
 
 	// Get the zone
+	h.zonesMu.RLock()
 	z, ok := h.zones[zoneName]
+	h.zonesMu.RUnlock()
 	if !ok {
 		return h.createUpdateResponse(req, protocol.RcodeNotZone), nil
 	}
@@ -346,6 +355,9 @@ func IsUpdateResponse(msg *protocol.Message) bool {
 
 // ApplyUpdate applies an update to a zone
 func ApplyUpdate(z *zone.Zone, update *UpdateRequest) error {
+	z.Lock()
+	defer z.Unlock()
+
 	// Check prerequisites again before applying
 	for _, precond := range update.Prerequisites {
 		if err := checkPrerequisiteOnZone(z, precond); err != nil {

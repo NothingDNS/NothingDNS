@@ -293,7 +293,10 @@ func (s *Signer) SignRRSet(rrSet []*protocol.ResourceRecord, key *SigningKey, in
 	}
 
 	// Create canonical data to sign
-	signedData := s.createSignedData(sorted, rrsig)
+	signedData, err := s.createSignedData(sorted, rrsig)
+	if err != nil {
+		return nil, fmt.Errorf("creating signed data: %w", err)
+	}
 
 	// Sign the data
 	signature, err := SignData(key.DNSKEY.Algorithm, key.PrivateKey, signedData)
@@ -320,7 +323,7 @@ func (s *Signer) SignRRSet(rrSet []*protocol.ResourceRecord, key *SigningKey, in
 }
 
 // createSignedData creates the canonical data that was signed.
-func (s *Signer) createSignedData(rrSet []*protocol.ResourceRecord, rrsig *protocol.RDataRRSIG) []byte {
+func (s *Signer) createSignedData(rrSet []*protocol.ResourceRecord, rrsig *protocol.RDataRRSIG) ([]byte, error) {
 	// Build the RRSIG RDATA portion (without signature)
 	// TypeCovered | Algorithm | Labels | OriginalTTL | Expiration | Inception | KeyTag | SignerName
 
@@ -371,13 +374,16 @@ func (s *Signer) createSignedData(rrSet []*protocol.ResourceRecord, rrsig *proto
 
 		// RData length (2 bytes) and RData
 		buf := make([]byte, 65535)
-		n, _ := rr.Data.Pack(buf, 0)
+		n, err := rr.Data.Pack(buf, 0)
+		if err != nil {
+			return nil, fmt.Errorf("packing RDATA for %s type %d: %w", rr.Name.String(), rr.Type, err)
+		}
 		rdata := buf[:n]
 		data = append(data, byte(len(rdata)>>8), byte(len(rdata)))
 		data = append(data, rdata...)
 	}
 
-	return data
+	return data, nil
 }
 
 // generateNSEC creates NSEC records for the zone.

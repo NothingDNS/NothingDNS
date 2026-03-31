@@ -277,6 +277,7 @@ func (tx *Tx) Commit() error {
 
 	tx.store.rwtx = nil
 	tx.closed = true
+	tx.store.removeTx(tx)
 
 	for _, fn := range tx.commitHandlers {
 		fn()
@@ -304,8 +305,20 @@ func (tx *Tx) Rollback() error {
 	}
 
 	tx.closed = true
+	tx.store.removeTx(tx)
 	atomic.AddInt64(&tx.store.stats.OpenTxCount, -1)
 	return nil
+}
+
+// removeTx removes a transaction from the store's txs slice to prevent unbounded memory growth.
+// Must be called with s.mu held.
+func (s *KVStore) removeTx(tx *Tx) {
+	for i, t := range s.txs {
+		if t == tx {
+			s.txs = append(s.txs[:i], s.txs[i+1:]...)
+			return
+		}
+	}
 }
 
 // Bucket returns a bucket by name

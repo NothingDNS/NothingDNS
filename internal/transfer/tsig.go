@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
@@ -79,6 +80,7 @@ type TSIGRecord struct {
 // KeyStore manages TSIG keys
 type KeyStore struct {
 	keys map[string]*TSIGKey // keyed by key name
+	mu   sync.RWMutex
 }
 
 // NewKeyStore creates a new TSIG key store
@@ -90,18 +92,24 @@ func NewKeyStore() *KeyStore {
 
 // AddKey adds a key to the store
 func (ks *KeyStore) AddKey(key *TSIGKey) {
+	ks.mu.Lock()
 	ks.keys[strings.ToLower(key.Name)] = key
+	ks.mu.Unlock()
 }
 
 // GetKey retrieves a key by name
 func (ks *KeyStore) GetKey(name string) (*TSIGKey, bool) {
+	ks.mu.RLock()
 	key, ok := ks.keys[strings.ToLower(name)]
+	ks.mu.RUnlock()
 	return key, ok
 }
 
 // RemoveKey removes a key from the store
 func (ks *KeyStore) RemoveKey(name string) {
+	ks.mu.Lock()
 	delete(ks.keys, strings.ToLower(name))
+	ks.mu.Unlock()
 }
 
 // ParseTSIGKey parses a TSIG key from base64 secret

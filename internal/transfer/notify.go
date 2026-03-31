@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
@@ -174,6 +175,7 @@ func (s *NOTIFYSender) buildNOTIFYRequest(zoneName string, serial uint32) (*prot
 // NOTIFYSlaveHandler handles incoming NOTIFY requests on slave servers
 type NOTIFYSlaveHandler struct {
 	zones       map[string]*zone.Zone
+	zonesMu     sync.RWMutex
 	notifyChan  chan *NOTIFYRequest
 	serialCheck SerialChecker
 }
@@ -216,7 +218,9 @@ func (h *NOTIFYSlaveHandler) HandleNOTIFY(req *protocol.Message, clientIP net.IP
 	zoneName := strings.ToLower(question.Name.String())
 
 	// Check if we have this zone configured as a slave
+	h.zonesMu.RLock()
 	z, ok := h.zones[zoneName]
+	h.zonesMu.RUnlock()
 	if !ok {
 		return h.createNOTIFYResponse(req, protocol.RcodeNotAuth), nil
 	}

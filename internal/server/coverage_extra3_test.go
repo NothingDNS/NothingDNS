@@ -23,10 +23,10 @@ import (
 // ==============================================================================
 
 func TestTCPServerHandleMessageEDNS0ECSExtractViaNetwork(t *testing.T) {
-	var receivedClientInfo *ClientInfo
+	infoCh := make(chan *ClientInfo, 1)
 
 	handler := HandlerFunc(func(w ResponseWriter, req *protocol.Message) {
-		receivedClientInfo = w.ClientInfo()
+		infoCh <- w.ClientInfo()
 		w.Write(&protocol.Message{
 			Header: protocol.Header{
 				ID:    req.Header.ID,
@@ -81,6 +81,13 @@ func TestTCPServerHandleMessageEDNS0ECSExtractViaNetwork(t *testing.T) {
 	respBuf := make([]byte, respLen)
 	io.ReadFull(client, respBuf)
 
+	var receivedClientInfo *ClientInfo
+	select {
+	case receivedClientInfo = <-infoCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for handler")
+	}
+
 	if receivedClientInfo == nil {
 		t.Fatal("ClientInfo should not be nil")
 	}
@@ -109,10 +116,10 @@ func TestTCPServerHandleMessageEDNS0ECSExtractViaNetwork(t *testing.T) {
 // ==============================================================================
 
 func TestTCPServerHandleMessageEDNS0NonECSViaNetwork(t *testing.T) {
-	var receivedClientInfo *ClientInfo
+	infoCh := make(chan *ClientInfo, 1)
 
 	handler := HandlerFunc(func(w ResponseWriter, req *protocol.Message) {
-		receivedClientInfo = w.ClientInfo()
+		infoCh <- w.ClientInfo()
 		w.Write(&protocol.Message{
 			Header: protocol.Header{
 				ID:    req.Header.ID,
@@ -166,6 +173,13 @@ func TestTCPServerHandleMessageEDNS0NonECSViaNetwork(t *testing.T) {
 	respBuf := make([]byte, respLen)
 	io.ReadFull(client, respBuf)
 
+	var receivedClientInfo *ClientInfo
+	select {
+	case receivedClientInfo = <-infoCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for handler")
+	}
+
 	if receivedClientInfo == nil {
 		t.Fatal("ClientInfo should not be nil")
 	}
@@ -187,10 +201,10 @@ func TestTCPServerHandleMessageEDNS0NonECSViaNetwork(t *testing.T) {
 // ==============================================================================
 
 func TestUDPServerHandleRequestEDNS0ECSViaNetwork(t *testing.T) {
-	var receivedClientInfo *ClientInfo
+	infoCh := make(chan *ClientInfo, 1)
 
 	handler := HandlerFunc(func(w ResponseWriter, req *protocol.Message) {
-		receivedClientInfo = w.ClientInfo()
+		infoCh <- w.ClientInfo()
 		w.Write(&protocol.Message{
 			Header: protocol.Header{
 				ID:    req.Header.ID,
@@ -244,6 +258,12 @@ func TestUDPServerHandleRequestEDNS0ECSViaNetwork(t *testing.T) {
 		t.Fatalf("Failed to read response: %v", err)
 	}
 
+	var receivedClientInfo *ClientInfo
+	select {
+	case receivedClientInfo = <-infoCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for handler")
+	}
 	if receivedClientInfo == nil {
 		t.Fatal("ClientInfo should not be nil")
 	}

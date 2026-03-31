@@ -476,11 +476,13 @@ func (c *Client) checkHealth() {
 
 	for _, server := range c.servers {
 		go func(s *Server) {
-			_, err := c.queryUDP(s, msg)
+			// Copy msg to avoid data race across goroutines
+			queryCopy := *msg
+			_, err := c.queryUDP(s, &queryCopy)
 			if err != nil {
 				// Try TCP
 				log.Printf("health check UDP failed for %s: %v, trying TCP", s.Address, err)
-				_, err = c.queryTCP(s, msg)
+				_, err = c.queryTCP(s, &queryCopy)
 			}
 			// queryUDP/TCP already mark success/failure
 		}(server)

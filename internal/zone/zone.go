@@ -7,6 +7,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // RecordChange represents a single record addition or deletion
@@ -41,6 +42,9 @@ type Zone struct {
 
 	// NS records for the zone apex.
 	NS []NSRecord
+
+	// mu protects Records, SOA, and NS from concurrent access.
+	mu sync.RWMutex
 }
 
 // Record represents a single DNS resource record in a zone.
@@ -132,6 +136,26 @@ func NewZone(origin string) *Zone {
 		Origin:  canonicalize(origin),
 		Records: make(map[string][]Record),
 	}
+}
+
+// Lock acquires the the zone's write lock.
+func (z *Zone) Lock() {
+	z.mu.Lock()
+}
+
+// Unlock releases the zone's write lock.
+func (z *Zone) Unlock() {
+	z.mu.Unlock()
+}
+
+// RLock acquires the the zone's read lock.
+func (z *Zone) RLock() {
+	z.mu.RLock()
+}
+
+// RUnlock releases the zone's read lock.
+func (z *Zone) RUnlock() {
+	z.mu.RUnlock()
 }
 
 // canonicalize ensures a domain name ends with a dot.
@@ -580,6 +604,13 @@ func parseTTL(s string) (uint32, error) {
 
 // Lookup finds records for a given name and type.
 func (z *Zone) Lookup(name, rrtype string) []Record {
+	z.mu.RLock()
+	defer z.mu.RUnlock()
+	return z.lookupLocked(name, rrtype)
+}
+
+// lookupLocked is the lock-free internal lookup.
+func (z *Zone) lookupLocked(name, rrtype string) []Record {
 	name = strings.ToLower(canonicalize(name))
 	rrtype = strings.ToUpper(rrtype)
 
@@ -594,6 +625,8 @@ func (z *Zone) Lookup(name, rrtype string) []Record {
 
 // LookupAll finds all records for a given name.
 func (z *Zone) LookupAll(name string) []Record {
+	z.mu.RLock()
+	defer z.mu.RUnlock()
 	name = strings.ToLower(canonicalize(name))
 	return z.Records[name]
 }

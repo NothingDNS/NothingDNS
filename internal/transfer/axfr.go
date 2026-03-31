@@ -7,6 +7,7 @@ import (
 	"net"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
@@ -36,6 +37,7 @@ type AXFRResponse struct {
 // AXFR must use TCP (RFC 5936 Section 4.1)
 type AXFRServer struct {
 	zones     map[string]*zone.Zone  // zone name -> zone
+	zonesMu   sync.RWMutex           // protects zones map
 	keyStore  *KeyStore              // TSIG keys for authentication
 	allowList []net.IPNet            // Allowed client networks
 }
@@ -77,12 +79,16 @@ func NewAXFRServer(zones map[string]*zone.Zone, opts ...AXFRServerOption) *AXFRS
 
 // AddZone adds a zone to the server
 func (s *AXFRServer) AddZone(z *zone.Zone) {
+	s.zonesMu.Lock()
 	s.zones[strings.ToLower(z.Origin)] = z
+	s.zonesMu.Unlock()
 }
 
 // RemoveZone removes a zone from the server
 func (s *AXFRServer) RemoveZone(zoneName string) {
+	s.zonesMu.Lock()
 	delete(s.zones, strings.ToLower(zoneName))
+	s.zonesMu.Unlock()
 }
 
 // IsAllowed checks if a client IP is allowed to request AXFR
@@ -120,7 +126,9 @@ func (s *AXFRServer) HandleAXFR(req *protocol.Message, clientIP net.IP) ([]*prot
 	zoneName := question.Name.String()
 
 	// Get the zone
+	s.zonesMu.RLock()
 	z, ok := s.zones[strings.ToLower(zoneName)]
+	s.zonesMu.RUnlock()
 	if !ok {
 		return nil, nil, fmt.Errorf("zone %s not found", zoneName)
 	}

@@ -64,7 +64,9 @@ func NewIXFRServer(axfrServer *AXFRServer) *IXFRServer {
 
 // SetMaxJournalSize sets the maximum number of journal entries per zone
 func (s *IXFRServer) SetMaxJournalSize(size int) {
+	s.journalsMu.Lock()
 	s.maxJournalSize = size
+	s.journalsMu.Unlock()
 }
 
 // RecordChange records a zone change for IXFR
@@ -110,7 +112,9 @@ func (s *IXFRServer) HandleIXFR(req *protocol.Message, clientIP net.IP) ([]*prot
 	zoneName := question.Name.String()
 
 	// Get the zone
+	s.axfrServer.zonesMu.RLock()
 	z, ok := s.zones[strings.ToLower(zoneName)]
+	s.axfrServer.zonesMu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("zone %s not found", zoneName)
 	}
@@ -411,8 +415,14 @@ func (c *IXFRClient) buildIXFRRequest(zoneName string, currentSerial uint32, key
 	if err2 != nil {
 		return nil, fmt.Errorf("parsing zone name for SOA: %w", err2)
 	}
-	mname, _ := protocol.ParseName("ns1." + zoneName)
-	rname, _ := protocol.ParseName("admin." + zoneName)
+	mname, merr := protocol.ParseName("ns1." + zoneName)
+	if merr != nil {
+		return nil, fmt.Errorf("parsing mname for SOA: %w", merr)
+	}
+	rname, rerr := protocol.ParseName("admin." + zoneName)
+	if rerr != nil {
+		return nil, fmt.Errorf("parsing rname for SOA: %w", rerr)
+	}
 
 	soaData := &protocol.RDataSOA{
 		MName:   mname,
