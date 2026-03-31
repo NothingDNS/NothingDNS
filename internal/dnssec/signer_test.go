@@ -466,3 +466,108 @@ func TestCanonicalSort(t *testing.T) {
 		t.Errorf("Expected second record to be b.example.com., got %s", records[1].Name.String())
 	}
 }
+
+func TestSignRRSet(t *testing.T) {
+	s := NewSigner("example.com.", DefaultSignerConfig())
+
+	zsk, err := s.GenerateKeyPair(protocol.AlgorithmECDSAP256SHA256, false)
+	if err != nil {
+		t.Fatalf("GenerateKeyPair failed: %v", err)
+	}
+	s.AddKey(zsk)
+
+	name, _ := protocol.ParseName("www.example.com.")
+	rrSet := []*protocol.ResourceRecord{
+		{
+			Name:  name,
+			Type:  protocol.TypeA,
+			Class: protocol.ClassIN,
+			TTL:   300,
+			Data:  &protocol.RDataA{Address: [4]byte{192, 0, 2, 1}},
+		},
+	}
+
+	now := uint32(time.Now().Unix())
+	rrsig, err := s.SignRRSet(rrSet, zsk, now, now+86400)
+	if err != nil {
+		t.Fatalf("SignRRSet failed: %v", err)
+	}
+	if rrsig == nil {
+		t.Fatal("Expected non-nil RRSIG record")
+	}
+	if rrsig.Type != protocol.TypeRRSIG {
+		t.Errorf("Expected TypeRRSIG, got %d", rrsig.Type)
+	}
+
+	rdata, ok := rrsig.Data.(*protocol.RDataRRSIG)
+	if !ok {
+		t.Fatal("Expected RDataRRSIG")
+	}
+	if rdata.TypeCovered != protocol.TypeA {
+		t.Errorf("Expected TypeCovered=A(%d), got %d", protocol.TypeA, rdata.TypeCovered)
+	}
+	if rdata.Algorithm != protocol.AlgorithmECDSAP256SHA256 {
+		t.Errorf("Expected Algorithm ECDSAP256SHA256, got %d", rdata.Algorithm)
+	}
+	if len(rdata.Signature) == 0 {
+		t.Error("Expected non-empty Signature")
+	}
+	if rdata.KeyTag != zsk.KeyTag {
+		t.Errorf("Expected KeyTag %d, got %d", zsk.KeyTag, rdata.KeyTag)
+	}
+}
+
+func TestSignRRSetEmpty(t *testing.T) {
+	s := NewSigner("example.com.", DefaultSignerConfig())
+	zsk, _ := s.GenerateKeyPair(protocol.AlgorithmECDSAP256SHA256, false)
+
+	_, err := s.SignRRSet(nil, zsk, 0, 0)
+	if err == nil {
+		t.Error("Expected error for empty RRSet")
+	}
+}
+
+func TestSignRRSetMultipleRecords(t *testing.T) {
+	s := NewSigner("example.com.", DefaultSignerConfig())
+
+	zsk, err := s.GenerateKeyPair(protocol.AlgorithmECDSAP256SHA256, false)
+	if err != nil {
+		t.Fatalf("GenerateKeyPair failed: %v", err)
+	}
+	s.AddKey(zsk)
+
+	name, _ := protocol.ParseName("www.example.com.")
+	rrSet := []*protocol.ResourceRecord{
+		{
+			Name:  name,
+			Type:  protocol.TypeA,
+			Class: protocol.ClassIN,
+			TTL:   300,
+			Data:  &protocol.RDataA{Address: [4]byte{192, 0, 2, 1}},
+		},
+		{
+			Name:  name,
+			Type:  protocol.TypeA,
+			Class: protocol.ClassIN,
+			TTL:   300,
+			Data:  &protocol.RDataA{Address: [4]byte{192, 0, 2, 2}},
+		},
+	}
+
+	now := uint32(time.Now().Unix())
+	rrsig, err := s.SignRRSet(rrSet, zsk, now, now+86400)
+	if err != nil {
+		t.Fatalf("SignRRSet with multiple records failed: %v", err)
+	}
+	if rrsig == nil {
+		t.Fatal("Expected non-nil RRSIG record")
+	}
+
+	rdata, ok := rrsig.Data.(*protocol.RDataRRSIG)
+	if !ok {
+		t.Fatal("Expected RDataRRSIG")
+	}
+	if len(rdata.Signature) == 0 {
+		t.Error("Expected non-empty Signature for multi-record RRSet")
+	}
+}
