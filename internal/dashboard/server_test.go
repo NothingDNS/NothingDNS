@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -333,11 +334,11 @@ type MockWebSocketConn struct {
 	messages [][]byte
 	closed   bool
 	mu       sync.Mutex
-	readErr  bool
+	readErr  atomic.Bool
 }
 
 func (m *MockWebSocketConn) ReadMessage() (int, []byte, error) {
-	if m.readErr {
+	if m.readErr.Load() {
 		return 0, nil, errors.New("read error")
 	}
 	return 0, nil, nil
@@ -403,10 +404,8 @@ func TestServeHTTPWithStaticHandler(t *testing.T) {
 func TestClientLoop_ReadError(t *testing.T) {
 	server := NewServer()
 
-	mockConn := &ErrorMockWebSocketConn{
-		readErr:  true,
-		writeErr: false,
-	}
+	mockConn := &ErrorMockWebSocketConn{}
+	mockConn.readErr.Store(true)
 	client := &Client{
 		conn:        mockConn,
 		send:        make(chan []byte, 10),
@@ -448,10 +447,8 @@ func TestClientLoop_ReadError(t *testing.T) {
 func TestClientLoop_WriteError(t *testing.T) {
 	server := NewServer()
 
-	mockConn := &ErrorMockWebSocketConn{
-		readErr:  false,
-		writeErr: true,
-	}
+	mockConn := &ErrorMockWebSocketConn{}
+	mockConn.writeErr.Store(true)
 	client := &Client{
 		conn:        mockConn,
 		send:        make(chan []byte, 10),
@@ -477,7 +474,7 @@ func TestClientLoop_WriteError(t *testing.T) {
 	// The write goroutine exits but read loop is still running
 	// Trigger read error to complete the cleanup
 	mockConn.mu.Lock()
-	mockConn.readErr = true
+	mockConn.readErr.Store(true)
 	mockConn.mu.Unlock()
 
 	// Wait for client loop to finish
@@ -527,7 +524,7 @@ func TestClientLoop_SuccessfulWrite(t *testing.T) {
 	close(client.send)
 
 	// Trigger read error to exit
-	mockConn.readErr = true
+	mockConn.readErr.Store(true)
 
 	// Wait for client loop to finish
 	select {
@@ -542,15 +539,13 @@ func TestClientLoop_SuccessfulWrite(t *testing.T) {
 type ErrorMockWebSocketConn struct {
 	messages [][]byte
 	closed   bool
-	readErr  bool
-	writeErr bool
+	readErr  atomic.Bool
+	writeErr atomic.Bool
 	mu       sync.Mutex
 }
 
 func (m *ErrorMockWebSocketConn) ReadMessage() (int, []byte, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.readErr {
+	if m.readErr.Load() {
 		return 0, nil, errors.New("read error")
 	}
 	return 0, nil, nil
@@ -559,7 +554,7 @@ func (m *ErrorMockWebSocketConn) ReadMessage() (int, []byte, error) {
 func (m *ErrorMockWebSocketConn) WriteMessage(messageType int, data []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.writeErr {
+	if m.writeErr.Load() {
 		return errors.New("write error")
 	}
 	m.messages = append(m.messages, data)
