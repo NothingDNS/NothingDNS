@@ -458,13 +458,16 @@ func (lb *LoadBalancer) queryUDP(address string, msg *protocol.Message) (*protoc
 
 	if pool == nil {
 		// Create pool dynamically for anycast backends
-		pool = &sync.Pool{
-			New: func() interface{} {
-				return make([]byte, 4096)
-			},
-		}
 		lb.mu.Lock()
-		lb.udpPool[address] = pool
+		pool = lb.udpPool[address]
+		if pool == nil {
+			pool = &sync.Pool{
+				New: func() interface{} {
+					return make([]byte, 4096)
+				},
+			}
+			lb.udpPool[address] = pool
+		}
 		lb.mu.Unlock()
 	}
 
@@ -526,13 +529,16 @@ func (lb *LoadBalancer) queryTCP(address string, msg *protocol.Message) (*protoc
 	lb.mu.RUnlock()
 
 	if pool == nil {
-		pool = &sync.Pool{
-			New: func() interface{} {
-				return make([]byte, 65535)
-			},
-		}
 		lb.mu.Lock()
-		lb.tcpPool[address] = pool
+		pool = lb.tcpPool[address]
+		if pool == nil {
+			pool = &sync.Pool{
+				New: func() interface{} {
+					return make([]byte, 65535)
+				},
+			}
+			lb.tcpPool[address] = pool
+		}
 		lb.mu.Unlock()
 	}
 

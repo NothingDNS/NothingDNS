@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
@@ -1009,8 +1010,7 @@ func (h *integratedHandler) handleIXFR(w server.ResponseWriter, r *protocol.Mess
 	if err != nil {
 		h.logger.Warnf("IXFR failed for %s: %v", qname, err)
 		// Check if the error indicates AXFR fallback is needed
-		if err.Error() == "no journal available for incremental transfer" ||
-			err.Error() == "client serial not in journal range" {
+		if errors.Is(err, transfer.ErrNoJournal) || errors.Is(err, transfer.ErrSerialNotInRange) {
 			h.logger.Infof("Falling back to AXFR for %s", qname)
 			h.handleAXFR(w, r, q)
 			return

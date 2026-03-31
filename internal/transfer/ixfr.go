@@ -185,7 +185,7 @@ func (s *IXFRServer) generateIncrementalIXFR(z *zone.Zone, clientSerial uint32) 
 	journal := s.journals[zoneName]
 
 	if len(journal) == 0 {
-		return nil, fmt.Errorf("no journal available for incremental transfer")
+		return nil, ErrNoJournal
 	}
 
 	// Find the starting point in the journal
