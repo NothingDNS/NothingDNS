@@ -93,10 +93,8 @@ func TestStart_DisabledSkipsSignalReload(t *testing.T) {
 	}
 
 	// Disable the handler
-	handler.mu.Lock()
-	handler.enabled = false
+	handler.enabled.Store(false)
 	savedCount := reloadCount
-	handler.mu.Unlock()
 
 	// Second SIGHUP: enabled is false, should skip reload (line 68-69)
 	syscall.Kill(syscall.Getpid(), syscall.SIGHUP)
@@ -241,7 +239,7 @@ func TestStart_StopClosesChannel(t *testing.T) {
 	handler.Stop()
 
 	// Verify handler is disabled after Stop
-	if handler.enabled {
+	if handler.enabled.Load() {
 		t.Error("expected handler to be disabled after Stop()")
 	}
 }

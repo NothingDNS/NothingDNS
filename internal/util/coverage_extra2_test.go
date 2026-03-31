@@ -335,13 +335,13 @@ func TestSignalHandlerListenSIGHUPNoReload(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
+	s.Stop()
+
 	// Should have logged a warning about no reload function
 	logOutput := logBuf.String()
 	if !strings.Contains(logOutput, "No reload function") {
 		t.Errorf("Expected warning about no reload function, got: %s", logOutput)
 	}
-
-	s.Stop()
 	SetDefaultLogger(NewLogger(INFO, TextFormat, os.Stdout))
 }
 

@@ -14,7 +14,7 @@ type ReloadHandler struct {
 	mu        sync.RWMutex
 	callbacks map[string]ReloadCallback
 	reloadSig chan os.Signal
-	enabled   bool
+	enabled   atomic.Bool
 }
 
 // ReloadCallback is called on configuration reload
@@ -39,11 +39,12 @@ type ReloadError struct {
 
 // NewReloadHandler creates a new reload handler
 func NewReloadHandler() *ReloadHandler {
-	return &ReloadHandler{
+	h := &ReloadHandler{
 		callbacks: make(map[string]ReloadCallback),
 		reloadSig: make(chan os.Signal, 1),
-		enabled:   true,
 	}
+	h.enabled.Store(true)
+	return h
 }
 
 // Register registers a reload callback for a component
@@ -66,7 +67,7 @@ func (h *ReloadHandler) Start() {
 
 	go func() {
 		for range h.reloadSig {
-			if !h.enabled {
+			if !h.enabled.Load() {
 				continue
 			}
 			h.Reload()
@@ -76,7 +77,7 @@ func (h *ReloadHandler) Start() {
 
 // Stop stops listening for reload signals
 func (h *ReloadHandler) Stop() {
-	h.enabled = false
+	h.enabled.Store(false)
 	signal.Stop(h.reloadSig)
 	close(h.reloadSig)
 }
