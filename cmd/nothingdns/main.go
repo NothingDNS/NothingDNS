@@ -34,8 +34,7 @@ import (
 )
 
 const (
-	Version = "0.1.0"
-	Name    = "NothingDNS"
+	Name = "NothingDNS"
 )
 
 var (
@@ -89,6 +88,7 @@ type integratedHandler struct {
 	upstream      *upstream.Client
 	loadBalancer  *upstream.LoadBalancer
 	zones         map[string]*zone.Zone
+	zonesMu       sync.RWMutex
 	blocklist     *blocklist.Blocklist
 	metrics       *metrics.MetricsCollector
 	validator     *dnssec.Validator
@@ -113,7 +113,7 @@ func main() {
 	}
 
 	if *showVersion {
-		fmt.Printf("%s version %s\n", Name, Version)
+		fmt.Printf("%s version %s\n", Name, util.Version)
 		os.Exit(0)
 	}
 
@@ -139,7 +139,7 @@ func run() error {
 		output = os.Stderr
 	}
 	logger := util.NewLogger(level, format, output)
-	logger.Infof("Starting %s v%s", Name, Version)
+	logger.Infof("Starting %s v%s", Name, util.Version)
 
 	// Initialize cache
 	cacheConfig := cache.Config{
@@ -449,7 +449,9 @@ func run() error {
 				logger.Warnf("Failed to reload zone file %s: %v", zoneFile, err)
 				continue
 			}
+			handler.zonesMu.Lock()
 			zones[z.Origin] = z
+			handler.zonesMu.Unlock()
 			zoneFiles[z.Origin] = zoneFile
 			zoneManager.LoadZone(z, zoneFile)
 			logger.Infof("Reloaded zone %s", z.Origin)
@@ -592,7 +594,9 @@ func run() error {
 					logger.Warnf("Failed to reload zone file %s: %v", zoneFile, err)
 					continue
 				}
+				handler.zonesMu.Lock()
 				zones[z.Origin] = z
+				handler.zonesMu.Unlock()
 				zoneFiles[z.Origin] = zoneFile
 				zoneManager.LoadZone(z, zoneFile)
 				logger.Infof("Reloaded zone %s", z.Origin)
@@ -783,14 +787,17 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 	}
 
 	// Check authoritative zones
+	h.zonesMu.RLock()
 	for origin, z := range h.zones {
 		if isSubdomain(qname, origin) {
 			h.logger.Debugf("Checking zone %s for %s", origin, qname)
 			if resp := h.handleAuthoritative(z, w, r, q); resp {
+				h.zonesMu.RUnlock()
 				return
 			}
 		}
 	}
+	h.zonesMu.RUnlock()
 
 	// Forward to upstream
 	if h.upstream != nil || h.loadBalancer != nil {
@@ -1122,7 +1129,9 @@ func (h *integratedHandler) processUpdateEvents() {
 		h.logger.Infof("Processing UPDATE for zone %s", req.ZoneName)
 
 		// Get the zone
+		h.zonesMu.RLock()
 		z, ok := h.zones[req.ZoneName]
+		h.zonesMu.RUnlock()
 		if !ok {
 			h.logger.Warnf("Zone %s not found for UPDATE", req.ZoneName)
 			continue

@@ -27,11 +27,11 @@ import (
 
 	"github.com/nothingdns/nothingdns/internal/dnssec"
 	"github.com/nothingdns/nothingdns/internal/protocol"
+	"github.com/nothingdns/nothingdns/internal/util"
 )
 
 const (
-	Version = "0.1.0"
-	Name    = "dnsctl"
+	Name = "dnsctl"
 )
 
 type Command struct {
@@ -79,7 +79,7 @@ func main() {
 
 	// Handle version
 	if cmdName == "version" {
-		fmt.Printf("%s version %s\n", Name, Version)
+		fmt.Printf("%s version %s\n", Name, util.Version)
 		os.Exit(0)
 	}
 
@@ -1130,25 +1130,28 @@ func generateKeyPair(algorithm uint8, isKSK bool, keySize int) (*dnssec.SigningK
 		if keySize > 0 {
 			size = keySize
 		}
-		privKey, err = rsa.GenerateKey(rand.Reader, size)
-		if err != nil {
-			return nil, err
+		rsaKey, rsaErr := rsa.GenerateKey(rand.Reader, size)
+		if rsaErr != nil {
+			return nil, rsaErr
 		}
-		pubKey = &privKey.(*rsa.PrivateKey).PublicKey
+		privKey = rsaKey
+		pubKey = &rsaKey.PublicKey
 
 	case protocol.AlgorithmECDSAP256SHA256:
-		privKey, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-		if err != nil {
-			return nil, err
+		ecKey, ecErr := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if ecErr != nil {
+			return nil, ecErr
 		}
-		pubKey = &privKey.(*ecdsa.PrivateKey).PublicKey
+		privKey = ecKey
+		pubKey = &ecKey.PublicKey
 
 	case protocol.AlgorithmECDSAP384SHA384:
-		privKey, err = ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
-		if err != nil {
-			return nil, err
+		ecKey, ecErr := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+		if ecErr != nil {
+			return nil, ecErr
 		}
-		pubKey = &privKey.(*ecdsa.PrivateKey).PublicKey
+		privKey = ecKey
+		pubKey = &ecKey.PublicKey
 
 	default:
 		return nil, fmt.Errorf("unsupported algorithm: %d", algorithm)

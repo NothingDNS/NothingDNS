@@ -356,7 +356,11 @@ func (sm *SlaveManager) performAXFR(ctx context.Context, slaveZone *SlaveZone) (
 	// Get TSIG key if configured
 	var tsigKey *TSIGKey
 	if slaveZone.Config.TSIGKeyName != "" && sm.keyStore != nil {
-		tsigKey, _ = sm.keyStore.GetKey(slaveZone.Config.TSIGKeyName)
+		var ok bool
+		tsigKey, ok = sm.keyStore.GetKey(slaveZone.Config.TSIGKeyName)
+		if !ok {
+			return nil, fmt.Errorf("TSIG key %q not found", slaveZone.Config.TSIGKeyName)
+		}
 	}
 
 	// Perform transfer

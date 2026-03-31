@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"net"
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
@@ -108,8 +109,7 @@ func (w *baseResponseWriter) MaxSize() int {
 }
 
 func (w *baseResponseWriter) Write(msg *protocol.Message) (int, error) {
-	// Subclasses must override this
-	panic("baseResponseWriter.Write must be overridden")
+	return 0, fmt.Errorf("baseResponseWriter.Write not implemented for this transport")
 }
 
 // ResponseSizeLimit calculates the maximum response size for a client.

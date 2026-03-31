@@ -114,19 +114,16 @@ func TestNewResponseWriter(t *testing.T) {
 	}
 }
 
-// TestBaseResponseWriterWrite tests that baseResponseWriter.Write panics.
+// TestBaseResponseWriterWrite tests that baseResponseWriter.Write returns an error.
 func TestBaseResponseWriterWrite(t *testing.T) {
 	client := &ClientInfo{Protocol: "udp"}
 	rw := NewResponseWriter(client, 512).(*baseResponseWriter)
 
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("baseResponseWriter.Write() should panic")
-		}
-	}()
-
 	msg := &protocol.Message{}
-	rw.Write(msg)
+	_, err := rw.Write(msg)
+	if err == nil {
+		t.Error("baseResponseWriter.Write() should return an error")
+	}
 }
 
 // TestResponseSizeLimitEdgeCases tests edge cases for ResponseSizeLimit.

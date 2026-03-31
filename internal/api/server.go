@@ -13,6 +13,7 @@ import (
 	"github.com/nothingdns/nothingdns/internal/config"
 	"github.com/nothingdns/nothingdns/internal/doh"
 	"github.com/nothingdns/nothingdns/internal/server"
+	"github.com/nothingdns/nothingdns/internal/util"
 	"github.com/nothingdns/nothingdns/internal/zone"
 )
 
@@ -154,7 +155,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	status := map[string]interface{}{
 		"status":    "running",
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
-		"version":   "0.1.0",
+		"version":   util.Version,
 	}
 
 	if s.cache != nil {
