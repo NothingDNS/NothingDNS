@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
@@ -43,10 +44,11 @@ type IXFRJournalEntry struct {
 // IXFRServer handles IXFR requests
 // RFC 1995 - Incremental Zone Transfer in DNS
 type IXFRServer struct {
-	axfrServer *AXFRServer      // For AXFR fallback
-	zones      map[string]*zone.Zone
-	journals   map[string][]*IXFRJournalEntry // zone name -> journal entries
-	maxJournalSize int                        // Maximum entries per zone
+	axfrServer     *AXFRServer                    // For AXFR fallback
+	zones          map[string]*zone.Zone
+	journals       map[string][]*IXFRJournalEntry // zone name -> journal entries
+	journalsMu     sync.RWMutex                   // Protects journals map
+	maxJournalSize int                            // Maximum entries per zone
 }
 
 // NewIXFRServer creates a new IXFR server
@@ -76,12 +78,14 @@ func (s *IXFRServer) RecordChange(zoneName string, oldSerial, newSerial uint32, 
 		Timestamp: time.Now(),
 	}
 
+	s.journalsMu.Lock()
 	s.journals[zoneName] = append(s.journals[zoneName], entry)
 
 	// Trim journal if too large
 	if len(s.journals[zoneName]) > s.maxJournalSize {
 		s.journals[zoneName] = s.journals[zoneName][len(s.journals[zoneName])-s.maxJournalSize:]
 	}
+	s.journalsMu.Unlock()
 }
 
 // HandleIXFR handles an IXFR request message
@@ -182,7 +186,10 @@ func (s *IXFRServer) generateSingleSOA(z *zone.Zone) ([]*protocol.ResourceRecord
 // generateIncrementalIXFR generates incremental changes between client and server serials
 func (s *IXFRServer) generateIncrementalIXFR(z *zone.Zone, clientSerial uint32) ([]*protocol.ResourceRecord, error) {
 	zoneName := strings.ToLower(z.Origin)
+
+	s.journalsMu.RLock()
 	journal := s.journals[zoneName]
+	s.journalsMu.RUnlock()
 
 	if len(journal) == 0 {
 		return nil, ErrNoJournal
