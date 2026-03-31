@@ -2,15 +2,13 @@
 # Example configuration for a 3-node cluster with web dashboard
 #
 # Usage:
-#   docker-compose up -d
+#   docker compose up -d
 #
 # Access:
 #   - DNS: localhost:53 (UDP/TCP)
 #   - Dashboard (Node 1): http://localhost:8080
 #   - Dashboard (Node 2): http://localhost:8081
 #   - Dashboard (Node 3): http://localhost:8082
-
-version: '3.8'
 
 services:
   # Node 1 - Primary (seed node)

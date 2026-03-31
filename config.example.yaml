@@ -1,68 +1,49 @@
 # NothingDNS Example Configuration
-# This is a complete example showing all available configuration options.
+# Complete reference for all available configuration options.
+# See https://github.com/nothingdns/nothingdns for documentation.
 
-# Server configuration
 server:
-  # Bind addresses (IPv4 and IPv6)
   bind:
-    - "0.0.0.0"
+    - 0.0.0.0
     - "::"
-
-  # Port to listen on (default: 53)
   port: 53
+  udp_workers: 0   # 0 = auto (NumCPU * 4)
+  tcp_workers: 0   # 0 = auto (NumCPU * 2)
 
-  # Worker pool sizes (0 = auto: UDP = NumCPU*4, TCP = NumCPU*2)
-  udp_workers: 0
-  tcp_workers: 0
-
-  # TLS configuration for DNS over TLS (DoT)
   tls:
     enabled: false
-    cert_file: "/etc/nothingdns/server.crt"
-    key_file: "/etc/nothingdns/server.key"
+    cert_file: /etc/nothingdns/tls/server.crt
+    key_file: /etc/nothingdns/tls/server.key
     bind: ":853"
 
-  # HTTP API for metrics and management
   http:
-    enabled: false
+    enabled: true
     bind: ":8080"
+    auth_token: ""  # Set for API authentication
+    doh_enabled: false
+    doh_path: /dns-query
 
-# DNS resolution settings
 resolution:
-  # Enable recursive resolution (false = use upstream)
   recursive: false
-
-  # Root hints file for recursive resolution
-  root_hints: "/etc/nothingdns/root.hints"
-
-  # Maximum recursion depth
+  root_hints: ""
   max_depth: 10
-
-  # Query timeout
-  timeout: "5s"
-
-  # EDNS0 UDP buffer size
+  timeout: 5s
   edns0_buffer_size: 4096
 
-# Upstream DNS servers
 upstream:
-  # List of upstream servers (can use IP:port or hostname:port)
   servers:
-    - "8.8.8.8:53"
-    - "8.8.4.4:53"
-    - "1.1.1.1:53"
-    - "1.0.0.1:53"
+    - 8.8.8.8:53
+    - 8.8.4.4:53
+    - 1.1.1.1:53
+  strategy: random    # random, round_robin, fastest
+  health_check: 30s
+  failover_timeout: 5s
 
-  # Selection strategy: random, round_robin, or fastest
-  strategy: "random"
+  topology:
+    region: ""
+    zone: ""
+    weight: 100
 
-  # Health check interval
-  health_check: "30s"
-
-  # Failover timeout
-  failover_timeout: "5s"
-
-# Cache configuration
 cache:
   enabled: true
   size: 10000
@@ -73,72 +54,71 @@ cache:
   prefetch: false
   prefetch_threshold: 60
 
-# Logging settings
 logging:
-  # Log level: debug, info, warn, error, fatal
-  level: "info"
-
-  # Log format: json or text
-  format: "text"
-
-  # Log output: stdout, stderr, or file path
-  output: "stdout"
-
-  # Enable query logging
+  level: info        # debug, info, warn, error, fatal
+  format: text       # text, json
+  output: stdout     # stdout, stderr
   query_log: false
+  query_log_file: ""
 
-  # Query log file (optional, defaults to output)
-  query_log_file: "/var/log/nothingdns/queries.log"
-
-# Metrics configuration
 metrics:
-  enabled: true
+  enabled: false
   bind: ":9153"
-  path: "/metrics"
+  path: /metrics
 
-# DNSSEC validation
 dnssec:
   enabled: false
-  trust_anchor: "/etc/nothingdns/root.anchor"
+  trust_anchor: ""
   ignore_time: false
+  require_dnssec: false
 
-# Zone files to load
-zones:
-  - "/etc/nothingdns/zones/example.com.zone"
-  - "/etc/nothingdns/zones/local.zone"
+  signing:
+    enabled: false
+    signature_validity: "720h"  # 30 days
+    keys: []
+      # - private_key: /etc/nothingdns/keys/ksk.pem
+      #   type: ksk
+      #   algorithm: 13  # ECDSAP256SHA256
+    # nsec3:
+    #   iterations: 10
+    #   salt: ""
+    #   opt_out: false
 
-# Access control rules (evaluated in order)
-acl:
-  # Allow local network
-  - name: "local"
-    networks:
-      - "127.0.0.1/32"
-      - "10.0.0.0/8"
-      - "172.16.0.0/12"
-      - "192.168.0.0/16"
-      - "::1/128"
-      - "fc00::/7"
-    action: "allow"
+cluster:
+  enabled: false
+  node_id: ""
+  bind_addr: ""
+  gossip_port: 7946
+  region: ""
+  zone: ""
+  weight: 100
+  seed_nodes: []
+  cache_sync: true
 
-  # Block specific query types from external
-  - name: "block-axfr"
-    networks:
-      - "0.0.0.0/0"
-      - "::/0"
-    types:
-      - "AXFR"
-      - "IXFR"
-    action: "deny"
+blocklist:
+  enabled: false
+  files: []
+    # - /etc/nothingdns/blocklists/ad-blocklist.txt
 
-  # Redirect ads
-  - name: "block-ads"
-    networks:
-      - "0.0.0.0/0"
-    action: "redirect"
-    redirect: "0.0.0.0"
+zones: []
+  # - /etc/nothingdns/zones/example.com.zone
 
-  # Default deny
-  - name: "default"
-    networks:
-      - "0.0.0.0/0"
-    action: "deny"
+acl: []
+  # - name: "allow-local"
+  #   action: allow
+  #   networks:
+  #     - 127.0.0.0/8
+  #     - ::1/128
+  #   types:
+  #     - ANY
+
+slave_zones: []
+  # - zone_name: "slave.example.com."
+  #   masters:
+  #     - 192.168.1.1:53
+  #   transfer_type: ixfr
+  #   tsig_key_name: ""
+  #   tsig_secret: ""
+  #   timeout: 30s
+  #   retry_interval: 5m
+  #   max_retries: 3
