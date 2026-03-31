@@ -870,12 +870,12 @@ func TestIXFRClient_ParseIXFRResponse_IXFRFormat(t *testing.T) {
 	soaData3 := &protocol.RDataSOA{
 		MName:   mname,
 		RName:   rname,
-		Serial:  2024010104, // Different serial for last SOA to not look like AXFR
+		Serial:  2024010103, // Same serial as first SOA = proper IXFR format
 		Refresh: 3600,
 	}
 
 	// IXFR format: SOA(new) + SOA(old) + deletes + SOA(new) + adds + SOA(server)
-	// Note: If first and last SOA have same serial, it's considered AXFR format
+	// First and last SOA have same serial = proper IXFR format
 	records := []*protocol.ResourceRecord{
 		{Name: origin, Type: protocol.TypeSOA, Data: soaData1},
 		{Name: origin, Type: protocol.TypeSOA, Data: soaData2},

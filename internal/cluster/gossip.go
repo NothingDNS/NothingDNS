@@ -525,9 +525,11 @@ func (gp *GossipProtocol) probeNodes() {
 			// Mark dead if suspect for too long
 			if since > gp.config.ProbeInterval*time.Duration(gp.config.SuspicionMult*2) {
 				gp.nodeList.UpdateState(node.ID, NodeStateDead)
+				gp.callbacksMu.RLock()
 				if gp.onNodeLeave != nil {
 					gp.onNodeLeave(node)
 				}
+				gp.callbacksMu.RUnlock()
 			} else {
 				// Send direct ping to verify
 				gp.sendPing(node)

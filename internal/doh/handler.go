@@ -156,7 +156,12 @@ func (rw *dohResponseWriter) Write(msg *protocol.Message) (int, error) {
 
 // ClientInfo returns information about the client.
 func (rw *dohResponseWriter) ClientInfo() *server.ClientInfo {
-	host, port, _ := net.SplitHostPort(rw.r.RemoteAddr)
+	host, port, err := net.SplitHostPort(rw.r.RemoteAddr)
+	if err != nil {
+		return &server.ClientInfo{
+			Protocol: "https",
+		}
+	}
 	ip := net.ParseIP(host)
 
 	return &server.ClientInfo{

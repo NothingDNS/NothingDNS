@@ -565,13 +565,26 @@ func (c *IXFRClient) ParseIXFRResponse(records []*protocol.ResourceRecord) (*IXF
 	}
 
 	// Check if this looks like AXFR (SOA at start and end, rest in between)
+	// vs IXFR (multiple SOA records interleaved with changes)
 	if len(records) >= 2 {
 		firstSOA, firstOK := records[0].Data.(*protocol.RDataSOA)
 		lastSOA, lastOK := records[len(records)-1].Data.(*protocol.RDataSOA)
 
 		if firstOK && lastOK && firstSOA.Serial == lastSOA.Serial {
-			// This is actually an AXFR response
-			resp.IsAXFR = true
+			// Count SOA records - AXFR has exactly 2, IXFR has more
+			soaCount := 0
+			for _, rr := range records {
+				if _, ok := rr.Data.(*protocol.RDataSOA); ok {
+					soaCount++
+				}
+			}
+			if soaCount == 2 {
+				// AXFR: SOA + data records + SOA
+				resp.IsAXFR = true
+				resp.NewSerial = firstSOA.Serial
+				return resp, nil
+			}
+			// IXFR format: SOA + SOA(old) + changes + SOA(new) + changes + SOA
 			resp.NewSerial = firstSOA.Serial
 			return resp, nil
 		}
@@ -580,12 +593,15 @@ func (c *IXFRClient) ParseIXFRResponse(records []*protocol.ResourceRecord) (*IXF
 	// Extract serials from IXFR format
 	// Format: SOA(server) + [SOA(prev) + deletions + SOA(new) + additions]... + SOA(server)
 	if len(records) >= 3 {
+		var firstSOASerial uint32
 		if firstSOA, ok := records[0].Data.(*protocol.RDataSOA); ok {
+			firstSOASerial = firstSOA.Serial
 			resp.NewSerial = firstSOA.Serial
 		}
 		if lastSOA, ok := records[len(records)-1].Data.(*protocol.RDataSOA); ok {
-			// Should match first
-			_ = lastSOA
+			if lastSOA.Serial != firstSOASerial {
+				resp.IsAXFR = true
+			}
 		}
 	}
 

@@ -859,7 +859,7 @@ func cmdServer(args []string) error {
 
 func cmdDNSSEC(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("dnssec subcommand required (generate-key, ds-from-dnskey, sign-zone, verify-anchor)")
+		return fmt.Errorf("dnssec subcommand required (generate-key, ds-from-dnskey, sign-zone, verify-anchor, validate-zone)")
 	}
 
 	subcmd := args[0]
@@ -874,6 +874,8 @@ func cmdDNSSEC(args []string) error {
 		return cmdDNSSECSignZone(subArgs)
 	case "verify-anchor":
 		return cmdDNSSECVerifyAnchor(subArgs)
+	case "validate-zone":
+		return cmdDNSSECValidateZone(subArgs)
 	default:
 		return fmt.Errorf("unknown dnssec subcommand: %s", subcmd)
 	}
@@ -1456,4 +1458,374 @@ func keyType(key *dnssec.SigningKey) string {
 		return "KSK"
 	}
 	return "ZSK"
+}
+
+func cmdDNSSECValidateZone(args []string) error {
+	fs := flag.NewFlagSet("validate-zone", flag.ExitOnError)
+	zoneFile := fs.String("zone", "", "Zone file to validate (required)")
+	ignoreTime := fs.Bool("ignore-time", false, "Ignore signature timestamps (for testing)")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *zoneFile == "" {
+		return fmt.Errorf("zone file is required (-zone)")
+	}
+
+	// Read the zone file
+	data, err := os.ReadFile(*zoneFile)
+	if err != nil {
+		return fmt.Errorf("reading zone file: %w", err)
+	}
+
+	// Parse zone records
+	lines := strings.Split(string(data), "\n")
+	var records []*protocol.ResourceRecord
+	var dnskeyRRs []*protocol.ResourceRecord
+	var rrsigRRs []*protocol.ResourceRecord
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, ";") || strings.HasPrefix(line, "$") {
+			continue
+		}
+
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
+
+		name := fields[0]
+		ttlStr := fields[1]
+		classStr := fields[2]
+		typeStr := strings.ToUpper(fields[3])
+		rdata := strings.Join(fields[4:], " ")
+
+		ttl, err := strconv.ParseUint(ttlStr, 10, 32)
+		if err != nil {
+			continue
+		}
+
+		if !strings.EqualFold(classStr, "IN") {
+			continue
+		}
+
+		owner, err := protocol.ParseName(name)
+		if err != nil {
+			continue
+		}
+
+		rrtype := protocol.StringToType[typeStr]
+		if rrtype == 0 {
+			continue
+		}
+
+		rdataObj, err := parseRDataFromZone(rrtype, rdata, owner.String())
+		if err != nil {
+			continue
+		}
+
+		rr := &protocol.ResourceRecord{
+			Name:  owner,
+			Type:  rrtype,
+			Class: protocol.ClassIN,
+			TTL:   uint32(ttl),
+			Data:  rdataObj,
+		}
+		records = append(records, rr)
+
+		switch rrtype {
+		case protocol.TypeDNSKEY:
+			dnskeyRRs = append(dnskeyRRs, rr)
+		case protocol.TypeRRSIG:
+			rrsigRRs = append(rrsigRRs, rr)
+		}
+	}
+
+	fmt.Printf("Zone file: %s\n", *zoneFile)
+	fmt.Printf("Records found: %d (DNSKEY: %d, RRSIG: %d)\n", len(records), len(dnskeyRRs), len(rrsigRRs))
+
+	if len(records) == 0 {
+		return fmt.Errorf("no valid records found in zone file")
+	}
+
+	if len(dnskeyRRs) == 0 {
+		fmt.Println("WARNING: No DNSKEY records found - zone may be unsigned")
+		return nil
+	}
+
+	if len(rrsigRRs) == 0 {
+		fmt.Println("WARNING: No RRSIG records found - zone is not signed")
+		return nil
+	}
+
+	// Build DNSKEY map for verification
+	dnskeyMap := make(map[uint16]*protocol.RDataDNSKEY)
+	for _, rr := range dnskeyRRs {
+		if dnskey, ok := rr.Data.(*protocol.RDataDNSKEY); ok {
+			keyTag := protocol.CalculateKeyTag(dnskey.Flags, dnskey.Algorithm, dnskey.PublicKey)
+			dnskeyMap[keyTag] = dnskey
+			fmt.Printf("  DNSKEY: keytag=%d algorithm=%d flags=%d\n", keyTag, dnskey.Algorithm, dnskey.Flags)
+		}
+	}
+
+	// Verify each RRSIG
+	validSigs := 0
+	invalidSigs := 0
+	expiredSigs := 0
+
+	for _, rr := range rrsigRRs {
+		rrsig, ok := rr.Data.(*protocol.RDataRRSIG)
+		if !ok {
+			fmt.Printf("  ERROR: Invalid RRSIG record at %s\n", rr.Name.String())
+			invalidSigs++
+			continue
+		}
+
+		dnskey, ok := dnskeyMap[rrsig.KeyTag]
+		if !ok {
+			fmt.Printf("  ERROR: No DNSKEY found for keytag %d (covering %s type %d)\n",
+				rrsig.KeyTag, rr.Name.String(), rrsig.TypeCovered)
+			invalidSigs++
+			continue
+		}
+
+		// Check timestamps
+		if !*ignoreTime {
+			now := uint32(time.Now().Unix())
+			if now < rrsig.Inception {
+				fmt.Printf("  WARNING: Signature not yet valid for %s type %d (inception: %d)\n",
+					rr.Name.String(), rrsig.TypeCovered, rrsig.Inception)
+				expiredSigs++
+				continue
+			}
+			if now > rrsig.Expiration {
+				fmt.Printf("  ERROR: Signature expired for %s type %d (expired: %d)\n",
+					rr.Name.String(), rrsig.TypeCovered, rrsig.Expiration)
+				expiredSigs++
+				continue
+			}
+		}
+
+		// Find matching records covered by this RRSIG
+		var coveredRecords []*protocol.ResourceRecord
+		for _, rec := range records {
+			if rec.Type == rrsig.TypeCovered &&
+				strings.EqualFold(rec.Name.String(), rr.Name.String()) {
+				coveredRecords = append(coveredRecords, rec)
+			}
+		}
+
+		if len(coveredRecords) == 0 {
+			fmt.Printf("  WARNING: No records found for RRSIG covering %s type %d\n",
+				rr.Name.String(), rrsig.TypeCovered)
+			continue
+		}
+
+		// Verify the signature using the dnssec package
+		pubKey, err := dnssec.ParseDNSKEYPublicKey(dnskey.Algorithm, dnskey.PublicKey)
+		if err != nil {
+			fmt.Printf("  ERROR: Failed to parse DNSKEY for %s type %d: %v\n",
+				rr.Name.String(), rrsig.TypeCovered, err)
+			invalidSigs++
+			continue
+		}
+
+		// Build signed data for verification
+		signedData := buildSignedDataForValidation(coveredRecords, rrsig)
+
+		err = dnssec.VerifySignature(rrsig, signedData, pubKey)
+		if err != nil {
+			fmt.Printf("  FAIL: %s type %d keytag=%d: %v\n",
+				rr.Name.String(), rrsig.TypeCovered, rrsig.KeyTag, err)
+			invalidSigs++
+		} else {
+			fmt.Printf("  OK: %s type %d signed by keytag %d\n",
+				rr.Name.String(), rrsig.TypeCovered, rrsig.KeyTag)
+			validSigs++
+		}
+	}
+
+	fmt.Printf("\n=== Validation Summary ===\n")
+	fmt.Printf("Total RRSIGs: %d\n", len(rrsigRRs))
+	fmt.Printf("Valid: %d\n", validSigs)
+	fmt.Printf("Invalid: %d\n", invalidSigs)
+	fmt.Printf("Expired/Not-yet-valid: %d\n", expiredSigs)
+
+	if invalidSigs > 0 {
+		return fmt.Errorf("zone validation failed: %d invalid signatures", invalidSigs)
+	}
+
+	return nil
+}
+
+// buildSignedDataForValidation constructs the signed data blob for RRSIG verification.
+// This mirrors the Signer.createSignedData logic but for standalone validation.
+func buildSignedDataForValidation(rrSet []*protocol.ResourceRecord, rrsig *protocol.RDataRRSIG) []byte {
+	var data []byte
+
+	// RRSIG RDATA prefix (without signature)
+	data = append(data, byte(rrsig.TypeCovered>>8), byte(rrsig.TypeCovered))
+	data = append(data, rrsig.Algorithm)
+	data = append(data, rrsig.Labels)
+	data = append(data, byte(rrsig.OriginalTTL>>24), byte(rrsig.OriginalTTL>>16),
+		byte(rrsig.OriginalTTL>>8), byte(rrsig.OriginalTTL))
+	data = append(data, byte(rrsig.Expiration>>24), byte(rrsig.Expiration>>16),
+		byte(rrsig.Expiration>>8), byte(rrsig.Expiration))
+	data = append(data, byte(rrsig.Inception>>24), byte(rrsig.Inception>>16),
+		byte(rrsig.Inception>>8), byte(rrsig.Inception))
+	data = append(data, byte(rrsig.KeyTag>>8), byte(rrsig.KeyTag))
+
+	// Signer name in wire format
+	signerWire := canonicalWireName(rrsig.SignerName.String())
+	data = append(data, signerWire...)
+
+	for _, rr := range rrSet {
+		ownerWire := canonicalWireName(rr.Name.String())
+		data = append(data, ownerWire...)
+		data = append(data, byte(rr.Type>>8), byte(rr.Type))
+		data = append(data, byte(rr.Class>>8), byte(rr.Class))
+		data = append(data, byte(rrsig.OriginalTTL>>24), byte(rrsig.OriginalTTL>>16),
+			byte(rrsig.OriginalTTL>>8), byte(rrsig.OriginalTTL))
+
+		buf := make([]byte, 65535)
+		n, _ := rr.Data.Pack(buf, 0)
+		rdata := buf[:n]
+		data = append(data, byte(len(rdata)>>8), byte(len(rdata)))
+		data = append(data, rdata...)
+	}
+
+	return data
+}
+
+// canonicalWireName converts a domain name to lowercase wire format
+func canonicalWireName(name string) []byte {
+	name = strings.ToLower(name)
+	var result []byte
+	if name == "." || name == "" {
+		return []byte{0}
+	}
+	parts := strings.Split(strings.TrimSuffix(name, "."), ".")
+	for _, part := range parts {
+		result = append(result, byte(len(part)))
+		result = append(result, []byte(part)...)
+	}
+	result = append(result, 0)
+	return result
+}
+
+// parseRDataFromZone parses RDATA from a zone file line
+func parseRDataFromZone(rrtype uint16, rdata, origin string) (protocol.RData, error) {
+	switch rrtype {
+	case protocol.TypeA:
+		ip := net.ParseIP(rdata)
+		if ip == nil {
+			return nil, fmt.Errorf("invalid A record: %s", rdata)
+		}
+		ipv4 := ip.To4()
+		if ipv4 == nil {
+			return nil, fmt.Errorf("A record requires IPv4 address")
+		}
+		var addr [4]byte
+		copy(addr[:], ipv4)
+		return &protocol.RDataA{Address: addr}, nil
+
+	case protocol.TypeAAAA:
+		ip := net.ParseIP(rdata)
+		if ip == nil {
+			return nil, fmt.Errorf("invalid AAAA record: %s", rdata)
+		}
+		var addr [16]byte
+		copy(addr[:], ip.To16())
+		return &protocol.RDataAAAA{Address: addr}, nil
+
+	case protocol.TypeCNAME:
+		name, err := protocol.ParseName(rdata)
+		if err != nil {
+			return nil, err
+		}
+		return &protocol.RDataCNAME{CName: name}, nil
+
+	case protocol.TypeNS:
+		name, err := protocol.ParseName(rdata)
+		if err != nil {
+			return nil, err
+		}
+		return &protocol.RDataNS{NSDName: name}, nil
+
+	case protocol.TypeMX:
+		var pref uint16
+		var exchange string
+		_, err := fmt.Sscanf(rdata, "%d %s", &pref, &exchange)
+		if err != nil {
+			return nil, fmt.Errorf("invalid MX record: %s", rdata)
+		}
+		name, err := protocol.ParseName(exchange)
+		if err != nil {
+			return nil, err
+		}
+		return &protocol.RDataMX{Preference: pref, Exchange: name}, nil
+
+	case protocol.TypeTXT:
+		text := strings.Trim(rdata, "\"")
+		return &protocol.RDataTXT{Strings: []string{text}}, nil
+
+	case protocol.TypeDNSKEY:
+		fields := strings.Fields(rdata)
+		if len(fields) < 4 {
+			return nil, fmt.Errorf("invalid DNSKEY record")
+		}
+		flags, _ := strconv.ParseUint(fields[0], 10, 16)
+		alg, _ := strconv.ParseUint(fields[2], 10, 8)
+		pubKeyB64 := strings.Join(fields[3:], "")
+		pubKey, err := base64.StdEncoding.DecodeString(pubKeyB64)
+		if err != nil {
+			return nil, fmt.Errorf("decoding DNSKEY public key: %w", err)
+		}
+		return &protocol.RDataDNSKEY{
+			Flags:     uint16(flags),
+			Protocol:  3,
+			Algorithm: uint8(alg),
+			PublicKey: pubKey,
+		}, nil
+
+	case protocol.TypeRRSIG:
+		fields := strings.Fields(rdata)
+		if len(fields) < 9 {
+			return nil, fmt.Errorf("invalid RRSIG record")
+		}
+		typeStr := strings.ToUpper(fields[0])
+		covered := protocol.StringToType[typeStr]
+		alg, _ := strconv.ParseUint(fields[1], 10, 8)
+		labels, _ := strconv.ParseUint(fields[2], 10, 8)
+		origTTL, _ := strconv.ParseUint(fields[3], 10, 32)
+		expiration, _ := strconv.ParseUint(fields[4], 10, 32)
+		inception, _ := strconv.ParseUint(fields[5], 10, 32)
+		keyTag, _ := strconv.ParseUint(fields[6], 10, 16)
+		signerName := fields[7]
+		sigB64 := strings.Join(fields[8:], "")
+		signature, err := base64.StdEncoding.DecodeString(sigB64)
+		if err != nil {
+			return nil, fmt.Errorf("decoding RRSIG signature: %w", err)
+		}
+		signer, err := protocol.ParseName(signerName)
+		if err != nil {
+			return nil, fmt.Errorf("parsing signer name: %w", err)
+		}
+		return &protocol.RDataRRSIG{
+			TypeCovered: covered,
+			Algorithm:   uint8(alg),
+			Labels:      uint8(labels),
+			OriginalTTL: uint32(origTTL),
+			Expiration:  uint32(expiration),
+			Inception:   uint32(inception),
+			KeyTag:      uint16(keyTag),
+			SignerName:  signer,
+			Signature:   signature,
+		}, nil
+
+	default:
+		return &protocol.RDataRaw{TypeVal: rrtype, Data: []byte(rdata)}, nil
+	}
 }
