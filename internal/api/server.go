@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -82,7 +83,7 @@ func (s *Server) Start() error {
 
 	go func() {
 		if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			// Log error
+			log.Printf("API server error: %v", err)
 		}
 	}()
 

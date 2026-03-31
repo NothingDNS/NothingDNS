@@ -3,6 +3,7 @@ package dnssec
 import (
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
@@ -12,6 +13,7 @@ import (
 type Signer struct {
 	zone   string
 	keys   map[uint16]*SigningKey // keytag -> key
+	mu     sync.RWMutex
 	config SignerConfig
 }
 
@@ -57,16 +59,22 @@ func NewSigner(zone string, config SignerConfig) *Signer {
 
 // AddKey adds a signing key (KSK or ZSK).
 func (s *Signer) AddKey(key *SigningKey) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.keys[key.KeyTag] = key
 }
 
 // RemoveKey removes a signing key.
 func (s *Signer) RemoveKey(keyTag uint16) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	delete(s.keys, keyTag)
 }
 
 // GetKeys returns all signing keys.
 func (s *Signer) GetKeys() []*SigningKey {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	result := make([]*SigningKey, 0, len(s.keys))
 	for _, key := range s.keys {
 		result = append(result, key)
@@ -76,6 +84,8 @@ func (s *Signer) GetKeys() []*SigningKey {
 
 // GetKSKs returns all Key Signing Keys.
 func (s *Signer) GetKSKs() []*SigningKey {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	var result []*SigningKey
 	for _, key := range s.keys {
 		if key.IsKSK {
@@ -87,6 +97,8 @@ func (s *Signer) GetKSKs() []*SigningKey {
 
 // GetZSKs returns all Zone Signing Keys.
 func (s *Signer) GetZSKs() []*SigningKey {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	var result []*SigningKey
 	for _, key := range s.keys {
 		if key.IsZSK {

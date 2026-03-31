@@ -3,6 +3,7 @@ package metrics
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -81,7 +82,7 @@ func (m *MetricsCollector) Start() error {
 
 	go func() {
 		if err := m.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			// Log error but don't fail - metrics are best-effort
+			log.Printf("metrics server error: %v", err)
 		}
 	}()
 
