@@ -88,6 +88,7 @@ type GossipProtocol struct {
 	seqNum uint64
 
 	// Callbacks
+	callbacksMu    sync.RWMutex
 	onNodeJoin     func(*Node)
 	onNodeLeave    func(*Node)
 	onNodeUpdate   func(*Node)
@@ -152,6 +153,8 @@ func (gp *GossipProtocol) SetCallbacks(
 	onJoin, onLeave, onUpdate func(*Node),
 	onCacheInvalid func([]string),
 ) {
+	gp.callbacksMu.Lock()
+	defer gp.callbacksMu.Unlock()
 	gp.onNodeJoin = onJoin
 	gp.onNodeLeave = onLeave
 	gp.onNodeUpdate = onUpdate
@@ -382,15 +385,21 @@ func (gp *GossipProtocol) handleGossip(msg Message, from *net.UDPAddr) {
 				Version:  info.Version,
 				Meta:     info.Meta,
 			}
-			if gp.nodeList.Add(newNode) && gp.onNodeJoin != nil {
-				gp.onNodeJoin(newNode)
+			if gp.nodeList.Add(newNode) {
+				gp.callbacksMu.RLock()
+				if gp.onNodeJoin != nil {
+					gp.onNodeJoin(newNode)
+				}
+				gp.callbacksMu.RUnlock()
 			}
 		} else if info.Version > existing.Version {
 			// Update existing node
 			gp.nodeList.UpdateState(info.ID, info.State)
+			gp.callbacksMu.RLock()
 			if gp.onNodeUpdate != nil {
 				gp.onNodeUpdate(existing)
 			}
+			gp.callbacksMu.RUnlock()
 		}
 	}
 }

@@ -3,6 +3,7 @@ package storage
 import (
 	"encoding/gob"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -273,7 +274,9 @@ func (tx *Tx) Rollback() error {
 	if tx.writable {
 		tx.store.rwtx = nil
 		// Reload data from disk to discard changes
-		tx.store.load()
+		if err := tx.store.load(); err != nil {
+			log.Printf("kvstore: failed to reload data during rollback: %v", err)
+		}
 	}
 
 	tx.closed = true
