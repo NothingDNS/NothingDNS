@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"crypto/sha1" //nolint:gosec // SHA-1 needed for DS digest type 1 (deprecated but still used)
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
@@ -156,9 +157,9 @@ func CalculateDSDigest(fqdn string, key *RDataDNSKEY, digestType uint8) ([]byte,
 
 	// Calculate digest based on digest type
 	switch digestType {
-	case 1: // SHA-1 (deprecated but still used)
-		// Not implementing SHA-1 for security reasons
-		return nil, fmt.Errorf("SHA-1 digest type is not supported")
+	case 1: // SHA-1 (NOT RECOMMENDED, but supported for compatibility)
+		h := sha1.Sum(data) //nolint:gosec
+		return h[:], nil
 	case 2: // SHA-256
 		digest := sha256.Sum256(data)
 		return digest[:], nil

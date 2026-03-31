@@ -59,6 +59,10 @@ type dnssecResolverAdapter struct {
 
 // Query implements dnssec.Resolver interface
 func (d *dnssecResolverAdapter) Query(ctx context.Context, name string, qtype uint16) (*protocol.Message, error) {
+	parsedName, err := protocol.ParseName(name)
+	if err != nil {
+		return nil, fmt.Errorf("parsing name %q: %w", name, err)
+	}
 	// Create a query message
 	msg := &protocol.Message{
 		Header: protocol.Header{
@@ -68,22 +72,13 @@ func (d *dnssecResolverAdapter) Query(ctx context.Context, name string, qtype ui
 		},
 		Questions: []*protocol.Question{
 			{
-				Name:   mustParseName(name),
+				Name:   parsedName,
 				QType:  qtype,
 				QClass: protocol.ClassIN,
 			},
 		},
 	}
 	return d.upstream.Query(msg)
-}
-
-// mustParseName parses a domain name or panics (for internal use only)
-func mustParseName(name string) *protocol.Name {
-	n, err := protocol.ParseName(name)
-	if err != nil {
-		panic(err)
-	}
-	return n
 }
 
 // integratedHandler is the DNS request handler that uses all components.

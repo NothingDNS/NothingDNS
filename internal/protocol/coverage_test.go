@@ -951,19 +951,22 @@ func TestNSEC3PARAMVerifyParamsInvalidAlgorithm(t *testing.T) {
 }
 
 // ============================================================================
-// CalculateDSDigest with SHA-1
+// CalculateDSDigest with SHA-1 (NOT RECOMMENDED but supported for compatibility)
 // ============================================================================
 
-func TestCalculateDSDigestSHA1Unsupported(t *testing.T) {
+func TestCalculateDSDigestSHA1(t *testing.T) {
 	dnskey := &RDataDNSKEY{
 		Flags:     DNSKEYFlagZone,
 		Protocol:  3,
 		Algorithm: AlgorithmRSASHA256,
 		PublicKey: []byte{0x01, 0x02, 0x03, 0x04},
 	}
-	_, err := CalculateDSDigest("example.com.", dnskey, 1) // SHA-1 - deprecated, not supported
-	if err == nil {
-		t.Error("CalculateDSDigest should fail for SHA-1 (deprecated)")
+	digest, err := CalculateDSDigest("example.com.", dnskey, 1) // SHA-1 - deprecated but supported
+	if err != nil {
+		t.Errorf("CalculateDSDigest failed for SHA-1: %v", err)
+	}
+	if len(digest) != 20 { // SHA-1 produces 20-byte digest
+		t.Errorf("expected 20-byte SHA-1 digest, got %d bytes", len(digest))
 	}
 }
 
