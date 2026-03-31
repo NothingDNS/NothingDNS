@@ -28,6 +28,7 @@ type Cluster struct {
 	// Status
 	started bool
 	mu      sync.RWMutex
+	wg      sync.WaitGroup
 }
 
 // Config configures the cluster.
@@ -180,6 +181,7 @@ func (c *Cluster) Start() error {
 
 	// Start cache sync processor
 	if c.config.CacheSync {
+		c.wg.Add(1)
 		go c.cacheSyncLoop()
 	}
 
@@ -193,20 +195,25 @@ func (c *Cluster) Start() error {
 // Stop stops the cluster.
 func (c *Cluster) Stop() error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	if !c.started {
+		c.mu.Unlock()
 		return nil
 	}
 
 	close(c.cacheSyncChan)
+	c.mu.Unlock()
 
+	// Wait for cacheSyncLoop to finish before stopping gossip
+	c.wg.Wait()
+
+	c.mu.Lock()
 	if err := c.gossip.Stop(); err != nil {
 		c.logger.Warnf("Error stopping gossip: %v", err)
 	}
 
 	c.started = false
 	c.logger.Info("Cluster stopped")
+	c.mu.Unlock()
 
 	return nil
 }
@@ -291,7 +298,11 @@ func (c *Cluster) InvalidateCacheLocal(keys []string) {
 
 // IsHealthy returns true if the cluster is healthy (has quorum).
 func (c *Cluster) IsHealthy() bool {
-	if !c.started {
+	c.mu.RLock()
+	started := c.started
+	c.mu.RUnlock()
+
+	if !started {
 		return true // Single node mode is always healthy
 	}
 
@@ -364,6 +375,7 @@ func (c *Cluster) handleCacheInvalid(keys []string) {
 
 // cacheSyncLoop processes cache synchronization events.
 func (c *Cluster) cacheSyncLoop() {
+	defer c.wg.Done()
 	for event := range c.cacheSyncChan {
 		switch event.Type {
 		case "invalidate":

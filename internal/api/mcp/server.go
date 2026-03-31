@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -454,11 +455,11 @@ func (s *StdioServer) Run(ctx context.Context) error {
 
 		var req Request
 		if err := decoder.Decode(&req); err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				return nil
 			}
 			// Send parse error
-			encoder.Encode(&Response{
+			_ = encoder.Encode(&Response{
 				JSONRPC: JsonRPC,
 				Error:   &RPCError{Code: ParseError, Message: "Parse error"},
 				ID:      nil,

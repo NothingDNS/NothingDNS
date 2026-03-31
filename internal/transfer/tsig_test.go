@@ -515,30 +515,6 @@ func TestRDataTSIG_Copy(t *testing.T) {
 	}
 }
 
-func TestHmacAlgorithm(t *testing.T) {
-	// Test all supported algorithms
-	algorithms := []string{
-		HmacSHA256,
-		HmacSHA384,
-		HmacSHA512,
-		HmacSHA1,
-		"unknown-algorithm",
-	}
-
-	for _, alg := range algorithms {
-		fn := hmacAlgorithm(alg)
-		if fn == nil {
-			t.Errorf("hmacAlgorithm(%s) returned nil", alg)
-		} else {
-			result := fn()
-			// Just ensure it doesn't panic and returns something
-			if result == nil && alg != HmacSHA1 {
-				t.Errorf("hmacAlgorithm(%s) function returned nil", alg)
-			}
-		}
-	}
-}
-
 func TestRDataTSIG_String_Invalid(t *testing.T) {
 	// Test with invalid raw data
 	rdata := &RDataTSIG{Raw: []byte{0xFF, 0xFE, 0xFD}} // Invalid TSIG data

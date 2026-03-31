@@ -250,7 +250,10 @@ func apiGet(path string) (map[string]interface{}, error) {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
+	if err != nil {
+		return nil, fmt.Errorf("reading response body: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
 		var errResp map[string]interface{}
 		if json.Unmarshal(body, &errResp) == nil {
@@ -281,7 +284,10 @@ func apiPost(path string) (map[string]interface{}, error) {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
+	if err != nil {
+		return nil, fmt.Errorf("reading response body: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
 		var errResp map[string]interface{}
 		if json.Unmarshal(body, &errResp) == nil {
@@ -732,9 +738,13 @@ func cmdDig(args []string) error {
 	if len(resp.Answers) > 0 {
 		fmt.Println(";; ANSWER SECTION:")
 		for _, rr := range resp.Answers {
+			dataStr := "; NODATA"
+			if rr.Data != nil {
+				dataStr = rr.Data.String()
+			}
 			fmt.Printf("%s\t%d\t%s\t%s\t%s\n",
 				rr.Name.String(), rr.TTL, "IN",
-				protocol.TypeString(rr.Type), rr.Data.String())
+				protocol.TypeString(rr.Type), dataStr)
 		}
 		fmt.Println()
 	}
@@ -743,9 +753,13 @@ func cmdDig(args []string) error {
 	if len(resp.Authorities) > 0 {
 		fmt.Println(";; AUTHORITY SECTION:")
 		for _, rr := range resp.Authorities {
+			dataStr := "; NODATA"
+			if rr.Data != nil {
+				dataStr = rr.Data.String()
+			}
 			fmt.Printf("%s\t%d\t%s\t%s\t%s\n",
 				rr.Name.String(), rr.TTL, "IN",
-				protocol.TypeString(rr.Type), rr.Data.String())
+				protocol.TypeString(rr.Type), dataStr)
 		}
 		fmt.Println()
 	}
@@ -754,9 +768,13 @@ func cmdDig(args []string) error {
 	if len(resp.Additionals) > 0 {
 		fmt.Println(";; ADDITIONAL SECTION:")
 		for _, rr := range resp.Additionals {
+			dataStr := "; NODATA"
+			if rr.Data != nil {
+				dataStr = rr.Data.String()
+			}
 			fmt.Printf("%s\t%d\t%s\t%s\t%s\n",
 				rr.Name.String(), rr.TTL, "IN",
-				protocol.TypeString(rr.Type), rr.Data.String())
+				protocol.TypeString(rr.Type), dataStr)
 		}
 		fmt.Println()
 	}
@@ -1201,6 +1219,7 @@ func writePrivateKey(path string, key *dnssec.SigningKey) error {
 	// Serialize private key based on algorithm
 	switch k := key.PrivateKey.Key.(type) {
 	case *rsa.PrivateKey:
+		k.Precompute()
 		content.WriteString(fmt.Sprintf("Modulus: %s\n", base64.StdEncoding.EncodeToString(k.N.Bytes())))
 		content.WriteString(fmt.Sprintf("PublicExponent: %d\n", k.E))
 		content.WriteString(fmt.Sprintf("PrivateExponent: %s\n", base64.StdEncoding.EncodeToString(k.D.Bytes())))

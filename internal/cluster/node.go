@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"net"
@@ -220,7 +221,11 @@ func (nl *NodeList) AliveCount() int {
 // GenerateNodeID creates a unique node ID.
 func GenerateNodeID() string {
 	b := make([]byte, 8)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to timestamp-based ID if crypto/rand fails
+		now := time.Now().UnixNano()
+		binary.BigEndian.PutUint64(b, uint64(now))
+	}
 	return hex.EncodeToString(b)
 }
 

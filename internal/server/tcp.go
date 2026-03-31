@@ -171,7 +171,7 @@ func (s *TCPServer) handleConnection(conn net.Conn) {
 		var lengthBuf [2]byte
 		_, err := io.ReadFull(conn, lengthBuf[:])
 		if err != nil {
-			if err != io.EOF {
+			if !errors.Is(err, io.EOF) {
 				atomic.AddUint64(&s.errors, 1)
 			}
 			return

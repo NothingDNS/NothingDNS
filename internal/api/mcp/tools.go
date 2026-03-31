@@ -524,7 +524,10 @@ func (h *DNSToolsHandler) ReadResource(uri string) (*ResourceContents, error) {
 		if err != nil {
 			return nil, err
 		}
-		data, _ := json.MarshalIndent(zone, "", "  ")
+		data, err := json.MarshalIndent(zone, "", "  ")
+		if err != nil {
+			return nil, fmt.Errorf("marshaling zone data: %w", err)
+		}
 		return &ResourceContents{
 			URI:      uri,
 			MimeType: "application/json",
@@ -536,7 +539,10 @@ func (h *DNSToolsHandler) ReadResource(uri string) (*ResourceContents, error) {
 			return nil, fmt.Errorf("stats provider not configured")
 		}
 		stats := h.statsProvider.GetStats()
-		data, _ := json.MarshalIndent(stats, "", "  ")
+		data, err := json.MarshalIndent(stats, "", "  ")
+		if err != nil {
+			return nil, fmt.Errorf("marshaling server stats: %w", err)
+		}
 		return &ResourceContents{
 			URI:      uri,
 			MimeType: "application/json",
@@ -548,7 +554,10 @@ func (h *DNSToolsHandler) ReadResource(uri string) (*ResourceContents, error) {
 			return nil, fmt.Errorf("cache not configured")
 		}
 		stats := h.cache.GetStats()
-		data, _ := json.MarshalIndent(stats, "", "  ")
+		data, err := json.MarshalIndent(stats, "", "  ")
+		if err != nil {
+			return nil, fmt.Errorf("marshaling cache stats: %w", err)
+		}
 		return &ResourceContents{
 			URI:      uri,
 			MimeType: "application/json",
@@ -673,7 +682,13 @@ func errorResult(text string) *ToolResult {
 }
 
 func jsonResult(data interface{}) *ToolResult {
-	b, _ := json.MarshalIndent(data, "", "  ")
+	b, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return &ToolResult{
+			Content: []Content{{Type: "text", Text: fmt.Sprintf("error: %v", err)}},
+			IsError: true,
+		}
+	}
 	return &ToolResult{
 		Content: []Content{{Type: "text", Text: string(b)}},
 	}

@@ -180,9 +180,6 @@ func (s *TLSServer) handleConnection(conn net.Conn) {
 	}
 	tlsConn.SetDeadline(time.Time{}) // Clear deadline
 
-	// Get connection state for logging/debugging
-	_ = tlsConn.ConnectionState()
-
 	// Handle DNS messages over the TLS connection
 	for {
 		// Set read timeout
@@ -201,7 +198,7 @@ func (s *TLSServer) handleMessage(conn *tls.Conn) bool {
 	// Read 2-byte length prefix
 	var lengthBuf [2]byte
 	if _, err := io.ReadFull(conn, lengthBuf[:]); err != nil {
-		if err != io.EOF {
+		if !errors.Is(err, io.EOF) {
 			atomic.AddUint64(&s.errors, 1)
 		}
 		return false

@@ -179,6 +179,8 @@ func parsePort(port string) int {
 		return 0
 	}
 	var p int
-	fmt.Sscanf(port, "%d", &p)
+	if _, err := fmt.Sscanf(port, "%d", &p); err != nil {
+		return 0
+	}
 	return p
 }

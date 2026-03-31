@@ -1,6 +1,7 @@
 package transfer
 
 import (
+	"crypto/rand"
 	"fmt"
 	"net"
 	"sort"
@@ -258,8 +259,12 @@ func parseRData(rrtype uint16, rdataStr, origin string) (protocol.RData, error) 
 		if ip == nil {
 			return nil, fmt.Errorf("invalid A record: %s", rdataStr)
 		}
+		ipv4 := ip.To4()
+		if ipv4 == nil {
+			return nil, fmt.Errorf("A record requires IPv4 address, got: %s", rdataStr)
+		}
 		var addr [4]byte
-		copy(addr[:], ip.To4())
+		copy(addr[:], ipv4)
 		return &protocol.RDataA{Address: addr}, nil
 
 	case protocol.TypeAAAA:
@@ -599,5 +604,10 @@ func extractMAC(msg *protocol.Message) []byte {
 
 // generateMessageID generates a random message ID
 func generateMessageID() uint16 {
-	return uint16(time.Now().UnixNano() & 0xFFFF)
+	var b [2]byte
+	_, err := rand.Read(b[:])
+	if err != nil {
+		return uint16(time.Now().UnixNano() & 0xFFFF)
+	}
+	return uint16(b[0])<<8 | uint16(b[1])
 }

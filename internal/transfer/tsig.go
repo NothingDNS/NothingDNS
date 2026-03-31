@@ -252,39 +252,6 @@ func UnpackTSIGRecord(data []byte, offset int) (*TSIGRecord, int, error) {
 	return ts, n, nil
 }
 
-// hmacAlgorithm returns the hash function for the given algorithm
-func hmacAlgorithm(algorithm string) func() []byte {
-	switch strings.ToLower(algorithm) {
-	case HmacSHA256:
-		return func() []byte {
-			h := sha256.New()
-			return h.Sum(nil)
-		}
-	case HmacSHA384:
-		return func() []byte {
-			h := sha512.New384()
-			return h.Sum(nil)
-		}
-	case HmacSHA512:
-		return func() []byte {
-			h := sha512.New()
-			return h.Sum(nil)
-		}
-	case HmacSHA1:
-		return func() []byte {
-			h := sha256.New() // Use SHA-256 for SHA-1 (deprecated but compatible)
-			_ = h
-			return make([]byte, 20)
-		}
-	default:
-		// Default to SHA-256
-		return func() []byte {
-			h := sha256.New()
-			return h.Sum(nil)
-		}
-	}
-}
-
 // SignMessage signs a DNS message with TSIG
 func SignMessage(msg *protocol.Message, key *TSIGKey, fudge uint16) (*protocol.ResourceRecord, error) {
 	// Create TSIG variables
