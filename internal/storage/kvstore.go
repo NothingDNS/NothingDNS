@@ -3,6 +3,7 @@ package storage
 import (
 	"encoding/gob"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -128,16 +129,39 @@ func (s *KVStore) load() error {
 	return decoder.Decode(&s.root)
 }
 
-// save saves data to disk
+// save saves data to disk atomically using a temp file + rename.
 func (s *KVStore) save() error {
-	f, err := os.Create(s.dataFile)
+	dir := filepath.Dir(s.dataFile)
+	tmpFile, err := os.CreateTemp(dir, ".kvstore-save-*")
 	if err != nil {
-		return err
+		return fmt.Errorf("create temp file: %w", err)
 	}
-	defer f.Close()
+	tmpPath := tmpFile.Name()
 
-	encoder := gob.NewEncoder(f)
-	return encoder.Encode(s.root)
+	encoder := gob.NewEncoder(tmpFile)
+	if err := encoder.Encode(s.root); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("encode data: %w", err)
+	}
+
+	if err := tmpFile.Sync(); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("sync temp file: %w", err)
+	}
+
+	if err := tmpFile.Close(); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("close temp file: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, s.dataFile); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("rename temp file: %w", err)
+	}
+
+	return nil
 }
 
 // Begin starts a new transaction
