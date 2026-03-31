@@ -73,6 +73,7 @@ type WAL struct {
 	segments    []*WALSegment
 	active      *WALSegment
 	closed      bool
+	stopChan    chan struct{}
 	syncChan    chan struct{}
 	syncPending bool
 	opts        WALOptions
@@ -105,6 +106,7 @@ func OpenWAL(dir string, opts WALOptions) (*WAL, error) {
 		dir:      dir,
 		segments: make([]*WALSegment, 0),
 		syncChan: make(chan struct{}, 1),
+		stopChan: make(chan struct{}),
 		opts:     opts,
 	}
 
@@ -507,6 +509,8 @@ func (wal *WAL) syncLoop() {
 				wal.syncLocked()
 			}
 			wal.mu.Unlock()
+		case <-wal.stopChan:
+			return
 		}
 	}
 }
@@ -575,6 +579,7 @@ func (wal *WAL) Close() error {
 	}
 
 	wal.closed = true
+	close(wal.stopChan)
 
 	// Final sync
 	if wal.syncPending {

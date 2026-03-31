@@ -306,6 +306,9 @@ func run() error {
 		logger.Info("DNSSEC validation enabled")
 	}
 
+	// Stop channel for graceful goroutine shutdown
+	stopCh := make(chan struct{})
+
 	// Initialize cluster manager if enabled
 	var clusterMgr *cluster.Cluster
 	if cfg.Cluster.Enabled {
@@ -360,6 +363,8 @@ func run() error {
 									stats.GossipStats.MessagesReceived,
 								)
 							}
+						case <-stopCh:
+							return
 						}
 					}
 				}()
@@ -544,6 +549,9 @@ func run() error {
 		switch sig {
 		case syscall.SIGINT, syscall.SIGTERM:
 			logger.Info("Shutting down gracefully...")
+
+			// Signal goroutines to stop
+			close(stopCh)
 
 			// Stop servers
 			udpServer.Stop()
