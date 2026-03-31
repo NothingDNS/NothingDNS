@@ -192,8 +192,13 @@ func (nl *NodeList) GetRandom(exclude []string) *Node {
 		return nil
 	}
 
-	// Simple random selection
-	idx := time.Now().UnixNano() % int64(len(candidates))
+	// Random selection using crypto/rand
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		idx := time.Now().UnixNano() % int64(len(candidates))
+		return candidates[idx]
+	}
+	idx := binary.BigEndian.Uint32(b[:]) % uint32(len(candidates))
 	return candidates[idx]
 }
 

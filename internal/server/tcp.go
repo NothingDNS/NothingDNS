@@ -137,11 +137,19 @@ func (s *TCPServer) Serve() error {
 		select {
 		case s.connSem <- struct{}{}:
 			atomic.AddUint64(&s.connectionsAccepted, 1)
-			connChan <- conn
 		default:
 			// Too many connections, close this one
 			conn.Close()
 			atomic.AddUint64(&s.errors, 1)
+			continue
+		}
+
+		// Send to worker, respecting shutdown
+		select {
+		case connChan <- conn:
+		case <-s.ctx.Done():
+			conn.Close()
+			<-s.connSem
 		}
 	}
 }

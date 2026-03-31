@@ -1219,15 +1219,17 @@ func writePrivateKey(path string, key *dnssec.SigningKey) error {
 	// Serialize private key based on algorithm
 	switch k := key.PrivateKey.Key.(type) {
 	case *rsa.PrivateKey:
-		k.Precompute()
 		content.WriteString(fmt.Sprintf("Modulus: %s\n", base64.StdEncoding.EncodeToString(k.N.Bytes())))
 		content.WriteString(fmt.Sprintf("PublicExponent: %d\n", k.E))
 		content.WriteString(fmt.Sprintf("PrivateExponent: %s\n", base64.StdEncoding.EncodeToString(k.D.Bytes())))
-		content.WriteString(fmt.Sprintf("Prime1: %s\n", base64.StdEncoding.EncodeToString(k.Primes[0].Bytes())))
-		content.WriteString(fmt.Sprintf("Prime2: %s\n", base64.StdEncoding.EncodeToString(k.Primes[1].Bytes())))
-		content.WriteString(fmt.Sprintf("Exponent1: %s\n", base64.StdEncoding.EncodeToString(k.Precomputed.Dp.Bytes())))
-		content.WriteString(fmt.Sprintf("Exponent2: %s\n", base64.StdEncoding.EncodeToString(k.Precomputed.Dq.Bytes())))
-		content.WriteString(fmt.Sprintf("Coefficient: %s\n", base64.StdEncoding.EncodeToString(k.Precomputed.Qinv.Bytes())))
+		if len(k.Primes) >= 2 {
+			content.WriteString(fmt.Sprintf("Prime1: %s\n", base64.StdEncoding.EncodeToString(k.Primes[0].Bytes())))
+			content.WriteString(fmt.Sprintf("Prime2: %s\n", base64.StdEncoding.EncodeToString(k.Primes[1].Bytes())))
+			k.Precompute()
+			content.WriteString(fmt.Sprintf("Exponent1: %s\n", base64.StdEncoding.EncodeToString(k.Precomputed.Dp.Bytes())))
+			content.WriteString(fmt.Sprintf("Exponent2: %s\n", base64.StdEncoding.EncodeToString(k.Precomputed.Dq.Bytes())))
+			content.WriteString(fmt.Sprintf("Coefficient: %s\n", base64.StdEncoding.EncodeToString(k.Precomputed.Qinv.Bytes())))
+		}
 
 	case *ecdsa.PrivateKey:
 		// Write in PKCS8 DER format (base64 encoded)
