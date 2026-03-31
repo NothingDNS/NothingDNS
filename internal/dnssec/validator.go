@@ -509,6 +509,11 @@ func canonicalSort(rrs []*protocol.ResourceRecord) {
 
 // validateNegativeResponse validates NSEC/NSEC3 for negative answers.
 func (v *Validator) validateNegativeResponse(msg *protocol.Message, queryName string, chain []*chainLink) ValidationResult {
+	if len(msg.Questions) == 0 {
+		return ValidationBogus
+	}
+	qtype := msg.Questions[0].QType
+
 	// Check for NSEC records
 	for _, rr := range msg.Authorities {
 		if rr.Type == protocol.TypeNSEC {
@@ -516,7 +521,7 @@ func (v *Validator) validateNegativeResponse(msg *protocol.Message, queryName st
 			if !ok {
 				continue
 			}
-			if v.validateNSEC(rr.Name.String(), queryName, msg.Questions[0].QType, nsec) {
+			if v.validateNSEC(rr.Name.String(), queryName, qtype, nsec) {
 				return ValidationSecure
 			}
 		}
@@ -525,7 +530,7 @@ func (v *Validator) validateNegativeResponse(msg *protocol.Message, queryName st
 			if !ok {
 				continue
 			}
-			if v.validateNSEC3(rr.Name.String(), queryName, msg.Questions[0].QType, nsec3, chain) {
+			if v.validateNSEC3(rr.Name.String(), queryName, qtype, nsec3, chain) {
 				return ValidationSecure
 			}
 		}

@@ -416,9 +416,11 @@ func (gp *GossipProtocol) handleCacheInvalidate(msg Message, from *net.UDPAddr) 
 		return
 	}
 
+	gp.callbacksMu.RLock()
 	if gp.onCacheInvalid != nil {
 		gp.onCacheInvalid(payload.Keys)
 	}
+	gp.callbacksMu.RUnlock()
 }
 
 // gossipLoop periodically gossips node state.

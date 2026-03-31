@@ -1282,8 +1282,12 @@ func parseRData(rtype, rdata string) protocol.RData {
 	case "A":
 		ip := net.ParseIP(rdata)
 		if ip != nil {
+			ipv4 := ip.To4()
+			if ipv4 == nil {
+				return nil
+			}
 			var addr [4]byte
-			copy(addr[:], ip.To4())
+			copy(addr[:], ipv4)
 			return &protocol.RDataA{Address: addr}
 		}
 	case "AAAA":

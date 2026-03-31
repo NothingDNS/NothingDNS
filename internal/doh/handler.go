@@ -97,11 +97,12 @@ func (h *Handler) handlePOST(r *http.Request) ([]byte, error) {
 
 	// Limit body size to prevent abuse
 	r.Body = http.MaxBytesReader(nil, r.Body, MaxDNSMessageSize)
+	defer r.Body.Close()
+
 	data, err := io.ReadAll(r.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read body: %w", err)
 	}
-	defer r.Body.Close()
 
 	return data, nil
 }
