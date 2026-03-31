@@ -724,7 +724,7 @@ func TestStart_SignalHandling(t *testing.T) {
 	handler.Stop()
 
 	// Verify the handler can be stopped cleanly
-	if handler.enabled {
+	if handler.enabled.Load() {
 		t.Error("expected handler to be disabled after Stop()")
 	}
 }
@@ -754,7 +754,7 @@ func TestStart_GoroutineExecutesCallback(t *testing.T) {
 func TestStart_DisabledHandlerSkipsReload(t *testing.T) {
 	handler := NewReloadHandler()
 	// Disable before starting
-	handler.enabled = false
+	handler.enabled.Store(false)
 
 	handler.Start()
 	handler.Stop()
