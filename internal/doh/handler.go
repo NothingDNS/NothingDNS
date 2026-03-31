@@ -42,7 +42,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		queryData, err = h.handleGET(r)
 	case http.MethodPost:
-		queryData, err = h.handlePOST(r)
+		queryData, err = h.handlePOST(w, r)
 	default:
 		w.Header().Set("Allow", "GET, POST")
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -89,14 +89,14 @@ func (h *Handler) handleGET(r *http.Request) ([]byte, error) {
 }
 
 // handlePOST processes POST requests with DNS query in body.
-func (h *Handler) handlePOST(r *http.Request) ([]byte, error) {
+func (h *Handler) handlePOST(w http.ResponseWriter, r *http.Request) ([]byte, error) {
 	contentType := r.Header.Get("Content-Type")
 	if contentType != ContentTypeDNSMessage {
 		return nil, fmt.Errorf("unsupported Content-Type: %s (expected %s)", contentType, ContentTypeDNSMessage)
 	}
 
 	// Limit body size to prevent abuse
-	r.Body = http.MaxBytesReader(nil, r.Body, MaxDNSMessageSize)
+	r.Body = http.MaxBytesReader(w, r.Body, MaxDNSMessageSize)
 	defer r.Body.Close()
 
 	data, err := io.ReadAll(r.Body)
