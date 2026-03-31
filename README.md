@@ -1,6 +1,6 @@
 # NothingDNS
 
-[![Go Version](https://img.shields.io/badge/Go-1.21%2B-00ADD8?style=flat&logo=go)](https://golang.org)
+[![Go Version](https://img.shields.io/badge/Go-1.23%2B-00ADD8?style=flat&logo=go)](https://golang.org)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Go Report Card](https://goreportcard.com/badge/github.com/nothingdns/nothingdns)](https://goreportcard.com/report/github.com/nothingdns/nothingdns)
 
@@ -818,6 +818,8 @@ Contributions are welcome! Please ensure:
 - [x] Anycast/Load balancing
 - [x] Slave zone support (AXFR/IXFR)
 - [x] Configuration hot reload
+- [x] Production-ready code quality (see [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md))
 - [ ] Web GUI for zone management
 - [ ] DNS64/NAT64 support
 - [ ] Response Rate Limiting (RRL)
+- [ ] Ed25519 DNSSEC signing support
