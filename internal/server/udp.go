@@ -159,7 +159,10 @@ func (s *UDPServer) reader(requestChan chan<- *udpRequest) {
 		}
 
 		// Get a buffer from the pool
-		bufPtr := s.bufferPool.Get().(*[]byte)
+		bufPtr, ok := s.bufferPool.Get().(*[]byte)
+		if !ok {
+			continue
+		}
 		buf := *bufPtr
 
 		// Read packet
@@ -296,7 +299,10 @@ func (w *udpResponseWriter) Write(msg *protocol.Message) (int, error) {
 	}
 
 	// Send response
-	addr := w.client.Addr.(*net.UDPAddr)
+	addr, ok := w.client.Addr.(*net.UDPAddr)
+	if !ok {
+		return 0, fmt.Errorf("udp: expected *net.UDPAddr, got %T", w.client.Addr)
+	}
 	sent, err := w.server.conn.WriteToUDP(buf[:n], addr)
 	if err == nil {
 		atomic.AddUint64(&w.server.packetsSent, 1)

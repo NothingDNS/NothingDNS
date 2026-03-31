@@ -650,20 +650,15 @@ func TestSignalHandlerPerformShutdownError(t *testing.T) {
 // ============================================================================
 
 func TestPooledBufferGrowNegative(t *testing.T) {
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Error("Grow(-1) should panic")
-		}
-		msg, ok := r.(string)
-		if !ok || !strings.Contains(msg, "negative") {
-			t.Errorf("Expected panic with 'negative', got: %v", r)
-		}
-	}()
-
 	p := NewPooledBuffer()
 	defer p.Release()
-	p.Grow(-1)
+	err := p.Grow(-1)
+	if err == nil {
+		t.Error("Grow(-1) should return an error")
+	}
+	if !strings.Contains(err.Error(), "negative") {
+		t.Errorf("Expected error with 'negative', got: %v", err)
+	}
 }
 
 func TestPooledBufferGrowNoOp(t *testing.T) {

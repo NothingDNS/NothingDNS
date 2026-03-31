@@ -363,7 +363,9 @@ func (s *Server) handleClusterNodes(w http.ResponseWriter, r *http.Request) {
 func (s *Server) writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		log.Printf("api: failed to encode JSON response: %v", err)
+	}
 }
 
 // writeError writes an error response.

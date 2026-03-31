@@ -3,6 +3,7 @@ package dashboard
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -124,7 +125,9 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(stats)
+	if err := json.NewEncoder(w).Encode(stats); err != nil {
+		log.Printf("dashboard: failed to encode stats: %v", err)
+	}
 }
 
 // handleQueryStream handles query stream requests
@@ -135,7 +138,9 @@ func (s *Server) handleQueryStream(w http.ResponseWriter, r *http.Request) {
 	s.stats.mu.RUnlock()
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(queries)
+	if err := json.NewEncoder(w).Encode(queries); err != nil {
+		log.Printf("dashboard: failed to encode queries: %v", err)
+	}
 }
 
 // handleZones handles zone list requests
@@ -146,7 +151,9 @@ func (s *Server) handleZones(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(zones)
+	if err := json.NewEncoder(w).Encode(zones); err != nil {
+		log.Printf("dashboard: failed to encode zones: %v", err)
+	}
 }
 
 // handleWebSocket handles WebSocket connections
@@ -154,9 +161,11 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// WebSocket upgrade would be handled by gorilla/websocket or similar
 	// This is a placeholder that returns method not allowed
 	w.WriteHeader(http.StatusMethodNotAllowed)
-	json.NewEncoder(w).Encode(map[string]string{
+	if err := json.NewEncoder(w).Encode(map[string]string{
 		"error": "WebSocket upgrade required",
-	})
+	}); err != nil {
+		log.Printf("dashboard: failed to encode websocket error: %v", err)
+	}
 }
 
 // RecordQuery records a query event and broadcasts it

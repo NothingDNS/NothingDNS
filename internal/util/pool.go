@@ -1,6 +1,7 @@
 package util
 
 import (
+	"fmt"
 	"sync"
 )
 
@@ -23,7 +24,12 @@ var bufferPool = sync.Pool{
 // The returned buffer has capacity defaultBufferSize but length 0.
 // The buffer should be returned to the pool with PutBuffer when no longer needed.
 func GetBuffer() *[]byte {
-	return bufferPool.Get().(*[]byte)
+	if buf, ok := bufferPool.Get().(*[]byte); ok {
+		return buf
+	}
+	// Fallback if pool returns unexpected type
+	newBuf := make([]byte, 0, defaultBufferSize)
+	return &newBuf
 }
 
 // PutBuffer returns a buffer to the pool.
@@ -119,9 +125,9 @@ func (p *PooledBuffer) Release() {
 
 // Grow ensures the buffer has room for n more bytes.
 // The capacity will be increased if necessary.
-func (p *PooledBuffer) Grow(n int) {
+func (p *PooledBuffer) Grow(n int) error {
 	if n < 0 {
-		panic("cannot grow buffer by negative amount")
+		return fmt.Errorf("cannot grow buffer by negative amount")
 	}
 	if cap(*p.buf)-len(*p.buf) < n {
 		// Need more capacity - allocate new underlying array
@@ -130,4 +136,5 @@ func (p *PooledBuffer) Grow(n int) {
 		copy(newBuf, *p.buf)
 		*p.buf = newBuf
 	}
+	return nil
 }
