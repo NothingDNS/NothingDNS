@@ -380,6 +380,7 @@ func run() error {
 	}
 
 	// Initialize AXFR server for zone transfers
+	// Note: zonesMu is set later after handler is created
 	axfrServer := transfer.NewAXFRServer(zones)
 	logger.Infof("AXFR server initialized with %d zones", len(zones))
 
@@ -444,6 +445,11 @@ func run() error {
 		ddnsHandler:   ddnsHandler,
 		slaveManager:  slaveManager,
 	}
+
+	// Share the zones mutex between handler, AXFR server, and DDNS handler
+	// to prevent data races on the shared zones map
+	axfrServer.SetZonesMu(&handler.zonesMu)
+	ddnsHandler.SetZonesMu(&handler.zonesMu)
 
 	// Initialize API server
 	apiServer := api.NewServer(cfg.Server.HTTP, zoneManager, dnsCache, func() error {

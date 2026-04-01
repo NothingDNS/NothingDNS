@@ -78,7 +78,7 @@ type UpdateResponse struct {
 // RFC 2136 - Dynamic Updates in the Domain Name System
 type DynamicDNSHandler struct {
 	zones      map[string]*zone.Zone
-	zonesMu    sync.RWMutex
+	zonesMu    *sync.RWMutex
 	keyStore   *KeyStore
 	acl        map[string][]*net.IPNet // zone -> allowed networks
 	aclMu      sync.RWMutex
@@ -89,10 +89,17 @@ type DynamicDNSHandler struct {
 func NewDynamicDNSHandler(zones map[string]*zone.Zone) *DynamicDNSHandler {
 	return &DynamicDNSHandler{
 		zones:      zones,
+		zonesMu:    &sync.RWMutex{},
 		keyStore:   NewKeyStore(),
 		acl:        make(map[string][]*net.IPNet),
 		updateChan: make(chan *UpdateRequest, 100),
 	}
+}
+
+// SetZonesMu sets an external mutex to protect the zones map.
+// Use this when multiple components share the same zones map.
+func (h *DynamicDNSHandler) SetZonesMu(mu *sync.RWMutex) {
+	h.zonesMu = mu
 }
 
 // SetKeyStore sets the TSIG key store for authentication

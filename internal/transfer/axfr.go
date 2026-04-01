@@ -36,10 +36,10 @@ type AXFRResponse struct {
 // RFC 5936 - DNS Zone Transfer Protocol
 // AXFR must use TCP (RFC 5936 Section 4.1)
 type AXFRServer struct {
-	zones     map[string]*zone.Zone  // zone name -> zone
-	zonesMu   sync.RWMutex           // protects zones map
-	keyStore  *KeyStore              // TSIG keys for authentication
-	allowList []net.IPNet            // Allowed client networks
+	zones       map[string]*zone.Zone  // zone name -> zone
+	zonesMu     *sync.RWMutex          // protects zones map (can be shared externally)
+	keyStore    *KeyStore              // TSIG keys for authentication
+	allowList   []net.IPNet            // Allowed client networks
 }
 
 // AXFRServerOption configures the AXFR server
@@ -68,6 +68,7 @@ func WithAllowList(networks []string) AXFRServerOption {
 func NewAXFRServer(zones map[string]*zone.Zone, opts ...AXFRServerOption) *AXFRServer {
 	s := &AXFRServer{
 		zones:     zones,
+		zonesMu:   &sync.RWMutex{},
 		keyStore:  NewKeyStore(),
 		allowList: nil, // nil means allow all
 	}
@@ -75,6 +76,20 @@ func NewAXFRServer(zones map[string]*zone.Zone, opts ...AXFRServerOption) *AXFRS
 		opt(s)
 	}
 	return s
+}
+
+// WithZonesMu sets an external mutex to protect the zones map.
+// Use this when multiple components share the same zones map.
+func WithZonesMu(mu *sync.RWMutex) AXFRServerOption {
+	return func(s *AXFRServer) {
+		s.zonesMu = mu
+	}
+}
+
+// SetZonesMu sets an external mutex to protect the zones map.
+// Use this when multiple components share the same zones map.
+func (s *AXFRServer) SetZonesMu(mu *sync.RWMutex) {
+	s.zonesMu = mu
 }
 
 // AddZone adds a zone to the server
