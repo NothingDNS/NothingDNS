@@ -507,7 +507,9 @@ func (gp *GossipProtocol) probeLoop() {
 
 // probeNodes checks liveness of suspect nodes.
 func (gp *GossipProtocol) probeNodes() {
-	for _, node := range gp.nodeList.GetAll() {
+	nodes := gp.nodeList.GetAll()
+	for i := range nodes {
+		node := &nodes[i]
 		if node.ID == gp.nodeList.GetSelf().ID {
 			continue
 		}

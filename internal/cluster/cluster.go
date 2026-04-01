@@ -230,13 +230,13 @@ func (c *Cluster) GetNodeID() string {
 	return c.config.NodeID
 }
 
-// GetNodes returns all cluster nodes.
-func (c *Cluster) GetNodes() []*Node {
+// GetNodes returns copies of all cluster nodes.
+func (c *Cluster) GetNodes() []Node {
 	return c.nodeList.GetAll()
 }
 
-// GetAliveNodes returns all alive nodes.
-func (c *Cluster) GetAliveNodes() []*Node {
+// GetAliveNodes returns copies of all alive nodes.
+func (c *Cluster) GetAliveNodes() []Node {
 	return c.nodeList.GetAlive()
 }
 

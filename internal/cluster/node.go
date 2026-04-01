@@ -145,27 +145,31 @@ func (nl *NodeList) Remove(id string) {
 	delete(nl.nodes, id)
 }
 
-// GetAll returns all nodes.
-func (nl *NodeList) GetAll() []*Node {
+// GetAll returns copies of all nodes.
+// Returns value copies to prevent data races when callers read fields
+// after the lock is released.
+func (nl *NodeList) GetAll() []Node {
 	nl.mu.RLock()
 	defer nl.mu.RUnlock()
 
-	result := make([]*Node, 0, len(nl.nodes))
+	result := make([]Node, 0, len(nl.nodes))
 	for _, n := range nl.nodes {
-		result = append(result, n)
+		result = append(result, *n)
 	}
 	return result
 }
 
-// GetAlive returns all alive nodes (excluding self).
-func (nl *NodeList) GetAlive() []*Node {
+// GetAlive returns copies of all alive nodes (excluding self).
+// Returns value copies to prevent data races when callers read fields
+// after the lock is released.
+func (nl *NodeList) GetAlive() []Node {
 	nl.mu.RLock()
 	defer nl.mu.RUnlock()
 
-	result := make([]*Node, 0)
+	result := make([]Node, 0)
 	for _, n := range nl.nodes {
 		if n.ID != nl.self.ID && n.IsAlive() {
-			result = append(result, n)
+			result = append(result, *n)
 		}
 	}
 	return result

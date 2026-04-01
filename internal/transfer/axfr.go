@@ -181,6 +181,7 @@ func (s *AXFRServer) generateAXFRRecords(z *zone.Zone) ([]*protocol.ResourceReco
 
 	// Collect all zone records (excluding SOA - it's stored separately in z.SOA)
 	var zoneRecords []*protocol.ResourceRecord
+	z.RLock()
 	for name, zoneRecordsList := range z.Records {
 		for _, rec := range zoneRecordsList {
 			rr, err := s.zoneRecordToRR(name, rec, z.Origin)
@@ -190,6 +191,7 @@ func (s *AXFRServer) generateAXFRRecords(z *zone.Zone) ([]*protocol.ResourceReco
 			zoneRecords = append(zoneRecords, rr)
 		}
 	}
+	z.RUnlock()
 
 	// Sort zone records canonically (RFC 4034 Section 6.1)
 	// Note: We sort only zone records, not the SOA, because AXFR format
