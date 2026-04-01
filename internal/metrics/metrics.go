@@ -15,6 +15,7 @@ type MetricsCollector struct {
 	mu     sync.RWMutex
 	config Config
 	server *http.Server
+	wg     sync.WaitGroup
 
 	// Query metrics
 	queriesTotal   map[string]*uint64 // by query type
@@ -73,14 +74,18 @@ func (m *MetricsCollector) Start() error {
 	mux.HandleFunc(m.config.Path, m.handleMetrics)
 	mux.HandleFunc("/health", m.handleHealth)
 
+	m.mu.Lock()
 	m.server = &http.Server{
 		Addr:         m.config.Bind,
 		Handler:      mux,
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 5 * time.Second,
 	}
+	m.mu.Unlock()
 
+	m.wg.Add(1)
 	go func() {
+		defer m.wg.Done()
 		if err := m.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Printf("metrics server error: %v", err)
 		}
@@ -91,14 +96,20 @@ func (m *MetricsCollector) Start() error {
 
 // Stop stops the metrics HTTP server.
 func (m *MetricsCollector) Stop() error {
-	if m.server == nil {
+	m.mu.RLock()
+	srv := m.server
+	m.mu.RUnlock()
+
+	if srv == nil {
 		return nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	return m.server.Shutdown(ctx)
+	err := srv.Shutdown(ctx)
+	m.wg.Wait()
+	return err
 }
 
 // RecordQuery records a DNS query.
