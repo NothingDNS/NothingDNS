@@ -315,14 +315,26 @@ func (c *Client) selectFastest() *Server {
 
 // queryUDP sends a query via UDP.
 func (c *Client) queryUDP(server *Server, msg *protocol.Message) (*protocol.Message, error) {
-	// Pack the message
 	c.mu.RLock()
 	pool := c.udpPool[server.Address]
 	c.mu.RUnlock()
 
-	buf := pool.Get().([]byte)
-	defer pool.Put(buf)
+	var buf []byte
+	var putBack func()
+	if pool != nil {
+		buf = pool.Get().([]byte)
+		putBack = func() { pool.Put(buf) }
+	} else {
+		buf = make([]byte, 4096)
+		putBack = func() {}
+	}
+	defer putBack()
 
+	return c.queryUDPBuf(server, msg, buf)
+}
+
+// queryUDPBuf performs a UDP query using the provided buffer.
+func (c *Client) queryUDPBuf(server *Server, msg *protocol.Message, buf []byte) (*protocol.Message, error) {
 	n, err := msg.Pack(buf)
 	if err != nil {
 		return nil, fmt.Errorf("pack message: %w", err)
@@ -373,14 +385,26 @@ func (c *Client) queryUDP(server *Server, msg *protocol.Message) (*protocol.Mess
 
 // queryTCP sends a query via TCP.
 func (c *Client) queryTCP(server *Server, msg *protocol.Message) (*protocol.Message, error) {
-	// Pack the message
 	c.mu.RLock()
 	pool := c.tcpPool[server.Address]
 	c.mu.RUnlock()
 
-	buf := pool.Get().([]byte)
-	defer pool.Put(buf)
+	var buf []byte
+	var putBack func()
+	if pool != nil {
+		buf = pool.Get().([]byte)
+		putBack = func() { pool.Put(buf) }
+	} else {
+		buf = make([]byte, 65535)
+		putBack = func() {}
+	}
+	defer putBack()
 
+	return c.queryTCPBuf(server, msg, buf)
+}
+
+// queryTCPBuf performs a TCP query using the provided buffer.
+func (c *Client) queryTCPBuf(server *Server, msg *protocol.Message, buf []byte) (*protocol.Message, error) {
 	n, err := msg.Pack(buf)
 	if err != nil {
 		return nil, fmt.Errorf("pack message: %w", err)
