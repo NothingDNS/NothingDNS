@@ -122,7 +122,13 @@ func OpenWAL(dir string, opts WALOptions) (*WAL, error) {
 			return nil, fmt.Errorf("create initial segment: %w", err)
 		}
 	} else {
-		// Use the last segment as active
+		// Use the last segment as active, open its file for appending
+		lastPath := wal.segments[len(wal.segments)-1].Path
+		file, err := os.OpenFile(lastPath, os.O_APPEND|os.O_WRONLY, 0644)
+		if err != nil {
+			return nil, fmt.Errorf("open active segment file: %w", err)
+		}
+		wal.segments[len(wal.segments)-1].file = file
 		wal.active = wal.segments[len(wal.segments)-1]
 	}
 
