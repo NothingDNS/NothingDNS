@@ -36,8 +36,8 @@ func cacheKey(name string, qtype uint16) string {
 
 // Get retrieves a cached validation result.
 func (c *ValidationCache) Get(name string, qtype uint16) (ValidationResult, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	key := cacheKey(name, qtype)
 	entry, ok := c.items[key]
@@ -46,6 +46,7 @@ func (c *ValidationCache) Get(name string, qtype uint16) (ValidationResult, bool
 	}
 
 	if time.Now().After(entry.expiresAt) {
+		delete(c.items, key)
 		return ValidationIndeterminate, false
 	}
 
@@ -56,6 +57,16 @@ func (c *ValidationCache) Get(name string, qtype uint16) (ValidationResult, bool
 func (c *ValidationCache) Set(name string, qtype uint16, result ValidationResult) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	// Lazy eviction: purge expired entries when cache exceeds threshold
+	if len(c.items) > 10000 {
+		now := time.Now()
+		for key, entry := range c.items {
+			if now.After(entry.expiresAt) {
+				delete(c.items, key)
+			}
+		}
+	}
 
 	c.items[cacheKey(name, qtype)] = &cacheEntry{
 		result:    result,

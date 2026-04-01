@@ -76,6 +76,7 @@ type WAL struct {
 	stopChan    chan struct{}
 	syncChan    chan struct{}
 	syncPending bool
+	wg          sync.WaitGroup
 	opts        WALOptions
 }
 
@@ -126,6 +127,7 @@ func OpenWAL(dir string, opts WALOptions) (*WAL, error) {
 	}
 
 	// Start sync goroutine
+	wal.wg.Add(1)
 	go wal.syncLoop()
 
 	return wal, nil
@@ -492,6 +494,7 @@ func (wal *WAL) syncLocked() error {
 
 // syncLoop periodically syncs the WAL
 func (wal *WAL) syncLoop() {
+	defer wal.wg.Done()
 	ticker := time.NewTicker(wal.opts.SyncInterval)
 	defer ticker.Stop()
 
@@ -572,15 +575,20 @@ func (wal *WAL) Compact(checkpointData []byte) error {
 // Close closes the WAL
 func (wal *WAL) Close() error {
 	wal.mu.Lock()
-	defer wal.mu.Unlock()
 
 	if wal.closed {
+		wal.mu.Unlock()
 		return nil
 	}
 
 	wal.closed = true
 	close(wal.stopChan)
+	wal.mu.Unlock()
 
+	// Wait for syncLoop to finish before closing segment files
+	wal.wg.Wait()
+
+	wal.mu.Lock()
 	// Final sync
 	if wal.syncPending {
 		wal.syncLocked()
@@ -592,6 +600,7 @@ func (wal *WAL) Close() error {
 			seg.file.Close()
 		}
 	}
+	wal.mu.Unlock()
 
 	return nil
 }

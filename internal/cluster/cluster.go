@@ -26,9 +26,10 @@ type Cluster struct {
 	handlers   []EventHandler
 
 	// Status
-	started bool
-	mu      sync.RWMutex
-	wg      sync.WaitGroup
+	started     bool
+	cacheClosed bool
+	mu         sync.RWMutex
+	wg         sync.WaitGroup
 }
 
 // Config configures the cluster.
@@ -200,7 +201,10 @@ func (c *Cluster) Stop() error {
 		return nil
 	}
 
-	close(c.cacheSyncChan)
+	if !c.cacheClosed {
+		close(c.cacheSyncChan)
+		c.cacheClosed = true
+	}
 	c.mu.Unlock()
 
 	// Wait for cacheSyncLoop to finish before stopping gossip
@@ -212,6 +216,7 @@ func (c *Cluster) Stop() error {
 	}
 
 	c.started = false
+	c.cacheClosed = true
 	c.logger.Info("Cluster stopped")
 	c.mu.Unlock()
 

@@ -190,7 +190,11 @@ func (sm *SlaveManager) AddSlaveZone(config SlaveZoneConfig) error {
 	sm.clients[zoneName] = client
 
 	// Perform initial zone transfer
-	go sm.performZoneTransfer(zoneName)
+	sm.wg.Add(1)
+	go func() {
+		defer sm.wg.Done()
+		sm.performZoneTransfer(zoneName)
+	}()
 
 	return nil
 }
@@ -289,10 +293,15 @@ func (sm *SlaveManager) handleNotify(req *NOTIFYRequest) {
 	}
 
 	// Perform zone transfer
-	go sm.performZoneTransfer(zoneName)
+	sm.wg.Add(1)
+	go func() {
+		defer sm.wg.Done()
+		sm.performZoneTransfer(zoneName)
+	}()
 }
 
 // performZoneTransfer performs a zone transfer for the specified slave zone.
+// Callers should wrap this in a goroutine with wg tracking.
 func (sm *SlaveManager) performZoneTransfer(zoneName string) {
 	sm.mu.RLock()
 	slaveZone, exists := sm.slaveZones[zoneName]
@@ -323,13 +332,21 @@ func (sm *SlaveManager) performZoneTransfer(zoneName string) {
 
 	if err != nil {
 		// Schedule retry
-		go sm.scheduleRetry(zoneName)
+		sm.wg.Add(1)
+		go func() {
+			defer sm.wg.Done()
+			sm.scheduleRetry(zoneName)
+		}()
 		return
 	}
 
 	// Apply the transferred zone
 	if err := sm.applyTransferredZone(slaveZone, records); err != nil {
-		go sm.scheduleRetry(zoneName)
+		sm.wg.Add(1)
+		go func() {
+			defer sm.wg.Done()
+			sm.scheduleRetry(zoneName)
+		}()
 		return
 	}
 }
@@ -466,7 +483,11 @@ func (sm *SlaveManager) scheduleRetry(zoneName string) {
 
 	select {
 	case <-time.After(slaveZone.Config.RetryInterval):
-		sm.performZoneTransfer(zoneName)
+		sm.wg.Add(1)
+		go func() {
+			defer sm.wg.Done()
+			sm.performZoneTransfer(zoneName)
+		}()
 	case <-sm.stopChan:
 		// Manager is stopping, abort retry
 	}

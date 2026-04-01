@@ -15,6 +15,7 @@ type ReloadHandler struct {
 	callbacks map[string]ReloadCallback
 	reloadSig chan os.Signal
 	enabled   atomic.Bool
+	wg        sync.WaitGroup
 }
 
 // ReloadCallback is called on configuration reload
@@ -65,7 +66,9 @@ func (h *ReloadHandler) Unregister(component string) {
 func (h *ReloadHandler) Start() {
 	signal.Notify(h.reloadSig, syscall.SIGHUP)
 
+	h.wg.Add(1)
 	go func() {
+		defer h.wg.Done()
 		for range h.reloadSig {
 			if !h.enabled.Load() {
 				continue
@@ -80,6 +83,7 @@ func (h *ReloadHandler) Stop() {
 	h.enabled.Store(false)
 	signal.Stop(h.reloadSig)
 	close(h.reloadSig)
+	h.wg.Wait()
 }
 
 // Reload triggers a manual reload
@@ -301,6 +305,7 @@ func (r *TLSReloader) Reload() error {
 
 // LogLevelReloader handles log level hot reload
 type LogLevelReloader struct {
+	mu           sync.RWMutex
 	currentLevel string
 	callback     func(level string) error
 	logger       Logger
@@ -322,7 +327,9 @@ func (r *LogLevelReloader) SetLevel(level string) error {
 			return err
 		}
 	}
+	r.mu.Lock()
 	r.currentLevel = level
+	r.mu.Unlock()
 	if r.logger != nil {
 		r.logger.Info("Log level changed", "level", level)
 	}
@@ -331,6 +338,8 @@ func (r *LogLevelReloader) SetLevel(level string) error {
 
 // GetLevel returns the current log level
 func (r *LogLevelReloader) GetLevel() string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.currentLevel
 }
 
