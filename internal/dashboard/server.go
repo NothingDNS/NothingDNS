@@ -17,6 +17,7 @@ type Server struct {
 	stats         *DashboardStats
 	enabled       bool
 	staticHandler http.Handler
+	wg            sync.WaitGroup
 }
 
 // Client represents a connected WebSocket client
@@ -25,6 +26,7 @@ type Client struct {
 	send        chan []byte
 	subscribe   chan struct{}
 	unsubscribe chan struct{}
+	closeSend   sync.Once
 }
 
 // WebSocketConn interface for WebSocket connections
@@ -73,6 +75,7 @@ func NewServer() *Server {
 		enabled: true,
 	}
 
+	s.wg.Add(1)
 	go s.broadcastLoop()
 
 	return s
@@ -238,6 +241,7 @@ func (s *Server) RemoveClient(client *Client) {
 
 // broadcastLoop broadcasts events to all connected clients
 func (s *Server) broadcastLoop() {
+	defer s.wg.Done()
 	for event := range s.broadcastChan {
 		data, err := json.Marshal(map[string]interface{}{
 			"type":  "query",
@@ -262,6 +266,7 @@ func (s *Server) broadcastLoop() {
 // ClientLoop handles a client's read/write loops
 func (s *Server) ClientLoop(client *Client) {
 	defer func() {
+		client.closeSend.Do(func() { close(client.send) })
 		s.RemoveClient(client)
 		client.conn.Close()
 	}()
@@ -287,7 +292,6 @@ func (s *Server) ClientLoop(client *Client) {
 // Stop stops the dashboard server
 func (s *Server) Stop() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	s.enabled = false
 
@@ -302,6 +306,10 @@ func (s *Server) Stop() {
 		}
 	}
 	s.clients = make(map[*Client]struct{})
+	s.mu.Unlock()
+
+	// Wait for broadcastLoop to finish
+	s.wg.Wait()
 }
 
 // GetStats returns current dashboard statistics

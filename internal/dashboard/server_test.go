@@ -521,7 +521,7 @@ func TestClientLoop_SuccessfulWrite(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	// Close the send channel to stop the write loop
-	close(client.send)
+	client.closeSend.Do(func() { close(client.send) })
 
 	// Trigger read error to exit
 	mockConn.readErr.Store(true)
@@ -1049,7 +1049,7 @@ func TestClientLoop_ClosedSendChannel(t *testing.T) {
 	}()
 
 	// Close the send channel to stop the write loop
-	close(client.send)
+	client.closeSend.Do(func() { close(client.send) })
 
 	// Close the readChan to trigger ReadMessage return
 	close(mockConn.readChan)
