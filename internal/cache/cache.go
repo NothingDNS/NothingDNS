@@ -307,16 +307,18 @@ func (c *Cache) SetInvalidateFunc(fn func(key string)) {
 // Delete removes an entry from the cache.
 func (c *Cache) Delete(key string) {
 	var notify bool
+	var fn func(string)
 	c.mu.Lock()
 	if entry, exists := c.entries[key]; exists {
 		c.removeEntry(entry)
 		notify = true
 	}
+	fn = c.invalidateFunc
 	c.mu.Unlock()
 
 	// Notify outside lock to prevent deadlock
-	if notify && c.invalidateFunc != nil {
-		c.invalidateFunc(key)
+	if notify && fn != nil {
+		fn(key)
 	}
 }
 

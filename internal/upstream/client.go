@@ -222,6 +222,7 @@ func (c *Client) QueryContext(ctx context.Context, msg *protocol.Message) (*prot
 
 	select {
 	case <-ctx.Done():
+		go func() { <-done }() // drain to prevent goroutine leak
 		return nil, ctx.Err()
 	case r := <-done:
 		return r.resp, r.err

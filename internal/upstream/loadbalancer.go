@@ -238,6 +238,7 @@ func (lb *LoadBalancer) QueryContext(ctx context.Context, msg *protocol.Message)
 
 	select {
 	case <-ctx.Done():
+		go func() { <-done }() // drain to prevent goroutine leak
 		return nil, ctx.Err()
 	case r := <-done:
 		return r.resp, r.err
@@ -639,8 +640,13 @@ func (lb *LoadBalancer) checkHealth() {
 		QClass: protocol.ClassIN,
 	})
 
-	// Check standalone servers
-	for _, server := range lb.servers {
+	// Check standalone servers — snapshot under lock
+	lb.mu.RLock()
+	servers := make([]*Server, len(lb.servers))
+	copy(servers, lb.servers)
+	lb.mu.RUnlock()
+
+	for _, server := range servers {
 		go func(s *Server) {
 			query := *msg // copy to avoid data race on Pack
 			_, err := lb.queryUDP(s.Address, &query)
@@ -654,7 +660,12 @@ func (lb *LoadBalancer) checkHealth() {
 
 	// Check anycast backends
 	for _, group := range lb.anycastGroups {
-		for _, backend := range group.Backends {
+		group.mu.RLock()
+		backends := make([]*AnycastBackend, len(group.Backends))
+		copy(backends, group.Backends)
+		group.mu.RUnlock()
+
+		for _, backend := range backends {
 			go func(b *AnycastBackend) {
 				query := *msg // copy to avoid data race on Pack
 				_, err := lb.queryUDP(b.Address(), &query)

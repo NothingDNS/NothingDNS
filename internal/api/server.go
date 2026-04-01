@@ -197,9 +197,12 @@ func (s *Server) handleZones(w http.ResponseWriter, r *http.Request) {
 	zones := []map[string]interface{}{}
 	if s.zoneManager != nil {
 		for name, z := range s.zoneManager.List() {
+			z.RLock()
+			recordCount := len(z.Records)
+			z.RUnlock()
 			zones = append(zones, map[string]interface{}{
 				"name":    name,
-				"records": len(z.Records),
+				"records": recordCount,
 			})
 		}
 	}
