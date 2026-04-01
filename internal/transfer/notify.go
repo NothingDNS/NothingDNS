@@ -178,6 +178,7 @@ type NOTIFYSlaveHandler struct {
 	zonesMu     sync.RWMutex
 	notifyChan  chan *NOTIFYRequest
 	serialCheck SerialChecker
+	closeOnce   sync.Once
 }
 
 // SerialChecker is called to check if the serial has changed
@@ -194,6 +195,13 @@ func NewNOTIFYSlaveHandler(zones map[string]*zone.Zone) *NOTIFYSlaveHandler {
 // SetSerialChecker sets the function used to check serial numbers
 func (h *NOTIFYSlaveHandler) SetSerialChecker(checker SerialChecker) {
 	h.serialCheck = checker
+}
+
+// Close shuts down the handler, closing the notify channel.
+func (h *NOTIFYSlaveHandler) Close() {
+	h.closeOnce.Do(func() {
+		close(h.notifyChan)
+	})
 }
 
 // GetNotifyChannel returns the channel that receives NOTIFY events

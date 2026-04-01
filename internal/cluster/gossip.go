@@ -274,7 +274,9 @@ func (gp *GossipProtocol) receiveLoop() {
 		default:
 		}
 
-		gp.conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		if err := gp.conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+			return
+		}
 		n, from, err := gp.conn.ReadFromUDP(buf)
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {

@@ -173,7 +173,10 @@ func (s *TCPServer) handleConnection(conn net.Conn) {
 
 	for {
 		// Set read timeout
-		conn.SetReadDeadline(time.Now().Add(TCPReadTimeout))
+		if err := conn.SetReadDeadline(time.Now().Add(TCPReadTimeout)); err != nil {
+			atomic.AddUint64(&s.errors, 1)
+			return
+		}
 
 		// Read 2-byte length prefix
 		var lengthBuf [2]byte

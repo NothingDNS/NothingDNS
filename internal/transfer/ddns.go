@@ -83,6 +83,8 @@ type DynamicDNSHandler struct {
 	acl        map[string][]*net.IPNet // zone -> allowed networks
 	aclMu      sync.RWMutex
 	updateChan chan *UpdateRequest
+	closed     bool
+	closeMu    sync.Once
 }
 
 // NewDynamicDNSHandler creates a new Dynamic DNS handler
@@ -100,6 +102,14 @@ func NewDynamicDNSHandler(zones map[string]*zone.Zone) *DynamicDNSHandler {
 // Use this when multiple components share the same zones map.
 func (h *DynamicDNSHandler) SetZonesMu(mu *sync.RWMutex) {
 	h.zonesMu = mu
+}
+
+// Close shuts down the handler, closing the update channel.
+func (h *DynamicDNSHandler) Close() {
+	h.closeMu.Do(func() {
+		h.closed = true
+		close(h.updateChan)
+	})
 }
 
 // SetKeyStore sets the TSIG key store for authentication
