@@ -647,11 +647,11 @@ func loadConfig(path string) (*config.Config, error) {
 	}
 
 	// Validate configuration
-	if errors := cfg.Validate(); len(errors) > 0 {
-		for _, e := range errors {
+	if errs := cfg.Validate(); len(errs) > 0 {
+		for _, e := range errs {
 			fmt.Fprintf(os.Stderr, "Config validation error: %s\n", e)
 		}
-		return nil, fmt.Errorf("configuration validation failed")
+		return nil, fmt.Errorf("configuration validation failed: %d error(s)", len(errs))
 	}
 
 	return cfg, nil

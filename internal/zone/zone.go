@@ -634,15 +634,15 @@ func (z *Zone) LookupAll(name string) []Record {
 // Validate checks the zone for required records and consistency.
 func (z *Zone) Validate() error {
 	if z.Origin == "" || z.Origin == "." {
-		return fmt.Errorf("zone has no origin")
+		return fmt.Errorf("zone %q: has no origin", z.Origin)
 	}
 
 	if z.SOA == nil {
-		return fmt.Errorf("zone missing SOA record")
+		return fmt.Errorf("zone %q: missing SOA record", z.Origin)
 	}
 
 	if len(z.NS) == 0 {
-		return fmt.Errorf("zone missing NS records")
+		return fmt.Errorf("zone %q: missing NS records", z.Origin)
 	}
 
 	return nil

@@ -47,8 +47,12 @@ func (m *Manager) Load(name, path string) error {
 	return nil
 }
 
-// LoadZone loads a zone directly
+// LoadZone loads a zone directly without validation.
+// Prefer Load() for new zones, which validates before loading.
 func (m *Manager) LoadZone(z *Zone, path string) {
+	if z == nil {
+		return
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
