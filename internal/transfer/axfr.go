@@ -529,6 +529,10 @@ func (c *AXFRClient) sendMessage(conn net.Conn, msg *protocol.Message) error {
 		return err
 	}
 
+	if n > 65535 {
+		return fmt.Errorf("message too large for TCP: %d bytes", n)
+	}
+
 	// Write length prefix + message in a single Write call
 	buf[0] = byte(n >> 8)
 	buf[1] = byte(n)

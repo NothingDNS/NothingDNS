@@ -545,7 +545,8 @@ func (lb *LoadBalancer) queryTCP(address string, msg *protocol.Message) (*protoc
 	}
 
 	buf := pool.Get().([]byte)
-	defer pool.Put(buf)
+	poolBuf := buf
+	defer pool.Put(poolBuf)
 
 	n, err := msg.Pack(buf)
 	if err != nil {
@@ -563,6 +564,9 @@ func (lb *LoadBalancer) queryTCP(address string, msg *protocol.Message) (*protoc
 		return nil, fmt.Errorf("set deadline: %w", err)
 	}
 
+	if len(packed) > 65535 {
+		return nil, fmt.Errorf("message too large for TCP: %d bytes", len(packed))
+	}
 	length := uint16(len(packed))
 	lengthBuf := []byte{byte(length >> 8), byte(length)}
 	if _, err := conn.Write(lengthBuf); err != nil {

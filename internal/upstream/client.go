@@ -393,7 +393,8 @@ func (c *Client) queryTCP(server *Server, msg *protocol.Message) (*protocol.Mess
 	var putBack func()
 	if pool != nil {
 		buf = pool.Get().([]byte)
-		putBack = func() { pool.Put(buf) }
+		poolBuf := buf
+		putBack = func() { pool.Put(poolBuf) }
 	} else {
 		buf = make([]byte, 65535)
 		putBack = func() {}
@@ -424,6 +425,9 @@ func (c *Client) queryTCPBuf(server *Server, msg *protocol.Message, buf []byte) 
 	}
 
 	// Send length-prefixed query
+	if len(packed) > 65535 {
+		return nil, fmt.Errorf("message too large for TCP: %d bytes", len(packed))
+	}
 	length := uint16(len(packed))
 	lengthBuf := []byte{byte(length >> 8), byte(length)}
 	if _, err := conn.Write(lengthBuf); err != nil {

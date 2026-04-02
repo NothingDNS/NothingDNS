@@ -251,6 +251,7 @@ func (s *TCPServer) handleMessage(conn net.Conn, data []byte) {
 		conn:    conn,
 		client:  client,
 		maxSize: TCPMaxMessageSize,
+		server:  s,
 	}
 
 	// Call handler
@@ -262,7 +263,8 @@ type tcpResponseWriter struct {
 	conn       net.Conn
 	client     *ClientInfo
 	maxSize    int
-	writeCount int // Number of writes (for AXFR support)
+	writeCount int        // Number of writes (for AXFR support)
+	server     *TCPServer // Reference for metrics
 }
 
 func (w *tcpResponseWriter) ClientInfo() *ClientInfo {
@@ -299,7 +301,9 @@ func (w *tcpResponseWriter) Write(msg *protocol.Message) (int, error) {
 	// Write response
 	sent, err := w.conn.Write(buf[:n+2])
 	if err == nil && sent > 0 {
-		// Update metrics through a global or passed mechanism
+		if w.server != nil {
+			atomic.AddUint64(&w.server.messagesSent, 1)
+		}
 	}
 
 	w.writeCount++
@@ -330,6 +334,7 @@ func (s *TCPServer) Stats() TCPServerStats {
 		ConnectionsAccepted: atomic.LoadUint64(&s.connectionsAccepted),
 		ConnectionsClosed:   atomic.LoadUint64(&s.connectionsClosed),
 		MessagesReceived:    atomic.LoadUint64(&s.messagesReceived),
+		MessagesSent:        atomic.LoadUint64(&s.messagesSent),
 		Errors:              atomic.LoadUint64(&s.errors),
 		Workers:             s.workers,
 	}
@@ -340,6 +345,7 @@ type TCPServerStats struct {
 	ConnectionsAccepted uint64
 	ConnectionsClosed   uint64
 	MessagesReceived    uint64
+	MessagesSent        uint64
 	Errors              uint64
 	Workers             int
 }

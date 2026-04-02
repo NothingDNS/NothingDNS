@@ -163,6 +163,9 @@ func (rw *dohResponseWriter) ClientInfo() *server.ClientInfo {
 		}
 	}
 	ip := net.ParseIP(host)
+	if ip == nil {
+		ip = net.IPv4(0, 0, 0, 0)
+	}
 
 	return &server.ClientInfo{
 		Addr: &net.TCPAddr{
