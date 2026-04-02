@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"sort"
 	"strings"
@@ -201,7 +202,8 @@ func (s *AXFRServer) generateAXFRRecords(z *zone.Zone) ([]*protocol.ResourceReco
 		for _, rec := range zoneRecordsList {
 			rr, err := s.zoneRecordToRR(name, rec, z.Origin)
 			if err != nil {
-				continue // Skip records we can't convert
+				log.Printf("axfr: skipping record %s/%s: %v", name, rec.Type, err)
+				continue
 			}
 			zoneRecords = append(zoneRecords, rr)
 		}

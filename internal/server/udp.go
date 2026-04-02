@@ -293,19 +293,30 @@ func (w *udpResponseWriter) Write(msg *protocol.Message) (int, error) {
 
 	// Truncate if necessary (set TC bit)
 	if n > w.maxSize {
-		// Truncate the message
 		msg.Header.Flags.TC = true
-		msg.Answers = truncateRRSet(msg.Answers, w.maxSize-512) // Leave room for header
 		msg.Authorities = nil
 		msg.Additionals = nil
 
-		n, err = msg.Pack(buf)
-		if err != nil {
-			return 0, err
+		// Reduce answers until the message fits
+		for len(msg.Answers) > 0 {
+			// Remove one answer at a time from the end
+			msg.Answers = msg.Answers[:len(msg.Answers)-1]
+			n, err = msg.Pack(buf)
+			if err != nil {
+				return 0, err
+			}
+			if n <= w.maxSize {
+				break
+			}
 		}
 
-		if n > w.maxSize {
-			n = w.maxSize
+		// If still too large (or no answers left), send header + question only
+		if n > w.maxSize || len(msg.Answers) == 0 {
+			msg.Answers = nil
+			n, err = msg.Pack(buf)
+			if err != nil {
+				return 0, err
+			}
 		}
 	}
 

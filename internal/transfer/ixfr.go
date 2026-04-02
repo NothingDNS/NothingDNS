@@ -3,6 +3,7 @@ package transfer
 import (
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"strings"
 	"sync"
@@ -247,6 +248,7 @@ func (s *IXFRServer) generateIncrementalIXFR(z *zone.Zone, clientSerial uint32) 
 		for _, del := range entry.Deleted {
 			rr, err := s.changeToRR(del, z.Origin)
 			if err != nil {
+				log.Printf("ixfr: skipping deleted record %s/%d: %v", del.Name, del.Type, err)
 				continue
 			}
 			records = append(records, rr)
@@ -260,6 +262,7 @@ func (s *IXFRServer) generateIncrementalIXFR(z *zone.Zone, clientSerial uint32) 
 		for _, add := range entry.Added {
 			rr, err := s.changeToRR(add, z.Origin)
 			if err != nil {
+				log.Printf("ixfr: skipping added record %s/%d: %v", add.Name, add.Type, err)
 				continue
 			}
 			records = append(records, rr)

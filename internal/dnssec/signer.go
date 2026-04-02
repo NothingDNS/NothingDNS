@@ -382,7 +382,7 @@ func (s *Signer) createSignedData(rrSet []*protocol.ResourceRecord, rrsig *proto
 			byte(rrsig.OriginalTTL>>8), byte(rrsig.OriginalTTL))
 
 		// RData length (2 bytes) and RData
-		buf := make([]byte, 65535)
+		buf := make([]byte, rr.Data.Len())
 		n, err := rr.Data.Pack(buf, 0)
 		if err != nil {
 			return nil, fmt.Errorf("packing RDATA for %s type %d: %w", rr.Name.String(), rr.Type, err)
