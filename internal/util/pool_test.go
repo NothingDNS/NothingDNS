@@ -112,22 +112,22 @@ func TestPooledBufferGrow(t *testing.T) {
 	p.WriteString("test")
 	initialCap := p.Cap()
 
-	// Grow beyond current capacity
-	// Write enough data so we need to grow
-	for i := 0; i < 4092; i++ {
+	// Fill buffer to capacity so Grow must allocate
+	for i := 0; i < initialCap; i++ {
 		p.WriteByte('x')
 	}
 
-	// Now we should be at capacity, Grow should increase it
+	// Now we are at capacity, Grow should increase it
 	p.Grow(1000)
 
-	if p.Cap() < initialCap+1000 {
-		t.Errorf("After Grow(1000), Cap() = %d, expected >= %d", p.Cap(), initialCap+1000)
+	// Grow guarantees room for n more bytes, so cap must be >= len + n
+	if p.Cap() < p.Len()+1000 {
+		t.Errorf("After Grow(1000), Cap() = %d, expected >= %d", p.Cap(), p.Len()+1000)
 	}
 
-	// Length should remain unchanged
-	if p.Len() != 4096 {
-		t.Errorf("After Grow, Len() = %d, expected 4096", p.Len())
+	// Length should remain unchanged (4 from WriteString + initialCap bytes)
+	if p.Len() != 4+initialCap {
+		t.Errorf("After Grow, Len() = %d, expected %d", p.Len(), 4+initialCap)
 	}
 }
 

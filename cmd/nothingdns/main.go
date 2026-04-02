@@ -449,6 +449,14 @@ func run() error {
 		logger.Infof("RRL enabled: %d qps/client, burst %d", cfg.RRL.Rate, cfg.RRL.Burst)
 	}
 
+	// Initialize audit logger
+	auditLogger, err := audit.NewAuditLogger(cfg.Logging.QueryLog, cfg.Logging.QueryLogFile)
+	if err != nil {
+		logger.Warnf("Failed to initialize audit logger: %v", err)
+	} else if cfg.Logging.QueryLog {
+		logger.Info("Query audit logging enabled")
+	}
+
 	// Create DNS handler (needed for API server DoH support)
 	handler := &integratedHandler{
 		config:        cfg,
@@ -469,6 +477,7 @@ func run() error {
 		slaveManager:  slaveManager,
 		aclChecker:    aclChecker,
 		rateLimiter:   rateLimiter,
+		auditLogger:   auditLogger,
 	}
 
 	// Share the zones mutex between handler, AXFR server, and DDNS handler
@@ -569,6 +578,27 @@ func run() error {
 		logger.Infof("TLS server listening on %s (DoT)", tlsAddr)
 	}
 
+	// Periodically collect transport stats
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopCh:
+				return
+			case <-ticker.C:
+				if metricsCollector != nil {
+					us := udpServer.Stats()
+					ts := tcpServer.Stats()
+					metricsCollector.SetTransportStats(
+						us.PacketsReceived, us.PacketsSent, us.Errors,
+						ts.ConnectionsAccepted, ts.ConnectionsClosed, ts.MessagesReceived, ts.Errors,
+					)
+				}
+			}
+		}
+	}()
+
 	// Setup signal handling
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
@@ -637,6 +667,11 @@ func run() error {
 				// Close DDNS handler so processUpdateEvents goroutine can exit
 				if ddnsHandler != nil {
 					ddnsHandler.Close()
+				}
+
+				// Close audit logger
+				if auditLogger != nil {
+					auditLogger.Close()
 				}
 			}()
 
@@ -773,10 +808,28 @@ func loadZoneSigner(z *zone.Zone, signingCfg config.SigningConfig) (*dnssec.Sign
 func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Message) {
 	start := time.Now()
 
-	// Defer latency recording
+	// Defer latency recording and audit logging
+	var qtypeStr string
+	var qnameAudit string
+	var cacheHit bool
 	defer func() {
-		if h.metrics != nil {
-			h.metrics.RecordQueryLatency(typeToString(r.Questions[0].QType), time.Since(start))
+		latency := time.Since(start)
+		if h.metrics != nil && qtypeStr != "" {
+			h.metrics.RecordQueryLatency(qtypeStr, latency)
+		}
+		if h.auditLogger != nil && qtypeStr != "" {
+			clientIP := "-"
+			if ci := w.ClientInfo(); ci != nil && ci.IP() != nil {
+				clientIP = ci.IP().String()
+			}
+			h.auditLogger.LogQuery(audit.QueryAuditEntry{
+				Timestamp: start.UTC().Format(time.RFC3339),
+				ClientIP:  clientIP,
+				QueryName: qnameAudit,
+				QueryType: qtypeStr,
+				Latency:    latency,
+				CacheHit:   cacheHit,
+			})
 		}
 	}()
 
@@ -790,6 +843,8 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 	q := r.Questions[0]
 	qname := q.Name.String()
 	qtype := q.QType
+	qtypeStr = typeToString(qtype)
+	qnameAudit = qname
 
 	h.logger.Debugf("Query: %s %s", qname, typeToString(qtype))
 
@@ -863,6 +918,7 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 	// Check cache first
 	cacheKey := cache.MakeKey(qname, qtype)
 	if entry := h.cache.Get(cacheKey); entry != nil {
+		cacheHit = true
 		if entry.IsNegative {
 			h.logger.Debugf("Cache hit (negative) for %s", qname)
 			if h.metrics != nil {

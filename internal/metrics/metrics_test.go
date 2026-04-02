@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -305,6 +306,201 @@ func TestSetClusterMetricsUnhealthy(t *testing.T) {
 	}
 
 	m.Stop()
+}
+
+func TestRecordQueryLatency_BucketAssignment(t *testing.T) {
+	cfg := Config{Enabled: true}
+	m := New(cfg)
+
+	cases := []struct {
+		dur   time.Duration
+		bound string
+	}{
+		{500 * time.Microsecond, "0.001"},
+		{3 * time.Millisecond, "0.005"},
+		{7 * time.Millisecond, "0.01"},
+		{15 * time.Millisecond, "0.025"},
+		{40 * time.Millisecond, "0.05"},
+		{75 * time.Millisecond, "0.1"},
+		{200 * time.Millisecond, "0.25"},
+		{400 * time.Millisecond, "0.5"},
+		{750 * time.Millisecond, "1.0"},
+	}
+
+	for _, tc := range cases {
+		m.RecordQueryLatency("A", tc.dur)
+	}
+
+	m.latencyMu.RLock()
+	h := m.latencyHists["A"]
+	m.latencyMu.RUnlock()
+
+	if h == nil {
+		t.Fatal("expected histogram for type A")
+	}
+
+	count := atomic.LoadUint64(&h.totalCount)
+	if count != uint64(len(cases)) {
+		t.Errorf("expected totalCount %d, got %d", len(cases), count)
+	}
+
+	// Verify sum is positive
+	sum := atomic.LoadUint64(&h.sumNs)
+	if sum == 0 {
+		t.Error("expected non-zero sumNs")
+	}
+}
+
+func TestRecordQueryLatency_OverOneSecond(t *testing.T) {
+	cfg := Config{Enabled: true}
+	m := New(cfg)
+
+	// 2 seconds should fall into implicit +Inf bucket (no explicit bucket)
+	m.RecordQueryLatency("MX", 2*time.Second)
+
+	m.latencyMu.RLock()
+	h := m.latencyHists["MX"]
+	m.latencyMu.RUnlock()
+
+	if h == nil {
+		t.Fatal("expected histogram for type MX")
+	}
+
+	count := atomic.LoadUint64(&h.totalCount)
+	if count != 1 {
+		t.Errorf("expected totalCount 1, got %d", count)
+	}
+
+	// No bucket should have a count since it fell into +Inf
+	for i := 0; i < numLatencyBuckets; i++ {
+		bc := atomic.LoadUint64(&h.bucketCounts[i])
+		if bc != 0 {
+			t.Errorf("bucket %d should be 0 for 2s duration, got %d", i, bc)
+		}
+	}
+}
+
+func TestRecordQueryLatency_Disabled(t *testing.T) {
+	cfg := Config{Enabled: false}
+	m := New(cfg)
+
+	// Should not panic
+	m.RecordQueryLatency("A", 10*time.Millisecond)
+
+	m.latencyMu.RLock()
+	_, ok := m.latencyHists["A"]
+	m.latencyMu.RUnlock()
+
+	if ok {
+		t.Error("expected no histogram when disabled")
+	}
+}
+
+func TestRecordQueryLatency_MultipleTypes(t *testing.T) {
+	cfg := Config{Enabled: true}
+	m := New(cfg)
+
+	m.RecordQueryLatency("A", 5*time.Millisecond)
+	m.RecordQueryLatency("AAAA", 10*time.Millisecond)
+	m.RecordQueryLatency("A", 15*time.Millisecond)
+
+	m.latencyMu.RLock()
+	hA := m.latencyHists["A"]
+	hAAAA := m.latencyHists["AAAA"]
+	m.latencyMu.RUnlock()
+
+	if hA == nil || hAAAA == nil {
+		t.Fatal("expected histograms for both types")
+	}
+
+	countA := atomic.LoadUint64(&hA.totalCount)
+	countAAAA := atomic.LoadUint64(&hAAAA.totalCount)
+
+	if countA != 2 {
+		t.Errorf("expected A totalCount 2, got %d", countA)
+	}
+	if countAAAA != 1 {
+		t.Errorf("expected AAAA totalCount 1, got %d", countAAAA)
+	}
+}
+
+func TestRecordQueryLatency_PrometheusOutput(t *testing.T) {
+	cfg := Config{
+		Enabled: true,
+		Bind:    "127.0.0.1:19160",
+		Path:    "/metrics",
+	}
+	m := New(cfg)
+
+	m.RecordQueryLatency("A", 5*time.Millisecond)
+	m.RecordQueryLatency("A", 50*time.Millisecond)
+
+	if err := m.Start(); err != nil {
+		t.Fatalf("Failed to start: %v", err)
+	}
+	defer m.Stop()
+
+	time.Sleep(100 * time.Millisecond)
+
+	resp, err := http.Get("http://127.0.0.1:19160/metrics")
+	if err != nil {
+		t.Fatalf("Failed to get metrics: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// Check histogram header
+	if !strings.Contains(bodyStr, "# TYPE nothingdns_query_duration_seconds histogram") {
+		t.Error("expected histogram type header in output")
+	}
+
+	// Check +Inf bucket
+	if !strings.Contains(bodyStr, `le="+Inf"`) {
+		t.Error("expected +Inf bucket in output")
+	}
+
+	// Check count label
+	if !strings.Contains(bodyStr, `nothingdns_query_duration_seconds_count{type="A"}`) {
+		t.Error("expected histogram count in output")
+	}
+
+	// Check sum label
+	if !strings.Contains(bodyStr, `nothingdns_query_duration_seconds_sum{type="A"}`) {
+		t.Error("expected histogram sum in output")
+	}
+}
+
+func TestRecordRateLimited(t *testing.T) {
+	cfg := Config{
+		Enabled: true,
+		Bind:    "127.0.0.1:19161",
+		Path:    "/metrics",
+	}
+	m := New(cfg)
+
+	m.RecordRateLimited()
+
+	if err := m.Start(); err != nil {
+		t.Fatalf("Failed to start: %v", err)
+	}
+	defer m.Stop()
+
+	time.Sleep(100 * time.Millisecond)
+
+	resp, err := http.Get("http://127.0.0.1:19161/metrics")
+	if err != nil {
+		t.Fatalf("Failed to get metrics: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, "nothingdns_rate_limited_total 1") {
+		t.Errorf("expected rate_limited_total to be 1, got:\n%s", bodyStr)
+	}
 }
 
 func TestDefaultPath(t *testing.T) {

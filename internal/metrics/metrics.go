@@ -44,6 +44,15 @@ type MetricsCollector struct {
 	// Server metrics
 	startTime time.Time
 
+	// Transport stats (set periodically from UDP/TCP servers)
+	udpPacketsRecv uint64
+	udpPacketsSent uint64
+	udpErrors      uint64
+	tcpConnAccept  uint64
+	tcpConnClosed  uint64
+	tcpMsgRecv     uint64
+	tcpErrors      uint64
+
 	// Latency histograms
 	latencyMu      sync.RWMutex
 	latencyHists   map[string]*latencyHistogram // by query type
@@ -267,6 +276,20 @@ func (m *MetricsCollector) SetClusterMetrics(nodeCount, aliveCount int, healthy 
 	atomic.StoreUint64(&m.clusterGossipRecv, gossipRecv)
 }
 
+// SetTransportStats sets UDP/TCP transport stats from the DNS servers.
+func (m *MetricsCollector) SetTransportStats(udpPacketsRecv, udpPacketsSent, udpErrors, tcpConnAccept, tcpConnClosed, tcpMsgRecv, tcpErrors uint64) {
+	if !m.config.Enabled {
+		return
+	}
+	atomic.StoreUint64(&m.udpPacketsRecv, udpPacketsRecv)
+	atomic.StoreUint64(&m.udpPacketsSent, udpPacketsSent)
+	atomic.StoreUint64(&m.udpErrors, udpErrors)
+	atomic.StoreUint64(&m.tcpConnAccept, tcpConnAccept)
+	atomic.StoreUint64(&m.tcpConnClosed, tcpConnClosed)
+	atomic.StoreUint64(&m.tcpMsgRecv, tcpMsgRecv)
+	atomic.StoreUint64(&m.tcpErrors, tcpErrors)
+}
+
 // RecordUpstreamQuery records an upstream query.
 func (m *MetricsCollector) RecordUpstreamQuery(server string) {
 	if !m.config.Enabled {
@@ -392,7 +415,36 @@ func (m *MetricsCollector) handleMetrics(w http.ResponseWriter, r *http.Request)
 
 	fmt.Fprintf(w, "# HELP nothingdns_cluster_gossip_messages_received_total Total gossip messages received\n")
 	fmt.Fprintf(w, "# TYPE nothingdns_cluster_gossip_messages_received_total counter\n")
-	fmt.Fprintf(w, "nothingdns_cluster_gossip_messages_received_total %d\n", atomic.LoadUint64(&m.clusterGossipRecv))
+	fmt.Fprintf(w, "nothingdns_cluster_gossip_messages_received_total %d\n\n", atomic.LoadUint64(&m.clusterGossipRecv))
+
+	// Transport metrics
+	fmt.Fprintf(w, "# HELP nothingdns_udp_packets_received_total Total UDP packets received\n")
+	fmt.Fprintf(w, "# TYPE nothingdns_udp_packets_received_total counter\n")
+	fmt.Fprintf(w, "nothingdns_udp_packets_received_total %d\n\n", atomic.LoadUint64(&m.udpPacketsRecv))
+
+	fmt.Fprintf(w, "# HELP nothingdns_udp_packets_sent_total Total UDP packets sent\n")
+	fmt.Fprintf(w, "# TYPE nothingdns_udp_packets_sent_total counter\n")
+	fmt.Fprintf(w, "nothingdns_udp_packets_sent_total %d\n\n", atomic.LoadUint64(&m.udpPacketsSent))
+
+	fmt.Fprintf(w, "# HELP nothingdns_udp_errors_total Total UDP errors\n")
+	fmt.Fprintf(w, "# TYPE nothingdns_udp_errors_total counter\n")
+	fmt.Fprintf(w, "nothingdns_udp_errors_total %d\n\n", atomic.LoadUint64(&m.udpErrors))
+
+	fmt.Fprintf(w, "# HELP nothingdns_tcp_connections_accepted_total Total TCP connections accepted\n")
+	fmt.Fprintf(w, "# TYPE nothingdns_tcp_connections_accepted_total counter\n")
+	fmt.Fprintf(w, "nothingdns_tcp_connections_accepted_total %d\n\n", atomic.LoadUint64(&m.tcpConnAccept))
+
+	fmt.Fprintf(w, "# HELP nothingdns_tcp_connections_closed_total Total TCP connections closed\n")
+	fmt.Fprintf(w, "# TYPE nothingdns_tcp_connections_closed_total counter\n")
+	fmt.Fprintf(w, "nothingdns_tcp_connections_closed_total %d\n\n", atomic.LoadUint64(&m.tcpConnClosed))
+
+	fmt.Fprintf(w, "# HELP nothingdns_tcp_messages_received_total Total TCP messages received\n")
+	fmt.Fprintf(w, "# TYPE nothingdns_tcp_messages_received_total counter\n")
+	fmt.Fprintf(w, "nothingdns_tcp_messages_received_total %d\n\n", atomic.LoadUint64(&m.tcpMsgRecv))
+
+	fmt.Fprintf(w, "# HELP nothingdns_tcp_errors_total Total TCP errors\n")
+	fmt.Fprintf(w, "# TYPE nothingdns_tcp_errors_total counter\n")
+	fmt.Fprintf(w, "nothingdns_tcp_errors_total %d\n", atomic.LoadUint64(&m.tcpErrors))
 }
 
 // handleHealth serves a simple health check endpoint.
