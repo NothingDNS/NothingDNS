@@ -669,6 +669,11 @@ func run() error {
 					ddnsHandler.Close()
 				}
 
+				// Stop rate limiter
+				if rateLimiter != nil {
+					rateLimiter.Stop()
+				}
+
 				// Close audit logger
 				if auditLogger != nil {
 					auditLogger.Close()
