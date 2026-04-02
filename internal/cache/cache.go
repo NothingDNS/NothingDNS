@@ -369,12 +369,13 @@ func (c *Cache) InvalidatePattern(pattern string) []string {
 			}
 		}
 	}
+	fn := c.invalidateFunc
 	c.mu.Unlock()
 
 	// Notify invalidation callback outside lock to prevent deadlock
-	if c.invalidateFunc != nil {
+	if fn != nil {
 		for _, key := range invalidated {
-			c.invalidateFunc(key)
+			fn(key)
 		}
 	}
 	return invalidated

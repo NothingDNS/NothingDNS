@@ -86,12 +86,17 @@ func (nl *NodeList) GetSelf() *Node {
 	return nl.self
 }
 
-// Get returns a node by ID.
+// Get returns a value copy of a node by ID.
+// Returns a copy to prevent data races when callers read fields after the lock is released.
 func (nl *NodeList) Get(id string) (*Node, bool) {
 	nl.mu.RLock()
 	defer nl.mu.RUnlock()
 	n, ok := nl.nodes[id]
-	return n, ok
+	if !ok {
+		return nil, false
+	}
+	cp := *n
+	return &cp, true
 }
 
 // Add adds a node to the list.
@@ -175,7 +180,8 @@ func (nl *NodeList) GetAlive() []Node {
 	return result
 }
 
-// GetRandom returns a random alive node (for gossip targets).
+// GetRandom returns a copy of a random alive node (for gossip targets).
+// Returns a value copy to prevent data races, consistent with GetAll/GetAlive.
 func (nl *NodeList) GetRandom(exclude []string) *Node {
 	nl.mu.RLock()
 	defer nl.mu.RUnlock()
@@ -198,12 +204,14 @@ func (nl *NodeList) GetRandom(exclude []string) *Node {
 
 	// Random selection using crypto/rand
 	var b [4]byte
+	idx := uint32(0)
 	if _, err := rand.Read(b[:]); err != nil {
-		idx := time.Now().UnixNano() % int64(len(candidates))
-		return candidates[idx]
+		idx = uint32(time.Now().UnixNano() % int64(len(candidates)))
+	} else {
+		idx = binary.BigEndian.Uint32(b[:]) % uint32(len(candidates))
 	}
-	idx := binary.BigEndian.Uint32(b[:]) % uint32(len(candidates))
-	return candidates[idx]
+	copy := *candidates[idx]
+	return &copy
 }
 
 // Count returns the total number of nodes.

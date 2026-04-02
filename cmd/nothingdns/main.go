@@ -597,6 +597,16 @@ func run() error {
 				slaveManager.Stop()
 			}
 
+			// Close notify handler so processNotifyEvents goroutine can exit
+			if notifyHandler != nil {
+				notifyHandler.Close()
+			}
+
+			// Close DDNS handler so processUpdateEvents goroutine can exit
+			if ddnsHandler != nil {
+				ddnsHandler.Close()
+			}
+
 			logger.Info("Server shutdown complete")
 			return nil
 
@@ -1218,12 +1228,16 @@ func (h *integratedHandler) buildResponse(query *protocol.Message, records []zon
 	}
 
 	for _, rec := range records {
+		data := parseRData(rec.Type, rec.RData)
+		if data == nil {
+			continue // Skip records with unparseable RData
+		}
 		rr := &protocol.ResourceRecord{
 			Name:  query.Questions[0].Name,
 			Type:  stringToType(rec.Type),
 			Class: protocol.ClassIN,
 			TTL:   rec.TTL,
-			Data:  parseRData(rec.Type, rec.RData),
+			Data:  data,
 		}
 		resp.AddAnswer(rr)
 	}

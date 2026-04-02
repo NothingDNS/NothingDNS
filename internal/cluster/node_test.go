@@ -294,8 +294,8 @@ func TestNodeList_Get_Self(t *testing.T) {
 	if !ok {
 		t.Error("Get() should find self node")
 	}
-	if node != self {
-		t.Error("Get() should return self node")
+	if node.ID != self.ID || node.Addr != self.Addr {
+		t.Error("Get() should return matching self node data")
 	}
 }
 
