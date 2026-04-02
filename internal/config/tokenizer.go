@@ -14,8 +14,9 @@ type Tokenizer struct {
 	col   int // current column (1-indexed)
 
 	// Indentation tracking
-	indentStack []int
-	atLineStart bool
+	indentStack   []int
+	atLineStart   bool
+	pendingTokens []Token // buffered DEDENT tokens for multi-level dedents
 }
 
 // NewTokenizer creates a new tokenizer for the given input.
@@ -32,6 +33,13 @@ func NewTokenizer(input string) *Tokenizer {
 
 // Next returns the next token from the input.
 func (t *Tokenizer) Next() Token {
+	// Return buffered DEDENT tokens first
+	if len(t.pendingTokens) > 0 {
+		tok := t.pendingTokens[0]
+		t.pendingTokens = t.pendingTokens[1:]
+		return tok
+	}
+
 	// Handle end of input
 	if t.pos >= len(t.input) {
 		return t.emitEOF()
@@ -167,9 +175,13 @@ func (t *Tokenizer) emitChar(tt TokenType) Token {
 
 // emitEOF emits EOF and any pending dedents.
 func (t *Tokenizer) emitEOF() Token {
-	// Pop remaining indent levels
+	// Pop remaining indent levels, emitting one DEDENT per level
 	if len(t.indentStack) > 1 {
-		t.indentStack = t.indentStack[:len(t.indentStack)-1]
+		popCount := len(t.indentStack) - 1
+		for i := 1; i < popCount; i++ {
+			t.pendingTokens = append(t.pendingTokens, t.emit(TokenDedent, ""))
+		}
+		t.indentStack = t.indentStack[:1]
 		return t.emit(TokenDedent, "")
 	}
 	return t.emit(TokenEOF, "")
@@ -211,12 +223,18 @@ func (t *Tokenizer) checkIndent() Token {
 		t.indentStack = append(t.indentStack, indent)
 		return t.emit(TokenIndent, "")
 	} else if indent < currentIndent {
-		// Decreased indent - pop until we match
+		// Decreased indent - emit one DEDENT per popped level
+		popCount := 0
 		for len(t.indentStack) > 1 && indent < t.indentStack[len(t.indentStack)-1] {
 			t.indentStack = t.indentStack[:len(t.indentStack)-1]
+			popCount++
 		}
 		if indent != t.indentStack[len(t.indentStack)-1] {
 			return t.emit(TokenError, fmt.Sprintf("inconsistent indentation at line %d", t.line))
+		}
+		// Buffer extra DEDENTs beyond the first
+		for i := 1; i < popCount; i++ {
+			t.pendingTokens = append(t.pendingTokens, t.emit(TokenDedent, ""))
 		}
 		return t.emit(TokenDedent, "")
 	}

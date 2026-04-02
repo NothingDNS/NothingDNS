@@ -11,6 +11,7 @@ import (
 	"github.com/nothingdns/nothingdns/internal/cache"
 	"github.com/nothingdns/nothingdns/internal/cluster"
 	"github.com/nothingdns/nothingdns/internal/config"
+	"github.com/nothingdns/nothingdns/internal/dashboard"
 	"github.com/nothingdns/nothingdns/internal/doh"
 	"github.com/nothingdns/nothingdns/internal/server"
 	"github.com/nothingdns/nothingdns/internal/util"
@@ -74,6 +75,11 @@ func (s *Server) Start() error {
 
 	// Config management
 	mux.HandleFunc("/api/v1/config/reload", s.handleConfigReload)
+
+	// Dashboard UI
+	mux.HandleFunc("/dashboard", s.handleDashboard)
+	mux.HandleFunc("/api/dashboard/stats", s.handleDashboardStats)
+	mux.HandleFunc("/", s.handleDashboard)
 
 	s.httpServer = &http.Server{
 		Addr:         s.config.Bind,
@@ -148,6 +154,46 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"status":    "healthy",
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 	})
+}
+
+// handleDashboard serves the web UI dashboard.
+func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
+	// Only serve dashboard for exact "/" or "/dashboard" paths
+	if r.URL.Path != "/" && r.URL.Path != "/dashboard" {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write([]byte(dashboard.GetIndexHTML()))
+}
+
+// handleDashboardStats returns stats formatted for the web dashboard.
+func (s *Server) handleDashboardStats(w http.ResponseWriter, r *http.Request) {
+	stats := map[string]interface{}{
+		"uptime":          0,
+		"queriesTotal":    0,
+		"queriesPerSec":   0.0,
+		"cacheHitRate":    0.0,
+		"blockedQueries":  0,
+		"activeClients":   0,
+		"zoneCount":       0,
+		"upstreamLatency": 0,
+	}
+
+	if s.cache != nil {
+		cs := s.cache.Stats()
+		stats["queriesTotal"] = cs.Hits + cs.Misses
+		total := float64(cs.Hits + cs.Misses)
+		if total > 0 {
+			stats["cacheHitRate"] = float64(cs.Hits) / total * 100
+		}
+	}
+
+	if s.zoneManager != nil {
+		stats["zoneCount"] = s.zoneManager.Count()
+	}
+
+	s.writeJSON(w, http.StatusOK, stats)
 }
 
 // handleStatus returns server status.
