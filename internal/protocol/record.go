@@ -65,7 +65,11 @@ func NewResourceRecord(name string, rrtype, rrclass uint16, ttl uint32, data RDa
 // WireLength returns the length of the resource record in wire format.
 func (rr *ResourceRecord) WireLength() int {
 	// Name length + Type (2) + Class (2) + TTL (4) + RDLENGTH (2) + RData length
-	return rr.Name.WireLength() + 10 + rr.Data.Len()
+	rdataLen := 0
+	if rr.Data != nil {
+		rdataLen = rr.Data.Len()
+	}
+	return rr.Name.WireLength() + 10 + rdataLen
 }
 
 // Pack serializes the resource record to wire format.
@@ -285,13 +289,18 @@ func (rr *ResourceRecord) String() string {
 	classStr := ClassString(rr.Class)
 	typeStr := TypeString(rr.Type)
 
+	dataStr := ""
+	if rr.Data != nil {
+		dataStr = rr.Data.String()
+	}
+
 	// Format: name TTL class type data
 	return fmt.Sprintf("%s\t%d\t%s\t%s\t%s",
 		rr.Name.String(),
 		rr.TTL,
 		classStr,
 		typeStr,
-		rr.Data.String(),
+		dataStr,
 	)
 }
 
@@ -301,12 +310,17 @@ func (rr *ResourceRecord) Copy() *ResourceRecord {
 		return nil
 	}
 
+	var data RData
+	if rr.Data != nil {
+		data = rr.Data.Copy()
+	}
+
 	return &ResourceRecord{
 		Name:  NewName(rr.Name.Labels, rr.Name.FQDN),
 		Type:  rr.Type,
 		Class: rr.Class,
 		TTL:   rr.TTL,
-		Data:  rr.Data.Copy(),
+		Data:  data,
 	}
 }
 

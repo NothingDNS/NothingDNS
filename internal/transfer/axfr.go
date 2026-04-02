@@ -374,7 +374,7 @@ func parseRData(rrtype uint16, rdataStr, origin string) (protocol.RData, error) 
 // hasTSIG checks if a message has a TSIG record
 func hasTSIG(msg *protocol.Message) bool {
 	for _, rr := range msg.Additionals {
-		if rr.Type == protocol.TypeTSIG {
+		if rr != nil && rr.Type == protocol.TypeTSIG {
 			return true
 		}
 	}
@@ -384,7 +384,7 @@ func hasTSIG(msg *protocol.Message) bool {
 // getTSIGKeyName extracts the TSIG key name from a message
 func getTSIGKeyName(msg *protocol.Message) (string, error) {
 	for _, rr := range msg.Additionals {
-		if rr.Type == protocol.TypeTSIG {
+		if rr != nil && rr.Type == protocol.TypeTSIG {
 			return rr.Name.String(), nil
 		}
 	}

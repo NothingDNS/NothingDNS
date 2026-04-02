@@ -145,7 +145,8 @@ func (s *IXFRServer) HandleIXFR(req *protocol.Message, clientIP net.IP) ([]*prot
 	serverSerial := z.SOA.Serial
 
 	// If client is up to date, return single SOA
-	if clientSerial >= serverSerial {
+	// Use RFC 1982 serial arithmetic for wrap-safe comparison
+	if !serialIsNewer(serverSerial, clientSerial) {
 		return s.generateSingleSOA(z)
 	}
 

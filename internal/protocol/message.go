@@ -89,7 +89,7 @@ func (m *Message) AddAdditional(rr *ResourceRecord) {
 // GetOPT returns the OPT record from the additional section, or nil if not present.
 func (m *Message) GetOPT() *ResourceRecord {
 	for _, rr := range m.Additionals {
-		if rr.Type == TypeOPT {
+		if rr != nil && rr.Type == TypeOPT {
 			return rr
 		}
 	}
