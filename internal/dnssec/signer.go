@@ -150,9 +150,18 @@ func (s *Signer) GenerateKeyPair(algorithm uint8, isKSK bool) (*SigningKey, erro
 // SignZone signs all records in a zone.
 // Returns the signed zone records including RRSIGs and NSEC/NSEC3 records.
 func (s *Signer) SignZone(records []*protocol.ResourceRecord) ([]*protocol.ResourceRecord, error) {
+	s.mu.RLock()
 	if len(s.keys) == 0 {
+		s.mu.RUnlock()
 		return nil, fmt.Errorf("no signing keys available")
 	}
+
+	// Snapshot keys while holding the lock
+	keys := make(map[uint16]*SigningKey, len(s.keys))
+	for k, v := range s.keys {
+		keys[k] = v
+	}
+	s.mu.RUnlock()
 
 	// Separate DNSKEY records and other records
 	var dnskeyRRs []*protocol.ResourceRecord
@@ -168,7 +177,7 @@ func (s *Signer) SignZone(records []*protocol.ResourceRecord) ([]*protocol.Resou
 
 	// Generate DNSKEY records from our keys if not present
 	if len(dnskeyRRs) == 0 {
-		for _, key := range s.keys {
+		for _, key := range keys {
 			name, err := protocol.ParseName(s.zone)
 			if err != nil {
 				return nil, fmt.Errorf("parsing zone name %q: %w", s.zone, err)
