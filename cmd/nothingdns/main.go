@@ -25,6 +25,8 @@ import (
 	"github.com/nothingdns/nothingdns/internal/cluster"
 	"github.com/nothingdns/nothingdns/internal/config"
 	"github.com/nothingdns/nothingdns/internal/dnssec"
+	"github.com/nothingdns/nothingdns/internal/audit"
+	"github.com/nothingdns/nothingdns/internal/filter"
 	"github.com/nothingdns/nothingdns/internal/metrics"
 	"github.com/nothingdns/nothingdns/internal/protocol"
 	"github.com/nothingdns/nothingdns/internal/server"
@@ -100,6 +102,9 @@ type integratedHandler struct {
 	notifyHandler *transfer.NOTIFYSlaveHandler
 	ddnsHandler   *transfer.DynamicDNSHandler
 	slaveManager  *transfer.SlaveManager
+	aclChecker    *filter.ACLChecker
+	rateLimiter   *filter.RateLimiter
+	auditLogger   *audit.AuditLogger
 
 	notifyOnce sync.Once
 	updateOnce sync.Once
@@ -426,6 +431,24 @@ func run() error {
 	slaveManager.Start()
 	logger.Info("Slave manager started")
 
+	// Initialize ACL checker
+	var aclChecker *filter.ACLChecker
+	if len(cfg.ACL) > 0 {
+		var err error
+		aclChecker, err = filter.NewACLChecker(cfg.ACL)
+		if err != nil {
+			return fmt.Errorf("initializing ACL: %w", err)
+		}
+		logger.Infof("ACL loaded with %d rules", len(cfg.ACL))
+	}
+
+	// Initialize rate limiter
+	var rateLimiter *filter.RateLimiter
+	if cfg.RRL.Enabled {
+		rateLimiter = filter.NewRateLimiter(cfg.RRL)
+		logger.Infof("RRL enabled: %d qps/client, burst %d", cfg.RRL.Rate, cfg.RRL.Burst)
+	}
+
 	// Create DNS handler (needed for API server DoH support)
 	handler := &integratedHandler{
 		config:        cfg,
@@ -444,6 +467,8 @@ func run() error {
 		notifyHandler: notifyHandler,
 		ddnsHandler:   ddnsHandler,
 		slaveManager:  slaveManager,
+		aclChecker:    aclChecker,
+		rateLimiter:   rateLimiter,
 	}
 
 	// Share the zones mutex between handler, AXFR server, and DDNS handler
@@ -560,54 +585,67 @@ func run() error {
 			// Signal goroutines to stop
 			close(stopCh)
 
-			// Stop servers
-			udpServer.Stop()
-			tcpServer.Stop()
-			if tlsServer != nil {
-				tlsServer.Stop()
-			}
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer shutdownCancel()
 
-			// Close upstream client
-			if client != nil {
-				client.Close()
-			}
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
 
-			// Close load balancer
-			if loadBalancer != nil {
-				loadBalancer.Close()
-			}
+				// Stop servers
+				udpServer.Stop()
+				tcpServer.Stop()
+				if tlsServer != nil {
+					tlsServer.Stop()
+				}
 
-			// Stop metrics server
-			if metricsCollector != nil {
-				metricsCollector.Stop()
-			}
+				// Close upstream client
+				if client != nil {
+					client.Close()
+				}
 
-			// Stop API server
-			if apiServer != nil {
-				apiServer.Stop()
-			}
+				// Close load balancer
+				if loadBalancer != nil {
+					loadBalancer.Close()
+				}
 
-			// Stop cluster manager
-			if clusterMgr != nil {
-				clusterMgr.Stop()
-			}
+				// Stop metrics server
+				if metricsCollector != nil {
+					metricsCollector.Stop()
+				}
 
-			// Stop slave manager
-			if slaveManager != nil {
-				slaveManager.Stop()
-			}
+				// Stop API server
+				if apiServer != nil {
+					apiServer.Stop()
+				}
 
-			// Close notify handler so processNotifyEvents goroutine can exit
-			if notifyHandler != nil {
-				notifyHandler.Close()
-			}
+				// Stop cluster manager
+				if clusterMgr != nil {
+					clusterMgr.Stop()
+				}
 
-			// Close DDNS handler so processUpdateEvents goroutine can exit
-			if ddnsHandler != nil {
-				ddnsHandler.Close()
-			}
+				// Stop slave manager
+				if slaveManager != nil {
+					slaveManager.Stop()
+				}
 
-			logger.Info("Server shutdown complete")
+				// Close notify handler so processNotifyEvents goroutine can exit
+				if notifyHandler != nil {
+					notifyHandler.Close()
+				}
+
+				// Close DDNS handler so processUpdateEvents goroutine can exit
+				if ddnsHandler != nil {
+					ddnsHandler.Close()
+				}
+			}()
+
+			select {
+			case <-done:
+				logger.Info("Server shutdown complete")
+			case <-shutdownCtx.Done():
+				logger.Warnf("Server shutdown timed out after 30s")
+			}
 			return nil
 
 		case syscall.SIGHUP:
@@ -733,6 +771,15 @@ func loadZoneSigner(z *zone.Zone, signingCfg config.SigningConfig) (*dnssec.Sign
 
 // ServeDNS implements the server.Handler interface.
 func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Message) {
+	start := time.Now()
+
+	// Defer latency recording
+	defer func() {
+		if h.metrics != nil {
+			h.metrics.RecordQueryLatency(typeToString(r.Questions[0].QType), time.Since(start))
+		}
+	}()
+
 	// Check if we have questions
 	if len(r.Questions) == 0 {
 		h.logger.Debug("Query with no questions")
@@ -749,6 +796,34 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 	// Record query metric
 	if h.metrics != nil {
 		h.metrics.RecordQuery(typeToString(qtype))
+	}
+
+	// Check ACL
+	clientIP := w.ClientInfo().IP()
+	if h.aclChecker != nil && clientIP != nil {
+		allowed, redirect := h.aclChecker.IsAllowed(clientIP, qtype)
+		if !allowed {
+			if redirect != "" {
+				h.logger.Infof("ACL redirect: %s %s from %s -> %s", qname, typeToString(qtype), clientIP, redirect)
+				h.handleACLRedirect(w, r, q, redirect)
+			} else {
+				h.logger.Infof("ACL denied: %s %s from %s", qname, typeToString(qtype), clientIP)
+				sendError(w, r, protocol.RcodeRefused)
+			}
+			return
+		}
+	}
+
+	// Check rate limit
+	if h.rateLimiter != nil && clientIP != nil {
+		if !h.rateLimiter.Allow(clientIP) {
+			h.logger.Debugf("RRL dropped: %s %s from %s", qname, typeToString(qtype), clientIP)
+			if h.metrics != nil {
+				h.metrics.RecordRateLimited()
+			}
+			sendError(w, r, protocol.RcodeRefused)
+			return
+		}
 	}
 
 	// Handle AXFR (zone transfer) requests
@@ -811,18 +886,46 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 		h.metrics.RecordCacheMiss()
 	}
 
-	// Check authoritative zones
+	// Check authoritative zones — try direct lookup first.
+	// If no zone has a direct record, attempt CNAME chasing across zones,
+	// then cache, then upstream.
 	h.zonesMu.RLock()
+	var matchedZone bool
 	for origin, z := range h.zones {
 		if isSubdomain(qname, origin) {
+			matchedZone = true
 			h.logger.Debugf("Checking zone %s for %s", origin, qname)
-			if resp := h.handleAuthoritative(z, w, r, q); resp {
+			if h.handleAuthoritative(z, w, r, q) {
 				h.zonesMu.RUnlock()
 				return
 			}
 		}
 	}
 	h.zonesMu.RUnlock()
+
+	// If the query name falls within one of our zones but no direct record
+	// was found, chase CNAME chains before falling through to upstream.
+	if matchedZone {
+		result := h.chaseCNAMEInZones(qname)
+		if result.loopDetected {
+			h.logger.Warnf("CNAME loop detected for %s", qname)
+			if h.metrics != nil {
+				h.metrics.RecordResponse(protocol.RcodeServerFailure)
+			}
+			sendError(w, r, protocol.RcodeServerFailure)
+			return
+		}
+		if len(result.cnameRecords) > 0 {
+			// We have a CNAME chain — resolve the target
+			targetAnswers := h.resolveCNAMETarget(w, r, q, result.targetName, qtype)
+			resp := h.buildCNAMEResponse(r, result.cnameRecords, targetAnswers)
+			if h.metrics != nil {
+				h.metrics.RecordResponse(protocol.RcodeSuccess)
+			}
+			reply(w, r, resp)
+			return
+		}
+	}
 
 	// Forward to upstream
 	if h.upstream != nil || h.loadBalancer != nil {
@@ -903,6 +1006,9 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 }
 
 // handleAuthoritative handles queries for authoritative zones.
+// It performs direct record lookup. If no records match the query type,
+// CNAME chasing is deferred to the caller (ServeDNS) which can resolve
+// across zones, cache, and upstream.
 func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseWriter, r *protocol.Message, q *protocol.Question) bool {
 	qname := q.Name.String()
 	qtype := q.QType
@@ -910,40 +1016,238 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 	// Check if client wants DNSSEC (DO bit in OPT record)
 	wantsDNSSEC := hasDOBit(r)
 
-	// Look up records
+	// Look up records matching the requested type
 	records := z.Lookup(qname, typeToString(qtype))
-	if len(records) == 0 {
-		// Check for CNAME
-		cnameRecords := z.Lookup(qname, "CNAME")
-		if len(cnameRecords) > 0 {
-			var resp *protocol.Message
-			if signer, ok := h.zoneSigners[z.Origin]; ok && wantsDNSSEC {
-				resp = h.buildSignedResponse(r, cnameRecords, signer, true)
-			} else {
-				resp = h.buildResponse(r, cnameRecords)
-			}
-			if h.metrics != nil {
-				h.metrics.RecordResponse(protocol.RcodeSuccess)
-			}
-			reply(w, r, resp)
-			return true
+	if len(records) > 0 {
+		var resp *protocol.Message
+		if signer, ok := h.zoneSigners[z.Origin]; ok && wantsDNSSEC {
+			resp = h.buildSignedResponse(r, records, signer, true)
+		} else {
+			resp = h.buildResponse(r, records)
 		}
-		return false
+		if h.metrics != nil {
+			h.metrics.RecordResponse(protocol.RcodeSuccess)
+		}
+		reply(w, r, resp)
+		return true
 	}
 
-	// Use signed response if signer available for this zone
-	var resp *protocol.Message
-	if signer, ok := h.zoneSigners[z.Origin]; ok && wantsDNSSEC {
-		resp = h.buildSignedResponse(r, records, signer, true)
-	} else {
-		resp = h.buildResponse(r, records)
+	// No direct records. Check for CNAME — but don't resolve it here.
+	// Return false so ServeDNS can do full CNAME chasing (across zones,
+	// cache, upstream).
+	cnameRecords := z.Lookup(qname, "CNAME")
+	if len(cnameRecords) > 0 {
+		return false // signal to ServeDNS to chase the CNAME
 	}
 
-	if h.metrics != nil {
-		h.metrics.RecordResponse(protocol.RcodeSuccess)
+	return false
+}
+
+// cnameChainResult holds the result of chasing a CNAME chain.
+type cnameChainResult struct {
+	// cnameRecords are the collected CNAME records along the chain.
+	cnameRecords []zone.Record
+	// targetName is the final name the chain resolves to.
+	targetName string
+	// loopDetected is true if a CNAME loop was detected.
+	loopDetected bool
+}
+
+// chaseCNAMEInZones follows a CNAME chain across all local zones starting
+// from the given name. It collects every CNAME record encountered and
+// stops when the target name is not a CNAME in any local zone, or when
+// a loop is detected (max chain depth exceeded or revisited name).
+//
+// The caller must NOT hold zonesMu; this method acquires the read lock
+// internally as needed.
+func (h *integratedHandler) chaseCNAMEInZones(name string) cnameChainResult {
+	const maxCNAMEDepth = 16
+
+	visited := make(map[string]struct{}, maxCNAMEDepth)
+	var result cnameChainResult
+	current := canonicalize(name)
+
+	for i := 0; i < maxCNAMEDepth; i++ {
+		// Loop detection
+		if _, seen := visited[current]; seen {
+			result.loopDetected = true
+			return result
+		}
+		visited[current] = struct{}{}
+
+		// Look for a CNAME record in any authoritative zone
+		h.zonesMu.RLock()
+		cnameRec := h.findCNAMEInZonesLocked(current)
+		h.zonesMu.RUnlock()
+
+		if cnameRec == nil {
+			// No CNAME found; the chain terminates at current.
+			result.targetName = current
+			return result
+		}
+
+		result.cnameRecords = append(result.cnameRecords, *cnameRec)
+		target := canonicalize(cnameRec.RData)
+		current = target
 	}
-	reply(w, r, resp)
-	return true
+
+	// Chain exceeded maximum depth — treat as loop.
+	result.loopDetected = true
+	result.targetName = current
+	return result
+}
+
+// findCNAMEInZonesLocked searches all authoritative zones for a CNAME record
+// for the given name. The caller must hold zonesMu (at least RLock).
+// Returns nil if no CNAME is found.
+func (h *integratedHandler) findCNAMEInZonesLocked(name string) *zone.Record {
+	cname := canonicalize(name)
+	for _, z := range h.zones {
+		recs := z.Lookup(cname, "CNAME")
+		if len(recs) > 0 {
+			return &recs[0]
+		}
+	}
+	return nil
+}
+
+// resolveCNAMETarget attempts to resolve a CNAME target using local zones,
+// cache, and upstream. It returns answer records for the original query type
+// at the CNAME target, or nil if resolution failed.
+func (h *integratedHandler) resolveCNAMETarget(w server.ResponseWriter, r *protocol.Message, q *protocol.Question, targetName string, qtype uint16) []*protocol.ResourceRecord {
+	qtypeStr := typeToString(qtype)
+
+	// 1. Try local zones first
+	h.zonesMu.RLock()
+	for _, z := range h.zones {
+		recs := z.Lookup(targetName, qtypeStr)
+		if len(recs) > 0 {
+			h.zonesMu.RUnlock()
+			var answers []*protocol.ResourceRecord
+			for _, rec := range recs {
+				data := parseRData(rec.Type, rec.RData)
+				if data == nil {
+					continue
+				}
+				targetNameParsed, err := protocol.ParseName(targetName)
+				if err != nil {
+					continue
+				}
+				answers = append(answers, &protocol.ResourceRecord{
+					Name:  targetNameParsed,
+					Type:  qtype,
+					Class: protocol.ClassIN,
+					TTL:   rec.TTL,
+					Data:  data,
+				})
+			}
+			return answers
+		}
+	}
+	h.zonesMu.RUnlock()
+
+	// 2. Check cache for the target
+	cacheKey := cache.MakeKey(targetName, qtype)
+	if entry := h.cache.Get(cacheKey); entry != nil && !entry.IsNegative && entry.Message != nil {
+		var answers []*protocol.ResourceRecord
+		for _, rr := range entry.Message.Answers {
+			if rr.Type == qtype {
+				answers = append(answers, rr.Copy())
+			}
+		}
+		if len(answers) > 0 {
+			return answers
+		}
+	}
+
+	// 3. Forward to upstream
+	if h.upstream != nil || h.loadBalancer != nil {
+		targetNameParsed, err := protocol.ParseName(targetName)
+		if err != nil {
+			return nil
+		}
+		upstreamQuery := &protocol.Message{
+			Header: protocol.Header{
+				ID:      r.Header.ID,
+				Flags:   protocol.NewQueryFlags(),
+				QDCount: 1,
+			},
+			Questions: []*protocol.Question{
+				{
+					Name:   targetNameParsed,
+					QType:  qtype,
+					QClass: protocol.ClassIN,
+				},
+			},
+		}
+
+		var resp *protocol.Message
+		if h.loadBalancer != nil {
+			resp, err = h.loadBalancer.Query(upstreamQuery)
+		} else {
+			resp, err = h.upstream.Query(upstreamQuery)
+		}
+		if err != nil {
+			h.logger.Warnf("Upstream CNAME target query failed for %s: %v", targetName, err)
+			return nil
+		}
+
+		// Cache the upstream response
+		if resp.Header.Flags.RCODE == protocol.RcodeSuccess && len(resp.Answers) > 0 {
+			ttl := extractTTL(resp)
+			h.cache.Set(cacheKey, resp, ttl)
+		}
+
+		// Extract matching answer records
+		var answers []*protocol.ResourceRecord
+		for _, rr := range resp.Answers {
+			if rr.Type == qtype {
+				answers = append(answers, rr.Copy())
+			}
+		}
+		return answers
+	}
+
+	return nil
+}
+
+// buildCNAMEResponse constructs a complete DNS response with a CNAME chain
+// and the resolved target records.
+func (h *integratedHandler) buildCNAMEResponse(query *protocol.Message, cnameRecords []zone.Record, targetAnswers []*protocol.ResourceRecord) *protocol.Message {
+	resp := &protocol.Message{
+		Header: protocol.Header{
+			ID:    query.Header.ID,
+			Flags: protocol.NewResponseFlags(protocol.RcodeSuccess),
+		},
+		Questions: query.Questions,
+	}
+
+	// Add all CNAME records in the chain
+	for _, rec := range cnameRecords {
+		data := parseRData("CNAME", rec.RData)
+		if data == nil {
+			continue
+		}
+		nameParsed, err := protocol.ParseName(rec.Name)
+		if err != nil {
+			continue
+		}
+		rr := &protocol.ResourceRecord{
+			Name:  nameParsed,
+			Type:  protocol.TypeCNAME,
+			Class: protocol.ClassIN,
+			TTL:   rec.TTL,
+			Data:  data,
+		}
+		resp.AddAnswer(rr)
+	}
+
+	// Append the resolved target records
+	for _, rr := range targetAnswers {
+		resp.AddAnswer(rr)
+	}
+
+	return resp
 }
 
 // handleAXFR handles zone transfer (AXFR) requests.
@@ -1268,6 +1572,36 @@ func sendError(w server.ResponseWriter, query *protocol.Message, rcode uint8) {
 	}
 	if _, err := w.Write(resp); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to write error response: %v\n", err)
+	}
+}
+
+// handleACLRedirect sends a CNAME redirect response for ACL-redirected queries.
+func (h *integratedHandler) handleACLRedirect(w server.ResponseWriter, r *protocol.Message, q *protocol.Question, target string) {
+	resp := &protocol.Message{
+		Header: protocol.Header{
+			ID:    r.Header.ID,
+			Flags: protocol.NewResponseFlags(protocol.RcodeSuccess),
+		},
+		Questions: r.Questions,
+	}
+
+	targetName, err := protocol.ParseName(target)
+	if err != nil {
+		sendError(w, r, protocol.RcodeServerFailure)
+		return
+	}
+
+	rr := &protocol.ResourceRecord{
+		Name:  q.Name,
+		Type:  protocol.TypeCNAME,
+		Class: protocol.ClassIN,
+		TTL:   60,
+		Data:  &protocol.RDataCNAME{CName: targetName},
+	}
+	resp.AddAnswer(rr)
+
+	if _, err := w.Write(resp); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to write redirect response: %v\n", err)
 	}
 }
 

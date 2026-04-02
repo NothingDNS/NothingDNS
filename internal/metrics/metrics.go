@@ -28,6 +28,9 @@ type MetricsCollector struct {
 	// Blocklist metrics
 	blocklistBlocks uint64
 
+	// Rate limit metrics
+	rateLimited uint64
+
 	// Upstream metrics
 	upstreamQueries map[string]*uint64 // by server
 
@@ -40,6 +43,35 @@ type MetricsCollector struct {
 
 	// Server metrics
 	startTime time.Time
+
+	// Latency histograms
+	latencyMu      sync.RWMutex
+	latencyHists   map[string]*latencyHistogram // by query type
+}
+
+// latencyHistogram implements a fixed-bucket histogram without external dependencies.
+type latencyHistogram struct {
+	bucketCounts [numLatencyBuckets]uint64
+	totalCount   uint64
+	sumNs        uint64
+}
+
+const numLatencyBuckets = 9
+
+var latencyBounds = [numLatencyBuckets]time.Duration{
+	1 * time.Millisecond,
+	5 * time.Millisecond,
+	10 * time.Millisecond,
+	25 * time.Millisecond,
+	50 * time.Millisecond,
+	100 * time.Millisecond,
+	250 * time.Millisecond,
+	500 * time.Millisecond,
+	1000 * time.Millisecond,
+}
+
+var latencyLabels = [numLatencyBuckets]string{
+	"0.001", "0.005", "0.01", "0.025", "0.05", "0.1", "0.25", "0.5", "1.0",
 }
 
 // Config holds metrics configuration.
@@ -60,6 +92,7 @@ func New(cfg Config) *MetricsCollector {
 		queriesTotal:    make(map[string]*uint64),
 		responsesTotal:  make(map[uint8]*uint64),
 		upstreamQueries: make(map[string]*uint64),
+		latencyHists:    make(map[string]*latencyHistogram),
 		startTime:       time.Now(),
 	}
 }
@@ -182,6 +215,42 @@ func (m *MetricsCollector) RecordBlocklistBlock() {
 	atomic.AddUint64(&m.blocklistBlocks, 1)
 }
 
+// RecordRateLimited records a rate-limited query.
+func (m *MetricsCollector) RecordRateLimited() {
+	if !m.config.Enabled {
+		return
+	}
+	atomic.AddUint64(&m.rateLimited, 1)
+}
+
+// RecordQueryLatency records query processing latency.
+func (m *MetricsCollector) RecordQueryLatency(qtype string, duration time.Duration) {
+	if !m.config.Enabled {
+		return
+	}
+
+	m.latencyMu.Lock()
+	h, ok := m.latencyHists[qtype]
+	if !ok {
+		h = &latencyHistogram{}
+		m.latencyHists[qtype] = h
+	}
+	m.latencyMu.Unlock()
+
+	ns := duration.Nanoseconds()
+	atomic.AddUint64(&h.totalCount, 1)
+	atomic.AddUint64(&h.sumNs, uint64(ns))
+
+	// Find and increment the appropriate bucket
+	for i, bound := range latencyBounds {
+		if duration <= bound {
+			atomic.AddUint64(&h.bucketCounts[i], 1)
+			return
+		}
+	}
+	// Falls into implicit +Inf bucket (no explicit counter needed)
+}
+
 // SetClusterMetrics sets cluster-related metrics.
 func (m *MetricsCollector) SetClusterMetrics(nodeCount, aliveCount int, healthy bool, gossipSent, gossipRecv uint64) {
 	if !m.config.Enabled {
@@ -269,6 +338,11 @@ func (m *MetricsCollector) handleMetrics(w http.ResponseWriter, r *http.Request)
 	fmt.Fprintf(w, "# TYPE nothingdns_blocklist_blocks_total counter\n")
 	fmt.Fprintf(w, "nothingdns_blocklist_blocks_total %d\n\n", atomic.LoadUint64(&m.blocklistBlocks))
 
+	// Rate limit metrics
+	fmt.Fprintf(w, "# HELP nothingdns_rate_limited_total Total number of rate-limited queries\n")
+	fmt.Fprintf(w, "# TYPE nothingdns_rate_limited_total counter\n")
+	fmt.Fprintf(w, "nothingdns_rate_limited_total %d\n\n", atomic.LoadUint64(&m.rateLimited))
+
 	// Upstream queries
 	fmt.Fprintf(w, "# HELP nothingdns_upstream_queries_total Total number of upstream queries\n")
 	fmt.Fprintf(w, "# TYPE nothingdns_upstream_queries_total counter\n")
@@ -279,6 +353,24 @@ func (m *MetricsCollector) handleMetrics(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	m.mu.RUnlock()
+	fmt.Fprintln(w)
+
+	// Latency histograms
+	fmt.Fprintf(w, "# HELP nothingdns_query_duration_seconds Query latency distribution\n")
+	fmt.Fprintf(w, "# TYPE nothingdns_query_duration_seconds histogram\n")
+	m.latencyMu.RLock()
+	for qtype, h := range m.latencyHists {
+		count := atomic.LoadUint64(&h.totalCount)
+		sum := atomic.LoadUint64(&h.sumNs)
+		for i, label := range latencyLabels {
+			bucketCount := atomic.LoadUint64(&h.bucketCounts[i])
+			fmt.Fprintf(w, "nothingdns_query_duration_seconds_bucket{type=\"%s\",le=\"%s\"} %d\n", qtype, label, bucketCount)
+		}
+		fmt.Fprintf(w, "nothingdns_query_duration_seconds_bucket{type=\"%s\",le=\"+Inf\"} %d\n", qtype, count)
+		fmt.Fprintf(w, "nothingdns_query_duration_seconds_sum{type=\"%s\"} %.6f\n", qtype, float64(sum)/1e9)
+		fmt.Fprintf(w, "nothingdns_query_duration_seconds_count{type=\"%s\"} %d\n", qtype, count)
+	}
+	m.latencyMu.RUnlock()
 	fmt.Fprintln(w)
 
 	// Cluster metrics

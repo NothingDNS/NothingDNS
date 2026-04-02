@@ -40,6 +40,9 @@ type Config struct {
 	// ACL configuration
 	ACL []ACLRule `yaml:"acl"`
 
+	// RRL configuration
+	RRL RRLConfig `yaml:"rrl"`
+
 	// Blocklist configuration
 	Blocklist BlocklistConfig `yaml:"blocklist"`
 
@@ -380,6 +383,18 @@ type ACLRule struct {
 
 	// Redirect target (for action=redirect)
 	Redirect string `yaml:"redirect"`
+}
+
+// RRLConfig holds response rate limiting configuration.
+type RRLConfig struct {
+	// Enable rate limiting
+	Enabled bool `yaml:"enabled"`
+
+	// Responses per second per client (default 5)
+	Rate int `yaml:"rate"`
+
+	// Maximum burst size (default 20)
+	Burst int `yaml:"burst"`
 }
 
 // DefaultConfig returns a Config with default values.
