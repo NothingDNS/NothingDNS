@@ -217,20 +217,21 @@ func TestHandleZones(t *testing.T) {
 		}
 	})
 
-	t.Run("POST zones - method not allowed", func(t *testing.T) {
+	t.Run("POST zones - no zone manager", func(t *testing.T) {
 		cfg := config.HTTPConfig{
 			Enabled: true,
 			Bind:    "127.0.0.1:0",
 		}
 		server := NewServer(cfg, nil, nil, nil, nil, nil)
 
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/zones", nil)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/zones", strings.NewReader(`{"name":"test.com."}`))
+		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
 
 		server.handleZones(rec, req)
 
-		if rec.Code != http.StatusMethodNotAllowed {
-			t.Errorf("Expected status %d, got %d", http.StatusMethodNotAllowed, rec.Code)
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Errorf("Expected status %d, got %d", http.StatusServiceUnavailable, rec.Code)
 		}
 
 		var response map[string]interface{}
@@ -238,8 +239,8 @@ func TestHandleZones(t *testing.T) {
 			t.Fatalf("Failed to parse response: %v", err)
 		}
 
-		if response["error"] != "Method not allowed" {
-			t.Errorf("Expected error 'Method not allowed', got %v", response["error"])
+		if response["error"] != "Zone manager not available" {
+			t.Errorf("Expected error 'Zone manager not available', got %v", response["error"])
 		}
 	})
 
@@ -1476,7 +1477,7 @@ func TestErrorResponseFormat(t *testing.T) {
 		expected int
 	}{
 		{"Unauthorized", http.MethodGet, "/api/v1/status", false, http.StatusUnauthorized},
-		{"Method not allowed - zones", http.MethodPost, "/api/v1/zones", true, http.StatusMethodNotAllowed},
+		{"POST zones - no zone manager returns 503", http.MethodPost, "/api/v1/zones", true, http.StatusServiceUnavailable},
 		{"Method not allowed - cache stats", http.MethodPost, "/api/v1/cache/stats", true, http.StatusMethodNotAllowed},
 		{"Method not allowed - cache flush", http.MethodGet, "/api/v1/cache/flush", true, http.StatusMethodNotAllowed},
 		{"Method not allowed - config reload", http.MethodGet, "/api/v1/config/reload", true, http.StatusMethodNotAllowed},

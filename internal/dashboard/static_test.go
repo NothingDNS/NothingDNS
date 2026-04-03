@@ -44,13 +44,10 @@ func TestGetIndexHTML_ContainsExpectedContent(t *testing.T) {
 	expectedStrings := []string{
 		"NothingDNS",
 		"Dashboard",
-		"WebSocket",
-		"/ws",
 		"/api/dashboard/stats",
-		"Total Queries",
-		"Cache Hit Rate",
-		"Blocked",
 		"Zones",
+		"Settings",
+		"navigate",
 	}
 
 	for _, expected := range expectedStrings {

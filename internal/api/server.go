@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/cache"
@@ -68,6 +71,7 @@ func (s *Server) Start() error {
 	// Zone management
 	mux.HandleFunc("/api/v1/zones", s.handleZones)
 	mux.HandleFunc("/api/v1/zones/reload", s.handleZoneReload)
+	mux.HandleFunc("/api/v1/zones/", s.handleZoneActions)
 
 	// Cache management
 	mux.HandleFunc("/api/v1/cache/stats", s.handleCacheStats)
@@ -250,21 +254,36 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, status)
 }
 
-// handleZones returns list of zones.
+// handleZones handles GET (list zones) and POST (create zone).
 func (s *Server) handleZones(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
+		s.handleListZones(w, r)
+	case http.MethodPost:
+		s.handleCreateZone(w, r)
+	default:
 		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
 	}
+}
 
+// handleListZones returns list of zones with serial and record count.
+func (s *Server) handleListZones(w http.ResponseWriter, r *http.Request) {
 	zones := []map[string]interface{}{}
 	if s.zoneManager != nil {
 		for name, z := range s.zoneManager.List() {
 			z.RLock()
-			recordCount := len(z.Records)
+			recordCount := 0
+			for _, records := range z.Records {
+				recordCount += len(records)
+			}
+			serial := uint32(0)
+			if z.SOA != nil {
+				serial = z.SOA.Serial
+			}
 			z.RUnlock()
 			zones = append(zones, map[string]interface{}{
 				"name":    name,
+				"serial":  serial,
 				"records": recordCount,
 			})
 		}
@@ -273,6 +292,365 @@ func (s *Server) handleZones(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]interface{}{
 		"zones": zones,
 	})
+}
+
+// handleZoneActions dispatches zone-specific operations based on path and method.
+// Routes: DELETE /api/v1/zones/{name}
+//
+//	GET    /api/v1/zones/{name}/records
+//	POST   /api/v1/zones/{name}/records
+//	PUT    /api/v1/zones/{name}/records
+//	DELETE /api/v1/zones/{name}/records
+//	GET    /api/v1/zones/{name}/export
+func (s *Server) handleZoneActions(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/zones/")
+
+	// Decode URL-encoded zone name (e.g., "example.com." from "example.com.")
+	zoneName, err := url.PathUnescape(path)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid zone name")
+		return
+	}
+
+	if s.zoneManager == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Zone manager not available")
+		return
+	}
+
+	// Check if there's a sub-path after the zone name
+	parts := strings.SplitN(zoneName, "/", 2)
+	if len(parts) == 1 || parts[1] == "" {
+		// /api/v1/zones/{name}
+		switch r.Method {
+		case http.MethodGet:
+			s.handleGetZone(w, r, parts[0])
+		case http.MethodDelete:
+			s.handleDeleteZone(w, r, parts[0])
+		default:
+			s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		}
+		return
+	}
+
+	zoneName = parts[0]
+	subPath := parts[1]
+
+	switch {
+	case subPath == "records":
+		switch r.Method {
+		case http.MethodGet:
+			s.handleGetRecords(w, r, zoneName)
+		case http.MethodPost:
+			s.handleAddRecord(w, r, zoneName)
+		case http.MethodPut:
+			s.handleUpdateRecord(w, r, zoneName)
+		case http.MethodDelete:
+			s.handleDeleteRecord(w, r, zoneName)
+		default:
+			s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		}
+	case subPath == "export":
+		if r.Method == http.MethodGet {
+			s.handleExportZone(w, r, zoneName)
+		} else {
+			s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		}
+	default:
+		s.writeError(w, http.StatusNotFound, "Not found")
+	}
+}
+
+// handleGetZone returns details of a single zone.
+func (s *Server) handleGetZone(w http.ResponseWriter, r *http.Request, name string) {
+	z, ok := s.zoneManager.Get(name)
+	if !ok {
+		s.writeError(w, http.StatusNotFound, fmt.Sprintf("Zone %s not found", name))
+		return
+	}
+
+	z.RLock()
+	defer z.RUnlock()
+
+	recordCount := 0
+	for _, records := range z.Records {
+		recordCount += len(records)
+	}
+
+	result := map[string]interface{}{
+		"name":    z.Origin,
+		"records": recordCount,
+	}
+
+	if z.SOA != nil {
+		result["serial"] = z.SOA.Serial
+		result["soa"] = map[string]interface{}{
+			"mname":   z.SOA.MName,
+			"rname":   z.SOA.RName,
+			"serial":  z.SOA.Serial,
+			"refresh": z.SOA.Refresh,
+			"retry":   z.SOA.Retry,
+			"expire":  z.SOA.Expire,
+			"minimum": z.SOA.Minimum,
+		}
+	}
+
+	var nsList []string
+	for _, ns := range z.NS {
+		nsList = append(nsList, ns.NSDName)
+	}
+	result["nameservers"] = nsList
+
+	s.writeJSON(w, http.StatusOK, result)
+}
+
+// handleCreateZone creates a new zone.
+func (s *Server) handleCreateZone(w http.ResponseWriter, r *http.Request) {
+	if s.zoneManager == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Zone manager not available")
+		return
+	}
+
+	body, err := io.ReadAll(io.LimitReader(r.Body, 65536))
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "Failed to read request body")
+		return
+	}
+
+	var req struct {
+		Name        string   `json:"name"`
+		TTL         uint32   `json:"ttl"`
+		AdminEmail  string   `json:"admin_email"`
+		Nameservers []string `json:"nameservers"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid JSON")
+		return
+	}
+
+	if req.Name == "" {
+		s.writeError(w, http.StatusBadRequest, "Zone name is required")
+		return
+	}
+	if len(req.Nameservers) == 0 {
+		s.writeError(w, http.StatusBadRequest, "At least one nameserver is required")
+		return
+	}
+
+	ttl := req.TTL
+	if ttl == 0 {
+		ttl = 3600
+	}
+
+	soa := &zone.SOARecord{
+		TTL:     ttl,
+		MName:   req.Nameservers[0],
+		RName:   req.AdminEmail,
+		Serial:  1,
+		Refresh: 3600,
+		Retry:   600,
+		Expire:  604800,
+		Minimum: 86400,
+	}
+
+	var nsRecords []zone.NSRecord
+	for _, ns := range req.Nameservers {
+		nsRecords = append(nsRecords, zone.NSRecord{
+			TTL:    ttl,
+			NSDName: ns,
+		})
+	}
+
+	if err := s.zoneManager.CreateZone(req.Name, ttl, soa, nsRecords); err != nil {
+		s.writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+
+	s.writeJSON(w, http.StatusCreated, map[string]interface{}{
+		"message": fmt.Sprintf("Zone %s created", req.Name),
+		"name":    req.Name,
+	})
+}
+
+// handleDeleteZone deletes a zone.
+func (s *Server) handleDeleteZone(w http.ResponseWriter, r *http.Request, name string) {
+	if err := s.zoneManager.DeleteZone(name); err != nil {
+		s.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"message": fmt.Sprintf("Zone %s deleted", name),
+	})
+}
+
+// handleGetRecords returns records for a zone.
+func (s *Server) handleGetRecords(w http.ResponseWriter, r *http.Request, zoneName string) {
+	name := r.URL.Query().Get("name")
+
+	records, err := s.zoneManager.GetRecords(zoneName, name)
+	if err != nil {
+		s.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	// Convert to API response
+	result := make([]map[string]interface{}, 0, len(records))
+	for _, r := range records {
+		result = append(result, map[string]interface{}{
+			"name":  r.Name,
+			"type":  r.Type,
+			"ttl":   r.TTL,
+			"class": r.Class,
+			"data":  r.RData,
+		})
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"records": result,
+	})
+}
+
+// handleAddRecord adds a record to a zone.
+func (s *Server) handleAddRecord(w http.ResponseWriter, r *http.Request, zoneName string) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 65536))
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "Failed to read request body")
+		return
+	}
+
+	var req struct {
+		Name string `json:"name"`
+		Type string `json:"type"`
+		TTL  uint32 `json:"ttl"`
+		Data string `json:"data"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid JSON")
+		return
+	}
+
+	if req.Name == "" || req.Type == "" || req.Data == "" {
+		s.writeError(w, http.StatusBadRequest, "name, type, and data are required")
+		return
+	}
+
+	ttl := req.TTL
+	if ttl == 0 {
+		// Use zone's default TTL
+		if z, ok := s.zoneManager.Get(zoneName); ok {
+			z.RLock()
+			ttl = z.DefaultTTL
+			z.RUnlock()
+		}
+		if ttl == 0 {
+			ttl = 3600
+		}
+	}
+
+	record := zone.Record{
+		Name:  req.Name,
+		Type:  req.Type,
+		TTL:   ttl,
+		Class: "IN",
+		RData: req.Data,
+	}
+
+	if err := s.zoneManager.AddRecord(zoneName, record); err != nil {
+		s.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	s.writeJSON(w, http.StatusCreated, map[string]interface{}{
+		"message": "Record added",
+	})
+}
+
+// handleUpdateRecord updates a record in a zone.
+func (s *Server) handleUpdateRecord(w http.ResponseWriter, r *http.Request, zoneName string) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 65536))
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "Failed to read request body")
+		return
+	}
+
+	var req struct {
+		Name    string `json:"name"`
+		Type    string `json:"type"`
+		OldData string `json:"old_data"`
+		TTL     uint32 `json:"ttl"`
+		Data    string `json:"data"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid JSON")
+		return
+	}
+
+	if req.Name == "" || req.Type == "" {
+		s.writeError(w, http.StatusBadRequest, "name and type are required")
+		return
+	}
+
+	newRecord := zone.Record{
+		Name:  req.Name,
+		Type:  req.Type,
+		TTL:   req.TTL,
+		Class: "IN",
+		RData: req.Data,
+	}
+
+	if err := s.zoneManager.UpdateRecord(zoneName, req.Name, req.Type, req.OldData, newRecord); err != nil {
+		s.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"message": "Record updated",
+	})
+}
+
+// handleDeleteRecord deletes a record from a zone.
+func (s *Server) handleDeleteRecord(w http.ResponseWriter, r *http.Request, zoneName string) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 65536))
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "Failed to read request body")
+		return
+	}
+
+	var req struct {
+		Name string `json:"name"`
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid JSON")
+		return
+	}
+
+	if req.Name == "" || req.Type == "" {
+		s.writeError(w, http.StatusBadRequest, "name and type are required")
+		return
+	}
+
+	if err := s.zoneManager.DeleteRecord(zoneName, req.Name, req.Type); err != nil {
+		s.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"message": "Record deleted",
+	})
+}
+
+// handleExportZone returns a zone in BIND format.
+func (s *Server) handleExportZone(w http.ResponseWriter, r *http.Request, zoneName string) {
+	content, err := s.zoneManager.ExportZone(zoneName)
+	if err != nil {
+		s.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.zone", strings.TrimSuffix(zoneName, ".")))
+	w.Write([]byte(content))
 }
 
 // handleZoneReload reloads a zone.

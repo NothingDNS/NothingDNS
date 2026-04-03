@@ -92,6 +92,7 @@ type integratedHandler struct {
 	loadBalancer  *upstream.LoadBalancer
 	zones         map[string]*zone.Zone
 	zonesMu       sync.RWMutex
+	zoneManager   *zone.Manager
 	blocklist     *blocklist.Blocklist
 	metrics       *metrics.MetricsCollector
 	validator     *dnssec.Validator
@@ -465,6 +466,7 @@ func run() error {
 		upstream:      client,
 		loadBalancer:  loadBalancer,
 		zones:         zones,
+		zoneManager:   zoneManager,
 		blocklist:     bl,
 		metrics:       metricsCollector,
 		validator:     validator,
@@ -963,6 +965,28 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 		}
 	}
 	h.zonesMu.RUnlock()
+
+	// Also check zones created via API (stored in zoneManager)
+	if h.zoneManager != nil {
+		for name, z := range h.zoneManager.List() {
+			if !isSubdomain(qname, name) {
+				continue
+			}
+			// Skip if already checked in h.zones (file-loaded zones)
+			h.zonesMu.RLock()
+			_, inLocal := h.zones[name]
+			h.zonesMu.RUnlock()
+			if inLocal {
+				matchedZone = true
+				continue
+			}
+			matchedZone = true
+			h.logger.Debugf("Checking zone manager zone %s for %s", name, qname)
+			if h.handleAuthoritative(z, w, r, q) {
+				return
+			}
+		}
+	}
 
 	// If the query name falls within one of our zones but no direct record
 	// was found, chase CNAME chains before falling through to upstream.
