@@ -17,7 +17,7 @@ func TestAPIServer(t *testing.T) {
 		Bind:    "127.0.0.1:18080",
 	}
 
-	server := NewServer(cfg, nil, nil, nil, nil, nil)
+	server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start API server: %v", err)
@@ -63,7 +63,7 @@ func TestAPIStatus(t *testing.T) {
 	}
 	c := cache.New(cacheCfg)
 
-	server := NewServer(cfg, nil, c, nil, nil, nil)
+	server := NewServer(cfg, nil, c, nil, nil, nil, nil)
 	server.Start()
 	time.Sleep(100 * time.Millisecond)
 
@@ -113,7 +113,7 @@ func TestAPICacheFlush(t *testing.T) {
 	}
 	c := cache.New(cacheCfg)
 
-	server := NewServer(cfg, nil, c, nil, nil, nil)
+	server := NewServer(cfg, nil, c, nil, nil, nil, nil)
 	server.Start()
 	time.Sleep(100 * time.Millisecond)
 
@@ -147,7 +147,7 @@ func TestAPIAuth(t *testing.T) {
 		AuthToken: "test-token-123",
 	}
 
-	server := NewServer(cfg, nil, nil, nil, nil, nil)
+	server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 	server.Start()
 	time.Sleep(100 * time.Millisecond)
 
@@ -195,7 +195,7 @@ func TestAPIDisabled(t *testing.T) {
 		Bind:    "127.0.0.1:18084",
 	}
 
-	server := NewServer(cfg, nil, nil, nil, nil, nil)
+	server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 	if err := server.Start(); err != nil {
 		t.Errorf("Start should not fail when disabled: %v", err)

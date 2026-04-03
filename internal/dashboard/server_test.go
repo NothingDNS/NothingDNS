@@ -358,48 +358,6 @@ func (m *MockWebSocketConn) Close() error {
 	return nil
 }
 
-// Test SetStaticHandler
-func TestSetStaticHandler(t *testing.T) {
-	server := NewServer()
-
-	// Create a simple static handler
-	staticHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("static content"))
-	})
-
-	server.SetStaticHandler(staticHandler)
-
-	if server.staticHandler == nil {
-		t.Error("Expected staticHandler to be set")
-	}
-}
-
-// Test ServeHTTP with static handler
-func TestServeHTTPWithStaticHandler(t *testing.T) {
-	server := NewServer()
-
-	staticHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("static content"))
-	})
-
-	server.SetStaticHandler(staticHandler)
-
-	req := httptest.NewRequest("GET", "/index.html", nil)
-	w := httptest.NewRecorder()
-
-	server.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("Expected status 200, got %d", w.Code)
-	}
-
-	if w.Body.String() != "static content" {
-		t.Errorf("Expected 'static content', got %s", w.Body.String())
-	}
-}
-
 // Test ClientLoop with read error
 func TestClientLoop_ReadError(t *testing.T) {
 	server := NewServer()
@@ -798,7 +756,7 @@ func TestServeHTTP_AllRoutes(t *testing.T) {
 		{"/api/dashboard/stats", http.StatusOK},
 		{"/api/dashboard/queries", http.StatusOK},
 		{"/api/dashboard/zones", http.StatusOK},
-		{"/ws", http.StatusMethodNotAllowed},
+		{"/ws", http.StatusBadRequest},
 		{"/unknown", http.StatusNotFound},
 	}
 

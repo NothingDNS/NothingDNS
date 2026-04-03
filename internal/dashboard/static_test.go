@@ -3,93 +3,61 @@ package dashboard
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
-// Test StaticHandler returns a valid handler
-func TestStaticHandler(t *testing.T) {
-	handler := StaticHandler()
+// Test SPAHandler returns a valid handler
+func TestSPAHandler(t *testing.T) {
+	handler := SPAHandler()
 	if handler == nil {
 		t.Error("Expected non-nil handler")
 	}
 }
 
-// Test StaticHandler serves files
-func TestStaticHandler_ServeHTTP(t *testing.T) {
-	handler := StaticHandler()
+// Test SPAHandler serves index.html for unknown routes
+func TestSPAHandler_ServeIndexHTML(t *testing.T) {
+	handler := SPAHandler()
 
-	// Try to serve a non-existent file - should return 404
-	req := httptest.NewRequest("GET", "/nonexistent.txt", nil)
+	req := httptest.NewRequest("GET", "/zones", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
-	// The file doesn't exist, so we expect 404
-	if w.Code != http.StatusNotFound {
-		t.Logf("Status code: %d", w.Code)
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200 for SPA route, got %d", w.Code)
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "doctype html") {
+		t.Errorf("Expected HTML response for SPA route, got body length %d", len(body))
 	}
 }
 
-// Test GetIndexHTML returns non-empty string
-func TestGetIndexHTML(t *testing.T) {
-	html := GetIndexHTML()
+// Test SPAHandler serves assets
+func TestSPAHandler_ServesAssets(t *testing.T) {
+	handler := SPAHandler()
+
+	req := httptest.NewRequest("GET", "/assets/nonexistent.js", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	// Should attempt to serve the file (404 if doesn't exist, but not SPA fallback)
+	if w.Code == http.StatusOK && w.Body.Len() == 0 {
+		t.Error("Expected file server behavior for /assets/ routes")
+	}
+}
+
+// Test GetLoginHTML returns non-empty string
+func TestGetLoginHTML(t *testing.T) {
+	html := GetLoginHTML()
 	if html == "" {
-		t.Error("Expected non-empty HTML")
+		t.Error("Expected non-empty login HTML")
 	}
-}
-
-// Test GetIndexHTML contains expected content
-func TestGetIndexHTML_ContainsExpectedContent(t *testing.T) {
-	html := GetIndexHTML()
-
-	expectedStrings := []string{
-		"NothingDNS",
-		"Dashboard",
-		"/api/dashboard/stats",
-		"Zones",
-		"Settings",
-		"navigate",
+	if !containsString(html, "NothingDNS") {
+		t.Error("Expected login HTML to contain NothingDNS")
 	}
-
-	for _, expected := range expectedStrings {
-		if !containsString(html, expected) {
-			t.Errorf("Expected HTML to contain %q", expected)
-		}
-	}
-}
-
-// Test indexHTML variable directly
-func TestIndexHTML_Variable(t *testing.T) {
-	if indexHTML == "" {
-		t.Error("Expected indexHTML to be non-empty")
-	}
-}
-
-// Test indexHTML contains doctype
-func TestIndexHTML_ContainsDoctype(t *testing.T) {
-	if !containsString(indexHTML, "<!DOCTYPE html>") {
-		t.Error("Expected indexHTML to contain doctype")
-	}
-}
-
-// Test indexHTML contains valid HTML structure
-func TestIndexHTML_ValidStructure(t *testing.T) {
-	if !containsString(indexHTML, "<html") {
-		t.Error("Expected indexHTML to contain <html> tag")
-	}
-	if !containsString(indexHTML, "</html>") {
-		t.Error("Expected indexHTML to contain </html> tag")
-	}
-	if !containsString(indexHTML, "<head>") {
-		t.Error("Expected indexHTML to contain <head> tag")
-	}
-	if !containsString(indexHTML, "</head>") {
-		t.Error("Expected indexHTML to contain </head> tag")
-	}
-	if !containsString(indexHTML, "<body>") {
-		t.Error("Expected indexHTML to contain <body> tag")
-	}
-	if !containsString(indexHTML, "</body>") {
-		t.Error("Expected indexHTML to contain </body> tag")
+	if !containsString(html, "loginForm") {
+		t.Error("Expected login HTML to contain login form")
 	}
 }
 

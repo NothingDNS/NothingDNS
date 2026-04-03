@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/nothingdns/nothingdns/internal/websocket"
 )
 
 // Server implements the web dashboard server
@@ -16,7 +18,6 @@ type Server struct {
 	broadcastChan chan *QueryEvent
 	stats         *DashboardStats
 	enabled       bool
-	staticHandler http.Handler
 	wg            sync.WaitGroup
 }
 
@@ -81,13 +82,6 @@ func NewServer() *Server {
 	return s
 }
 
-// SetStaticHandler sets the static file handler
-func (s *Server) SetStaticHandler(handler http.Handler) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.staticHandler = handler
-}
-
 // ServeHTTP handles HTTP requests
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
@@ -102,12 +96,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/ws":
 		s.handleWebSocket(w, r)
 	default:
-		// Serve static files
-		if s.staticHandler != nil {
-			s.staticHandler.ServeHTTP(w, r)
-		} else {
-			http.NotFound(w, r)
-		}
+		http.NotFound(w, r)
 	}
 }
 
@@ -161,14 +150,21 @@ func (s *Server) handleZones(w http.ResponseWriter, r *http.Request) {
 
 // handleWebSocket handles WebSocket connections
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	// WebSocket upgrade would be handled by gorilla/websocket or similar
-	// This is a placeholder that returns method not allowed
-	w.WriteHeader(http.StatusMethodNotAllowed)
-	if err := json.NewEncoder(w).Encode(map[string]string{
-		"error": "WebSocket upgrade required",
-	}); err != nil {
-		log.Printf("dashboard: failed to encode websocket error: %v", err)
+	conn, err := websocket.Handshake(w, r)
+	if err != nil {
+		log.Printf("dashboard: websocket handshake failed: %v", err)
+		return
 	}
+
+	client := &Client{
+		conn:        conn,
+		send:        make(chan []byte, 256),
+		subscribe:   make(chan struct{}, 1),
+		unsubscribe: make(chan struct{}, 1),
+	}
+
+	s.AddClient(client)
+	s.ClientLoop(client)
 }
 
 // RecordQuery records a query event and broadcasts it

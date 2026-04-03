@@ -34,7 +34,7 @@ func TestHandleHealth(t *testing.T) {
 				Enabled: true,
 				Bind:    "127.0.0.1:0",
 			}
-			server := NewServer(cfg, nil, nil, nil, nil, nil)
+			server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 			req := httptest.NewRequest(tt.method, "/health", nil)
 			rec := httptest.NewRecorder()
@@ -68,7 +68,7 @@ func TestHandleStatus(t *testing.T) {
 			Enabled: true,
 			Bind:    "127.0.0.1:0",
 		}
-		server := NewServer(cfg, nil, nil, nil, nil, nil)
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
 		rec := httptest.NewRecorder()
@@ -114,7 +114,7 @@ func TestHandleStatus(t *testing.T) {
 		}
 		c := cache.New(cacheCfg)
 
-		server := NewServer(cfg, nil, c, nil, nil, nil)
+		server := NewServer(cfg, nil, c, nil, nil, nil, nil)
 
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
 		rec := httptest.NewRecorder()
@@ -148,7 +148,7 @@ func TestHandleZones(t *testing.T) {
 			Enabled: true,
 			Bind:    "127.0.0.1:0",
 		}
-		server := NewServer(cfg, nil, nil, nil, nil, nil)
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil)
 		rec := httptest.NewRecorder()
@@ -192,7 +192,7 @@ func TestHandleZones(t *testing.T) {
 		}
 		zm.LoadZone(testZone, "")
 
-		server := NewServer(cfg, zm, nil, nil, nil, nil)
+		server := NewServer(cfg, zm, nil, nil, nil, nil, nil)
 
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil)
 		rec := httptest.NewRecorder()
@@ -222,7 +222,7 @@ func TestHandleZones(t *testing.T) {
 			Enabled: true,
 			Bind:    "127.0.0.1:0",
 		}
-		server := NewServer(cfg, nil, nil, nil, nil, nil)
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/zones", strings.NewReader(`{"name":"test.com."}`))
 		req.Header.Set("Content-Type", "application/json")
@@ -249,7 +249,7 @@ func TestHandleZones(t *testing.T) {
 			Enabled: true,
 			Bind:    "127.0.0.1:0",
 		}
-		server := NewServer(cfg, nil, nil, nil, nil, nil)
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 		req := httptest.NewRequest(http.MethodPut, "/api/v1/zones", nil)
 		rec := httptest.NewRecorder()
@@ -266,7 +266,7 @@ func TestHandleZones(t *testing.T) {
 			Enabled: true,
 			Bind:    "127.0.0.1:0",
 		}
-		server := NewServer(cfg, nil, nil, nil, nil, nil)
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 		req := httptest.NewRequest(http.MethodDelete, "/api/v1/zones", nil)
 		rec := httptest.NewRecorder()
@@ -286,7 +286,7 @@ func TestHandleZoneReload(t *testing.T) {
 			Enabled: true,
 			Bind:    "127.0.0.1:0",
 		}
-		server := NewServer(cfg, nil, nil, nil, nil, nil)
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/zones/reload", nil)
 		rec := httptest.NewRecorder()
@@ -312,7 +312,7 @@ func TestHandleZoneReload(t *testing.T) {
 			Enabled: true,
 			Bind:    "127.0.0.1:0",
 		}
-		server := NewServer(cfg, nil, nil, nil, nil, nil)
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/zones/reload?zone=example.com.", nil)
 		rec := httptest.NewRecorder()
@@ -339,7 +339,7 @@ func TestHandleZoneReload(t *testing.T) {
 			Bind:    "127.0.0.1:0",
 		}
 		zm := zone.NewManager()
-		server := NewServer(cfg, zm, nil, nil, nil, nil)
+		server := NewServer(cfg, zm, nil, nil, nil, nil, nil)
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/zones/reload?zone=nonexistent.com.", nil)
 		rec := httptest.NewRecorder()
@@ -365,7 +365,7 @@ func TestHandleZoneReload(t *testing.T) {
 			Enabled: true,
 			Bind:    "127.0.0.1:0",
 		}
-		server := NewServer(cfg, nil, nil, nil, nil, nil)
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/zones/reload", nil)
 		rec := httptest.NewRecorder()
@@ -385,7 +385,7 @@ func TestHandleCacheStats(t *testing.T) {
 			Enabled: true,
 			Bind:    "127.0.0.1:0",
 		}
-		server := NewServer(cfg, nil, nil, nil, nil, nil)
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/cache/stats", nil)
 		rec := httptest.NewRecorder()
@@ -419,7 +419,7 @@ func TestHandleCacheStats(t *testing.T) {
 		}
 		c := cache.New(cacheCfg)
 
-		server := NewServer(cfg, nil, c, nil, nil, nil)
+		server := NewServer(cfg, nil, c, nil, nil, nil, nil)
 
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/cache/stats", nil)
 		rec := httptest.NewRecorder()
@@ -453,7 +453,7 @@ func TestHandleCacheStats(t *testing.T) {
 		}
 		c := cache.New(cacheCfg)
 
-		server := NewServer(cfg, nil, c, nil, nil, nil)
+		server := NewServer(cfg, nil, c, nil, nil, nil, nil)
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/cache/stats", nil)
 		rec := httptest.NewRecorder()
@@ -473,7 +473,7 @@ func TestHandleCacheFlush(t *testing.T) {
 			Enabled: true,
 			Bind:    "127.0.0.1:0",
 		}
-		server := NewServer(cfg, nil, nil, nil, nil, nil)
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/cache/flush", nil)
 		rec := httptest.NewRecorder()
@@ -507,7 +507,7 @@ func TestHandleCacheFlush(t *testing.T) {
 		}
 		c := cache.New(cacheCfg)
 
-		server := NewServer(cfg, nil, c, nil, nil, nil)
+		server := NewServer(cfg, nil, c, nil, nil, nil, nil)
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/cache/flush", nil)
 		rec := httptest.NewRecorder()
@@ -541,7 +541,7 @@ func TestHandleCacheFlush(t *testing.T) {
 		}
 		c := cache.New(cacheCfg)
 
-		server := NewServer(cfg, nil, c, nil, nil, nil)
+		server := NewServer(cfg, nil, c, nil, nil, nil, nil)
 
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/cache/flush", nil)
 		rec := httptest.NewRecorder()
@@ -561,7 +561,7 @@ func TestHandleConfigReload(t *testing.T) {
 			Enabled: true,
 			Bind:    "127.0.0.1:0",
 		}
-		server := NewServer(cfg, nil, nil, nil, nil, nil)
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/config/reload", nil)
 		rec := httptest.NewRecorder()
@@ -590,7 +590,7 @@ func TestHandleConfigReload(t *testing.T) {
 		reloadFunc := func() error {
 			return nil
 		}
-		server := NewServer(cfg, nil, nil, reloadFunc, nil, nil)
+		server := NewServer(cfg, nil, nil, reloadFunc, nil, nil, nil)
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/config/reload", nil)
 		rec := httptest.NewRecorder()
@@ -619,7 +619,7 @@ func TestHandleConfigReload(t *testing.T) {
 		reloadFunc := func() error {
 			return fmt.Errorf("config file not found")
 		}
-		server := NewServer(cfg, nil, nil, reloadFunc, nil, nil)
+		server := NewServer(cfg, nil, nil, reloadFunc, nil, nil, nil)
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/config/reload", nil)
 		rec := httptest.NewRecorder()
@@ -645,7 +645,7 @@ func TestHandleConfigReload(t *testing.T) {
 			Enabled: true,
 			Bind:    "127.0.0.1:0",
 		}
-		server := NewServer(cfg, nil, nil, nil, nil, nil)
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/config/reload", nil)
 		rec := httptest.NewRecorder()
@@ -665,7 +665,7 @@ func TestHandleClusterStatus(t *testing.T) {
 			Enabled: true,
 			Bind:    "127.0.0.1:0",
 		}
-		server := NewServer(cfg, nil, nil, nil, nil, nil)
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/cluster/status", nil)
 		rec := httptest.NewRecorder()
@@ -703,7 +703,7 @@ func TestHandleClusterStatus(t *testing.T) {
 			t.Fatalf("Failed to create cluster: %v", err)
 		}
 
-		server := NewServer(cfg, nil, nil, nil, nil, c)
+		server := NewServer(cfg, nil, nil, nil, nil, c, nil)
 
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/cluster/status", nil)
 		rec := httptest.NewRecorder()
@@ -729,7 +729,7 @@ func TestHandleClusterStatus(t *testing.T) {
 			Enabled: true,
 			Bind:    "127.0.0.1:0",
 		}
-		server := NewServer(cfg, nil, nil, nil, nil, nil)
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/cluster/status", nil)
 		rec := httptest.NewRecorder()
@@ -749,7 +749,7 @@ func TestHandleClusterNodes(t *testing.T) {
 			Enabled: true,
 			Bind:    "127.0.0.1:0",
 		}
-		server := NewServer(cfg, nil, nil, nil, nil, nil)
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/cluster/nodes", nil)
 		rec := httptest.NewRecorder()
@@ -787,7 +787,7 @@ func TestHandleClusterNodes(t *testing.T) {
 			t.Fatalf("Failed to create cluster: %v", err)
 		}
 
-		server := NewServer(cfg, nil, nil, nil, nil, c)
+		server := NewServer(cfg, nil, nil, nil, nil, c, nil)
 
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/cluster/nodes", nil)
 		rec := httptest.NewRecorder()
@@ -818,7 +818,7 @@ func TestHandleClusterNodes(t *testing.T) {
 			Enabled: true,
 			Bind:    "127.0.0.1:0",
 		}
-		server := NewServer(cfg, nil, nil, nil, nil, nil)
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/cluster/nodes", nil)
 		rec := httptest.NewRecorder()
@@ -839,7 +839,7 @@ func TestAuthMiddleware(t *testing.T) {
 			Bind:      "127.0.0.1:0",
 			AuthToken: "",
 		}
-		server := NewServer(cfg, nil, nil, nil, nil, nil)
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 		handlerCalled := false
 		testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -866,7 +866,7 @@ func TestAuthMiddleware(t *testing.T) {
 			Bind:      "127.0.0.1:0",
 			AuthToken: "secret-token",
 		}
-		server := NewServer(cfg, nil, nil, nil, nil, nil)
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 		handlerCalled := false
 		testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -894,7 +894,7 @@ func TestAuthMiddleware(t *testing.T) {
 			Bind:      "127.0.0.1:0",
 			AuthToken: "secret-token",
 		}
-		server := NewServer(cfg, nil, nil, nil, nil, nil)
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 		handlerCalled := false
 		testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -921,7 +921,7 @@ func TestAuthMiddleware(t *testing.T) {
 			Bind:      "127.0.0.1:0",
 			AuthToken: "secret-token",
 		}
-		server := NewServer(cfg, nil, nil, nil, nil, nil)
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 		handlerCalled := false
 		testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -949,7 +949,7 @@ func TestAuthMiddleware(t *testing.T) {
 			Bind:      "127.0.0.1:0",
 			AuthToken: "secret-token",
 		}
-		server := NewServer(cfg, nil, nil, nil, nil, nil)
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 		handlerCalled := false
 		testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -986,7 +986,7 @@ func TestAuthMiddleware(t *testing.T) {
 			Bind:      "127.0.0.1:0",
 			AuthToken: "secret-token",
 		}
-		server := NewServer(cfg, nil, nil, nil, nil, nil)
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 		handlerCalled := false
 		testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1015,7 +1015,7 @@ func TestCorsMiddleware(t *testing.T) {
 			Enabled: true,
 			Bind:    "127.0.0.1:0",
 		}
-		server := NewServer(cfg, nil, nil, nil, nil, nil)
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 		handlerCalled := false
 		testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1041,7 +1041,7 @@ func TestCorsMiddleware(t *testing.T) {
 			Enabled: true,
 			Bind:    "127.0.0.1:0",
 		}
-		server := NewServer(cfg, nil, nil, nil, nil, nil)
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 		testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
@@ -1070,7 +1070,7 @@ func TestCorsMiddleware(t *testing.T) {
 			Enabled: true,
 			Bind:    "127.0.0.1:0",
 		}
-		server := NewServer(cfg, nil, nil, nil, nil, nil)
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 		handlerCalled := false
 		testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1099,7 +1099,7 @@ func TestWriteJSON(t *testing.T) {
 			Enabled: true,
 			Bind:    "127.0.0.1:0",
 		}
-		server := NewServer(cfg, nil, nil, nil, nil, nil)
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 		rec := httptest.NewRecorder()
 
@@ -1154,7 +1154,7 @@ func TestWriteError(t *testing.T) {
 				Enabled: true,
 				Bind:    "127.0.0.1:0",
 			}
-			server := NewServer(cfg, nil, nil, nil, nil, nil)
+			server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 			rec := httptest.NewRecorder()
 
@@ -1188,7 +1188,7 @@ func TestNewServer(t *testing.T) {
 	c := cache.New(cacheCfg)
 	reloadFunc := func() error { return nil }
 
-	server := NewServer(cfg, zm, c, reloadFunc, nil, nil)
+	server := NewServer(cfg, zm, c, reloadFunc, nil, nil, nil)
 
 	if server == nil {
 		t.Fatal("Expected server to be created")
@@ -1219,7 +1219,7 @@ func TestStartStop(t *testing.T) {
 			Bind:    "127.0.0.1:18090",
 		}
 
-		server := NewServer(cfg, nil, nil, nil, nil, nil)
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 		if err := server.Start(); err != nil {
 			t.Fatalf("Failed to start server: %v", err)
@@ -1250,7 +1250,7 @@ func TestStartStop(t *testing.T) {
 			Bind:    "127.0.0.1:18091",
 		}
 
-		server := NewServer(cfg, nil, nil, nil, nil, nil)
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 		if err := server.Start(); err != nil {
 			t.Errorf("Start should not fail when disabled: %v", err)
@@ -1268,7 +1268,7 @@ func TestStartStop(t *testing.T) {
 			Bind:    "127.0.0.1:18092",
 		}
 
-		server := NewServer(cfg, nil, nil, nil, nil, nil)
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 		// Stop without start should not fail
 		if err := server.Stop(); err != nil {
@@ -1282,7 +1282,7 @@ func TestStartStop(t *testing.T) {
 			Bind:    "127.0.0.1:18093",
 		}
 
-		server := NewServer(cfg, nil, nil, nil, nil, nil)
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 		if err := server.Start(); err != nil {
 			t.Fatalf("Failed to start server: %v", err)
@@ -1311,7 +1311,7 @@ func TestMiddlewareChain(t *testing.T) {
 			AuthToken: "secret",
 		}
 
-		server := NewServer(cfg, nil, nil, nil, nil, nil)
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 		server.Start()
 		time.Sleep(50 * time.Millisecond)
 		defer server.Stop()
@@ -1358,7 +1358,7 @@ func TestIntegration(t *testing.T) {
 			return nil
 		}
 
-		server := NewServer(cfg, nil, c, reloadFunc, nil, nil)
+		server := NewServer(cfg, nil, c, reloadFunc, nil, nil, nil)
 		server.Start()
 		time.Sleep(50 * time.Millisecond)
 		defer server.Stop()
@@ -1427,7 +1427,7 @@ func TestIntegration(t *testing.T) {
 			AuthToken: "secret-key",
 		}
 
-		server := NewServer(cfg, nil, nil, nil, nil, nil)
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 		server.Start()
 		time.Sleep(50 * time.Millisecond)
 		defer server.Stop()
@@ -1464,7 +1464,7 @@ func TestErrorResponseFormat(t *testing.T) {
 	cacheCfg := cache.Config{Capacity: 100}
 	c := cache.New(cacheCfg)
 
-	server := NewServer(cfg, nil, c, nil, nil, nil)
+	server := NewServer(cfg, nil, c, nil, nil, nil, nil)
 	server.Start()
 	time.Sleep(50 * time.Millisecond)
 	defer server.Stop()
@@ -1526,7 +1526,7 @@ func TestOptionsPreflight(t *testing.T) {
 		Bind:      "127.0.0.1:18098",
 	}
 
-	server := NewServer(cfg, nil, nil, nil, nil, nil)
+	server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 	server.Start()
 	time.Sleep(50 * time.Millisecond)
 	defer server.Stop()
@@ -1569,7 +1569,7 @@ func TestConcurrentRequests(t *testing.T) {
 	cacheCfg := cache.Config{Capacity: 1000}
 	c := cache.New(cacheCfg)
 
-	server := NewServer(cfg, nil, c, nil, nil, nil)
+	server := NewServer(cfg, nil, c, nil, nil, nil, nil)
 	server.Start()
 	time.Sleep(50 * time.Millisecond)
 	defer server.Stop()

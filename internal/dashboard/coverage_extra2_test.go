@@ -173,23 +173,19 @@ func TestBroadcastLoop_MixedClients(t *testing.T) {
 // Additional coverage: StaticHandler serves files correctly
 // ============================================================================
 
-func TestStaticHandler_ServesFiles(t *testing.T) {
-	handler := StaticHandler()
+func TestSPAHandler_ServesIndex(t *testing.T) {
+	handler := SPAHandler()
 	if handler == nil {
-		t.Error("Expected non-nil handler from StaticHandler()")
+		t.Error("Expected non-nil handler from SPAHandler()")
 	}
 
-	// Test that it can serve requests via the Server
-	server := NewServer()
-	defer server.Stop()
-	server.SetStaticHandler(handler)
-
-	req := httptest.NewRequest("GET", "/index.html", nil)
+	req := httptest.NewRequest("GET", "/zones", nil)
 	w := httptest.NewRecorder()
-	server.ServeHTTP(w, req)
+	handler.ServeHTTP(w, req)
 
-	// The embedded file may or may not exist, but the handler should not crash
-	t.Logf("Static file request returned status %d", w.Code)
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected 200 for SPA route, got %d", w.Code)
+	}
 }
 
 // ============================================================================

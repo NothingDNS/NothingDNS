@@ -41,7 +41,7 @@ func TestHandleStatus_WithCluster(t *testing.T) {
 	cacheCfg := cache.Config{Capacity: 200, MinTTL: 60, MaxTTL: 3600, DefaultTTL: 300}
 	c := cache.New(cacheCfg)
 
-	srv := NewServer(cfg, nil, c, nil, nil, cl)
+	srv := NewServer(cfg, nil, c, nil, nil, cl, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
 	rec := httptest.NewRecorder()
@@ -94,7 +94,7 @@ func TestStart_DoHEnabled(t *testing.T) {
 		DoHPath:    "/dns-query",
 	}
 
-	srv := NewServer(cfg, nil, nil, nil, &mockDNSHandler{}, nil)
+	srv := NewServer(cfg, nil, nil, nil, &mockDNSHandler{}, nil, nil)
 
 	if err := srv.Start(); err != nil {
 		t.Fatalf("failed to start server: %v", err)
@@ -134,7 +134,7 @@ func TestStart_WithCluster(t *testing.T) {
 		Bind:    "127.0.0.1:18101",
 	}
 
-	srv := NewServer(cfg, nil, nil, nil, nil, cl)
+	srv := NewServer(cfg, nil, nil, nil, nil, cl, nil)
 
 	if err := srv.Start(); err != nil {
 		t.Fatalf("failed to start server: %v", err)
@@ -158,6 +158,7 @@ func TestStart_WithCluster(t *testing.T) {
 
 func TestStart_DoHEnabledWithoutDNSHandler(t *testing.T) {
 	// When DoHEnabled is true but dnsHandler is nil, the DoH block should be skipped.
+	// The SPA fallback handler will serve index.html for the path instead.
 	cfg := config.HTTPConfig{
 		Enabled:    true,
 		Bind:       "127.0.0.1:18102",
@@ -165,21 +166,23 @@ func TestStart_DoHEnabledWithoutDNSHandler(t *testing.T) {
 		DoHPath:    "/dns-query",
 	}
 
-	srv := NewServer(cfg, nil, nil, nil, nil, nil)
+	srv := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 	if err := srv.Start(); err != nil {
 		t.Fatalf("failed to start server: %v", err)
 	}
 	time.Sleep(100 * time.Millisecond)
 
-	// The /dns-query route should NOT be registered; expect 404.
+	// The /dns-query route is not registered as a DoH handler (dnsHandler is nil),
+	// but the SPA fallback will serve index.html for the path.
 	resp, err := http.Get("http://127.0.0.1:18102/dns-query")
 	if err != nil {
 		t.Fatalf("failed to reach server: %v", err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Errorf("expected 404 for unregistered DoH path, got %d", resp.StatusCode)
+	// SPA fallback returns 200 with HTML, not 404
+	if resp.StatusCode == http.StatusNotFound {
+		t.Error("SPA fallback should serve index.html, got 404")
 	}
 
 	srv.Stop()
@@ -209,7 +212,7 @@ $TTL 3600
 	}
 
 	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
-	srv := NewServer(cfg, zm, nil, nil, nil, nil)
+	srv := NewServer(cfg, zm, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/zones/reload?zone=testzone.com.", nil)
 	rec := httptest.NewRecorder()
@@ -232,7 +235,7 @@ $TTL 3600
 
 func TestHandleZoneReload_PUTMethodNotAllowed(t *testing.T) {
 	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
-	srv := NewServer(cfg, nil, nil, nil, nil, nil)
+	srv := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/zones/reload?zone=example.com.", nil)
 	rec := httptest.NewRecorder()
@@ -245,7 +248,7 @@ func TestHandleZoneReload_PUTMethodNotAllowed(t *testing.T) {
 
 func TestHandleZoneReload_DeleteMethodNotAllowed(t *testing.T) {
 	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
-	srv := NewServer(cfg, nil, nil, nil, nil, nil)
+	srv := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/zones/reload?zone=example.com.", nil)
 	rec := httptest.NewRecorder()
