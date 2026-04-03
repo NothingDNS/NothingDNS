@@ -133,18 +133,35 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		// Check Authorization header
 		token := r.Header.Get("Authorization")
+
+		// Check query parameter
 		if token == "" {
 			token = r.URL.Query().Get("token")
 		}
 
+		// Check cookie
+		if token == "" {
+			if c, err := r.Cookie("ndns_token"); err == nil {
+				token = c.Value
+			}
+		}
+
 		expected := "Bearer " + s.config.AuthToken
-		if token != expected && token != s.config.AuthToken {
-			s.writeError(w, http.StatusUnauthorized, "Unauthorized")
+		if token == expected || token == s.config.AuthToken {
+			next.ServeHTTP(w, r)
 			return
 		}
 
-		next.ServeHTTP(w, r)
+		// For dashboard pages, serve the login page instead of JSON error
+		if r.URL.Path == "/" || r.URL.Path == "/dashboard" {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Write([]byte(dashboard.GetLoginHTML()))
+			return
+		}
+
+		s.writeError(w, http.StatusUnauthorized, "Unauthorized")
 	})
 }
 
