@@ -23,24 +23,26 @@ import (
 
 // Server provides HTTP API for DNS server management.
 type Server struct {
-	config      config.HTTPConfig
-	httpServer  *http.Server
-	zoneManager *zone.Manager
-	cache       *cache.Cache
-	reloadFunc  func() error
-	dnsHandler  server.Handler
-	cluster     *cluster.Cluster
+	config          config.HTTPConfig
+	httpServer      *http.Server
+	zoneManager     *zone.Manager
+	cache           *cache.Cache
+	reloadFunc      func() error
+	dnsHandler      server.Handler
+	cluster         *cluster.Cluster
+	dashboardServer *dashboard.Server
 }
 
 // NewServer creates a new API server.
-func NewServer(cfg config.HTTPConfig, zm *zone.Manager, c *cache.Cache, reload func() error, dnsHandler server.Handler, cluster *cluster.Cluster) *Server {
+func NewServer(cfg config.HTTPConfig, zm *zone.Manager, c *cache.Cache, reload func() error, dnsHandler server.Handler, cl *cluster.Cluster, ds *dashboard.Server) *Server {
 	return &Server{
-		config:      cfg,
-		zoneManager: zm,
-		cache:       c,
-		reloadFunc:  reload,
-		dnsHandler:  dnsHandler,
-		cluster:     cluster,
+		config:          cfg,
+		zoneManager:     zm,
+		cache:           c,
+		reloadFunc:      reload,
+		dnsHandler:      dnsHandler,
+		cluster:         cl,
+		dashboardServer: ds,
 	}
 }
 
@@ -81,9 +83,17 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/v1/config/reload", s.handleConfigReload)
 
 	// Dashboard UI
-	mux.HandleFunc("/dashboard", s.handleDashboard)
 	mux.HandleFunc("/api/dashboard/stats", s.handleDashboardStats)
-	mux.HandleFunc("/", s.handleDashboard)
+
+	// WebSocket endpoint
+	mux.HandleFunc("/ws", s.dashboardServer.ServeHTTP)
+
+	// SPA static assets
+	spaHandler := dashboard.SPAHandler()
+	mux.Handle("/assets/", spaHandler)
+
+	// SPA fallback: serve index.html for all non-API routes
+	mux.HandleFunc("/", s.handleSPA(spaHandler))
 
 	s.httpServer = &http.Server{
 		Addr:         s.config.Bind,
@@ -158,8 +168,10 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// For dashboard pages, serve the login page instead of JSON error
-		if r.URL.Path == "/" || r.URL.Path == "/dashboard" {
+		// For SPA routes, serve the login page instead of JSON error
+		if !strings.HasPrefix(r.URL.Path, "/api/") && !strings.HasPrefix(r.URL.Path, "/assets/") &&
+			r.URL.Path != "/health" && r.URL.Path != "/ws" &&
+			!strings.HasSuffix(r.URL.Path, ".svg") && !strings.HasSuffix(r.URL.Path, ".ico") {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.Write([]byte(dashboard.GetLoginHTML()))
 			return
@@ -177,15 +189,13 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleDashboard serves the web UI dashboard.
-func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
-	// Only serve dashboard for exact "/" or "/dashboard" paths
-	if r.URL.Path != "/" && r.URL.Path != "/dashboard" {
-		http.NotFound(w, r)
-		return
+// handleSPA returns a handler that serves the React SPA, falling back to
+// index.html for client-side routes. Non-API, non-static-file requests
+// are handled by the SPA.
+func (s *Server) handleSPA(spaHandler http.Handler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		spaHandler.ServeHTTP(w, r)
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write([]byte(dashboard.GetIndexHTML()))
 }
 
 // handleDashboardStats returns stats formatted for the web dashboard.

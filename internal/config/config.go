@@ -37,6 +37,9 @@ type Config struct {
 	// Zone files to load
 	Zones []string `yaml:"zones"`
 
+	// Directory for zone file storage (defaults to ./zones/)
+	ZoneDir string `yaml:"zone_dir"`
+
 	// ACL configuration
 	ACL []ACLRule `yaml:"acl"`
 
@@ -586,6 +589,11 @@ func unmarshalToConfig(node *Node, cfg *Config) error {
 	// Zones list
 	if zonesNode := node.Get("zones"); zonesNode != nil && zonesNode.Type == NodeSequence {
 		cfg.Zones = zonesNode.getStringSlice()
+	}
+
+	// Zone directory
+	if zdn := node.Get("zone_dir"); zdn != nil && zdn.Value != "" {
+		cfg.ZoneDir = zdn.Value
 	}
 
 	// ACL rules

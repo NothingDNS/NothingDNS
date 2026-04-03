@@ -24,6 +24,7 @@ import (
 	"github.com/nothingdns/nothingdns/internal/cache"
 	"github.com/nothingdns/nothingdns/internal/cluster"
 	"github.com/nothingdns/nothingdns/internal/config"
+	"github.com/nothingdns/nothingdns/internal/dashboard"
 	"github.com/nothingdns/nothingdns/internal/dnssec"
 	"github.com/nothingdns/nothingdns/internal/audit"
 	"github.com/nothingdns/nothingdns/internal/filter"
@@ -488,6 +489,7 @@ func run() error {
 	ddnsHandler.SetZonesMu(&handler.zonesMu)
 
 	// Initialize API server
+	dashboardServer := dashboard.NewServer()
 	apiServer := api.NewServer(cfg.Server.HTTP, zoneManager, dnsCache, func() error {
 		logger.Info("Reloading configuration via API...")
 		// Reload zone files
@@ -511,7 +513,7 @@ func run() error {
 			}
 		}
 		return nil
-	}, handler, clusterMgr)
+	}, handler, clusterMgr, dashboardServer)
 	if err := apiServer.Start(); err != nil {
 		logger.Warnf("Failed to start API server: %v", err)
 	} else if cfg.Server.HTTP.Enabled {
