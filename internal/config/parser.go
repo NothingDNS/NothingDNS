@@ -84,20 +84,30 @@ func (p *Parser) ParseMapping() (*Node, error) {
 	return node, nil
 }
 
-// advance moves to the next token.
+// advance moves to the next token, skipping comment tokens.
 func (p *Parser) advance() {
-	if p.hasPeek {
-		p.current = p.peekToken
-		p.hasPeek = false
-	} else {
-		p.current = p.tokenizer.Next()
+	for {
+		if p.hasPeek {
+			p.current = p.peekToken
+			p.hasPeek = false
+		} else {
+			p.current = p.tokenizer.Next()
+		}
+		if p.current.Type != TokenComment {
+			break
+		}
 	}
 }
 
-// peek returns the next token without consuming it.
+// peek returns the next non-comment token without consuming it.
 func (p *Parser) peek() Token {
 	if !p.hasPeek {
-		p.peekToken = p.tokenizer.Next()
+		for {
+			p.peekToken = p.tokenizer.Next()
+			if p.peekToken.Type != TokenComment {
+				break
+			}
+		}
 		p.hasPeek = true
 	}
 	return p.peekToken
