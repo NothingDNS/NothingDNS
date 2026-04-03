@@ -276,8 +276,17 @@ func (w *tcpResponseWriter) MaxSize() int {
 }
 
 func (w *tcpResponseWriter) Write(msg *protocol.Message) (int, error) {
+	// Estimate buffer size from wire length (+2 for length prefix)
+	estimated := msg.WireLength() + 2
+	if estimated < 512 {
+		estimated = 512
+	}
+	if estimated > TCPMaxMessageSize {
+		estimated = TCPMaxMessageSize
+	}
+	buf := make([]byte, estimated)
+
 	// Pack the response
-	buf := make([]byte, TCPMaxMessageSize)
 	n, err := msg.Pack(buf[2:]) // Leave room for length prefix
 	if err != nil {
 		return 0, err

@@ -299,7 +299,14 @@ func (w *tlsResponseWriter) Write(msg *protocol.Message) (int, error) {
 	w.written = true
 
 	// Pack the response
-	buf := make([]byte, TLSMaxMessageSize)
+	estimated := msg.WireLength() + 2
+	if estimated < 512 {
+		estimated = 512
+	}
+	if estimated > TLSMaxMessageSize {
+		estimated = TLSMaxMessageSize
+	}
+	buf := make([]byte, estimated)
 	n, err := msg.Pack(buf[2:]) // Leave room for length prefix
 	if err != nil {
 		return 0, err

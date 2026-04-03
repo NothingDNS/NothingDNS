@@ -483,11 +483,8 @@ func (sm *SlaveManager) scheduleRetry(zoneName string) {
 
 	select {
 	case <-time.After(slaveZone.Config.RetryInterval):
-		sm.wg.Add(1)
-		go func() {
-			defer sm.wg.Done()
-			sm.performZoneTransfer(zoneName)
-		}()
+		// Already running inside a wg-tracked goroutine, so call directly
+		sm.performZoneTransfer(zoneName)
 	case <-sm.stopChan:
 		// Manager is stopping, abort retry
 	}
