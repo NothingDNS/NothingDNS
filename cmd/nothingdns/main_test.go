@@ -368,3 +368,360 @@ func mustParseName(t *testing.T, s string) *protocol.Name {
 	}
 	return n
 }
+
+// --- Pure function tests ---
+
+func TestIsSubdomain(t *testing.T) {
+	tests := []struct {
+		child, parent string
+		want          bool
+	}{
+		{"www.example.com.", "example.com.", true},
+		{"example.com.", "example.com.", true},
+		{"other.com.", "example.com.", false},
+		{"sub.www.example.com.", "example.com.", true},
+		{"example.com.", "www.example.com.", false},
+		{"WWW.EXAMPLE.COM.", "example.com.", true}, // case-insensitive
+		{"www.example.com", "example.com", true},   // no trailing dot
+	}
+	for _, tc := range tests {
+		if got := isSubdomain(tc.child, tc.parent); got != tc.want {
+			t.Errorf("isSubdomain(%q, %q) = %v, want %v", tc.child, tc.parent, got, tc.want)
+		}
+	}
+}
+
+func TestCanonicalize(t *testing.T) {
+	tests := []struct {
+		input, want string
+	}{
+		{"EXAMPLE.COM.", "example.com."},
+		{"example.com", "example.com."},
+		{"  EXAMPLE.COM  ", "example.com."},
+		{"", "."},
+		{".", "."},
+	}
+	for _, tc := range tests {
+		if got := canonicalize(tc.input); got != tc.want {
+			t.Errorf("canonicalize(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestTypeToString(t *testing.T) {
+	if got := typeToString(protocol.TypeA); got != "A" {
+		t.Errorf("typeToString(TypeA) = %q, want %q", got, "A")
+	}
+	if got := typeToString(protocol.TypeAAAA); got != "AAAA" {
+		t.Errorf("typeToString(TypeAAAA) = %q, want %q", got, "AAAA")
+	}
+}
+
+func TestStringToType(t *testing.T) {
+	if got := stringToType("A"); got != protocol.TypeA {
+		t.Errorf("stringToType(%q) = %d, want %d", "A", got, protocol.TypeA)
+	}
+	if got := stringToType("aaaa"); got != protocol.TypeAAAA {
+		t.Errorf("stringToType(%q) = %d, want %d", "aaaa", got, protocol.TypeAAAA)
+	}
+	if got := stringToType("UNKNOWN"); got != 0 {
+		t.Errorf("stringToType(%q) = %d, want 0", "UNKNOWN", got)
+	}
+}
+
+func TestParseRData(t *testing.T) {
+	// A record
+	rd := parseRData("A", "192.168.1.1")
+	a, ok := rd.(*protocol.RDataA)
+	if !ok {
+		t.Fatalf("expected RDataA, got %T", rd)
+	}
+	if a.Address != [4]byte{192, 168, 1, 1} {
+		t.Errorf("A address = %v, want 192.168.1.1", a.Address)
+	}
+
+	// A record with IPv6 should return nil
+	if rd := parseRData("A", "::1"); rd != nil {
+		t.Errorf("expected nil for IPv6 in A record, got %T", rd)
+	}
+
+	// AAAA record
+	rd = parseRData("AAAA", "2001:db8::1")
+	aaaa, ok := rd.(*protocol.RDataAAAA)
+	if !ok {
+		t.Fatalf("expected RDataAAAA, got %T", rd)
+	}
+	ifaaaa := net.IP(aaaa.Address[:])
+	if !ifaaaa.Equal(net.ParseIP("2001:db8::1")) {
+		t.Errorf("AAAA address = %v, want 2001:db8::1", ifaaaa)
+	}
+
+	// CNAME record
+	rd = parseRData("CNAME", "target.example.com.")
+	cname, ok := rd.(*protocol.RDataCNAME)
+	if !ok {
+		t.Fatalf("expected RDataCNAME, got %T", rd)
+	}
+	if cname.CName.String() != "target.example.com." {
+		t.Errorf("CNAME = %q, want target.example.com.", cname.CName.String())
+	}
+
+	// NS record
+	rd = parseRData("NS", "ns1.example.com.")
+	if _, ok := rd.(*protocol.RDataCNAME); !ok {
+		t.Fatalf("expected RDataCNAME for NS, got %T", rd)
+	}
+
+	// MX record
+	rd = parseRData("MX", "10 mail.example.com.")
+	mx, ok := rd.(*protocol.RDataMX)
+	if !ok {
+		t.Fatalf("expected RDataMX, got %T", rd)
+	}
+	if mx.Preference != 10 {
+		t.Errorf("MX preference = %d, want 10", mx.Preference)
+	}
+
+	// TXT record
+	rd = parseRData("TXT", "hello world")
+	txt, ok := rd.(*protocol.RDataTXT)
+	if !ok {
+		t.Fatalf("expected RDataTXT, got %T", rd)
+	}
+	if len(txt.Strings) != 1 || txt.Strings[0] != "hello world" {
+		t.Errorf("TXT = %v, want [hello world]", txt.Strings)
+	}
+
+	// Unknown type
+	if rd := parseRData("UNKNOWN", "data"); rd != nil {
+		t.Errorf("expected nil for unknown type, got %T", rd)
+	}
+
+	// Invalid A record
+	if rd := parseRData("A", "not-an-ip"); rd != nil {
+		t.Errorf("expected nil for invalid IP, got %T", rd)
+	}
+
+	// MX with not enough fields
+	if rd := parseRData("MX", "10"); rd != nil {
+		t.Errorf("expected nil for invalid MX, got %T", rd)
+	}
+}
+
+func TestParseSOARData(t *testing.T) {
+	soa := parseSOARData("ns1.example.com. admin.example.com. 2024010101 3600 600 604800 86400")
+	s, ok := soa.(*protocol.RDataSOA)
+	if !ok {
+		t.Fatalf("expected RDataSOA, got %T", soa)
+	}
+	if s.Serial != 2024010101 {
+		t.Errorf("Serial = %d, want 2024010101", s.Serial)
+	}
+	if s.Refresh != 3600 {
+		t.Errorf("Refresh = %d, want 3600", s.Refresh)
+	}
+	if s.Retry != 600 {
+		t.Errorf("Retry = %d, want 600", s.Retry)
+	}
+	if s.Expire != 604800 {
+		t.Errorf("Expire = %d, want 604800", s.Expire)
+	}
+	if s.Minimum != 86400 {
+		t.Errorf("Minimum = %d, want 86400", s.Minimum)
+	}
+
+	// Not enough fields
+	if soa := parseSOARData("ns1.example.com. admin.example.com."); soa != nil {
+		t.Errorf("expected nil for incomplete SOA, got %T", soa)
+	}
+}
+
+func TestParseSRVRData(t *testing.T) {
+	srv := parseSRVRData("10 20 443 server.example.com.")
+	s, ok := srv.(*protocol.RDataSRV)
+	if !ok {
+		t.Fatalf("expected RDataSRV, got %T", srv)
+	}
+	if s.Priority != 10 {
+		t.Errorf("Priority = %d, want 10", s.Priority)
+	}
+	if s.Weight != 20 {
+		t.Errorf("Weight = %d, want 20", s.Weight)
+	}
+	if s.Port != 443 {
+		t.Errorf("Port = %d, want 443", s.Port)
+	}
+
+	// Not enough fields
+	if srv := parseSRVRData("10 20"); srv != nil {
+		t.Errorf("expected nil for incomplete SRV, got %T", srv)
+	}
+}
+
+func TestParseCAARData(t *testing.T) {
+	caa := parseCAARData("0 issue letsencrypt.org.")
+	c, ok := caa.(*protocol.RDataCAA)
+	if !ok {
+		t.Fatalf("expected RDataCAA, got %T", caa)
+	}
+	if c.Flags != 0 {
+		t.Errorf("Flags = %d, want 0", c.Flags)
+	}
+	if c.Tag != "issue" {
+		t.Errorf("Tag = %q, want %q", c.Tag, "issue")
+	}
+	if c.Value != "letsencrypt.org." {
+		t.Errorf("Value = %q, want %q", c.Value, "letsencrypt.org.")
+	}
+
+	// Not enough fields
+	if caa := parseCAARData("0 issue"); caa != nil {
+		t.Errorf("expected nil for incomplete CAA, got %T", caa)
+	}
+}
+
+func TestExtractTTL(t *testing.T) {
+	// With answers
+	resp := &protocol.Message{
+		Answers: []*protocol.ResourceRecord{
+			{TTL: 600},
+		},
+	}
+	if got := extractTTL(resp); got != 600 {
+		t.Errorf("extractTTL with answer = %d, want 600", got)
+	}
+
+	// No answers
+	resp2 := &protocol.Message{Answers: nil}
+	if got := extractTTL(resp2); got != 300 {
+		t.Errorf("extractTTL with no answers = %d, want 300", got)
+	}
+
+	// Answer with TTL 0
+	resp3 := &protocol.Message{
+		Answers: []*protocol.ResourceRecord{
+			{TTL: 0},
+		},
+	}
+	if got := extractTTL(resp3); got != 300 {
+		t.Errorf("extractTTL with TTL 0 = %d, want 300", got)
+	}
+}
+
+func TestHasDOBit(t *testing.T) {
+	// With DO bit set
+	msg := &protocol.Message{
+		Additionals: []*protocol.ResourceRecord{
+			{Type: protocol.TypeOPT, TTL: 0x8000},
+		},
+	}
+	if !hasDOBit(msg) {
+		t.Error("expected DO bit to be set")
+	}
+
+	// Without DO bit
+	msg2 := &protocol.Message{
+		Additionals: []*protocol.ResourceRecord{
+			{Type: protocol.TypeOPT, TTL: 0},
+		},
+	}
+	if hasDOBit(msg2) {
+		t.Error("expected DO bit to not be set")
+	}
+
+	// No OPT record
+	msg3 := &protocol.Message{Additionals: nil}
+	if hasDOBit(msg3) {
+		t.Error("expected no DO bit without OPT")
+	}
+}
+
+func TestParseDurationOrDefault(t *testing.T) {
+	if got := parseDurationOrDefault("5s", time.Second); got != 5*time.Second {
+		t.Errorf("parseDurationOrDefault(%q) = %v, want 5s", "5s", got)
+	}
+	if got := parseDurationOrDefault("", time.Minute); got != time.Minute {
+		t.Errorf("parseDurationOrDefault(empty) = %v, want 1m", got)
+	}
+	if got := parseDurationOrDefault("invalid", time.Hour); got != time.Hour {
+		t.Errorf("parseDurationOrDefault(invalid) = %v, want 1h", got)
+	}
+}
+
+func TestLogLevelFromString(t *testing.T) {
+	tests := []struct {
+		input string
+		want  util.LogLevel
+	}{
+		{"debug", util.DEBUG},
+		{"info", util.INFO},
+		{"warn", util.WARN},
+		{"error", util.ERROR},
+		{"fatal", util.FATAL},
+		{"unknown", util.INFO}, // default
+	}
+	for _, tc := range tests {
+		if got := logLevelFromString(tc.input); got != tc.want {
+			t.Errorf("logLevelFromString(%q) = %d, want %d", tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestLogFormatFromString(t *testing.T) {
+	if got := logFormatFromString("json"); got != util.JSONFormat {
+		t.Errorf("logFormatFromString(json) = %d, want JSONFormat", got)
+	}
+	if got := logFormatFromString("text"); got != util.TextFormat {
+		t.Errorf("logFormatFromString(text) = %d, want TextFormat", got)
+	}
+	if got := logFormatFromString("other"); got != util.TextFormat {
+		t.Errorf("logFormatFromString(other) = %d, want TextFormat (default)", got)
+	}
+}
+
+func TestSendError(t *testing.T) {
+	query := &protocol.Message{
+		Header:    protocol.Header{ID: 42, Flags: protocol.NewQueryFlags()},
+		Questions: []*protocol.Question{{Name: mustParseName(t, "test.com."), QType: protocol.TypeA, QClass: protocol.ClassIN}},
+	}
+	w := &captureWriter{}
+	sendError(w, query, protocol.RcodeRefused)
+
+	if w.msg == nil {
+		t.Fatal("expected error response")
+	}
+	if w.msg.Header.ID != 42 {
+		t.Errorf("ID = %d, want 42", w.msg.Header.ID)
+	}
+	if w.msg.Header.Flags.RCODE != protocol.RcodeRefused {
+		t.Errorf("RCODE = %d, want REFUSED", w.msg.Header.Flags.RCODE)
+	}
+	if !w.msg.Header.Flags.QR {
+		t.Error("expected QR bit set")
+	}
+}
+
+func TestReply(t *testing.T) {
+	query := &protocol.Message{
+		Header:    protocol.Header{ID: 100, Flags: protocol.NewQueryFlags()},
+		Questions: []*protocol.Question{{Name: mustParseName(t, "test.com."), QType: protocol.TypeA, QClass: protocol.ClassIN}},
+	}
+	response := &protocol.Message{
+		Header: protocol.Header{Flags: protocol.NewResponseFlags(protocol.RcodeSuccess)},
+	}
+	w := &captureWriter{}
+	reply(w, query, response)
+
+	if w.msg == nil {
+		t.Fatal("expected response")
+	}
+	if w.msg.Header.ID != 100 {
+		t.Errorf("ID = %d, want 100", w.msg.Header.ID)
+	}
+	if !w.msg.Header.Flags.QR {
+		t.Error("expected QR bit set")
+	}
+	if len(w.msg.Questions) != 1 {
+		t.Errorf("expected 1 question, got %d", len(w.msg.Questions))
+	}
+}
