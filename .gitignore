@@ -58,6 +58,12 @@ go.work
 *.zone
 /zones/
 
+# AI assistant config (personal)
+.claude/
+
+# Test run configs (local)
+configs/test-run.yaml
+
 # Temporary files
 /tmp/
 /temp/
