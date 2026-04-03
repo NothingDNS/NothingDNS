@@ -416,20 +416,7 @@ func (v *Validator) canonicalizeRR(rr *protocol.ResourceRecord, ttl uint32) []by
 	buf := make([]byte, 0, 512)
 
 	// 1. Canonical owner name (lowercase, wire format, no compression)
-	// Each label: 1 byte length + label data (lowercase)
-	name := rr.Name.String()
-	if !strings.HasSuffix(name, ".") {
-		name += "."
-	}
-	labels := strings.Split(strings.TrimSuffix(name, "."), ".")
-	for _, label := range labels {
-		if label == "" {
-			continue // Skip empty labels (root)
-		}
-		buf = append(buf, byte(len(label)))
-		buf = append(buf, toLowerBytes(label)...)
-	}
-	buf = append(buf, 0) // Root label terminator
+	buf = append(buf, protocol.CanonicalWireName(rr.Name.String())...)
 
 	// 2. Type (2 bytes, big-endian)
 	typeBytes := make([]byte, 2)

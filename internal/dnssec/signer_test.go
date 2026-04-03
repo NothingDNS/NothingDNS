@@ -432,7 +432,7 @@ func TestCanonicalWireName(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		result := canonicalWireName(tt.input)
+		result := protocol.CanonicalWireName(tt.input)
 
 		if len(result) != len(tt.expected) {
 			t.Errorf("canonicalWireName(%s): expected length %d, got %d", tt.input, len(tt.expected), len(result))

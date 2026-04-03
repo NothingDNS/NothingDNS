@@ -363,12 +363,12 @@ func (s *Signer) createSignedData(rrSet []*protocol.ResourceRecord, rrsig *proto
 	data = append(data, byte(rrsig.KeyTag>>8), byte(rrsig.KeyTag))
 
 	// Signer Name (wire format)
-	signerData := canonicalWireName(rrsig.SignerName.String())
+	signerData := protocol.CanonicalWireName(rrsig.SignerName.String())
 	data = append(data, signerData...)
 
 	// Add canonical owner name for each RR in the set
 	for _, rr := range rrSet {
-		ownerData := canonicalWireName(rr.Name.String())
+		ownerData := protocol.CanonicalWireName(rr.Name.String())
 		data = append(data, ownerData...)
 
 		// Type (2 bytes)

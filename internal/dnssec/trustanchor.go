@@ -436,7 +436,7 @@ func calculateDSDigestSHA384(zone string, dnskey *protocol.RDataDNSKEY) ([]byte,
 // calculateDSDigestWithHash computes DS digest using a hash function.
 func calculateDSDigestWithHash(zone string, dnskey *protocol.RDataDNSKEY, h hash.Hash) ([]byte, error) {
 	// Wire format of owner name
-	ownerWire := canonicalWireName(zone)
+	ownerWire := protocol.CanonicalWireName(zone)
 
 	// DNSKEY RDATA: flags (2) + protocol (1) + algorithm (1) + public key
 	dnskeyRData := make([]byte, 4+len(dnskey.PublicKey))
@@ -451,32 +451,4 @@ func calculateDSDigestWithHash(zone string, dnskey *protocol.RDataDNSKEY, h hash
 	h.Write(dnskeyRData)
 
 	return h.Sum(nil), nil
-}
-
-// canonicalWireName converts a name to wire format (simplified).
-func canonicalWireName(name string) []byte {
-	// Lowercase the name
-	name = toLower(name)
-
-	// Remove trailing dot
-	if len(name) > 0 && name[len(name)-1] == '.' {
-		name = name[:len(name)-1]
-	}
-
-	// Split labels and create wire format
-	var wire []byte
-	labels := splitLabels(name)
-
-	for _, label := range labels {
-		if len(label) == 0 {
-			continue
-		}
-		wire = append(wire, byte(len(label)))
-		wire = append(wire, []byte(label)...)
-	}
-
-	// Root label
-	wire = append(wire, 0)
-
-	return wire
 }

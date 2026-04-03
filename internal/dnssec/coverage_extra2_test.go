@@ -704,7 +704,7 @@ func TestDSFromDNSKEY_DigestCalcError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCanonicalWireName_EmptyLabelSkip(t *testing.T) {
-	result := canonicalWireName("example..com.")
+	result := protocol.CanonicalWireName("example..com.")
 	// The empty label between "example" and "com" should be skipped
 	// Expected: [7, 'e','x','a','m','p','l','e', 3, 'c','o','m', 0]
 	if len(result) == 0 {

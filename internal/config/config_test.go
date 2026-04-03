@@ -1130,6 +1130,7 @@ func TestValidateDNSSEC(t *testing.T) {
 		name    string
 		config  *Config
 		wantErr bool
+		errMsg  string
 	}{
 		{
 			name: "DNSSEC disabled",
@@ -1158,6 +1159,320 @@ func TestValidateDNSSEC(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "DNSSEC enabled with valid signing config",
+			config: &Config{
+				DNSSEC: DNSSECConfig{
+					Enabled: true,
+					Signing: SigningConfig{
+						Enabled: true,
+						Keys: []KeyConfig{
+							{
+								PrivateKey: "/etc/dns/keys/Kexample.com.+013+12345.private",
+								Type:       "ksk",
+								Algorithm:  13, // ECDSAP256SHA256
+							},
+						},
+						SignatureValidity: "30d",
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "DNSSEC enabled with multiple valid signing keys",
+			config: &Config{
+				DNSSEC: DNSSECConfig{
+					Enabled: true,
+					Signing: SigningConfig{
+						Enabled: true,
+						Keys: []KeyConfig{
+							{
+								PrivateKey: "/etc/dns/keys/Kexample.com.+008+12345.private",
+								Type:       "ksk",
+								Algorithm:  8, // RSASHA256
+							},
+							{
+								PrivateKey: "/etc/dns/keys/Kexample.com.+013+67890.private",
+								Type:       "zsk",
+								Algorithm:  13, // ECDSAP256SHA256
+							},
+						},
+						SignatureValidity: "14d",
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "DNSSEC signing with invalid algorithm",
+			config: &Config{
+				DNSSEC: DNSSECConfig{
+					Enabled: true,
+					Signing: SigningConfig{
+						Enabled: true,
+						Keys: []KeyConfig{
+							{
+								PrivateKey: "/etc/dns/keys/key.private",
+								Type:       "zsk",
+								Algorithm:  99, // Invalid algorithm
+							},
+						},
+					},
+				},
+			},
+			wantErr: true,
+			errMsg:  "unsupported algorithm",
+		},
+		{
+			name: "DNSSEC signing with invalid key type",
+			config: &Config{
+				DNSSEC: DNSSECConfig{
+					Enabled: true,
+					Signing: SigningConfig{
+						Enabled: true,
+						Keys: []KeyConfig{
+							{
+								PrivateKey: "/etc/dns/keys/key.private",
+								Type:       "invalid",
+								Algorithm:  13,
+							},
+						},
+					},
+				},
+			},
+			wantErr: true,
+			errMsg:  "invalid type",
+		},
+		{
+			name: "DNSSEC signing with NSEC3 config",
+			config: &Config{
+				DNSSEC: DNSSECConfig{
+					Enabled: true,
+					Signing: SigningConfig{
+						Enabled: true,
+						Keys: []KeyConfig{
+							{
+								PrivateKey: "/etc/dns/keys/key.private",
+								Type:       "ksk",
+								Algorithm:  13,
+							},
+						},
+						NSEC3: &NSEC3Config{
+							Iterations: 10,
+							Salt:       "aabbccdd",
+							OptOut:     false,
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "DNSSEC signing with NSEC3 opt-out enabled",
+			config: &Config{
+				DNSSEC: DNSSECConfig{
+					Enabled: true,
+					Signing: SigningConfig{
+						Enabled: true,
+						Keys: []KeyConfig{
+							{
+								PrivateKey: "/etc/dns/keys/key.private",
+								Type:       "ksk",
+								Algorithm:  8,
+							},
+						},
+						NSEC3: &NSEC3Config{
+							Iterations: 5,
+							Salt:       "",
+							OptOut:     true,
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "DNSSEC signing enabled without keys",
+			config: &Config{
+				DNSSEC: DNSSECConfig{
+					Enabled: true,
+					Signing: SigningConfig{
+						Enabled: true,
+						Keys:    []KeyConfig{},
+					},
+				},
+			},
+			wantErr: true,
+			errMsg:  "at least one key must be specified when signing is enabled",
+		},
+		{
+			name: "DNSSEC signing enabled with nil keys",
+			config: &Config{
+				DNSSEC: DNSSECConfig{
+					Enabled: true,
+					Signing: SigningConfig{
+						Enabled: true,
+						Keys:    nil,
+					},
+				},
+			},
+			wantErr: true,
+			errMsg:  "at least one key must be specified when signing is enabled",
+		},
+		{
+			name: "DNSSEC signing key missing private_key",
+			config: &Config{
+				DNSSEC: DNSSECConfig{
+					Enabled: true,
+					Signing: SigningConfig{
+						Enabled: true,
+						Keys: []KeyConfig{
+							{
+								PrivateKey: "",
+								Type:       "ksk",
+								Algorithm:  13,
+							},
+						},
+					},
+				},
+			},
+			wantErr: true,
+			errMsg:  "private_key is required",
+		},
+		{
+			name: "DNSSEC enabled with trust anchor file path",
+			config: &Config{
+				DNSSEC: DNSSECConfig{
+					Enabled:     true,
+					TrustAnchor: "/etc/dns/root-anchors.xml",
+				},
+			},
+			wantErr: false, // File does not need to exist for validation to pass
+		},
+		{
+			name: "DNSSEC enabled with empty trust anchor is valid",
+			config: &Config{
+				DNSSEC: DNSSECConfig{
+					Enabled:     true,
+					TrustAnchor: "",
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "DNSSEC ignore time flag enabled",
+			config: &Config{
+				DNSSEC: DNSSECConfig{
+					Enabled:     true,
+					IgnoreTime:  true,
+					TrustAnchor: "/etc/dns/root-anchors.xml",
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "DNSSEC ignore time flag disabled",
+			config: &Config{
+				DNSSEC: DNSSECConfig{
+					Enabled:     true,
+					IgnoreTime:  false,
+					TrustAnchor: "/etc/dns/root-anchors.xml",
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "DNSSEC signing disabled does not validate keys",
+			config: &Config{
+				DNSSEC: DNSSECConfig{
+					Enabled: true,
+					Signing: SigningConfig{
+						Enabled: false,
+						Keys:    []KeyConfig{},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "DNSSEC signing with algorithm 0 skips algorithm check",
+			config: &Config{
+				DNSSEC: DNSSECConfig{
+					Enabled: true,
+					Signing: SigningConfig{
+						Enabled: true,
+						Keys: []KeyConfig{
+							{
+								PrivateKey: "/etc/dns/keys/key.private",
+								Type:       "ksk",
+								Algorithm:  0, // Algorithm 0 is skipped in validation
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "DNSSEC signing with all supported algorithms",
+			config: &Config{
+				DNSSEC: DNSSECConfig{
+					Enabled: true,
+					Signing: SigningConfig{
+						Enabled: true,
+						Keys: []KeyConfig{
+							{PrivateKey: "/keys/5", Type: "ksk", Algorithm: 5},  // RSASHA1
+							{PrivateKey: "/keys/8", Type: "ksk", Algorithm: 8},  // RSASHA256
+							{PrivateKey: "/keys/10", Type: "ksk", Algorithm: 10}, // RSASHA512
+							{PrivateKey: "/keys/13", Type: "zsk", Algorithm: 13}, // ECDSAP256SHA256
+							{PrivateKey: "/keys/14", Type: "zsk", Algorithm: 14}, // ECDSAP384SHA384
+							{PrivateKey: "/keys/15", Type: "zsk", Algorithm: 15}, // ED25519
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "DNSSEC signing with empty key type is valid",
+			config: &Config{
+				DNSSEC: DNSSECConfig{
+					Enabled: true,
+					Signing: SigningConfig{
+						Enabled: true,
+						Keys: []KeyConfig{
+							{
+								PrivateKey: "/etc/dns/keys/key.private",
+								Type:       "", // Empty type is allowed
+								Algorithm:  13,
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "DNSSEC signing multiple errors at once",
+			config: &Config{
+				DNSSEC: DNSSECConfig{
+					Enabled: true,
+					Signing: SigningConfig{
+						Enabled: true,
+						Keys: []KeyConfig{
+							{
+								PrivateKey: "",
+								Type:       "badtype",
+								Algorithm:  99,
+							},
+						},
+					},
+				},
+			},
+			wantErr: true,
+			errMsg:  "private_key is required", // First error found
+		},
 	}
 
 	for _, tt := range tests {
@@ -1169,8 +1484,12 @@ func TestValidateDNSSEC(t *testing.T) {
 					dnssecErrors = append(dnssecErrors, e)
 				}
 			}
-			if tt.wantErr && len(dnssecErrors) == 0 {
-				t.Errorf("expected DNSSEC error, got %v", errors)
+			if tt.wantErr {
+				if len(dnssecErrors) == 0 {
+					t.Errorf("expected DNSSEC error, got %v", errors)
+				} else if tt.errMsg != "" && !containsAny(dnssecErrors, tt.errMsg) {
+					t.Errorf("expected error containing %q, got %v", tt.errMsg, dnssecErrors)
+				}
 			}
 			if !tt.wantErr && len(dnssecErrors) > 0 {
 				t.Errorf("unexpected DNSSEC error: %v", dnssecErrors)

@@ -2,7 +2,6 @@ package protocol
 
 import (
 	"fmt"
-	"strings"
 	"time"
 )
 
@@ -259,12 +258,12 @@ func RRSIGForRRSet(rrsig *RDataRRSIG, rrset []*ResourceRecord) ([]byte, error) {
 	data = append(data, byte(rrsig.Inception>>24), byte(rrsig.Inception>>16),
 		byte(rrsig.Inception>>8), byte(rrsig.Inception))
 	data = append(data, byte(rrsig.KeyTag>>8), byte(rrsig.KeyTag))
-	data = append(data, canonicalWireName(rrsig.SignerName.String())...)
+	data = append(data, CanonicalWireName(rrsig.SignerName.String())...)
 
 	// RRSet in canonical form (sorted, one RR at a time):
 	// Owner Name | Type | Class | TTL | RDLENGTH | RDATA
 	for _, rr := range rrset {
-		data = append(data, canonicalWireName(rr.Name.String())...)
+		data = append(data, CanonicalWireName(rr.Name.String())...)
 		data = append(data, byte(rr.Type>>8), byte(rr.Type))
 		data = append(data, byte(rr.Class>>8), byte(rr.Class))
 		data = append(data, byte(rrsig.OriginalTTL>>24), byte(rrsig.OriginalTTL>>16),
@@ -285,24 +284,4 @@ func RRSIGForRRSet(rrsig *RDataRRSIG, rrset []*ResourceRecord) ([]byte, error) {
 	}
 
 	return data, nil
-}
-
-// canonicalWireName converts a DNS name to canonical lowercase wire format.
-func canonicalWireName(name string) []byte {
-	name = strings.ToLower(strings.TrimSpace(name))
-	name = strings.TrimSuffix(name, ".")
-	if name == "" || name == "." {
-		return []byte{0}
-	}
-
-	var wire []byte
-	for _, label := range strings.Split(name, ".") {
-		if label == "" {
-			continue
-		}
-		wire = append(wire, byte(len(label)))
-		wire = append(wire, []byte(label)...)
-	}
-	wire = append(wire, 0)
-	return wire
 }

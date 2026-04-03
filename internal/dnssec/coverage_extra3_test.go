@@ -896,7 +896,7 @@ func TestDSFromDNSKEY_SHA384_Detailed(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCanonicalWireName_NoTrailingDot(t *testing.T) {
-	result := canonicalWireName("example.com")
+	result := protocol.CanonicalWireName("example.com")
 	expected := []byte{7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0}
 	if len(result) != len(expected) {
 		t.Fatalf("canonicalWireName length: got %d, want %d", len(result), len(expected))
@@ -913,7 +913,7 @@ func TestCanonicalWireName_NoTrailingDot(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCanonicalWireName_EmptyString(t *testing.T) {
-	result := canonicalWireName("")
+	result := protocol.CanonicalWireName("")
 	// Should just be the root label terminator
 	if len(result) != 1 || result[0] != 0 {
 		t.Errorf("expected [0] for empty string, got %v", result)

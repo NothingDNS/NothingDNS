@@ -1,0 +1,374 @@
+package dnssec
+
+import (
+	"sync"
+	"testing"
+	"time"
+)
+
+func TestNewValidationCache(t *testing.T) {
+	ttl := 5 * time.Minute
+	cache := NewValidationCache(ttl)
+	if cache == nil {
+		t.Fatal("NewValidationCache returned nil")
+	}
+	if cache.ttl != ttl {
+		t.Errorf("ttl = %v, want %v", cache.ttl, ttl)
+	}
+	if cache.items == nil {
+		t.Error("items map is nil")
+	}
+	if len(cache.items) != 0 {
+		t.Errorf("items map not empty, has %d entries", len(cache.items))
+	}
+}
+
+func TestCacheSetGetBasic(t *testing.T) {
+	cache := NewValidationCache(5 * time.Minute)
+
+	// Store a result.
+	cache.Set("example.com", 1, ValidationSecure)
+
+	// Retrieve it.
+	result, ok := cache.Get("example.com", 1)
+	if !ok {
+		t.Fatal("Get returned ok=false for existing entry")
+	}
+	if result != ValidationSecure {
+		t.Errorf("result = %v, want %v", result, ValidationSecure)
+	}
+}
+
+func TestCacheGetNonExistent(t *testing.T) {
+	cache := NewValidationCache(5 * time.Minute)
+
+	result, ok := cache.Get("nonexistent.example.com", 1)
+	if ok {
+		t.Error("Get returned ok=true for non-existent key")
+	}
+	if result != ValidationIndeterminate {
+		t.Errorf("result = %v, want %v", result, ValidationIndeterminate)
+	}
+}
+
+func TestCacheSetOverwritesExisting(t *testing.T) {
+	cache := NewValidationCache(5 * time.Minute)
+
+	cache.Set("example.com", 1, ValidationSecure)
+	cache.Set("example.com", 1, ValidationBogus)
+
+	result, ok := cache.Get("example.com", 1)
+	if !ok {
+		t.Fatal("Get returned ok=false after overwrite")
+	}
+	if result != ValidationBogus {
+		t.Errorf("result = %v, want %v", result, ValidationBogus)
+	}
+}
+
+func TestCacheDifferentKeysAreIndependent(t *testing.T) {
+	cache := NewValidationCache(5 * time.Minute)
+
+	cache.Set("a.example.com", 1, ValidationSecure)
+	cache.Set("b.example.com", 1, ValidationInsecure)
+
+	resultA, okA := cache.Get("a.example.com", 1)
+	resultB, okB := cache.Get("b.example.com", 1)
+
+	if !okA || !okB {
+		t.Fatal("one or both keys not found")
+	}
+	if resultA != ValidationSecure {
+		t.Errorf("a.example.com result = %v, want %v", resultA, ValidationSecure)
+	}
+	if resultB != ValidationInsecure {
+		t.Errorf("b.example.com result = %v, want %v", resultB, ValidationInsecure)
+	}
+}
+
+func TestCacheSameNameDifferentTypeAreIndependent(t *testing.T) {
+	cache := NewValidationCache(5 * time.Minute)
+
+	cache.Set("example.com", 1, ValidationSecure)  // Type A
+	cache.Set("example.com", 28, ValidationBogus)  // Type AAAA
+
+	resultA, okA := cache.Get("example.com", 1)
+	resultAAAA, okAAAA := cache.Get("example.com", 28)
+
+	if !okA || !okAAAA {
+		t.Fatal("one or both type entries not found")
+	}
+	if resultA != ValidationSecure {
+		t.Errorf("type A result = %v, want %v", resultA, ValidationSecure)
+	}
+	if resultAAAA != ValidationBogus {
+		t.Errorf("type AAAA result = %v, want %v", resultAAAA, ValidationBogus)
+	}
+}
+
+func TestCacheExpiration(t *testing.T) {
+	// Use a very short TTL so entries expire quickly.
+	cache := NewValidationCache(50 * time.Millisecond)
+
+	cache.Set("expire.example.com", 1, ValidationSecure)
+
+	// Should be available immediately.
+	result, ok := cache.Get("expire.example.com", 1)
+	if !ok || result != ValidationSecure {
+		t.Fatalf("immediate Get: ok=%v result=%v, want ok=true result=SECURE", ok, result)
+	}
+
+	// Wait for TTL to elapse.
+	time.Sleep(80 * time.Millisecond)
+
+	result, ok = cache.Get("expire.example.com", 1)
+	if ok {
+		t.Errorf("Get after expiration: ok=true, want false; result=%v", result)
+	}
+	if result != ValidationIndeterminate {
+		t.Errorf("result after expiration = %v, want %v", result, ValidationIndeterminate)
+	}
+}
+
+func TestCacheClear(t *testing.T) {
+	cache := NewValidationCache(5 * time.Minute)
+
+	cache.Set("a.example.com", 1, ValidationSecure)
+	cache.Set("b.example.com", 1, ValidationInsecure)
+	cache.Set("c.example.com", 1, ValidationBogus)
+
+	total, _ := cache.Stats()
+	if total != 3 {
+		t.Fatalf("Stats total before clear = %d, want 3", total)
+	}
+
+	cache.Clear()
+
+	total, _ = cache.Stats()
+	if total != 0 {
+		t.Errorf("Stats total after clear = %d, want 0", total)
+	}
+
+	// All entries should be gone.
+	for _, name := range []string{"a.example.com", "b.example.com", "c.example.com"} {
+		if _, ok := cache.Get(name, 1); ok {
+			t.Errorf("Get(%q) returned ok=true after Clear", name)
+		}
+	}
+}
+
+func TestCachePurgeRemovesOnlyExpired(t *testing.T) {
+	cache := NewValidationCache(50 * time.Millisecond)
+
+	// Store two entries.
+	cache.Set("expired.example.com", 1, ValidationSecure)
+	cache.Set("valid.example.com", 1, ValidationInsecure)
+
+	// Manually shorten the TTL of the first entry so it expires.
+	cache.mu.Lock()
+	key := cacheKey("expired.example.com", 1)
+	if entry, ok := cache.items[key]; ok {
+		entry.expiresAt = time.Now().Add(-1 * time.Second) // already expired
+	}
+	cache.mu.Unlock()
+
+	total, expired := cache.Stats()
+	if total != 2 {
+		t.Fatalf("Stats total = %d, want 2", total)
+	}
+	if expired != 1 {
+		t.Errorf("Stats expired = %d, want 1", expired)
+	}
+
+	purged := cache.Purge()
+	if purged != 1 {
+		t.Errorf("Purge returned %d, want 1", purged)
+	}
+
+	total, expired = cache.Stats()
+	if total != 1 {
+		t.Errorf("Stats total after purge = %d, want 1", total)
+	}
+	if expired != 0 {
+		t.Errorf("Stats expired after purge = %d, want 0", expired)
+	}
+
+	// The valid entry should still be retrievable.
+	result, ok := cache.Get("valid.example.com", 1)
+	if !ok {
+		t.Fatal("Get valid.example.com returned ok=false after purge")
+	}
+	if result != ValidationInsecure {
+		t.Errorf("valid.example.com result = %v, want %v", result, ValidationInsecure)
+	}
+
+	// The expired entry should be gone.
+	_, ok = cache.Get("expired.example.com", 1)
+	if ok {
+		t.Error("Get expired.example.com returned ok=true after purge")
+	}
+}
+
+func TestCachePurgeAllExpired(t *testing.T) {
+	cache := NewValidationCache(50 * time.Millisecond)
+
+	cache.Set("a.example.com", 1, ValidationSecure)
+	cache.Set("b.example.com", 1, ValidationInsecure)
+
+	// Expire both entries.
+	cache.mu.Lock()
+	for _, entry := range cache.items {
+		entry.expiresAt = time.Now().Add(-1 * time.Second)
+	}
+	cache.mu.Unlock()
+
+	purged := cache.Purge()
+	if purged != 2 {
+		t.Errorf("Purge returned %d, want 2", purged)
+	}
+
+	total, _ := cache.Stats()
+	if total != 0 {
+		t.Errorf("Stats total after purge = %d, want 0", total)
+	}
+}
+
+func TestCachePurgeNoneExpired(t *testing.T) {
+	cache := NewValidationCache(5 * time.Minute)
+
+	cache.Set("a.example.com", 1, ValidationSecure)
+
+	purged := cache.Purge()
+	if purged != 0 {
+		t.Errorf("Purge returned %d, want 0 when no entries expired", purged)
+	}
+
+	total, _ := cache.Stats()
+	if total != 1 {
+		t.Errorf("Stats total = %d, want 1", total)
+	}
+}
+
+func TestCacheStats(t *testing.T) {
+	cache := NewValidationCache(50 * time.Millisecond)
+
+	// Empty cache.
+	total, expired := cache.Stats()
+	if total != 0 || expired != 0 {
+		t.Fatalf("empty cache: total=%d expired=%d, want 0 0", total, expired)
+	}
+
+	// Add entries.
+	cache.Set("a.example.com", 1, ValidationSecure)
+	cache.Set("b.example.com", 1, ValidationInsecure)
+	cache.Set("c.example.com", 1, ValidationBogus)
+
+	total, expired = cache.Stats()
+	if total != 3 {
+		t.Errorf("total = %d, want 3", total)
+	}
+	if expired != 0 {
+		t.Errorf("expired = %d, want 0", expired)
+	}
+
+	// Expire one entry.
+	cache.mu.Lock()
+	key := cacheKey("b.example.com", 1)
+	if entry, ok := cache.items[key]; ok {
+		entry.expiresAt = time.Now().Add(-1 * time.Second)
+	}
+	cache.mu.Unlock()
+
+	total, expired = cache.Stats()
+	if total != 3 {
+		t.Errorf("total after expire = %d, want 3", total)
+	}
+	if expired != 1 {
+		t.Errorf("expired after expire = %d, want 1", expired)
+	}
+}
+
+func TestCacheConcurrentAccess(t *testing.T) {
+	cache := NewValidationCache(5 * time.Minute)
+
+	const goroutines = 50
+	const opsPerGoroutine = 100
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines * 3) // writers, readers, and stats callers
+
+	// Concurrent writers.
+	for i := 0; i < goroutines; i++ {
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < opsPerGoroutine; j++ {
+				cache.Set("concurrent.example.com", uint16(id), ValidationSecure)
+			}
+		}(i)
+	}
+
+	// Concurrent readers.
+	for i := 0; i < goroutines; i++ {
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < opsPerGoroutine; j++ {
+				_, _ = cache.Get("concurrent.example.com", uint16(id))
+			}
+		}(i)
+	}
+
+	// Concurrent stats/purge callers.
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			for j := 0; j < opsPerGoroutine; j++ {
+				_, _ = cache.Stats()
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	// After all goroutines complete, each unique key should still be readable.
+	total, _ := cache.Stats()
+	if total != goroutines {
+		t.Errorf("total entries after concurrent writes = %d, want %d", total, goroutines)
+	}
+}
+
+func TestCacheConcurrentMixed(t *testing.T) {
+	cache := NewValidationCache(5 * time.Minute)
+
+	const writers = 20
+	const readers = 20
+
+	var wg sync.WaitGroup
+	wg.Add(writers + readers)
+
+	// Writers inserting different domains.
+	for i := 0; i < writers; i++ {
+		go func(id int) {
+			defer wg.Done()
+			name := "domain" + string(rune('0'+id%10)) + ".example.com"
+			for j := 0; j < 200; j++ {
+				cache.Set(name, 1, ValidationResult(id%4))
+			}
+		}(i)
+	}
+
+	// Readers querying those domains.
+	for i := 0; i < readers; i++ {
+		go func(id int) {
+			defer wg.Done()
+			name := "domain" + string(rune('0'+id%10)) + ".example.com"
+			for j := 0; j < 200; j++ {
+				result, ok := cache.Get(name, 1)
+				if ok && result < 0 || result > ValidationIndeterminate {
+					t.Errorf("unexpected result value %d", result)
+				}
+			}
+		}(i)
+	}
+
+	wg.Wait()
+}

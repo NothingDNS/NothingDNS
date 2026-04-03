@@ -57,6 +57,10 @@ var (
 		Server string // NothingDNS API server URL
 		APIKey string // API key for authentication
 	}
+
+	httpClient = &http.Client{
+		Timeout: 30 * time.Second,
+	}
 )
 
 func main() {
@@ -245,7 +249,7 @@ func apiGet(path string) (map[string]interface{}, error) {
 	if globalFlags.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+globalFlags.APIKey)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
@@ -279,7 +283,7 @@ func apiPost(path string) (map[string]interface{}, error) {
 	if globalFlags.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+globalFlags.APIKey)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
@@ -837,7 +841,12 @@ func cmdServer(args []string) error {
 
 	case "health":
 		url := strings.TrimRight(globalFlags.Server, "/") + "/health"
-		resp, err := http.Get(url)
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			fmt.Printf("Server unhealthy: %v\n", err)
+			os.Exit(1)
+		}
+		resp, err := httpClient.Do(req)
 		if err != nil {
 			fmt.Printf("Server unhealthy: %v\n", err)
 			os.Exit(1)
@@ -998,6 +1007,8 @@ func cmdDNSSECSignZone(args []string) error {
 	inputFile := fs.String("input", "", "Input zone file (required)")
 	outputFile := fs.String("output", "", "Output signed zone file (default: <input>.signed)")
 	keyDir := fs.String("keydir", ".", "Directory containing key files")
+	algorithm := fs.Int("algorithm", 13, "DNSSEC algorithm for generated keys (3-16, default: 13=ECDSAP256SHA256)")
+	keySize := fs.Int("keysize", 0, "Key size in bits for RSA algorithms (must be > 0 for RSA)")
 	nsec3 := fs.Bool("nsec3", false, "Use NSEC3 instead of NSEC")
 	nsec3Iterations := fs.Int("iterations", 0, "NSEC3 iterations")
 	nsec3Salt := fs.String("salt", "", "NSEC3 salt (hex string)")
@@ -1009,6 +1020,21 @@ func cmdDNSSECSignZone(args []string) error {
 
 	if *zone == "" || *inputFile == "" {
 		return fmt.Errorf("zone and input are required")
+	}
+
+	// Validate algorithm
+	if *algorithm < 3 || *algorithm > 16 {
+		return fmt.Errorf("invalid algorithm %d: must be in range 3-16", *algorithm)
+	}
+
+	// Validate keysize for RSA algorithms
+	isRSA := *algorithm == int(protocol.AlgorithmRSASHA1) ||
+		*algorithm == int(protocol.AlgorithmRSASHA1NSEC3) ||
+		*algorithm == int(protocol.AlgorithmRSASHA256) ||
+		*algorithm == int(protocol.AlgorithmRSASHA512) ||
+		*algorithm == int(protocol.AlgorithmRSAMD5)
+	if isRSA && *keySize <= 0 {
+		return fmt.Errorf("keysize must be > 0 for RSA algorithms (recommended: 2048, 3072, or 4096)")
 	}
 
 	if *outputFile == "" {
@@ -1028,10 +1054,11 @@ func cmdDNSSECSignZone(args []string) error {
 	}
 
 	fmt.Printf("Signing zone %s...\n", *zone)
-	fmt.Printf("  Input:  %s\n", *inputFile)
-	fmt.Printf("  Output: %s\n", *outputFile)
-	fmt.Printf("  NSEC3:  %v\n", *nsec3)
-	fmt.Printf("  Validity: %s\n", sigValidity)
+	fmt.Printf("  Input:      %s\n", *inputFile)
+	fmt.Printf("  Output:     %s\n", *outputFile)
+	fmt.Printf("  Algorithm:  %d (%s)\n", *algorithm, algorithmName(uint8(*algorithm)))
+	fmt.Printf("  NSEC3:      %v\n", *nsec3)
+	fmt.Printf("  Validity:   %s\n", sigValidity)
 
 	// Create signer
 	signerCfg := dnssec.DefaultSignerConfig()
@@ -1056,10 +1083,6 @@ func cmdDNSSECSignZone(args []string) error {
 		return fmt.Errorf("finding key files: %w", err)
 	}
 
-	if len(keyFiles) == 0 {
-		return fmt.Errorf("no key files found in %s for zone %s", *keyDir, *zone)
-	}
-
 	for _, kf := range keyFiles {
 		key, err := loadSigningKey(kf, *zone)
 		if err != nil {
@@ -1070,36 +1093,148 @@ func cmdDNSSECSignZone(args []string) error {
 		fmt.Printf("  Loaded key: %s (tag=%d, %s)\n", filepath.Base(kf), key.KeyTag, keyType(key))
 	}
 
-	keys := signer.GetKeys()
-	if len(keys) == 0 {
-		return fmt.Errorf("no valid signing keys loaded")
+	// If no key files found, generate KSK + ZSK pair using the specified algorithm
+	if len(signer.GetKeys()) == 0 {
+		fmt.Printf("  No key files found; generating KSK + ZSK with algorithm %d (%s)\n",
+			*algorithm, algorithmName(uint8(*algorithm)))
+
+		ksk, err := signer.GenerateKeyPair(uint8(*algorithm), true)
+		if err != nil {
+			return fmt.Errorf("generating KSK: %w", err)
+		}
+		fmt.Printf("  Generated KSK: tag=%d\n", ksk.KeyTag)
+
+		zsk, err := signer.GenerateKeyPair(uint8(*algorithm), false)
+		if err != nil {
+			return fmt.Errorf("generating ZSK: %w", err)
+		}
+		fmt.Printf("  Generated ZSK: tag=%d\n", zsk.KeyTag)
 	}
 
-	// Parse zone file
+	keys := signer.GetKeys()
+	if len(keys) == 0 {
+		return fmt.Errorf("no valid signing keys available")
+	}
+
+	// Parse zone file into resource records
 	f, err := os.Open(*inputFile)
 	if err != nil {
 		return fmt.Errorf("opening zone file: %w", err)
 	}
 	defer f.Close()
 
-	// Read zone file content for signing
 	content, err := io.ReadAll(f)
 	if err != nil {
 		return fmt.Errorf("reading zone file: %w", err)
 	}
 
-	// Write signed zone
-	output := fmt.Sprintf("; Signed zone: %s\n; Signed at: %s\n;\n%s\n",
-		*zone, time.Now().UTC().Format(time.RFC3339), string(content))
+	records, err := parseZoneRecords(string(content), *zone)
+	if err != nil {
+		return fmt.Errorf("parsing zone file: %w", err)
+	}
+	if len(records) == 0 {
+		return fmt.Errorf("no valid records found in zone file %s", *inputFile)
+	}
+	fmt.Printf("  Parsed %d records from zone file\n", len(records))
 
-	if err := os.WriteFile(*outputFile, []byte(output), 0644); err != nil {
+	// Sign the zone
+	signedRecords, err := signer.SignZone(records)
+	if err != nil {
+		return fmt.Errorf("signing zone: %w", err)
+	}
+
+	// Format signed zone as BIND zone file
+	var output strings.Builder
+	output.WriteString(fmt.Sprintf("; Signed zone: %s\n", *zone))
+	output.WriteString(fmt.Sprintf("; Signed at: %s\n", time.Now().UTC().Format(time.RFC3339)))
+	output.WriteString(fmt.Sprintf("; Algorithm: %d (%s)\n", *algorithm, algorithmName(uint8(*algorithm))))
+	output.WriteString(fmt.Sprintf("; Keys: %d, Validity: %s\n;\n", len(keys), sigValidity))
+
+	for _, rr := range signedRecords {
+		output.WriteString(rr.String())
+		output.WriteByte('\n')
+	}
+
+	if err := os.WriteFile(*outputFile, []byte(output.String()), 0644); err != nil {
 		return fmt.Errorf("writing signed zone: %w", err)
 	}
 
 	fmt.Printf("\nZone signed successfully: %s\n", *outputFile)
-	fmt.Printf("  Keys: %d, Validity: %s\n", len(keys), sigValidity)
+	fmt.Printf("  Input records:   %d\n", len(records))
+	fmt.Printf("  Signed records:  %d (includes DNSKEY, RRSIG, NSEC)\n", len(signedRecords))
+	fmt.Printf("  Keys used:       %d\n", len(keys))
 
 	return nil
+}
+
+// parseZoneRecords parses a BIND-format zone file into resource records.
+func parseZoneRecords(data, origin string) ([]*protocol.ResourceRecord, error) {
+	var records []*protocol.ResourceRecord
+	lines := strings.Split(data, "\n")
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, ";") || strings.HasPrefix(line, "$") {
+			continue
+		}
+
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
+
+		// Determine field positions: name ttl class type rdata
+		name := fields[0]
+		ttlStr := fields[1]
+		classStr := fields[2]
+		typeStr := strings.ToUpper(fields[3])
+		rdata := ""
+		if len(fields) > 4 {
+			rdata = strings.Join(fields[4:], " ")
+		}
+
+		ttl, err := strconv.ParseUint(ttlStr, 10, 32)
+		if err != nil {
+			continue
+		}
+
+		if !strings.EqualFold(classStr, "IN") {
+			continue
+		}
+
+		// Expand @ to origin
+		if name == "@" {
+			name = origin
+		} else if !strings.HasSuffix(name, ".") {
+			// Relative name: append origin
+			name = name + "." + origin
+		}
+
+		owner, err := protocol.ParseName(name)
+		if err != nil {
+			continue
+		}
+
+		rrtype, ok := protocol.StringToType[typeStr]
+		if !ok || rrtype == 0 {
+			continue
+		}
+
+		rdataObj, err := parseRDataFromZone(rrtype, rdata, owner.String())
+		if err != nil {
+			continue
+		}
+
+		records = append(records, &protocol.ResourceRecord{
+			Name:  owner,
+			Type:  rrtype,
+			Class: protocol.ClassIN,
+			TTL:   uint32(ttl),
+			Data:  rdataObj,
+		})
+	}
+
+	return records, nil
 }
 
 func cmdDNSSECVerifyAnchor(args []string) error {

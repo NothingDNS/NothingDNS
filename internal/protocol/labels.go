@@ -343,6 +343,39 @@ func toLower(b byte) byte {
 	return b
 }
 
+// CanonicalWireName converts a DNS name string to canonical lowercase wire
+// format (RFC 4034 Section 6.2). Each label is prefixed with its length byte,
+// and the name is terminated with a zero-length root label. The name is
+// lowercased using ASCII-only rules (DNS names are ASCII).
+func CanonicalWireName(name string) []byte {
+	name = strings.TrimSpace(name)
+	name = strings.TrimSuffix(name, ".")
+	if name == "" || name == "." {
+		return []byte{0}
+	}
+
+	var wire []byte
+	for _, label := range strings.Split(name, ".") {
+		if label == "" {
+			continue
+		}
+		lowered := toLowerLabel(label)
+		wire = append(wire, byte(len(lowered)))
+		wire = append(wire, lowered...)
+	}
+	wire = append(wire, 0)
+	return wire
+}
+
+// toLowerLabel performs ASCII-only lowercasing of a label string.
+func toLowerLabel(s string) []byte {
+	b := make([]byte, len(s))
+	for i := 0; i < len(s); i++ {
+		b[i] = toLower(s[i])
+	}
+	return b
+}
+
 // WireNameLength returns the length of a domain name at the given offset.
 // This is useful for skipping over names without fully parsing them.
 func WireNameLength(buf []byte, offset int) (int, error) {
