@@ -650,8 +650,12 @@ func (lb *LoadBalancer) checkHealth() {
 	copy(servers, lb.servers)
 	lb.mu.RUnlock()
 
+	var healthWg sync.WaitGroup
+
 	for _, server := range servers {
+		healthWg.Add(1)
 		go func(s *Server) {
+			defer healthWg.Done()
 			query := *msg // copy to avoid data race on Pack
 			_, err := lb.queryUDP(s.Address, &query)
 			if err != nil {
@@ -670,7 +674,9 @@ func (lb *LoadBalancer) checkHealth() {
 		group.mu.RUnlock()
 
 		for _, backend := range backends {
+			healthWg.Add(1)
 			go func(b *AnycastBackend) {
+				defer healthWg.Done()
 				query := *msg // copy to avoid data race on Pack
 				_, err := lb.queryUDP(b.Address(), &query)
 				if err != nil {
@@ -685,6 +691,8 @@ func (lb *LoadBalancer) checkHealth() {
 			}(backend)
 		}
 	}
+
+	healthWg.Wait()
 }
 
 // Stats returns load balancer statistics.

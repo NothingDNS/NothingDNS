@@ -503,8 +503,11 @@ func (c *Client) checkHealth() {
 		QClass: protocol.ClassIN,
 	})
 
+	var healthWg sync.WaitGroup
 	for _, server := range c.servers {
+		healthWg.Add(1)
 		go func(s *Server) {
+			defer healthWg.Done()
 			// Copy msg to avoid data race across goroutines
 			queryCopy := *msg
 			_, err := c.queryUDP(s, &queryCopy)
@@ -516,6 +519,7 @@ func (c *Client) checkHealth() {
 			// queryUDP/TCP already mark success/failure
 		}(server)
 	}
+	healthWg.Wait()
 }
 
 // Stats returns client statistics.
