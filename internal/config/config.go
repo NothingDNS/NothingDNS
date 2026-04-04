@@ -52,6 +52,9 @@ type Config struct {
 	// RPZ (Response Policy Zone) configuration
 	RPZ RPZConfig `yaml:"rpz"`
 
+	// GeoDNS configuration
+	GeoDNS GeoDNSConfig `yaml:"geodns"`
+
 	// Slave zone configuration for automatic zone transfers
 	SlaveZones []SlaveZoneConfig `yaml:"slave_zones"`
 
@@ -77,6 +80,21 @@ type RPZPolicyZone struct {
 	Name     string `yaml:"name"`
 	File     string `yaml:"file"`
 	Priority int    `yaml:"priority"`
+}
+
+// GeoDNSConfig holds GeoDNS configuration.
+type GeoDNSConfig struct {
+	Enabled  bool             `yaml:"enabled"`
+	MMDBFile string           `yaml:"mmdb_file"`
+	Rules    []GeoDNSRule     `yaml:"rules"`
+}
+
+// GeoDNSRule configures a single geo DNS rule.
+type GeoDNSRule struct {
+	Domain  string            `yaml:"domain"`
+	Type    string            `yaml:"type"`
+	Default string            `yaml:"default"`
+	Records map[string]string `yaml:"records"`
 }
 
 // SlaveZoneConfig represents configuration for a slave zone.
@@ -476,6 +494,9 @@ func DefaultConfig() *Config {
 			Enabled: false,
 			Files:   []string{},
 		},
+		GeoDNS: GeoDNSConfig{
+			Enabled: false,
+		},
 		Cluster: ClusterConfig{
 			Enabled:    false,
 			GossipPort: 7946,
@@ -657,6 +678,13 @@ func unmarshalToConfig(node *Node, cfg *Config) error {
 	if rpzNode := node.Get("rpz"); rpzNode != nil {
 		if err := unmarshalRPZ(rpzNode, &cfg.RPZ); err != nil {
 			return fmt.Errorf("rpz: %w", err)
+		}
+	}
+
+	// GeoDNS config
+	if geodnsNode := node.Get("geodns"); geodnsNode != nil {
+		if err := unmarshalGeoDNS(geodnsNode, &cfg.GeoDNS); err != nil {
+			return fmt.Errorf("geodns: %w", err)
 		}
 	}
 
@@ -939,6 +967,40 @@ func unmarshalRPZ(node *Node, cfg *RPZConfig) error {
 				pz.File = zoneNode.GetString("file")
 				pz.Priority = getInt(zoneNode, "priority", 0)
 				cfg.Zones = append(cfg.Zones, pz)
+			}
+		}
+	}
+
+	return nil
+}
+
+func unmarshalGeoDNS(node *Node, cfg *GeoDNSConfig) error {
+	if node.Type != NodeMapping {
+		return fmt.Errorf("expected mapping")
+	}
+
+	cfg.Enabled = getBool(node, "enabled", cfg.Enabled)
+	cfg.MMDBFile = node.GetString("mmdb_file")
+
+	if rulesNode := node.Get("rules"); rulesNode != nil && rulesNode.Type == NodeSequence {
+		for _, ruleNode := range rulesNode.Children {
+			if ruleNode.Type == NodeMapping {
+				var rule GeoDNSRule
+				rule.Domain = ruleNode.GetString("domain")
+				rule.Type = ruleNode.GetString("type")
+				rule.Default = ruleNode.GetString("default")
+				// Parse records from a flat mapping: US, DE, etc.
+				rule.Records = make(map[string]string)
+				for _, key := range []string{"US", "CA", "DE", "FR", "GB", "JP", "CN", "AU",
+					"BR", "IN", "RU", "KR", "MX", "IT", "ES", "NL", "SE", "PL", "NO",
+					"NA", "EU", "AS", "SA", "OC", "AF"} {
+					if v := ruleNode.GetString(key); v != "" {
+						rule.Records[key] = v
+					}
+				}
+				if len(rule.Records) > 0 || rule.Default != "" {
+					cfg.Rules = append(cfg.Rules, rule)
+				}
 			}
 		}
 	}

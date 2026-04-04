@@ -33,6 +33,7 @@ import (
 	"github.com/nothingdns/nothingdns/internal/protocol"
 	"github.com/nothingdns/nothingdns/internal/resolver"
 	"github.com/nothingdns/nothingdns/internal/rpz"
+	"github.com/nothingdns/nothingdns/internal/geodns"
 	"github.com/nothingdns/nothingdns/internal/server"
 	"github.com/nothingdns/nothingdns/internal/transfer"
 	"github.com/nothingdns/nothingdns/internal/upstream"
@@ -142,6 +143,7 @@ type integratedHandler struct {
 	zoneManager   *zone.Manager
 	blocklist     *blocklist.Blocklist
 	rpzEngine     *rpz.Engine
+	geoEngine     *geodns.Engine
 	metrics       *metrics.MetricsCollector
 	validator     *dnssec.Validator
 	zoneSigners   map[string]*dnssec.Signer
@@ -352,6 +354,30 @@ func run() error {
 		}
 	}
 
+	// Initialize GeoDNS engine
+	var geoEngine *geodns.Engine
+	if cfg.GeoDNS.Enabled {
+		geoEngine = geodns.NewEngine(geodns.Config{Enabled: true})
+		if cfg.GeoDNS.MMDBFile != "" {
+			if err := geoEngine.LoadMMDB(cfg.GeoDNS.MMDBFile); err != nil {
+				logger.Warnf("Failed to load MMDB: %v", err)
+			} else {
+				logger.Infof("GeoDNS MMDB loaded from %s", cfg.GeoDNS.MMDBFile)
+			}
+		}
+		for _, rule := range cfg.GeoDNS.Rules {
+			geoEngine.SetRule(rule.Domain, rule.Type, &geodns.GeoRecord{
+				Records: rule.Records,
+				Default: rule.Default,
+				Type:    rule.Type,
+			})
+		}
+		if len(cfg.GeoDNS.Rules) > 0 {
+			stats := geoEngine.Stats()
+			logger.Infof("GeoDNS engine loaded with %d rules", stats.Rules)
+		}
+	}
+
 	// Initialize metrics collector
 	metricsCollector := metrics.New(metrics.Config{
 		Enabled: cfg.Metrics.Enabled,
@@ -554,6 +580,7 @@ func run() error {
 		zoneManager:   zoneManager,
 		blocklist:     bl,
 		rpzEngine:     rpzEngine,
+		geoEngine:     geoEngine,
 		metrics:       metricsCollector,
 		validator:     validator,
 		zoneSigners:   zoneSigners,
@@ -1306,6 +1333,31 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 
 	// Check if client wants DNSSEC (DO bit in OPT record)
 	wantsDNSSEC := hasDOBit(r)
+
+	// Check GeoDNS override
+	if h.geoEngine != nil {
+		clientIP := w.ClientInfo().IP()
+		if clientIP != nil {
+			typeStr := typeToString(qtype)
+			if geoRData := h.geoEngine.Resolve(qname, typeStr, clientIP); geoRData != "" {
+				geoRecords := []zone.Record{
+					{
+						Name:  qname,
+						Type:  typeStr,
+						TTL:   z.DefaultTTL,
+						Class: "IN",
+						RData: geoRData,
+					},
+				}
+				resp := h.buildResponse(r, geoRecords)
+				if h.metrics != nil {
+					h.metrics.RecordResponse(protocol.RcodeSuccess)
+				}
+				reply(w, r, resp)
+				return true
+			}
+		}
+	}
 
 	// Look up records matching the requested type
 	records := z.Lookup(qname, typeToString(qtype))
