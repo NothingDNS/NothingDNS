@@ -229,7 +229,7 @@ func (m *Manager) AddRecord(zoneName string, record Record) error {
 	defer z.Unlock()
 
 	z.Records[record.Name] = append(z.Records[record.Name], record)
-	incrementSerial(z)
+	IncrementSerial(z)
 
 	if m.zoneDir != "" {
 		m.mu.RLock()
@@ -285,7 +285,7 @@ func (m *Manager) DeleteRecord(zoneName, name, rtype string) error {
 		z.Records[name] = filtered
 	}
 
-	incrementSerial(z)
+	IncrementSerial(z)
 
 	if m.zoneDir != "" {
 		m.mu.RLock()
@@ -338,7 +338,7 @@ func (m *Manager) UpdateRecord(zoneName string, name, rtype, oldData string, new
 		return fmt.Errorf("record not found: %s %s %s", name, rtype, oldData)
 	}
 
-	incrementSerial(z)
+	IncrementSerial(z)
 
 	if m.zoneDir != "" {
 		m.mu.RLock()
@@ -408,8 +408,9 @@ func normalizeZoneName(name string) string {
 	return name
 }
 
-// incrementSerial bumps the SOA serial using YYYYMMDDNN format.
-func incrementSerial(z *Zone) {
+// IncrementSerial bumps the SOA serial using YYYYMMDDNN format.
+// Exported so that DDNS and other mutation paths can bump the serial.
+func IncrementSerial(z *Zone) {
 	if z.SOA == nil {
 		return
 	}
@@ -449,4 +450,28 @@ func (m *Manager) writeZoneFile(z *Zone, path string) error {
 	}
 
 	return os.WriteFile(path, []byte(content), 0644)
+}
+
+// PersistZone writes a zone file to disk if zoneDir is configured.
+// The caller must NOT hold the zone lock.
+func (m *Manager) PersistZone(zoneName string) error {
+	m.mu.RLock()
+	z, ok := m.zones[zoneName]
+	path := m.files[zoneName]
+	dir := m.zoneDir
+	m.mu.RUnlock()
+
+	if !ok || dir == "" {
+		return nil
+	}
+
+	// If no existing file path, construct one from zoneDir
+	if path == "" {
+		path = filepath.Join(dir, zoneName+".zone")
+		m.mu.Lock()
+		m.files[zoneName] = path
+		m.mu.Unlock()
+	}
+
+	return m.writeZoneFile(z, path)
 }

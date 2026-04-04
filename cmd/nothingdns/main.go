@@ -30,6 +30,7 @@ import (
 	"github.com/nothingdns/nothingdns/internal/filter"
 	"github.com/nothingdns/nothingdns/internal/metrics"
 	"github.com/nothingdns/nothingdns/internal/protocol"
+	"github.com/nothingdns/nothingdns/internal/resolver"
 	"github.com/nothingdns/nothingdns/internal/server"
 	"github.com/nothingdns/nothingdns/internal/transfer"
 	"github.com/nothingdns/nothingdns/internal/upstream"
@@ -84,6 +85,48 @@ func (d *dnssecResolverAdapter) Query(ctx context.Context, name string, qtype ui
 	return d.upstream.Query(msg)
 }
 
+// resolverTransportAdapter adapts the iterative resolver's queries to direct
+// network transport. For iterative resolution, we must query specific nameservers
+// directly (not through upstream forwarders), so we use StdioTransport.
+type resolverTransportAdapter struct {
+	inner *resolver.StdioTransport
+}
+
+func newResolverTransport(_ *upstream.Client, _ *upstream.LoadBalancer) *resolverTransportAdapter {
+	return &resolverTransportAdapter{
+		inner: resolver.NewStdioTransport(5 * time.Second),
+	}
+}
+
+func (t *resolverTransportAdapter) QueryContext(ctx context.Context, msg *protocol.Message, addr string) (*protocol.Message, error) {
+	return t.inner.QueryContext(ctx, msg, addr)
+}
+
+// resolverCacheAdapter adapts cache.Cache to the resolver.Cache interface.
+type resolverCacheAdapter struct {
+	cache *cache.Cache
+}
+
+func (a *resolverCacheAdapter) Get(key string) *resolver.CacheEntry {
+	entry := a.cache.Get(key)
+	if entry == nil {
+		return nil
+	}
+	return &resolver.CacheEntry{
+		Message:    entry.Message,
+		IsNegative: entry.IsNegative,
+		RCode:      entry.RCode,
+	}
+}
+
+func (a *resolverCacheAdapter) Set(key string, msg *protocol.Message, ttl uint32) {
+	a.cache.Set(key, msg, ttl)
+}
+
+func (a *resolverCacheAdapter) SetNegative(key string, rcode uint8) {
+	a.cache.SetNegative(key, rcode)
+}
+
 // integratedHandler is the DNS request handler that uses all components.
 type integratedHandler struct {
 	config        *config.Config
@@ -91,6 +134,7 @@ type integratedHandler struct {
 	cache         *cache.Cache
 	upstream      *upstream.Client
 	loadBalancer  *upstream.LoadBalancer
+	resolver      *resolver.Resolver
 	zones         map[string]*zone.Zone
 	zonesMu       sync.RWMutex
 	zoneManager   *zone.Manager
@@ -382,6 +426,10 @@ func run() error {
 
 	// Initialize zone manager (use already-loaded zones to avoid duplicate parsing)
 	zoneManager := zone.NewManager()
+	if cfg.ZoneDir != "" {
+		zoneManager.SetZoneDir(cfg.ZoneDir)
+		logger.Infof("Zone file persistence enabled: %s", cfg.ZoneDir)
+	}
 	for origin, z := range zones {
 		zoneManager.LoadZone(z, zoneFiles[origin])
 	}
@@ -481,6 +529,27 @@ func run() error {
 		aclChecker:    aclChecker,
 		rateLimiter:   rateLimiter,
 		auditLogger:   auditLogger,
+	}
+
+	// Initialize iterative recursive resolver if enabled
+	if cfg.Resolution.Recursive {
+		resolverTransport := newResolverTransport(client, loadBalancer)
+		resolverConfig := resolver.Config{
+			MaxDepth:      cfg.Resolution.MaxDepth,
+			MaxCNAMEDepth: 16,
+			Timeout:       5 * time.Second,
+			EDNS0BufSize:  uint16(cfg.Resolution.EDNS0BufferSize),
+		}
+		if cfg.Resolution.Timeout != "" {
+			if d, err := time.ParseDuration(cfg.Resolution.Timeout); err == nil {
+				resolverConfig.Timeout = d
+			}
+		}
+		if resolverConfig.EDNS0BufSize == 0 {
+			resolverConfig.EDNS0BufSize = 4096
+		}
+		handler.resolver = resolver.NewResolver(resolverConfig, &resolverCacheAdapter{cache: dnsCache}, resolverTransport)
+		logger.Info("Iterative recursive resolver enabled")
 	}
 
 	// Share the zones mutex between handler, AXFR server, and DDNS handler
@@ -1012,6 +1081,29 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 			reply(w, r, resp)
 			return
 		}
+	}
+
+	// Use iterative recursive resolver if enabled
+	if h.resolver != nil {
+		h.logger.Debugf("Resolving %s iteratively", qname)
+		resp, err := h.resolver.Resolve(context.Background(), qname, qtype)
+		if err != nil {
+			h.logger.Warnf("Iterative resolution failed for %s: %v", qname, err)
+			if h.metrics != nil {
+				h.metrics.RecordResponse(protocol.RcodeServerFailure)
+			}
+			sendError(w, r, protocol.RcodeServerFailure)
+			return
+		}
+
+		// Copy query ID from original request
+		resp.Header.ID = r.Header.ID
+
+		if h.metrics != nil {
+			h.metrics.RecordResponse(resp.Header.Flags.RCODE)
+		}
+		reply(w, r, resp)
+		return
 	}
 
 	// Forward to upstream
@@ -1593,6 +1685,11 @@ func (h *integratedHandler) processUpdateEvents() {
 		}
 
 		h.logger.Infof("UPDATE applied to zone %s", req.ZoneName)
+
+		// Persist zone file to disk if zoneDir is configured
+		if err := h.zoneManager.PersistZone(req.ZoneName); err != nil {
+			h.logger.Warnf("Failed to persist zone %s to disk: %v", req.ZoneName, err)
+		}
 	}
 }
 

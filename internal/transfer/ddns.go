@@ -389,6 +389,9 @@ func ApplyUpdate(z *zone.Zone, update *UpdateRequest) error {
 		}
 	}
 
+	// Bump SOA serial after successful mutation (RFC 2136 §3.7)
+	zone.IncrementSerial(z)
+
 	return nil
 }
 
