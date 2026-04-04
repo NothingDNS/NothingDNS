@@ -5,6 +5,7 @@ import (
 	"encoding/gob"
 	"errors"
 	"net"
+	"runtime"
 	"testing"
 	"time"
 
@@ -214,6 +215,10 @@ func TestGossipProtocol_Start_ResolveUDPAddrError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestGossipProtocol_Start_ListenUDPError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows allows binding to privileged ports without admin")
+	}
+
 	self := &Node{ID: "self", State: NodeStateAlive}
 	nl := NewNodeList(self)
 

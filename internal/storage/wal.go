@@ -219,14 +219,18 @@ func (wal *WAL) createNewSegment() error {
 
 	// Preallocate space
 	if wal.opts.PreallocateSize > 0 {
-		if err := file.Truncate(wal.opts.PreallocateSize); err != nil {
-			file.Close()
+		// Close the file first — on Windows, Truncate fails on O_APPEND handles.
+		file.Close()
+		if err := os.Truncate(path, wal.opts.PreallocateSize); err != nil {
 			return fmt.Errorf("preallocate segment: %w", err)
 		}
-		// Truncate back to 0, but the space is reserved
-		if err := file.Truncate(0); err != nil {
-			file.Close()
+		if err := os.Truncate(path, 0); err != nil {
 			return fmt.Errorf("truncate segment: %w", err)
+		}
+		// Reopen with O_APPEND for writing
+		file, err = os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			return fmt.Errorf("reopen segment: %w", err)
 		}
 	}
 

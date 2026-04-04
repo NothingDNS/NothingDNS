@@ -19,6 +19,9 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestClient_HealthCheckLoop_TickerFires(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires 30s health check interval")
+	}
 	// Start a UDP server that responds to queries
 	addr, cleanup := startUDPMockServer2(t, func(conn *net.UDPConn, data []byte, remote *net.UDPAddr) {
 		if len(data) < 2 {
@@ -286,6 +289,9 @@ func TestLB_QueryWithFailover_PrimaryAndFailoverBothFail(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestLB_QueryWithFailover_FailoverUDPSuccess(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires network timeout")
+	}
 	// Start a UDP mock server for the failover target
 	addr, cleanup := startUDPMockServer2(t, func(conn *net.UDPConn, data []byte, remote *net.UDPAddr) {
 		if len(data) < 2 {

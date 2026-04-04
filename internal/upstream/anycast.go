@@ -2,6 +2,7 @@ package upstream
 
 import (
 	"fmt"
+	"math/rand"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -225,14 +226,12 @@ func weightedSelect(backends []*AnycastBackend) *AnycastBackend {
 	}
 
 	if totalWeight == 0 {
-		// All weights are 0, use round-robin
-		idx := int(time.Now().UnixNano()) % len(backends)
-		return backends[idx]
+		// All weights are 0, pick randomly
+		return backends[rand.Intn(len(backends))]
 	}
 
-	// Weighted selection using current time nanoseconds
-	// (Simple deterministic selection for load balancing)
-	selector := int(time.Now().UnixNano()) % totalWeight
+	// Weighted random selection for load balancing
+	selector := rand.Intn(totalWeight)
 	currentWeight := 0
 
 	for _, b := range backends {

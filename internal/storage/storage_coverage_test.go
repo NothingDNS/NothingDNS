@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -2485,6 +2486,9 @@ func TestWALReadSegmentOpenError(t *testing.T) {
 		}
 		wal.Sync()
 
+		// Close WAL first so file handles are released (required on Windows)
+		wal.Close()
+
 		// Remove the segment file to cause readSegment to fail on os.Open
 		entries, _ := os.ReadDir(dir)
 		for _, e := range entries {
@@ -2493,14 +2497,26 @@ func TestWALReadSegmentOpenError(t *testing.T) {
 			}
 		}
 
+		// Re-open WAL — loadSegments finds no files, creates fresh segment
+		wal2, err := OpenWAL(dir, DefaultWALOptions())
+		if err != nil {
+			t.Fatalf("re-open WAL: %v", err)
+		}
+		defer wal2.Close()
+
+		// Manually add a fake segment path that doesn't exist
+		wal2.mu.Lock()
+		wal2.segments = append(wal2.segments, &WALSegment{
+			ID:   99,
+			Path: filepath.Join(dir, WALFilePrefix+"00000000000000000099"+WALFileSuffix),
+		})
+		wal2.mu.Unlock()
+
 		// ReadAll should return error from readSegment
-		// This exercises line 426-428 (os.Open failure in readSegment)
-		_, err = wal.ReadAll()
+		_, err = wal2.ReadAll()
 		if err == nil {
 			t.Error("Expected error when reading missing segment file")
 		}
-
-		wal.Close()
 	})
 }
 
@@ -2604,6 +2620,10 @@ func TestWALReadSegmentLargeEntry(t *testing.T) {
 
 func TestWALLoadSegmentsReadDirError(t *testing.T) {
 	t.Run("loadSegments fails when directory is not readable", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("chmod 0000 does not restrict directory reads on Windows")
+		}
+
 		dir := t.TempDir()
 		opts := DefaultWALOptions()
 

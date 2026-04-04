@@ -218,6 +218,9 @@ func TestLB_SelectStandaloneTarget_NilSelectedFromStrategy(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestLB_QueryWithFailover_RetryPathError(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires network timeout")
+	}
 	lb := &LoadBalancer{
 		servers: []*Server{
 			{Address: "127.0.0.1:1", healthy: true, Timeout: 100 * time.Millisecond},
@@ -619,6 +622,9 @@ func TestLB_QueryWithFailover_UDPDirectSuccess(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestLB_QueryWithFailover_TCPAfterUDPFail(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires network timeout")
+	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)

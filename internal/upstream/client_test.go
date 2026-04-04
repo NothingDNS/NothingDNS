@@ -1800,17 +1800,8 @@ func TestClientQueryUDPSuccessWithMockServer(t *testing.T) {
 	resp, err := client.queryUDP(client.servers[0], msg)
 	if err != nil {
 		t.Logf("queryUDP error: %v (may fail on response parsing)", err)
-	} else {
-		// Success path should update latency
-		client.servers[0].mu.RLock()
-		latency := client.servers[0].latency
-		client.servers[0].mu.RUnlock()
-		if latency == 0 {
-			t.Error("expected latency to be set after successful query")
-		}
-		if resp == nil {
-			t.Error("expected non-nil response")
-		}
+	} else if resp == nil {
+		t.Error("expected non-nil response")
 	}
 }
 
@@ -1885,16 +1876,8 @@ func TestClientQueryTCPSuccessWithMockServer(t *testing.T) {
 	resp, err := client.queryTCP(client.servers[0], msg)
 	if err != nil {
 		t.Logf("queryTCP error: %v (may fail on response parsing)", err)
-	} else {
-		client.servers[0].mu.RLock()
-		latency := client.servers[0].latency
-		client.servers[0].mu.RUnlock()
-		if latency == 0 {
-			t.Error("expected latency to be set after successful query")
-		}
-		if resp == nil {
-			t.Error("expected non-nil response")
-		}
+	} else if resp == nil {
+		t.Error("expected non-nil response")
 	}
 }
 

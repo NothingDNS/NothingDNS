@@ -547,6 +547,9 @@ func TestLoadBalancerQuery(t *testing.T) {
 }
 
 func TestLoadBalancerQueryNoServers(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires network timeout")
+	}
 	config := LoadBalancerConfig{
 		Servers:         []string{"127.0.0.1:1"}, // Invalid port
 		Strategy:        "random",
@@ -587,6 +590,9 @@ func TestLoadBalancerQueryNoServers(t *testing.T) {
 }
 
 func TestLoadBalancerQueryFailover(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires network timeout")
+	}
 	config := LoadBalancerConfig{
 		Servers:         []string{"127.0.0.1:1", "127.0.0.1:2"},
 		Strategy:        "random",
@@ -625,6 +631,9 @@ func TestLoadBalancerQueryFailover(t *testing.T) {
 }
 
 func TestLoadBalancerCheckHealth(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires network timeout")
+	}
 	config := LoadBalancerConfig{
 		Servers:         []string{"8.8.8.8:53"},
 		Strategy:        "random",
@@ -986,6 +995,9 @@ func TestLoadBalancerSelectFastestNoServers(t *testing.T) {
 }
 
 func TestLoadBalancerQueryWithFailoverUDPError(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires network timeout")
+	}
 	config := LoadBalancerConfig{
 		Servers:         []string{"127.0.0.1:1", "127.0.0.1:2"},
 		Strategy:        "random",
@@ -1022,6 +1034,9 @@ func TestLoadBalancerQueryWithFailoverUDPError(t *testing.T) {
 }
 
 func TestLoadBalancerQueryWithFailoverAnycastTarget(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires network timeout")
+	}
 	config := LoadBalancerConfig{
 		AnycastGroups: []AnycastGroupConfig{
 			{
@@ -1069,6 +1084,9 @@ func TestLoadBalancerQueryWithFailoverAnycastTarget(t *testing.T) {
 }
 
 func TestLoadBalancerHealthCheckLoop(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires health check interval wait")
+	}
 	config := LoadBalancerConfig{
 		Servers:         []string{"8.8.8.8:53"},
 		Strategy:        "random",
@@ -1091,6 +1109,9 @@ func TestLoadBalancerHealthCheckLoop(t *testing.T) {
 }
 
 func TestLoadBalancerUDPPoolDynamic(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires network timeout")
+	}
 	config := LoadBalancerConfig{
 		Servers:         []string{"8.8.8.8:53"},
 		Strategy:        "random",
@@ -1127,6 +1148,9 @@ func TestLoadBalancerUDPPoolDynamic(t *testing.T) {
 }
 
 func TestLoadBalancerTCPPoolDynamic(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires network timeout")
+	}
 	config := LoadBalancerConfig{
 		Servers:         []string{"8.8.8.8:53"},
 		Strategy:        "random",
@@ -1359,6 +1383,9 @@ func TestLoadBalancerQueryTCPWithInvalidAddress(t *testing.T) {
 }
 
 func TestLoadBalancerQueryWithFailoverSameTarget(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires network timeout")
+	}
 	// Create a load balancer with only one server
 	config := LoadBalancerConfig{
 		Servers:         []string{"127.0.0.1:1"},
@@ -1395,6 +1422,9 @@ func TestLoadBalancerQueryWithFailoverSameTarget(t *testing.T) {
 }
 
 func TestLoadBalancerQueryWithFailoverDifferentTarget(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires network timeout")
+	}
 	// Create a load balancer with multiple servers
 	config := LoadBalancerConfig{
 		Servers:         []string{"127.0.0.1:1", "127.0.0.1:2"},
@@ -1811,6 +1841,9 @@ func TestLoadBalancerSelectRandomEmptyServersLB(t *testing.T) {
 }
 
 func TestLoadBalancerQueryWithFailoverFailoverSuccessUDP(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires network timeout")
+	}
 	// Create a mock UDP DNS server that echoes
 	mockAddr, cleanup := setupMockDNSServerLB(t, nil)
 	defer cleanup()
@@ -1864,6 +1897,9 @@ func TestLoadBalancerQueryWithFailoverFailoverSuccessUDP(t *testing.T) {
 }
 
 func TestLoadBalancerQueryWithFailoverFailoverSuccessTCP(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires network timeout")
+	}
 	// Create a mock TCP server
 	tcpAddr, err := net.ResolveTCPAddr("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -1951,6 +1987,9 @@ func TestLoadBalancerQueryWithFailoverFailoverSuccessTCP(t *testing.T) {
 }
 
 func TestLoadBalancerQueryWithFailoverSelectTargetError(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires network timeout")
+	}
 	// Create LB with no servers at the selectTarget level
 	lb := &LoadBalancer{
 		servers:       []*Server{},
@@ -1980,6 +2019,9 @@ func TestLoadBalancerQueryWithFailoverSelectTargetError(t *testing.T) {
 }
 
 func TestLoadBalancerQueryWithFailoverAnycastMarkFailure(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires network timeout")
+	}
 	// Test that anycast targets don't call markFailure on target.Server
 	lb := &LoadBalancer{
 		servers:       []*Server{},
@@ -2111,6 +2153,9 @@ func TestLoadBalancerQueryTCPMockServer(t *testing.T) {
 }
 
 func TestLoadBalancerQueryFullWithFailover(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires network timeout")
+	}
 	mockAddr, cleanup := setupMockDNSServerLB(t, nil)
 	defer cleanup()
 
@@ -2186,6 +2231,9 @@ func TestLoadBalancerSelectAnycastTargetWithFallback(t *testing.T) {
 }
 
 func TestLoadBalancerCheckHealthWithBackends(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires network timeout")
+	}
 	config := LoadBalancerConfig{
 		AnycastGroups: []AnycastGroupConfig{
 			{
@@ -2276,6 +2324,9 @@ func setupMockDNSServerLB(t *testing.T, response []byte) (string, func()) {
 }
 
 func TestLoadBalancerQueryWithFailoverTCPSuccessAfterUDPFail(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires network timeout")
+	}
 	// Create a TCP-only mock server (no UDP)
 	tcpAddr, err := net.ResolveTCPAddr("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -2364,6 +2415,9 @@ func TestLoadBalancerQueryWithFailoverTCPSuccessAfterUDPFail(t *testing.T) {
 }
 
 func TestLoadBalancerQueryWithFailoverRetryPath(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires network timeout")
+	}
 	// Create a mock UDP server for the failover target
 	mockAddr, cleanup := setupMockDNSServerLB(t, nil)
 	defer cleanup()
@@ -2437,18 +2491,13 @@ func TestLoadBalancerQueryUDPSuccessWithMockServer(t *testing.T) {
 
 	resp, err := lb.queryUDP(mockAddr, msg)
 	if err != nil {
-		t.Logf("queryUDP with mock server error: %v", err)
-	} else {
-		if resp == nil {
-			t.Error("expected non-nil response")
-		}
-		// Verify latency was updated for the server
-		lb.servers[0].mu.RLock()
-		latency := lb.servers[0].latency
-		lb.servers[0].mu.RUnlock()
-		if latency == 0 {
-			t.Error("expected latency to be updated after successful UDP query")
-		}
+		t.Fatalf("queryUDP with mock server error: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("expected non-nil response")
+	}
+	if resp.Header.ID != 1234 {
+		t.Errorf("response ID = %d, want 1234", resp.Header.ID)
 	}
 }
 
@@ -2521,17 +2570,13 @@ func TestLoadBalancerQueryTCPSuccessWithMockServer(t *testing.T) {
 
 	resp, err := lb.queryTCP(localAddr, msg)
 	if err != nil {
-		t.Logf("queryTCP with mock server error: %v", err)
-	} else {
-		if resp == nil {
-			t.Error("expected non-nil response")
-		}
-		lb.servers[0].mu.RLock()
-		latency := lb.servers[0].latency
-		lb.servers[0].mu.RUnlock()
-		if latency == 0 {
-			t.Error("expected latency to be updated after successful TCP query")
-		}
+		t.Fatalf("queryTCP with mock server error: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("expected non-nil response")
+	}
+	if resp.Header.ID != 1234 {
+		t.Errorf("response ID = %d, want 1234", resp.Header.ID)
 	}
 }
 

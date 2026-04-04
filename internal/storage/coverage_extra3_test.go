@@ -151,24 +151,7 @@ func TestWALAppendBatch_CommitMarkerError(t *testing.T) {
 
 	// Write initial data
 	wal.Append(EntryTypePut, []byte("initial"))
-
-	// Replace the active file with a limited writer that will fail
-	// after a certain number of writes
-	wal.mu.Lock()
-	originalFile := wal.active.file
-	wal.mu.Unlock()
-
-	// We'll use a different approach: close the file right before AppendBatch
-	// writes the commit marker by writing the begin + entries manually,
-	// then corrupting the file.
-
-	// Actually, let's use appendLocked directly. We need the begin + all entries
-	// to succeed but commit to fail. Since AppendBatch holds the lock the entire
-	// time, we can't intervene mid-call. Instead, let's create a WAL where the
-	// file descriptor becomes invalid after enough writes.
-
-	// Close the original file and create a pipe-based approach
-	_ = originalFile
+	wal.Close()
 
 	// Alternative: use a very small MaxSegmentSize so the commit marker triggers
 	// rotation that fails because the directory becomes read-only

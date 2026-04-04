@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -361,7 +362,11 @@ func TestReloadManagerConfigReloadBadFile(t *testing.T) {
 	logger := &MockLogger{}
 	handler := NewReloadHandler()
 	cfg := DefaultConfig()
-	manager := NewReloadManager(handler, "/nonexistent/path/config.yaml", cfg)
+	// Use a path inside TempDir that truly doesn't exist on any OS.
+	// Hardcoded Unix paths like "/nonexistent/..." may resolve to real
+	// files on Windows (where "/" maps to the current drive root).
+	badPath := filepath.Join(t.TempDir(), "surely", "missing", "config.yaml")
+	manager := NewReloadManager(handler, badPath, cfg)
 	manager.SetLogger(logger)
 
 	handler.Register("config", manager.reloadConfig)

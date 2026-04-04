@@ -353,6 +353,9 @@ func TestCovLB4_LBQueryTCP_SendBodyFail(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCovLB4_LBQueryUDP_ReadError(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires network timeout")
+	}
 	lb := &LoadBalancer{
 		udpPool: make(map[string]*sync.Pool),
 		tcpPool: make(map[string]*sync.Pool),

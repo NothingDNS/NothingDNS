@@ -89,8 +89,9 @@ func TestWALOpen_InitialSegmentError(t *testing.T) {
 	}
 
 	opts := DefaultWALOptions()
-	_, err := OpenWAL(readOnlyDir, opts)
+	wal, err := OpenWAL(readOnlyDir, opts)
 	if err == nil {
+		wal.Close()
 		t.Skip("Could not trigger segment creation error on this platform")
 	}
 }
