@@ -49,6 +49,9 @@ type Config struct {
 	// Blocklist configuration
 	Blocklist BlocklistConfig `yaml:"blocklist"`
 
+	// RPZ (Response Policy Zone) configuration
+	RPZ RPZConfig `yaml:"rpz"`
+
 	// Slave zone configuration for automatic zone transfers
 	SlaveZones []SlaveZoneConfig `yaml:"slave_zones"`
 
@@ -60,6 +63,20 @@ type Config struct {
 type BlocklistConfig struct {
 	Enabled bool     `yaml:"enabled"`
 	Files   []string `yaml:"files"`
+}
+
+// RPZConfig holds Response Policy Zone configuration.
+type RPZConfig struct {
+	Enabled bool              `yaml:"enabled"`
+	Files   []string          `yaml:"files"`
+	Zones   []RPZPolicyZone   `yaml:"zones"`
+}
+
+// RPZPolicyZone configures a single RPZ policy zone.
+type RPZPolicyZone struct {
+	Name     string `yaml:"name"`
+	File     string `yaml:"file"`
+	Priority int    `yaml:"priority"`
 }
 
 // SlaveZoneConfig represents configuration for a slave zone.
@@ -455,6 +472,10 @@ func DefaultConfig() *Config {
 			Enabled: false,
 			Files:   []string{},
 		},
+		RPZ: RPZConfig{
+			Enabled: false,
+			Files:   []string{},
+		},
 		Cluster: ClusterConfig{
 			Enabled:    false,
 			GossipPort: 7946,
@@ -629,6 +650,13 @@ func unmarshalToConfig(node *Node, cfg *Config) error {
 	if blocklistNode := node.Get("blocklist"); blocklistNode != nil {
 		if err := unmarshalBlocklist(blocklistNode, &cfg.Blocklist); err != nil {
 			return fmt.Errorf("blocklist: %w", err)
+		}
+	}
+
+	// RPZ config
+	if rpzNode := node.Get("rpz"); rpzNode != nil {
+		if err := unmarshalRPZ(rpzNode, &cfg.RPZ); err != nil {
+			return fmt.Errorf("rpz: %w", err)
 		}
 	}
 
@@ -895,6 +923,29 @@ func unmarshalBlocklist(node *Node, cfg *BlocklistConfig) error {
 	return nil
 }
 
+func unmarshalRPZ(node *Node, cfg *RPZConfig) error {
+	if node.Type != NodeMapping {
+		return fmt.Errorf("expected mapping")
+	}
+
+	cfg.Enabled = getBool(node, "enabled", cfg.Enabled)
+	cfg.Files = getStringSlice(node, "files", cfg.Files)
+
+	if zonesNode := node.Get("zones"); zonesNode != nil && zonesNode.Type == NodeSequence {
+		for _, zoneNode := range zonesNode.Children {
+			if zoneNode.Type == NodeMapping {
+				var pz RPZPolicyZone
+				pz.Name = zoneNode.GetString("name")
+				pz.File = zoneNode.GetString("file")
+				pz.Priority = getInt(zoneNode, "priority", 0)
+				cfg.Zones = append(cfg.Zones, pz)
+			}
+		}
+	}
+
+	return nil
+}
+
 func unmarshalCluster(node *Node, cfg *ClusterConfig) error {
 	if node.Type != NodeMapping {
 		return fmt.Errorf("expected mapping")
@@ -991,6 +1042,9 @@ func (c *Config) Validate() []string {
 
 	// Validate blocklist configuration
 	errors = append(errors, c.validateBlocklist()...)
+
+	// Validate RPZ configuration
+	errors = append(errors, c.validateRPZ()...)
 
 	// Validate cluster configuration
 	errors = append(errors, c.validateCluster()...)
@@ -1278,6 +1332,35 @@ func (c *Config) validateBlocklist() []string {
 		}
 		if _, err := os.Stat(file); os.IsNotExist(err) {
 			errors = append(errors, fmt.Sprintf("blocklist: file '%s' does not exist", file))
+		}
+	}
+
+	return errors
+}
+
+func (c *Config) validateRPZ() []string {
+	var errors []string
+
+	if !c.RPZ.Enabled {
+		return errors
+	}
+
+	for _, file := range c.RPZ.Files {
+		if file == "" {
+			errors = append(errors, "rpz: file path cannot be empty")
+			continue
+		}
+		if _, err := os.Stat(file); os.IsNotExist(err) {
+			errors = append(errors, fmt.Sprintf("rpz: file '%s' does not exist", file))
+		}
+	}
+	for _, pz := range c.RPZ.Zones {
+		if pz.File == "" {
+			errors = append(errors, "rpz: zone file path cannot be empty")
+			continue
+		}
+		if _, err := os.Stat(pz.File); os.IsNotExist(err) {
+			errors = append(errors, fmt.Sprintf("rpz: zone file '%s' does not exist", pz.File))
 		}
 	}
 

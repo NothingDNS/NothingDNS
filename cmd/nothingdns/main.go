@@ -32,6 +32,7 @@ import (
 	"github.com/nothingdns/nothingdns/internal/metrics"
 	"github.com/nothingdns/nothingdns/internal/protocol"
 	"github.com/nothingdns/nothingdns/internal/resolver"
+	"github.com/nothingdns/nothingdns/internal/rpz"
 	"github.com/nothingdns/nothingdns/internal/server"
 	"github.com/nothingdns/nothingdns/internal/transfer"
 	"github.com/nothingdns/nothingdns/internal/upstream"
@@ -140,6 +141,7 @@ type integratedHandler struct {
 	zonesMu       sync.RWMutex
 	zoneManager   *zone.Manager
 	blocklist     *blocklist.Blocklist
+	rpzEngine     *rpz.Engine
 	metrics       *metrics.MetricsCollector
 	validator     *dnssec.Validator
 	zoneSigners   map[string]*dnssec.Signer
@@ -325,6 +327,29 @@ func run() error {
 	} else if cfg.Blocklist.Enabled {
 		stats := bl.Stats()
 		logger.Infof("Blocklist loaded with %d entries from %d files", stats.TotalBlocks, stats.Files)
+	}
+
+	// Initialize RPZ engine
+	var rpzEngine *rpz.Engine
+	if cfg.RPZ.Enabled {
+		rpzFiles := make([]string, 0, len(cfg.RPZ.Files)+len(cfg.RPZ.Zones))
+		rpzFiles = append(rpzFiles, cfg.RPZ.Files...)
+		policies := make(map[string]int)
+		for _, pz := range cfg.RPZ.Zones {
+			rpzFiles = append(rpzFiles, pz.File)
+			policies[pz.File] = pz.Priority
+		}
+		rpzEngine = rpz.NewEngine(rpz.Config{
+			Enabled:  true,
+			Files:    rpzFiles,
+			Policies: policies,
+		})
+		if err := rpzEngine.Load(); err != nil {
+			logger.Warnf("Failed to load RPZ zones: %v", err)
+		} else {
+			stats := rpzEngine.Stats()
+			logger.Infof("RPZ engine loaded with %d rules from %d files", stats.TotalRules, stats.Files)
+		}
 	}
 
 	// Initialize metrics collector
@@ -528,6 +553,7 @@ func run() error {
 		zones:         zones,
 		zoneManager:   zoneManager,
 		blocklist:     bl,
+		rpzEngine:     rpzEngine,
 		metrics:       metricsCollector,
 		validator:     validator,
 		zoneSigners:   zoneSigners,
@@ -590,6 +616,15 @@ func run() error {
 		if bl != nil {
 			if err := bl.Reload(); err != nil {
 				logger.Warnf("Failed to reload blocklist: %v", err)
+			}
+		}
+		// Reload RPZ
+		if rpzEngine != nil {
+			if err := rpzEngine.Reload(); err != nil {
+				logger.Warnf("Failed to reload RPZ zones: %v", err)
+			} else {
+				stats := rpzEngine.Stats()
+				logger.Infof("Reloaded RPZ with %d rules from %d files", stats.TotalRules, stats.Files)
 			}
 		}
 		return nil
@@ -802,6 +837,15 @@ func run() error {
 					logger.Infof("Reloaded blocklist with %d entries from %d files", stats.TotalBlocks, stats.Files)
 				}
 			}
+			// Reload RPZ
+			if rpzEngine != nil {
+				if err := rpzEngine.Reload(); err != nil {
+					logger.Warnf("Failed to reload RPZ zones: %v", err)
+				} else {
+					stats := rpzEngine.Stats()
+					logger.Infof("Reloaded RPZ with %d rules from %d files", stats.TotalRules, stats.Files)
+				}
+			}
 		}
 	}
 }
@@ -1007,6 +1051,43 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 		}
 		sendError(w, r, protocol.RcodeNameError)
 		return
+	}
+
+	// Check RPZ QNAME policy
+	if h.rpzEngine != nil {
+		if rule := h.rpzEngine.QNAMEPolicy(qname); rule != nil {
+			switch rule.Action {
+			case rpz.ActionNXDOMAIN:
+				h.logger.Debugf("RPZ NXDOMAIN for %s (policy: %s)", qname, rule.PolicyName)
+				if h.metrics != nil {
+					h.metrics.RecordBlocklistBlock()
+				}
+				sendError(w, r, protocol.RcodeNameError)
+				return
+			case rpz.ActionNODATA:
+				h.logger.Debugf("RPZ NODATA for %s (policy: %s)", qname, rule.PolicyName)
+				if h.metrics != nil {
+					h.metrics.RecordBlocklistBlock()
+				}
+				sendError(w, r, protocol.RcodeSuccess)
+				return
+			case rpz.ActionDrop:
+				h.logger.Debugf("RPZ DROP for %s (policy: %s)", qname, rule.PolicyName)
+				return // silently drop
+			case rpz.ActionPassThrough:
+				// Allow the query to proceed normally
+			case rpz.ActionTCPOnly:
+				// Set TC bit to force TCP retry
+				resp := r.Copy()
+				resp.Header.Flags.TC = true
+				resp.Header.Flags.QR = true
+				resp.Header.Flags.RCODE = protocol.RcodeSuccess
+				w.Write(resp)
+				return
+			case rpz.ActionOverride, rpz.ActionCNAME:
+				// Will be handled after resolution as override
+			}
+		}
 	}
 
 	// Check cache first
