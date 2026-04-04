@@ -318,7 +318,7 @@ func TestEncodeDecode_RoundTripPingAck(t *testing.T) {
 	}
 
 	var msg Message
-	if err := decodeMessage(msgData, &msg); err != nil {
+	if err := decodeMessageRaw(msgData, &msg); err != nil {
 		t.Fatalf("decodeMessage error: %v", err)
 	}
 	if msg.Type != MessageTypePing {
@@ -344,8 +344,8 @@ func TestEncodeDecode_RoundTripPingAck(t *testing.T) {
 	}
 
 	var ackMsg Message
-	if err := decodeMessage(ackMsgData, &ackMsg); err != nil {
-		t.Fatalf("decodeMessage(ack) error: %v", err)
+	if err := decodeMessageRaw(ackMsgData, &ackMsg); err != nil {
+		t.Fatalf("decodeMessageRaw(ack) error: %v", err)
 	}
 	if ackMsg.Type != MessageTypeAck {
 		t.Errorf("Expected type Ack, got %v", ackMsg.Type)

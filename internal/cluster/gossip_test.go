@@ -160,8 +160,8 @@ func TestEncodeDecodeMessage(t *testing.T) {
 
 	// Decode the message
 	var msg Message
-	if err := decodeMessage(data, &msg); err != nil {
-		t.Fatalf("decodeMessage() error = %v", err)
+	if err := decodeMessageRaw(data, &msg); err != nil {
+		t.Fatalf("decodeMessageRaw() error = %v", err)
 	}
 
 	if msg.Type != MessageTypePing {
@@ -219,8 +219,8 @@ func TestEncodeDecodeGossipPayload(t *testing.T) {
 	}
 
 	var msg Message
-	if err := decodeMessage(data, &msg); err != nil {
-		t.Fatalf("decodeMessage() error = %v", err)
+	if err := decodeMessageRaw(data, &msg); err != nil {
+		t.Fatalf("decodeMessageRaw() error = %v", err)
 	}
 
 	if msg.Type != MessageTypeGossip {
@@ -267,8 +267,8 @@ func TestEncodeDecodeCacheInvalidatePayload(t *testing.T) {
 	}
 
 	var msg Message
-	if err := decodeMessage(data, &msg); err != nil {
-		t.Fatalf("decodeMessage() error = %v", err)
+	if err := decodeMessageRaw(data, &msg); err != nil {
+		t.Fatalf("decodeMessageRaw() error = %v", err)
 	}
 
 	if msg.Type != MessageTypeCacheInvalidate {
@@ -448,7 +448,7 @@ func TestGossipProtocol_handleMessage_FromSelf(t *testing.T) {
 
 	// Decode and set From
 	var decodedMsg Message
-	decodeMessage(data, &decodedMsg)
+	decodeMessageRaw(data, &decodedMsg)
 	decodedMsg.From = "self"
 	data2, _ := encodeMessage(decodedMsg.Type, decodedMsg.Payload)
 

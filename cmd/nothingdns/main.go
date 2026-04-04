@@ -427,16 +427,17 @@ func run() error {
 	var clusterMgr *cluster.Cluster
 	if cfg.Cluster.Enabled {
 		clusterConfig := cluster.Config{
-			Enabled:   cfg.Cluster.Enabled,
-			NodeID:    cfg.Cluster.NodeID,
-			BindAddr:  cfg.Cluster.BindAddr,
-			GossipPort: cfg.Cluster.GossipPort,
-			Region:    cfg.Cluster.Region,
-			Zone:      cfg.Cluster.Zone,
-			Weight:    cfg.Cluster.Weight,
-			SeedNodes: cfg.Cluster.SeedNodes,
-			CacheSync: cfg.Cluster.CacheSync,
-			HTTPAddr:  cfg.Server.HTTP.Bind,
+			Enabled:       cfg.Cluster.Enabled,
+			NodeID:        cfg.Cluster.NodeID,
+			BindAddr:      cfg.Cluster.BindAddr,
+			GossipPort:     cfg.Cluster.GossipPort,
+			Region:        cfg.Cluster.Region,
+			Zone:          cfg.Cluster.Zone,
+			Weight:        cfg.Cluster.Weight,
+			SeedNodes:     cfg.Cluster.SeedNodes,
+			CacheSync:     cfg.Cluster.CacheSync,
+			HTTPAddr:      cfg.Server.HTTP.Bind,
+			EncryptionKey: cfg.Cluster.EncryptionKey,
 		}
 
 		clusterMgr, err = cluster.New(clusterConfig, logger, dnsCache)

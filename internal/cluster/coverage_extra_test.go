@@ -575,9 +575,9 @@ func TestGossipProtocol_receiveLoop_ReadErrorNonTimeout(t *testing.T) {
 
 func TestDecodeMessage_InvalidData(t *testing.T) {
 	var msg Message
-	err := decodeMessage([]byte{0xFF, 0xFE, 0xFD}, &msg)
+	err := decodeMessageRaw([]byte{0xFF, 0xFE, 0xFD}, &msg)
 	if err == nil {
-		t.Error("decodeMessage() should fail with invalid data")
+		t.Error("decodeMessageRaw() should fail with invalid data")
 	}
 }
 

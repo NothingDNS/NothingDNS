@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"encoding/hex"
 	"fmt"
 	"reflect"
 	"sync"
@@ -34,17 +35,18 @@ type Cluster struct {
 
 // Config configures the cluster.
 type Config struct {
-	Enabled      bool
-	NodeID       string
-	BindAddr     string
-	BindPort     int
-	GossipPort   int
-	Region       string
-	Zone         string
-	Weight       int
-	SeedNodes    []string
-	CacheSync    bool
-	HTTPAddr     string
+	Enabled       bool
+	NodeID        string
+	BindAddr      string
+	BindPort      int
+	GossipPort    int
+	Region        string
+	Zone          string
+	Weight        int
+	SeedNodes     []string
+	CacheSync     bool
+	HTTPAddr      string
+	EncryptionKey string // hex-encoded 32-byte AES-256 key
 }
 
 // CacheSyncEvent represents a cache synchronization event.
@@ -131,6 +133,15 @@ func New(config Config, logger *util.Logger, dnsCache *cache.Cache) (*Cluster, e
 	gossipConfig := DefaultGossipConfig()
 	gossipConfig.BindAddr = config.BindAddr
 	gossipConfig.BindPort = config.GossipPort
+
+	// Set encryption key if provided (hex-encoded 32-byte key)
+	if config.EncryptionKey != "" {
+		key, err := hex.DecodeString(config.EncryptionKey)
+		if err != nil {
+			return nil, fmt.Errorf("decoding cluster encryption key: %w", err)
+		}
+		gossipConfig.EncryptionKey = key
+	}
 
 	gossip, err := NewGossipProtocol(gossipConfig, nodeList)
 	if err != nil {

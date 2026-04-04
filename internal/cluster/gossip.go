@@ -3,8 +3,12 @@ package cluster
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"encoding/gob"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"sync"
@@ -84,6 +88,10 @@ type GossipProtocol struct {
 	nodeList *NodeList
 	conn     *net.UDPConn
 
+	// Encryption
+	aead     cipher.AEAD
+	encKey   []byte
+
 	// Message sequencing
 	seqNum uint64
 
@@ -117,6 +125,10 @@ type GossipConfig struct {
 	RetransmitMult   int
 	GossipNodes      int
 	IndirectChecks   int
+
+	// Encryption key (32 bytes for AES-256). When set, all gossip
+	// messages are encrypted with AES-256-GCM.
+	EncryptionKey []byte
 }
 
 // DefaultGossipConfig returns default configuration.
@@ -143,6 +155,14 @@ func NewGossipProtocol(config GossipConfig, nodeList *NodeList) (*GossipProtocol
 		nodeList: nodeList,
 		ctx:      ctx,
 		cancel:   cancel,
+	}
+
+	// Initialize AES-GCM if encryption key is provided
+	if len(config.EncryptionKey) > 0 {
+		if err := gp.initEncryption(config.EncryptionKey); err != nil {
+			cancel()
+			return nil, fmt.Errorf("init encryption: %w", err)
+		}
 	}
 
 	return gp, nil
@@ -213,13 +233,7 @@ func (gp *GossipProtocol) Join(seedAddr string) error {
 		return err
 	}
 
-	data, err := encodeMessage(MessageTypePing, payloadBytes)
-	if err != nil {
-		return err
-	}
-
-	_, err = gp.conn.WriteToUDP(data, addr)
-	if err != nil {
+	if err := gp.sendMessage(MessageTypePing, payloadBytes, addr); err != nil {
 		return fmt.Errorf("sending ping: %w", err)
 	}
 
@@ -243,6 +257,14 @@ func (gp *GossipProtocol) BroadcastCacheInvalidation(keys []string) error {
 	data, err := encodeMessage(MessageTypeCacheInvalidate, payloadBytes)
 	if err != nil {
 		return err
+	}
+
+	// Encrypt if enabled
+	if gp.aead != nil {
+		data, err = gp.encrypt(data)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Send to all alive nodes
@@ -296,7 +318,7 @@ func (gp *GossipProtocol) receiveLoop() {
 // handleMessage processes a received message.
 func (gp *GossipProtocol) handleMessage(data []byte, from *net.UDPAddr) {
 	var msg Message
-	if err := decodeMessage(data, &msg); err != nil {
+	if err := gp.decodeMessage(data, &msg); err != nil {
 		return
 	}
 
@@ -344,6 +366,14 @@ func (gp *GossipProtocol) handlePing(msg Message, from *net.UDPAddr) {
 	if err != nil {
 		log.Printf("gossip: failed to encode ack message: %v", err)
 		return
+	}
+	// Encrypt if enabled
+	if gp.aead != nil {
+		data, err = gp.encrypt(data)
+		if err != nil {
+			log.Printf("gossip: failed to encrypt ack: %v", err)
+			return
+		}
 	}
 	if _, err := gp.conn.WriteToUDP(data, from); err != nil {
 		log.Printf("gossip: failed to send ack to %s: %v", from, err)
@@ -471,6 +501,14 @@ func (gp *GossipProtocol) gossip() {
 		return
 	}
 
+	// Encrypt if enabled
+	if gp.aead != nil {
+		data, err = gp.encrypt(data)
+		if err != nil {
+			return
+		}
+	}
+
 	// Send to random nodes
 	for i := 0; i < gp.config.GossipNodes; i++ {
 		target := gp.nodeList.GetRandom(nil)
@@ -565,6 +603,14 @@ func (gp *GossipProtocol) sendPing(node *Node) {
 		log.Printf("gossip: failed to encode ping message: %v", err)
 		return
 	}
+	// Encrypt if enabled
+	if gp.aead != nil {
+		data, err = gp.encrypt(data)
+		if err != nil {
+			log.Printf("gossip: failed to encrypt ping: %v", err)
+			return
+		}
+	}
 	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", node.Addr, gp.config.BindPort))
 	if err != nil {
 		log.Printf("gossip: failed to resolve address for %s: %v", node.Addr, err)
@@ -594,6 +640,57 @@ type GossipStats struct {
 	PingReceived     uint64
 }
 
+// initEncryption initializes AES-256-GCM from a 32-byte key.
+func (gp *GossipProtocol) initEncryption(key []byte) error {
+	if len(key) != 32 {
+		return fmt.Errorf("gossip encryption key must be 32 bytes, got %d", len(key))
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return fmt.Errorf("gossip encryption: %w", err)
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return fmt.Errorf("gossip encryption GCM: %w", err)
+	}
+	gp.aead = aead
+	gp.encKey = make([]byte, 32)
+	copy(gp.encKey, key)
+	return nil
+}
+
+// IsEncrypted returns whether gossip encryption is enabled.
+func (gp *GossipProtocol) IsEncrypted() bool {
+	return gp.aead != nil
+}
+
+// encrypt encrypts data using AES-256-GCM.
+// Output format: nonce (12 bytes) + ciphertext + tag.
+func (gp *GossipProtocol) encrypt(plaintext []byte) ([]byte, error) {
+	if gp.aead == nil {
+		return plaintext, nil
+	}
+	nonce := make([]byte, gp.aead.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, fmt.Errorf("gossip encrypt nonce: %w", err)
+	}
+	// Seal appends the ciphertext to the nonce slice
+	return gp.aead.Seal(nonce, nonce, plaintext, nil), nil
+}
+
+// decrypt decrypts AES-256-GCM encrypted data.
+func (gp *GossipProtocol) decrypt(ciphertext []byte) ([]byte, error) {
+	if gp.aead == nil {
+		return ciphertext, nil
+	}
+	if len(ciphertext) < gp.aead.NonceSize()+gp.aead.Overhead() {
+		return nil, fmt.Errorf("gossip decrypt: ciphertext too short")
+	}
+	nonce := ciphertext[:gp.aead.NonceSize()]
+	data := ciphertext[gp.aead.NonceSize():]
+	return gp.aead.Open(nil, nonce, data, nil)
+}
+
 // encodeMessage encodes a message with its payload.
 func encodeMessage(msgType MessageType, payload []byte) ([]byte, error) {
 	msg := Message{
@@ -621,8 +718,44 @@ func encodePayload(payload interface{}) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// decodeMessage decodes a message envelope.
-func decodeMessage(data []byte, msg *Message) error {
+// decodeMessage decodes a message envelope, decrypting if needed.
+func (gp *GossipProtocol) decodeMessage(data []byte, msg *Message) error {
+	// Try decryption first if encryption is enabled
+	if gp.aead != nil {
+		decrypted, err := gp.decrypt(data)
+		if err != nil {
+			// Might be unencrypted message during transition
+			return fmt.Errorf("gossip decrypt: %w", err)
+		}
+		data = decrypted
+	}
+
+	buf := bytes.NewBuffer(data)
+	dec := gob.NewDecoder(buf)
+	return dec.Decode(msg)
+}
+
+// sendMessage encodes, encrypts, and sends a message to a UDP address.
+func (gp *GossipProtocol) sendMessage(msgType MessageType, payload []byte, addr *net.UDPAddr) error {
+	data, err := encodeMessage(msgType, payload)
+	if err != nil {
+		return err
+	}
+
+	// Encrypt if enabled
+	if gp.aead != nil {
+		data, err = gp.encrypt(data)
+		if err != nil {
+			return err
+		}
+	}
+
+	_, err = gp.conn.WriteToUDP(data, addr)
+	return err
+}
+
+// decodeMessageRaw decodes a message without decryption (for tests).
+func decodeMessageRaw(data []byte, msg *Message) error {
 	buf := bytes.NewBuffer(data)
 	dec := gob.NewDecoder(buf)
 	return dec.Decode(msg)

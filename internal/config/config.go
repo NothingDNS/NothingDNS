@@ -195,6 +195,10 @@ type ClusterConfig struct {
 
 	// Enable cache synchronization
 	CacheSync bool `yaml:"cache_sync"`
+
+	// Encryption key for gossip traffic (32 bytes, hex-encoded).
+	// When set, all inter-node communication is encrypted with AES-256-GCM.
+	EncryptionKey string `yaml:"encryption_key"`
 }
 
 // HTTPConfig contains HTTP API settings.
@@ -1021,6 +1025,7 @@ func unmarshalCluster(node *Node, cfg *ClusterConfig) error {
 	cfg.Zone = node.GetString("zone")
 	cfg.Weight = getInt(node, "weight", cfg.Weight)
 	cfg.CacheSync = getBool(node, "cache_sync", cfg.CacheSync)
+	cfg.EncryptionKey = node.GetString("encryption_key")
 
 	// Parse seed nodes
 	if seedNodesNode := node.Get("seed_nodes"); seedNodesNode != nil {
