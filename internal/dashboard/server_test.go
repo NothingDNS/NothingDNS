@@ -148,9 +148,7 @@ func TestAddRemoveClient(t *testing.T) {
 	server := NewServer()
 
 	client := &Client{
-		send:        make(chan []byte, 10),
-		subscribe:   make(chan struct{}),
-		unsubscribe: make(chan struct{}),
+		send: make(chan []byte, 10),
 	}
 
 	server.AddClient(client)
@@ -182,8 +180,6 @@ func TestBroadcastLoop(t *testing.T) {
 	client := &Client{
 		conn:        mockConn,
 		send:        make(chan []byte, 10),
-		subscribe:   make(chan struct{}),
-		unsubscribe: make(chan struct{}),
 	}
 
 	server.AddClient(client)
@@ -367,8 +363,6 @@ func TestClientLoop_ReadError(t *testing.T) {
 	client := &Client{
 		conn:        mockConn,
 		send:        make(chan []byte, 10),
-		subscribe:   make(chan struct{}),
-		unsubscribe: make(chan struct{}),
 	}
 
 	server.AddClient(client)
@@ -410,8 +404,6 @@ func TestClientLoop_WriteError(t *testing.T) {
 	client := &Client{
 		conn:        mockConn,
 		send:        make(chan []byte, 10),
-		subscribe:   make(chan struct{}),
-		unsubscribe: make(chan struct{}),
 	}
 
 	server.AddClient(client)
@@ -452,8 +444,6 @@ func TestClientLoop_SuccessfulWrite(t *testing.T) {
 	client := &Client{
 		conn:        mockConn,
 		send:        make(chan []byte, 10),
-		subscribe:   make(chan struct{}),
-		unsubscribe: make(chan struct{}),
 	}
 
 	server.AddClient(client)
@@ -577,8 +567,6 @@ func TestBroadcastLoop_ChannelFull(t *testing.T) {
 	client := &Client{
 		conn:        &MockWebSocketConn{},
 		send:        make(chan []byte, 1), // Small buffer
-		subscribe:   make(chan struct{}),
-		unsubscribe: make(chan struct{}),
 	}
 	server.AddClient(client)
 

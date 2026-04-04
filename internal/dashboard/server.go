@@ -23,11 +23,9 @@ type Server struct {
 
 // Client represents a connected WebSocket client
 type Client struct {
-	conn        WebSocketConn
-	send        chan []byte
-	subscribe   chan struct{}
-	unsubscribe chan struct{}
-	closeSend   sync.Once
+	conn      WebSocketConn
+	send      chan []byte
+	closeSend sync.Once
 }
 
 // WebSocketConn interface for WebSocket connections
@@ -156,10 +154,8 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := &Client{
-		conn:        conn,
-		send:        make(chan []byte, 256),
-		subscribe:   make(chan struct{}, 1),
-		unsubscribe: make(chan struct{}, 1),
+		conn: conn,
+		send: make(chan []byte, 256),
 	}
 
 	s.AddClient(client)

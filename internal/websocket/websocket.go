@@ -99,8 +99,9 @@ func (c *Conn) ReadMessage() (int, []byte, error) {
 		}
 
 		switch opcode {
-		case 0x0: // continuation - append to current message (simplified)
-			return 0, payload, nil
+		case 0x0: // continuation - discard (fragmented messages not supported)
+			// Fragmented messages are not expected in dashboard usage.
+			// Discard continuation frames and continue reading.
 		case 0x1: // text
 			return 1, payload, nil
 		case 0x2: // binary
