@@ -131,8 +131,8 @@ func TestRecentQueriesLimit(t *testing.T) {
 	// Record more than 100 queries
 	for i := 0; i < 150; i++ {
 		server.RecordQuery(&QueryEvent{
-			Domain:      "example.com",
-			QueryType:   "A",
+			Domain:       "example.com",
+			QueryType:    "A",
 			ResponseCode: "NOERROR",
 		})
 	}
@@ -178,17 +178,17 @@ func TestBroadcastLoop(t *testing.T) {
 	// Create mock client
 	mockConn := &MockWebSocketConn{}
 	client := &Client{
-		conn:        mockConn,
-		send:        make(chan []byte, 10),
+		conn: mockConn,
+		send: make(chan []byte, 10),
 	}
 
 	server.AddClient(client)
 
 	// Record a query (should broadcast)
 	event := &QueryEvent{
-		Domain:      "broadcast.example.com",
-		QueryType:   "A",
-		Protocol:    "udp",
+		Domain:    "broadcast.example.com",
+		QueryType: "A",
+		Protocol:  "udp",
 	}
 
 	server.RecordQuery(event)
@@ -361,8 +361,8 @@ func TestClientLoop_ReadError(t *testing.T) {
 	mockConn := &ErrorMockWebSocketConn{}
 	mockConn.readErr.Store(true)
 	client := &Client{
-		conn:        mockConn,
-		send:        make(chan []byte, 10),
+		conn: mockConn,
+		send: make(chan []byte, 10),
 	}
 
 	server.AddClient(client)
@@ -402,8 +402,8 @@ func TestClientLoop_WriteError(t *testing.T) {
 	mockConn := &ErrorMockWebSocketConn{}
 	mockConn.writeErr.Store(true)
 	client := &Client{
-		conn:        mockConn,
-		send:        make(chan []byte, 10),
+		conn: mockConn,
+		send: make(chan []byte, 10),
 	}
 
 	server.AddClient(client)
@@ -442,8 +442,8 @@ func TestClientLoop_SuccessfulWrite(t *testing.T) {
 
 	mockConn := &MockWebSocketConn{}
 	client := &Client{
-		conn:        mockConn,
-		send:        make(chan []byte, 10),
+		conn: mockConn,
+		send: make(chan []byte, 10),
 	}
 
 	server.AddClient(client)
@@ -522,8 +522,8 @@ func TestStop_AfterDrain(t *testing.T) {
 
 	// Add a client
 	client := &Client{
-		conn:  &MockWebSocketConn{},
-		send:  make(chan []byte, 10),
+		conn: &MockWebSocketConn{},
+		send: make(chan []byte, 10),
 	}
 	server.AddClient(client)
 
@@ -565,8 +565,8 @@ func TestBroadcastLoop_ChannelFull(t *testing.T) {
 
 	// Create client with small buffer
 	client := &Client{
-		conn:        &MockWebSocketConn{},
-		send:        make(chan []byte, 1), // Small buffer
+		conn: &MockWebSocketConn{},
+		send: make(chan []byte, 1), // Small buffer
 	}
 	server.AddClient(client)
 
@@ -714,8 +714,8 @@ func TestClient_ConcurrentOperations(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			client := &Client{
-				conn:  &MockWebSocketConn{},
-				send:  make(chan []byte, 10),
+				conn: &MockWebSocketConn{},
+				send: make(chan []byte, 10),
 			}
 			server.AddClient(client)
 			time.Sleep(time.Microsecond * time.Duration(id%10))
@@ -806,15 +806,15 @@ func TestHandleZones_ContentType(t *testing.T) {
 // Test QueryEvent JSON serialization
 func TestQueryEvent_JSONSerialization(t *testing.T) {
 	event := &QueryEvent{
-		Timestamp:     time.Now(),
-		ClientIP:      "192.168.1.1",
-		Domain:        "example.com",
-		QueryType:     "AAAA",
-		ResponseCode:  "NOERROR",
-		Duration:      1500,
-		Cached:        true,
-		Blocked:       false,
-		Protocol:      "udp",
+		Timestamp:    time.Now(),
+		ClientIP:     "192.168.1.1",
+		Domain:       "example.com",
+		QueryType:    "AAAA",
+		ResponseCode: "NOERROR",
+		Duration:     1500,
+		Cached:       true,
+		Blocked:      false,
+		Protocol:     "udp",
 	}
 
 	data, err := json.Marshal(event)
@@ -906,17 +906,17 @@ func TestBroadcast_MessageFormat(t *testing.T) {
 
 	mockConn := &MockWebSocketConn{}
 	client := &Client{
-		conn:  mockConn,
-		send:  make(chan []byte, 10),
+		conn: mockConn,
+		send: make(chan []byte, 10),
 	}
 	server.AddClient(client)
 
 	event := &QueryEvent{
-		Domain:      "test.example.com",
-		QueryType:   "A",
-		Protocol:    "udp",
-		Cached:      true,
-		Blocked:     false,
+		Domain:    "test.example.com",
+		QueryType: "A",
+		Protocol:  "udp",
+		Cached:    true,
+		Blocked:   false,
 	}
 
 	server.RecordQuery(event)
@@ -982,8 +982,8 @@ func TestClientLoop_ClosedSendChannel(t *testing.T) {
 		readChan: make(chan struct{}),
 	}
 	client := &Client{
-		conn:  mockConn,
-		send:  make(chan []byte, 10),
+		conn: mockConn,
+		send: make(chan []byte, 10),
 	}
 
 	server.AddClient(client)

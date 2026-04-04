@@ -240,11 +240,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if s.cluster != nil {
 		clusterStats := s.cluster.Stats()
 		resp.Cluster = ClusterInfo{
-			Enabled:   true,
-			NodeID:    clusterStats.NodeID,
-			NodeCount: clusterStats.NodeCount,
+			Enabled:    true,
+			NodeID:     clusterStats.NodeID,
+			NodeCount:  clusterStats.NodeCount,
 			AliveCount: clusterStats.AliveCount,
-			Healthy:   clusterStats.IsHealthy,
+			Healthy:    clusterStats.IsHealthy,
 		}
 	} else {
 		resp.Cluster = ClusterInfo{Enabled: false}
@@ -452,7 +452,7 @@ func (s *Server) handleCreateZone(w http.ResponseWriter, r *http.Request) {
 	var nsRecords []zone.NSRecord
 	for _, ns := range req.Nameservers {
 		nsRecords = append(nsRecords, zone.NSRecord{
-			TTL:    ttl,
+			TTL:     ttl,
 			NSDName: ns,
 		})
 	}

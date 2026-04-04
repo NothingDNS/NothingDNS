@@ -37,15 +37,15 @@ type WebSocketConn interface {
 
 // QueryEvent represents a DNS query event for streaming
 type QueryEvent struct {
-	Timestamp   time.Time `json:"timestamp"`
-	ClientIP    string    `json:"clientIp"`
-	Domain      string    `json:"domain"`
-	QueryType   string    `json:"queryType"`
-	ResponseCode string   `json:"responseCode"`
-	Duration    int64     `json:"duration"`
-	Cached      bool      `json:"cached"`
-	Blocked     bool      `json:"blocked"`
-	Protocol    string    `json:"protocol"`
+	Timestamp    time.Time `json:"timestamp"`
+	ClientIP     string    `json:"clientIp"`
+	Domain       string    `json:"domain"`
+	QueryType    string    `json:"queryType"`
+	ResponseCode string    `json:"responseCode"`
+	Duration     int64     `json:"duration"`
+	Cached       bool      `json:"cached"`
+	Blocked      bool      `json:"blocked"`
+	Protocol     string    `json:"protocol"`
 }
 
 // DashboardStats represents dashboard statistics
@@ -306,27 +306,25 @@ func (s *Server) Stop() {
 // StatsAPIResponse is the JSON response for GET /api/dashboard/stats.
 type StatsAPIResponse struct {
 	Uptime          float64 `json:"uptime"`
-	QueriesTotal    int64         `json:"queriesTotal"`
-	QueriesPerSec   float64       `json:"queriesPerSec"`
-	CacheHitRate    float64       `json:"cacheHitRate"`
-	BlockedQueries  int64         `json:"blockedQueries"`
-	ActiveClients   int           `json:"activeClients"`
-	ZoneCount       int           `json:"zoneCount"`
-	UpstreamLatency int64         `json:"upstreamLatency"`
+	QueriesTotal    int64   `json:"queriesTotal"`
+	QueriesPerSec   float64 `json:"queriesPerSec"`
+	CacheHitRate    float64 `json:"cacheHitRate"`
+	BlockedQueries  int64   `json:"blockedQueries"`
+	ActiveClients   int     `json:"activeClients"`
+	ZoneCount       int     `json:"zoneCount"`
+	UpstreamLatency int64   `json:"upstreamLatency"`
 }
-
-
 
 // ZoneAPIEntry represents a zone in the zones list API response.
 type ZoneAPIEntry struct {
 	Name    string `json:"name"`
-	Records int            `json:"records"`
-	Serial  int            `json:"serial"`
+	Records int    `json:"records"`
+	Serial  int    `json:"serial"`
 }
 
 // BroadcastMessage is the JSON WebSocket broadcast envelope.
 type BroadcastMessage struct {
-	Type  string       `json:"type"`
+	Type  string      `json:"type"`
 	Event *QueryEvent `json:"event"`
 }
 

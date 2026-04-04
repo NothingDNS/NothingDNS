@@ -53,20 +53,21 @@ type ClusterInfo struct {
 	AliveCount int    `json:"alive_count,omitempty"`
 	Healthy    bool   `json:"healthy,omitempty"`
 }
+
 // StatusResponse is returned by GET /api/v1/status.
 type StatusResponse struct {
-	Status    string     `json:"status"`
-	Timestamp string     `json:"timestamp"`
-	Version   string     `json:"version"`
-	Cache     *CacheInfo   `json:"cache,omitempty"`
-	Cluster   ClusterInfo  `json:"cluster"`
+	Status    string      `json:"status"`
+	Timestamp string      `json:"timestamp"`
+	Version   string      `json:"version"`
+	Cache     *CacheInfo  `json:"cache,omitempty"`
+	Cluster   ClusterInfo `json:"cluster"`
 }
 
 // ZoneSummary represents a zone in the zone list.
 type ZoneSummary struct {
-	Name    string  `json:"name"`
-	Serial  uint32  `json:"serial"`
-	Records int     `json:"records"`
+	Name    string `json:"name"`
+	Serial  uint32 `json:"serial"`
+	Records int    `json:"records"`
 }
 
 // ZoneListResponse is returned by GET /api/v1/zones.
