@@ -122,3 +122,37 @@ slave_zones: []
   #   timeout: 30s
   #   retry_interval: 5m
   #   max_retries: 3
+
+# Split-Horizon DNS Views
+# Different clients see different zones based on source IP.
+# Views are evaluated in order; first match wins.
+views: []
+  # - name: internal
+  #   match_clients:
+  #     - 10.0.0.0/8
+  #     - 192.168.0.0/16
+  #     - 172.16.0.0/12
+  #   zone_files:
+  #     - /etc/nothingdns/views/internal/example.com.zone
+  #
+  # - name: external
+  #   match_clients:
+  #     - any
+  #   zone_files:
+  #     - /etc/nothingdns/views/external/example.com.zone
+
+# RPZ (Response Policy Zones)
+rpz:
+  enabled: false
+  # zones:
+  #   - name: "rpz.example.com"
+  #     file: /etc/nothingdns/rpz/blocklist.rpz
+  #     priority: 1
+
+# GeoDNS - Geographic DNS routing
+geodns:
+  enabled: false
+  # database: /etc/nothingdns/GeoLite2-Country.mmdb
+
+# Memory limit in MB (0 = unlimited)
+memory_limit_mb: 0
