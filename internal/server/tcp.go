@@ -89,8 +89,10 @@ func NewTCPServerWithWorkers(addr string, handler Handler, workers int) *TCPServ
 }
 
 // Listen starts listening on the TCP address.
+// On platforms that support SO_REUSEPORT, the socket is created with
+// reuseport enabled for better multi-core scalability.
 func (s *TCPServer) Listen() error {
-	ln, err := net.Listen("tcp", s.addr)
+	ln, err := listenTCPWithReusePort(s.addr)
 	if err != nil {
 		return fmt.Errorf("listen tcp: %w", err)
 	}

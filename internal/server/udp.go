@@ -93,13 +93,10 @@ func NewUDPServerWithWorkers(addr string, handler Handler, workers int) *UDPServ
 }
 
 // Listen starts listening on the UDP address.
+// On platforms that support SO_REUSEPORT, the socket is created with
+// reuseport enabled for better multi-core scalability.
 func (s *UDPServer) Listen() error {
-	udpAddr, err := net.ResolveUDPAddr("udp", s.addr)
-	if err != nil {
-		return fmt.Errorf("resolve udp addr: %w", err)
-	}
-
-	conn, err := net.ListenUDP("udp", udpAddr)
+	conn, err := listenUDPWithReusePort("udp", s.addr)
 	if err != nil {
 		return fmt.Errorf("listen udp: %w", err)
 	}
