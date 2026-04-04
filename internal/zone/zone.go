@@ -319,6 +319,9 @@ func (p *parser) handleControl(line string) error {
 		}
 		p.zone.DefaultTTL = ttl
 
+	case "$GENERATE":
+		return p.handleGenerate(fields[1:])
+
 	case "$INCLUDE":
 		// $INCLUDE not supported in basic version
 		return fmt.Errorf("$INCLUDE not supported")
@@ -328,6 +331,146 @@ func (p *parser) handleControl(line string) error {
 	}
 
 	return nil
+}
+
+// handleGenerate processes the $GENERATE directive (BIND-compatible).
+// Syntax: $GENERATE <start>-<stop>[/<step>] <lhs> [ttl] [class] <type> <rhs>
+// The '$' character in lhs and rhs is replaced by the current iteration value.
+// Modifiers: ${<offset>,<width>,<radix>} where offset is added to the iterator,
+// width is zero-padded field width, and radix is d (decimal), o (octal), or x (hex).
+func (p *parser) handleGenerate(args []string) error {
+	if len(args) < 4 {
+		return fmt.Errorf("$GENERATE requires at least: range lhs type rhs")
+	}
+
+	// Parse range: start-stop or start-stop/step
+	start, stop, step, err := parseGenerateRange(args[0])
+	if err != nil {
+		return fmt.Errorf("$GENERATE range: %w", err)
+	}
+
+	// Remaining args form a record template: lhs [ttl] [class] type rhs
+	template := strings.Join(args[1:], " ")
+
+	for i := start; i <= stop; i += step {
+		expanded := expandGenerate(template, i)
+		if err := p.parseRecord(expanded); err != nil {
+			return fmt.Errorf("$GENERATE at iteration %d: %w", i, err)
+		}
+	}
+
+	return nil
+}
+
+// parseGenerateRange parses "start-stop" or "start-stop/step".
+func parseGenerateRange(s string) (start, stop, step int, err error) {
+	step = 1
+
+	// Check for step
+	slashIdx := strings.IndexByte(s, '/')
+	if slashIdx >= 0 {
+		stepVal, parseErr := strconv.Atoi(s[slashIdx+1:])
+		if parseErr != nil {
+			return 0, 0, 0, fmt.Errorf("invalid step %q: %w", s[slashIdx+1:], parseErr)
+		}
+		if stepVal <= 0 {
+			return 0, 0, 0, fmt.Errorf("step must be positive, got %d", stepVal)
+		}
+		step = stepVal
+		s = s[:slashIdx]
+	}
+
+	// Parse start-stop
+	dashIdx := strings.IndexByte(s, '-')
+	if dashIdx < 0 {
+		return 0, 0, 0, fmt.Errorf("range must be start-stop, got %q", s)
+	}
+
+	start, err = strconv.Atoi(s[:dashIdx])
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("invalid start %q: %w", s[:dashIdx], err)
+	}
+
+	stop, err = strconv.Atoi(s[dashIdx+1:])
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("invalid stop %q: %w", s[dashIdx+1:], err)
+	}
+
+	if start > stop {
+		return 0, 0, 0, fmt.Errorf("start (%d) must not exceed stop (%d)", start, stop)
+	}
+
+	return start, stop, step, nil
+}
+
+// expandGenerate replaces '$' tokens in a template with the iteration value.
+// Supports bare '$' and the ${offset,width,radix} modifier syntax.
+func expandGenerate(template string, iter int) string {
+	var b strings.Builder
+	b.Grow(len(template))
+
+	for i := 0; i < len(template); i++ {
+		if template[i] != '$' {
+			b.WriteByte(template[i])
+			continue
+		}
+
+		// Check for ${offset,width,radix} modifier
+		if i+1 < len(template) && template[i+1] == '{' {
+			end := strings.IndexByte(template[i+2:], '}')
+			if end >= 0 {
+				modifier := template[i+2 : i+2+end]
+				b.WriteString(applyGenerateModifier(iter, modifier))
+				i = i + 2 + end // skip past '}'
+				continue
+			}
+		}
+
+		// Bare '$' — replace with decimal value
+		b.WriteString(strconv.Itoa(iter))
+	}
+
+	return b.String()
+}
+
+// applyGenerateModifier handles ${offset,width,radix} syntax.
+// offset: integer added to the iterator value
+// width: minimum field width (zero-padded)
+// radix: d=decimal, o=octal, x=hex (default: d)
+func applyGenerateModifier(iter int, modifier string) string {
+	parts := strings.SplitN(modifier, ",", 3)
+
+	offset := 0
+	width := 0
+	radix := "d"
+
+	if len(parts) >= 1 && parts[0] != "" {
+		if v, err := strconv.Atoi(parts[0]); err == nil {
+			offset = v
+		}
+	}
+	if len(parts) >= 2 && parts[1] != "" {
+		if v, err := strconv.Atoi(parts[1]); err == nil {
+			width = v
+		}
+	}
+	if len(parts) >= 3 && parts[2] != "" {
+		radix = strings.ToLower(parts[2])
+	}
+
+	val := iter + offset
+
+	var format string
+	switch radix {
+	case "o":
+		format = fmt.Sprintf("%%0%do", width)
+	case "x":
+		format = fmt.Sprintf("%%0%dx", width)
+	default:
+		format = fmt.Sprintf("%%0%dd", width)
+	}
+
+	return fmt.Sprintf(format, val)
 }
 
 // parseRecord parses a single resource record line.
