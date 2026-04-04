@@ -51,6 +51,9 @@ type Config struct {
 
 	// Slave zone configuration for automatic zone transfers
 	SlaveZones []SlaveZoneConfig `yaml:"slave_zones"`
+
+	// Memory limit in MB (0 = unlimited). When exceeded, caches are cleared.
+	MemoryLimitMB int `yaml:"memory_limit_mb"`
 }
 
 // BlocklistConfig holds blocklist configuration.
@@ -594,6 +597,13 @@ func unmarshalToConfig(node *Node, cfg *Config) error {
 	// Zone directory
 	if zdn := node.Get("zone_dir"); zdn != nil && zdn.Value != "" {
 		cfg.ZoneDir = zdn.Value
+	}
+
+	// Memory limit
+	if mlNode := node.Get("memory_limit_mb"); mlNode != nil && mlNode.Value != "" {
+		if v, err := strconv.Atoi(mlNode.Value); err == nil && v > 0 {
+			cfg.MemoryLimitMB = v
+		}
 	}
 
 	// ACL rules

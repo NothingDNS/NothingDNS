@@ -28,6 +28,7 @@ import (
 	"github.com/nothingdns/nothingdns/internal/dnssec"
 	"github.com/nothingdns/nothingdns/internal/audit"
 	"github.com/nothingdns/nothingdns/internal/filter"
+	"github.com/nothingdns/nothingdns/internal/memory"
 	"github.com/nothingdns/nothingdns/internal/metrics"
 	"github.com/nothingdns/nothingdns/internal/protocol"
 	"github.com/nothingdns/nothingdns/internal/resolver"
@@ -205,6 +206,16 @@ func run() error {
 	}
 	dnsCache := cache.New(cacheConfig)
 	logger.Infof("Cache initialized with capacity %d", cfg.Cache.Size)
+
+	// Initialize memory monitor if limit is configured
+	var memMonitor *memory.Monitor
+	if cfg.MemoryLimitMB > 0 {
+		memCfg := memory.DefaultConfig()
+		memCfg.LimitBytes = uint64(cfg.MemoryLimitMB) * 1024 * 1024
+		memMonitor = memory.NewMonitor(memCfg, memory.NewCacheEvictor(dnsCache))
+		memMonitor.Start()
+		logger.Infof("Memory monitor started: limit=%dMB", cfg.MemoryLimitMB)
+	}
 
 	// Initialize upstream client (with optional load balancer for anycast)
 	var client *upstream.Client
@@ -745,6 +756,11 @@ func run() error {
 				// Stop rate limiter
 				if rateLimiter != nil {
 					rateLimiter.Stop()
+				}
+
+				// Stop memory monitor
+				if memMonitor != nil {
+					memMonitor.Stop()
 				}
 
 				// Close audit logger
