@@ -155,6 +155,8 @@ type integratedHandler struct {
 	slaveManager  *transfer.SlaveManager
 	aclChecker    *filter.ACLChecker
 	rateLimiter   *filter.RateLimiter
+	splitHorizon  *filter.SplitHorizon
+	viewZones     map[string]map[string]*zone.Zone // view name -> origin -> Zone
 	auditLogger   *audit.AuditLogger
 
 	notifyOnce sync.Once
@@ -570,6 +572,40 @@ func run() error {
 		logger.Info("Query audit logging enabled")
 	}
 
+	// Initialize split-horizon views
+	var splitHorizon *filter.SplitHorizon
+	var viewZones map[string]map[string]*zone.Zone
+	if len(cfg.Views) > 0 {
+		viewConfigs := make([]filter.ViewConfig, len(cfg.Views))
+		for i, v := range cfg.Views {
+			viewConfigs[i] = filter.ViewConfig{
+				Name:         v.Name,
+				MatchClients: v.MatchClients,
+				ZoneFiles:    v.ZoneFiles,
+			}
+		}
+		var shErr error
+		splitHorizon, shErr = filter.NewSplitHorizon(viewConfigs)
+		if shErr != nil {
+			return fmt.Errorf("initializing split-horizon: %w", shErr)
+		}
+
+		viewZones = make(map[string]map[string]*zone.Zone)
+		for _, v := range cfg.Views {
+			vzMap := make(map[string]*zone.Zone)
+			for _, zf := range v.ZoneFiles {
+				vz, vzErr := loadZoneFile(zf)
+				if vzErr != nil {
+					return fmt.Errorf("loading zone file %q for view %q: %w", zf, v.Name, vzErr)
+				}
+				vzMap[vz.Origin] = vz
+				logger.Infof("Loaded zone %s for view %s", vz.Origin, v.Name)
+			}
+			viewZones[v.Name] = vzMap
+		}
+		logger.Infof("Split-horizon enabled with %d views", len(cfg.Views))
+	}
+
 	// Create DNS handler (needed for API server DoH support)
 	handler := &integratedHandler{
 		config:        cfg,
@@ -593,6 +629,8 @@ func run() error {
 		slaveManager:  slaveManager,
 		aclChecker:    aclChecker,
 		rateLimiter:   rateLimiter,
+		splitHorizon:  splitHorizon,
+		viewZones:     viewZones,
 		auditLogger:   auditLogger,
 	}
 
@@ -1143,6 +1181,22 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 	// Record cache miss
 	if h.metrics != nil {
 		h.metrics.RecordCacheMiss()
+	}
+
+	// Split-horizon: if views are configured, check view-specific zones first.
+	if h.splitHorizon != nil && clientIP != nil {
+		if view := h.splitHorizon.SelectView(clientIP); view != nil {
+			if vzMap, ok := h.viewZones[view.Name]; ok {
+				for origin, z := range vzMap {
+					if isSubdomain(qname, origin) {
+						h.logger.Debugf("View %s: checking zone %s for %s", view.Name, origin, qname)
+						if h.handleAuthoritative(z, w, r, q) {
+							return
+						}
+					}
+				}
+			}
+		}
 	}
 
 	// Check authoritative zones — try direct lookup first.

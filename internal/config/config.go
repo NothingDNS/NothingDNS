@@ -58,8 +58,23 @@ type Config struct {
 	// Slave zone configuration for automatic zone transfers
 	SlaveZones []SlaveZoneConfig `yaml:"slave_zones"`
 
+	// Split-Horizon view configuration
+	Views []ViewConfig `yaml:"views"`
+
 	// Memory limit in MB (0 = unlimited). When exceeded, caches are cleared.
 	MemoryLimitMB int `yaml:"memory_limit_mb"`
+}
+
+// ViewConfig holds configuration for a single split-horizon view.
+type ViewConfig struct {
+	// Name is a unique identifier for this view.
+	Name string `yaml:"name"`
+
+	// MatchClients contains CIDR networks or "any" for a catch-all.
+	MatchClients []string `yaml:"match_clients"`
+
+	// ZoneFiles lists zone file paths specific to this view.
+	ZoneFiles []string `yaml:"zone_files"`
 }
 
 // BlocklistConfig holds blocklist configuration.
@@ -735,6 +750,19 @@ func unmarshalToConfig(node *Node, cfg *Config) error {
 		}
 	}
 
+	// Parse views (split-horizon)
+	if viewsNode := node.Get("views"); viewsNode != nil && viewsNode.Type == NodeSequence {
+		for _, viewNode := range viewsNode.Children {
+			if viewNode.Type == NodeMapping {
+				var view ViewConfig
+				view.Name = viewNode.GetString("name")
+				view.MatchClients = getStringSlice(viewNode, "match_clients", nil)
+				view.ZoneFiles = getStringSlice(viewNode, "zone_files", nil)
+				cfg.Views = append(cfg.Views, view)
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -1118,6 +1146,9 @@ func (c *Config) Validate() []string {
 
 	// Validate slave zones configuration
 	errors = append(errors, c.validateSlaveZones()...)
+
+	// Validate views (split-horizon) configuration
+	errors = append(errors, c.validateViews()...)
 
 	// Validate zone files exist
 	for _, zone := range c.Zones {
@@ -1503,6 +1534,42 @@ func (c *Config) validateSlaveZones() []string {
 		// Validate max retries
 		if slave.MaxRetries < 0 {
 			errors = append(errors, fmt.Sprintf("%s: max_retries cannot be negative", prefix))
+		}
+	}
+
+	return errors
+}
+
+func (c *Config) validateViews() []string {
+	var errors []string
+	names := make(map[string]bool)
+
+	for i, view := range c.Views {
+		prefix := fmt.Sprintf("views[%d]", i)
+
+		if view.Name == "" {
+			errors = append(errors, fmt.Sprintf("%s: name is required", prefix))
+		} else if names[view.Name] {
+			errors = append(errors, fmt.Sprintf("%s: duplicate view name '%s'", prefix, view.Name))
+		}
+		names[view.Name] = true
+
+		if len(view.MatchClients) == 0 {
+			errors = append(errors, fmt.Sprintf("%s: at least one match_clients entry is required", prefix))
+		}
+		for _, cidr := range view.MatchClients {
+			if strings.EqualFold(cidr, "any") {
+				continue
+			}
+			if !strings.Contains(cidr, "/") {
+				if net.ParseIP(cidr) == nil {
+					errors = append(errors, fmt.Sprintf("%s: invalid match_clients entry '%s'", prefix, cidr))
+				}
+				continue
+			}
+			if _, _, err := net.ParseCIDR(cidr); err != nil {
+				errors = append(errors, fmt.Sprintf("%s: invalid CIDR '%s'", prefix, cidr))
+			}
 		}
 	}
 
