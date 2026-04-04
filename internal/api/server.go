@@ -85,6 +85,10 @@ func (s *Server) Start() error {
 	// Dashboard UI
 	mux.HandleFunc("/api/dashboard/stats", s.handleDashboardStats)
 
+	// OpenAPI / Swagger
+	mux.HandleFunc("/api/openapi.json", s.handleOpenAPISpec)
+	mux.HandleFunc("/api/docs", s.handleSwaggerUI)
+
 	// WebSocket endpoint
 	mux.HandleFunc("/ws", s.dashboardServer.ServeHTTP)
 
