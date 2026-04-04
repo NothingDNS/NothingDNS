@@ -1554,3 +1554,189 @@ func TestPackRSAPublicKey_RSASHA512(t *testing.T) {
 		t.Error("expected non-empty packed key")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Ed25519 full DNSSEC round-trip: SignRRSet → createSignedData → VerifySignature
+// Exercises the complete sign→verify chain through the Signer and Validator
+// crypto layers with Ed25519 (Algorithm 15).
+// ---------------------------------------------------------------------------
+
+func TestEd25519_SignRRSet_VerifyRoundTrip(t *testing.T) {
+	s := NewSigner("example.com.", DefaultSignerConfig())
+	key, err := s.GenerateKeyPair(protocol.AlgorithmED25519, true)
+	if err != nil {
+		t.Fatalf("GenerateKeyPair Ed25519: %v", err)
+	}
+
+	name, _ := protocol.ParseName("www.example.com.")
+	rrSet := []*protocol.ResourceRecord{
+		{
+			Name:  name,
+			Type:  protocol.TypeA,
+			Class: protocol.ClassIN,
+			TTL:   3600,
+			Data:  &protocol.RDataA{Address: [4]byte{192, 0, 2, 1}},
+		},
+	}
+
+	inception := uint32(time.Now().Add(-time.Hour).Unix())
+	expiration := uint32(time.Now().Add(24 * time.Hour).Unix())
+
+	rrsigRR, err := s.SignRRSet(rrSet, key, inception, expiration)
+	if err != nil {
+		t.Fatalf("SignRRSet Ed25519: %v", err)
+	}
+
+	rrsig, ok := rrsigRR.Data.(*protocol.RDataRRSIG)
+	if !ok {
+		t.Fatal("RRSIG record data is not *RDataRRSIG")
+	}
+
+	// Rebuild canonical signed data for verification
+	sorted := make([]*protocol.ResourceRecord, len(rrSet))
+	copy(sorted, rrSet)
+	canonicalSort(sorted)
+
+	signedData, err := s.createSignedData(sorted, rrsig)
+	if err != nil {
+		t.Fatalf("createSignedData: %v", err)
+	}
+
+	// Parse the public key from wire format as the validator would
+	parsedPub, err := ParseDNSKEYPublicKey(key.DNSKEY.Algorithm, key.DNSKEY.PublicKey)
+	if err != nil {
+		t.Fatalf("ParseDNSKEYPublicKey: %v", err)
+	}
+
+	// Verify the signature
+	if err := VerifySignature(rrsig, signedData, parsedPub); err != nil {
+		t.Errorf("Ed25519 round-trip verification failed: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Ed25519 multi-record RRSet round-trip:
+// Signs multiple A records and verifies the RRSIG.
+// ---------------------------------------------------------------------------
+
+func TestEd25519_SignRRSet_MultiRecord_VerifyRoundTrip(t *testing.T) {
+	s := NewSigner("example.com.", DefaultSignerConfig())
+	key, err := s.GenerateKeyPair(protocol.AlgorithmED25519, false)
+	if err != nil {
+		t.Fatalf("GenerateKeyPair Ed25519 ZSK: %v", err)
+	}
+
+	name, _ := protocol.ParseName("multi.example.com.")
+	rrSet := []*protocol.ResourceRecord{
+		{
+			Name:  name,
+			Type:  protocol.TypeA,
+			Class: protocol.ClassIN,
+			TTL:   300,
+			Data:  &protocol.RDataA{Address: [4]byte{10, 0, 0, 1}},
+		},
+		{
+			Name:  name,
+			Type:  protocol.TypeA,
+			Class: protocol.ClassIN,
+			TTL:   300,
+			Data:  &protocol.RDataA{Address: [4]byte{10, 0, 0, 2}},
+		},
+		{
+			Name:  name,
+			Type:  protocol.TypeA,
+			Class: protocol.ClassIN,
+			TTL:   300,
+			Data:  &protocol.RDataA{Address: [4]byte{10, 0, 0, 3}},
+		},
+	}
+
+	inception := uint32(time.Now().Add(-time.Hour).Unix())
+	expiration := uint32(time.Now().Add(48 * time.Hour).Unix())
+
+	rrsigRR, err := s.SignRRSet(rrSet, key, inception, expiration)
+	if err != nil {
+		t.Fatalf("SignRRSet Ed25519 multi: %v", err)
+	}
+
+	rrsig, ok := rrsigRR.Data.(*protocol.RDataRRSIG)
+	if !ok {
+		t.Fatal("RRSIG data is not *RDataRRSIG")
+	}
+
+	if rrsig.Algorithm != protocol.AlgorithmED25519 {
+		t.Errorf("algorithm = %d, want %d", rrsig.Algorithm, protocol.AlgorithmED25519)
+	}
+
+	sorted := make([]*protocol.ResourceRecord, len(rrSet))
+	copy(sorted, rrSet)
+	canonicalSort(sorted)
+
+	signedData, err := s.createSignedData(sorted, rrsig)
+	if err != nil {
+		t.Fatalf("createSignedData: %v", err)
+	}
+
+	parsedPub, err := ParseDNSKEYPublicKey(key.DNSKEY.Algorithm, key.DNSKEY.PublicKey)
+	if err != nil {
+		t.Fatalf("ParseDNSKEYPublicKey: %v", err)
+	}
+
+	if err := VerifySignature(rrsig, signedData, parsedPub); err != nil {
+		t.Errorf("Ed25519 multi-record round-trip verification failed: %v", err)
+	}
+
+	// Verify tampered data fails
+	tamperedData := make([]byte, len(signedData))
+	copy(tamperedData, signedData)
+	tamperedData[len(tamperedData)-1] ^= 0xFF
+
+	if err := VerifySignature(rrsig, tamperedData, parsedPub); err == nil {
+		t.Error("expected verification failure with tampered data")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Ed25519 DNSKEY pack → parse → verify round-trip:
+// Tests that a DNSKEY record can be serialized, deserialized, and used to
+// verify an RRSIG, simulating what the validator does with wire-format keys.
+// ---------------------------------------------------------------------------
+
+func TestEd25519_DNSKEY_PackParseVerify(t *testing.T) {
+	_, privKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("ed25519.GenerateKey: %v", err)
+	}
+
+	pubKey := privKey.Public().(ed25519.PublicKey)
+
+	// Pack public key to wire format
+	pub := &PublicKey{Algorithm: protocol.AlgorithmED25519, Key: pubKey}
+	wireKey, err := PackDNSKEYPublicKey(pub)
+	if err != nil {
+		t.Fatalf("PackDNSKEYPublicKey: %v", err)
+	}
+
+	// Parse back from wire format (as validator would)
+	parsedPub, err := ParseDNSKEYPublicKey(protocol.AlgorithmED25519, wireKey)
+	if err != nil {
+		t.Fatalf("ParseDNSKEYPublicKey: %v", err)
+	}
+
+	// Sign data
+	data := []byte("canonical wire format data for RRSIG validation")
+	priv := &PrivateKey{Algorithm: protocol.AlgorithmED25519, Key: privKey}
+	signature, err := SignData(protocol.AlgorithmED25519, priv, data)
+	if err != nil {
+		t.Fatalf("SignData Ed25519: %v", err)
+	}
+
+	// Verify with parsed key
+	rrsig := &protocol.RDataRRSIG{
+		Algorithm: protocol.AlgorithmED25519,
+		Signature: signature,
+	}
+	if err := VerifySignature(rrsig, data, parsedPub); err != nil {
+		t.Errorf("Ed25519 DNSKEY pack→parse→verify failed: %v", err)
+	}
+}
