@@ -62,10 +62,14 @@ type Client struct {
 	strategy Strategy
 	timeout  time.Duration
 
-	// Connection pools
-	udpPool map[string]*sync.Pool // address -> pool
+	// Buffer pools
+	udpPool map[string]*sync.Pool // address -> buffer pool
 	tcpPool map[string]*sync.Pool
-	mu      sync.RWMutex
+
+	// TCP connection pools for persistent connections
+	tcpConnPools map[string]*tcpConnPool // address -> conn pool
+
+	mu sync.RWMutex
 
 	// Health check control
 	healthCheckCancel context.CancelFunc
@@ -129,11 +133,12 @@ func NewClient(config Config) (*Client, error) {
 	}
 
 	client := &Client{
-		servers:  make([]*Server, 0, len(config.Servers)),
-		strategy: StrategyFromString(config.Strategy),
-		timeout:  config.Timeout,
-		udpPool:  make(map[string]*sync.Pool),
-		tcpPool:  make(map[string]*sync.Pool),
+		servers:      make([]*Server, 0, len(config.Servers)),
+		strategy:     StrategyFromString(config.Strategy),
+		timeout:      config.Timeout,
+		udpPool:      make(map[string]*sync.Pool),
+		tcpPool:      make(map[string]*sync.Pool),
+		tcpConnPools: make(map[string]*tcpConnPool),
 	}
 
 	// Initialize servers
@@ -147,7 +152,7 @@ func NewClient(config Config) (*Client, error) {
 		}
 		client.servers = append(client.servers, server)
 
-		// Initialize connection pools
+		// Initialize buffer pools
 		client.udpPool[addr] = &sync.Pool{
 			New: func() interface{} {
 				return make([]byte, 4096)
@@ -158,6 +163,9 @@ func NewClient(config Config) (*Client, error) {
 				return make([]byte, 65535)
 			},
 		}
+
+		// Initialize TCP connection pool
+		client.tcpConnPools[addr] = newTCPConnPool(addr, 4, 64, 30*time.Second, config.Timeout)
 	}
 
 	// Start health check goroutine
@@ -175,6 +183,14 @@ func (c *Client) Close() error {
 		c.healthCheckCancel()
 		c.wg.Wait()
 	}
+
+	// Close all TCP connection pools
+	c.mu.Lock()
+	for _, pool := range c.tcpConnPools {
+		pool.closeAll()
+	}
+	c.mu.Unlock()
+
 	return nil
 }
 
@@ -412,51 +428,90 @@ func (c *Client) queryTCPBuf(server *Server, msg *protocol.Message, buf []byte) 
 	}
 	packed := buf[:n]
 
-	// Create TCP connection
-	conn, err := net.DialTimeout("tcp", server.Address, server.Timeout)
+	if len(packed) > 65535 {
+		return nil, fmt.Errorf("message too large for TCP: %d bytes", len(packed))
+	}
+
+	// Get a pooled connection
+	c.mu.RLock()
+	pool, hasPool := c.tcpConnPools[server.Address]
+	c.mu.RUnlock()
+
+	var tc *tcpConn
+	if hasPool {
+		tc, err = pool.get()
+	} else {
+		// Fallback: direct connection
+		var conn net.Conn
+		conn, err = net.DialTimeout("tcp", server.Address, server.Timeout)
+		if err == nil {
+			tc = &tcpConn{conn: conn, createdAt: time.Now(), lastUsedAt: time.Now()}
+		}
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("dial tcp: %w", err)
 	}
-	defer conn.Close()
 
-	// Set deadline
-	if err := conn.SetDeadline(time.Now().Add(server.Timeout)); err != nil {
+	// Return connection to pool when done
+	returnToPool := true
+	defer func() {
+		if tc == nil {
+			return
+		}
+		if returnToPool && hasPool {
+			pool.put(tc)
+		} else {
+			tc.close()
+		}
+	}()
+
+	// Set deadline for this query
+	if err := tc.conn.SetDeadline(time.Now().Add(server.Timeout)); err != nil {
 		return nil, fmt.Errorf("set deadline: %w", err)
 	}
 
 	// Send length-prefixed query
-	if len(packed) > 65535 {
-		return nil, fmt.Errorf("message too large for TCP: %d bytes", len(packed))
-	}
 	length := uint16(len(packed))
 	lengthBuf := []byte{byte(length >> 8), byte(length)}
-	if _, err := conn.Write(lengthBuf); err != nil {
+	if _, err := tc.conn.Write(lengthBuf); err != nil {
+		tc.close()
+		tc = nil // don't return broken conn to pool
 		return nil, fmt.Errorf("send length: %w", err)
 	}
 
 	start := time.Now()
-	if _, err := conn.Write(packed); err != nil {
+	if _, err := tc.conn.Write(packed); err != nil {
+		tc.close()
+		tc = nil
 		return nil, fmt.Errorf("send query: %w", err)
 	}
 
 	// Read length prefix
-	lengthBuf = make([]byte, 2)
-	if _, err := io.ReadFull(conn, lengthBuf); err != nil {
+	respLenBuf := make([]byte, 2)
+	if _, err := io.ReadFull(tc.conn, respLenBuf); err != nil {
+		tc.close()
+		tc = nil
 		return nil, fmt.Errorf("read length: %w", err)
 	}
-	respLen := uint16(lengthBuf[0])<<8 | uint16(lengthBuf[1])
+	respLen := uint16(respLenBuf[0])<<8 | uint16(respLenBuf[1])
 
 	if int(respLen) > len(buf) {
 		buf = make([]byte, respLen)
 	}
 
 	// Read response
-	_, err = io.ReadFull(conn, buf[:respLen])
+	_, err = io.ReadFull(tc.conn, buf[:respLen])
 	if err != nil {
+		tc.close()
+		tc = nil
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 
 	latency := time.Since(start)
+
+	// Clear deadline so connection can be reused
+	_ = tc.conn.SetDeadline(time.Time{})
 
 	// Parse response
 	resp, err := protocol.UnpackMessage(buf[:respLen])
