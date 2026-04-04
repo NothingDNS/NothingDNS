@@ -24,6 +24,10 @@ type SigningKey struct {
 	KeyTag     uint16
 	IsKSK      bool // Key Signing Key
 	IsZSK      bool // Zone Signing Key
+
+	// RFC 7583 key rollover state and timing
+	State  KeyState   // Current lifecycle state (default: Active)
+	Timing *KeyTiming // Scheduled timing for state transitions (nil = always active)
 }
 
 // SignerConfig holds signing parameters.
@@ -106,6 +110,61 @@ func (s *Signer) GetZSKs() []*SigningKey {
 		}
 	}
 	return result
+}
+
+// GetActiveKSKs returns KSKs that are in the Active state.
+// Keys without timing metadata are considered always active.
+func (s *Signer) GetActiveKSKs() []*SigningKey {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var result []*SigningKey
+	for _, key := range s.keys {
+		if key.IsKSK && isActive(key) {
+			result = append(result, key)
+		}
+	}
+	return result
+}
+
+// GetActiveZSKs returns ZSKs that are in the Active state.
+// Keys without timing metadata are considered always active.
+func (s *Signer) GetActiveZSKs() []*SigningKey {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var result []*SigningKey
+	for _, key := range s.keys {
+		if key.IsZSK && isActive(key) {
+			result = append(result, key)
+		}
+	}
+	return result
+}
+
+// isActive returns true if a key is in Active state or has no timing
+// (legacy keys without rollover metadata are always active).
+func isActive(key *SigningKey) bool {
+	if key.Timing == nil {
+		return true // No timing = always active (backward compatible)
+	}
+	return key.State == KeyStateActive
+}
+
+// SetKeyState updates the state of a key identified by its key tag.
+func (s *Signer) SetKeyState(keyTag uint16, state KeyState) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if key, ok := s.keys[keyTag]; ok {
+		key.State = state
+	}
+}
+
+// SetKeyTiming updates the timing metadata of a key identified by its key tag.
+func (s *Signer) SetKeyTiming(keyTag uint16, timing *KeyTiming) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if key, ok := s.keys[keyTag]; ok {
+		key.Timing = timing
+	}
 }
 
 // GenerateKeyPair generates a new key pair for the zone.
