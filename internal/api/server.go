@@ -183,9 +183,9 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 
 // handleHealth returns health status.
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	s.writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":    "healthy",
-		"timestamp": time.Now().UTC().Format(time.RFC3339),
+	s.writeJSON(w, http.StatusOK, &HealthResponse{
+		Status:    "healthy",
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	})
 }
 
@@ -200,68 +200,57 @@ func (s *Server) handleSPA(spaHandler http.Handler) http.HandlerFunc {
 
 // handleDashboardStats returns stats formatted for the web dashboard.
 func (s *Server) handleDashboardStats(w http.ResponseWriter, r *http.Request) {
-	stats := map[string]interface{}{
-		"uptime":          0,
-		"queriesTotal":    0,
-		"queriesPerSec":   0.0,
-		"cacheHitRate":    0.0,
-		"blockedQueries":  0,
-		"activeClients":   0,
-		"zoneCount":       0,
-		"upstreamLatency": 0,
-	}
+	resp := &DashboardStatsResponse{}
 
 	if s.cache != nil {
 		cs := s.cache.Stats()
-		stats["queriesTotal"] = cs.Hits + cs.Misses
+		resp.QueriesTotal = cs.Hits + cs.Misses
 		total := float64(cs.Hits + cs.Misses)
 		if total > 0 {
-			stats["cacheHitRate"] = float64(cs.Hits) / total * 100
+			resp.CacheHitRate = float64(cs.Hits) / total * 100
 		}
 	}
 
 	if s.zoneManager != nil {
-		stats["zoneCount"] = s.zoneManager.Count()
+		resp.ZoneCount = s.zoneManager.Count()
 	}
 
-	s.writeJSON(w, http.StatusOK, stats)
+	s.writeJSON(w, http.StatusOK, resp)
 }
 
 // handleStatus returns server status.
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	status := map[string]interface{}{
-		"status":    "running",
-		"timestamp": time.Now().UTC().Format(time.RFC3339),
-		"version":   util.Version,
+	resp := &StatusResponse{
+		Status:    "running",
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Version:   util.Version,
 	}
 
 	if s.cache != nil {
 		stats := s.cache.Stats()
-		status["cache"] = map[string]interface{}{
-			"size":      stats.Size,
-			"capacity":  stats.Capacity,
-			"hits":      stats.Hits,
-			"misses":    stats.Misses,
-			"hit_ratio": stats.HitRatio(),
+		resp.Cache = &CacheInfo{
+			Size:     stats.Size,
+			Capacity: stats.Capacity,
+			Hits:     stats.Hits,
+			Misses:   stats.Misses,
+			HitRatio: stats.HitRatio(),
 		}
 	}
 
 	if s.cluster != nil {
 		clusterStats := s.cluster.Stats()
-		status["cluster"] = map[string]interface{}{
-			"enabled":     true,
-			"node_id":     clusterStats.NodeID,
-			"node_count":  clusterStats.NodeCount,
-			"alive_count": clusterStats.AliveCount,
-			"healthy":     clusterStats.IsHealthy,
+		resp.Cluster = ClusterInfo{
+			Enabled:   true,
+			NodeID:    clusterStats.NodeID,
+			NodeCount: clusterStats.NodeCount,
+			AliveCount: clusterStats.AliveCount,
+			Healthy:   clusterStats.IsHealthy,
 		}
 	} else {
-		status["cluster"] = map[string]interface{}{
-			"enabled": false,
-		}
+		resp.Cluster = ClusterInfo{Enabled: false}
 	}
 
-	s.writeJSON(w, http.StatusOK, status)
+	s.writeJSON(w, http.StatusOK, resp)
 }
 
 // handleZones handles GET (list zones) and POST (create zone).
@@ -278,7 +267,7 @@ func (s *Server) handleZones(w http.ResponseWriter, r *http.Request) {
 
 // handleListZones returns list of zones with serial and record count.
 func (s *Server) handleListZones(w http.ResponseWriter, r *http.Request) {
-	zones := []map[string]interface{}{}
+	resp := &ZoneListResponse{Zones: []ZoneSummary{}}
 	if s.zoneManager != nil {
 		for name, z := range s.zoneManager.List() {
 			z.RLock()
@@ -291,17 +280,15 @@ func (s *Server) handleListZones(w http.ResponseWriter, r *http.Request) {
 				serial = z.SOA.Serial
 			}
 			z.RUnlock()
-			zones = append(zones, map[string]interface{}{
-				"name":    name,
-				"serial":  serial,
-				"records": recordCount,
+			resp.Zones = append(resp.Zones, ZoneSummary{
+				Name:    name,
+				Serial:  serial,
+				Records: recordCount,
 			})
 		}
 	}
 
-	s.writeJSON(w, http.StatusOK, map[string]interface{}{
-		"zones": zones,
-	})
+	s.writeJSON(w, http.StatusOK, resp)
 }
 
 // handleZoneActions dispatches zone-specific operations based on path and method.
@@ -386,21 +373,21 @@ func (s *Server) handleGetZone(w http.ResponseWriter, r *http.Request, name stri
 		recordCount += len(records)
 	}
 
-	result := map[string]interface{}{
-		"name":    z.Origin,
-		"records": recordCount,
+	result := &ZoneDetailResponse{
+		Name:    z.Origin,
+		Records: recordCount,
 	}
 
 	if z.SOA != nil {
-		result["serial"] = z.SOA.Serial
-		result["soa"] = map[string]interface{}{
-			"mname":   z.SOA.MName,
-			"rname":   z.SOA.RName,
-			"serial":  z.SOA.Serial,
-			"refresh": z.SOA.Refresh,
-			"retry":   z.SOA.Retry,
-			"expire":  z.SOA.Expire,
-			"minimum": z.SOA.Minimum,
+		result.Serial = z.SOA.Serial
+		result.SOA = &SOADetail{
+			MName:   z.SOA.MName,
+			RName:   z.SOA.RName,
+			Serial:  z.SOA.Serial,
+			Refresh: z.SOA.Refresh,
+			Retry:   z.SOA.Retry,
+			Expire:  z.SOA.Expire,
+			Minimum: z.SOA.Minimum,
 		}
 	}
 
@@ -408,7 +395,7 @@ func (s *Server) handleGetZone(w http.ResponseWriter, r *http.Request, name stri
 	for _, ns := range z.NS {
 		nsList = append(nsList, ns.NSDName)
 	}
-	result["nameservers"] = nsList
+	result.Nameservers = nsList
 
 	s.writeJSON(w, http.StatusOK, result)
 }
@@ -475,9 +462,9 @@ func (s *Server) handleCreateZone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.writeJSON(w, http.StatusCreated, map[string]interface{}{
-		"message": fmt.Sprintf("Zone %s created", req.Name),
-		"name":    req.Name,
+	s.writeJSON(w, http.StatusCreated, &MessageNameResponse{
+		Message: fmt.Sprintf("Zone %s created", req.Name),
+		Name:    req.Name,
 	})
 }
 
@@ -488,8 +475,8 @@ func (s *Server) handleDeleteZone(w http.ResponseWriter, r *http.Request, name s
 		return
 	}
 
-	s.writeJSON(w, http.StatusOK, map[string]interface{}{
-		"message": fmt.Sprintf("Zone %s deleted", name),
+	s.writeJSON(w, http.StatusOK, &MessageResponse{
+		Message: fmt.Sprintf("Zone %s deleted", name),
 	})
 }
 
@@ -504,20 +491,18 @@ func (s *Server) handleGetRecords(w http.ResponseWriter, r *http.Request, zoneNa
 	}
 
 	// Convert to API response
-	result := make([]map[string]interface{}, 0, len(records))
+	resp := &RecordListResponse{Records: make([]RecordItem, 0, len(records))}
 	for _, r := range records {
-		result = append(result, map[string]interface{}{
-			"name":  r.Name,
-			"type":  r.Type,
-			"ttl":   r.TTL,
-			"class": r.Class,
-			"data":  r.RData,
+		resp.Records = append(resp.Records, RecordItem{
+			Name:  r.Name,
+			Type:  r.Type,
+			TTL:   r.TTL,
+			Class: r.Class,
+			Data:  r.RData,
 		})
 	}
 
-	s.writeJSON(w, http.StatusOK, map[string]interface{}{
-		"records": result,
-	})
+	s.writeJSON(w, http.StatusOK, resp)
 }
 
 // handleAddRecord adds a record to a zone.
@@ -570,8 +555,8 @@ func (s *Server) handleAddRecord(w http.ResponseWriter, r *http.Request, zoneNam
 		return
 	}
 
-	s.writeJSON(w, http.StatusCreated, map[string]interface{}{
-		"message": "Record added",
+	s.writeJSON(w, http.StatusCreated, &MessageResponse{
+		Message: "Record added",
 	})
 }
 
@@ -613,8 +598,8 @@ func (s *Server) handleUpdateRecord(w http.ResponseWriter, r *http.Request, zone
 		return
 	}
 
-	s.writeJSON(w, http.StatusOK, map[string]interface{}{
-		"message": "Record updated",
+	s.writeJSON(w, http.StatusOK, &MessageResponse{
+		Message: "Record updated",
 	})
 }
 
@@ -645,8 +630,8 @@ func (s *Server) handleDeleteRecord(w http.ResponseWriter, r *http.Request, zone
 		return
 	}
 
-	s.writeJSON(w, http.StatusOK, map[string]interface{}{
-		"message": "Record deleted",
+	s.writeJSON(w, http.StatusOK, &MessageResponse{
+		Message: "Record deleted",
 	})
 }
 
@@ -686,8 +671,8 @@ func (s *Server) handleZoneReload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.writeJSON(w, http.StatusOK, map[string]interface{}{
-		"message": fmt.Sprintf("Zone %s reloaded", zoneName),
+	s.writeJSON(w, http.StatusOK, &MessageResponse{
+		Message: fmt.Sprintf("Zone %s reloaded", zoneName),
 	})
 }
 
@@ -704,12 +689,12 @@ func (s *Server) handleCacheStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	stats := s.cache.Stats()
-	s.writeJSON(w, http.StatusOK, map[string]interface{}{
-		"size":      stats.Size,
-		"capacity":  stats.Capacity,
-		"hits":      stats.Hits,
-		"misses":    stats.Misses,
-		"hit_ratio": stats.HitRatio(),
+	s.writeJSON(w, http.StatusOK, &CacheStatsResponse{
+		Size:     stats.Size,
+		Capacity: stats.Capacity,
+		Hits:     stats.Hits,
+		Misses:   stats.Misses,
+		HitRatio: stats.HitRatio(),
 	})
 }
 
@@ -726,8 +711,8 @@ func (s *Server) handleCacheFlush(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.cache.Flush()
-	s.writeJSON(w, http.StatusOK, map[string]interface{}{
-		"message": "Cache flushed",
+	s.writeJSON(w, http.StatusOK, &MessageResponse{
+		Message: "Cache flushed",
 	})
 }
 
@@ -748,8 +733,8 @@ func (s *Server) handleConfigReload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.writeJSON(w, http.StatusOK, map[string]interface{}{
-		"message": "Configuration reloaded",
+	s.writeJSON(w, http.StatusOK, &MessageResponse{
+		Message: "Configuration reloaded",
 	})
 }
 
@@ -766,16 +751,16 @@ func (s *Server) handleClusterStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	stats := s.cluster.Stats()
-	s.writeJSON(w, http.StatusOK, map[string]interface{}{
-		"node_id":     stats.NodeID,
-		"node_count":  stats.NodeCount,
-		"alive_count": stats.AliveCount,
-		"healthy":     stats.IsHealthy,
-		"gossip": map[string]interface{}{
-			"messages_sent":     stats.GossipStats.MessagesSent,
-			"messages_received": stats.GossipStats.MessagesReceived,
-			"ping_sent":         stats.GossipStats.PingSent,
-			"ping_received":     stats.GossipStats.PingReceived,
+	s.writeJSON(w, http.StatusOK, &ClusterStatusResponse{
+		NodeID:     stats.NodeID,
+		NodeCount:  stats.NodeCount,
+		AliveCount: stats.AliveCount,
+		Healthy:    stats.IsHealthy,
+		Gossip: GossipInfo{
+			MessagesSent:     stats.GossipStats.MessagesSent,
+			MessagesReceived: stats.GossipStats.MessagesReceived,
+			PingSent:         stats.GossipStats.PingSent,
+			PingReceived:     stats.GossipStats.PingReceived,
 		},
 	})
 }
@@ -793,28 +778,26 @@ func (s *Server) handleClusterNodes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	nodes := s.cluster.GetNodes()
-	nodeList := make([]map[string]interface{}, 0, len(nodes))
+	resp := &ClusterNodesResponse{Nodes: make([]NodeDetail, 0, len(nodes))}
 	for _, node := range nodes {
-		nodeList = append(nodeList, map[string]interface{}{
-			"id":        node.ID,
-			"addr":      node.Addr,
-			"port":      node.Port,
-			"state":     node.State.String(),
-			"region":    node.Meta.Region,
-			"zone":      node.Meta.Zone,
-			"weight":    node.Meta.Weight,
-			"http_addr": node.Meta.HTTPAddr,
-			"version":   node.Version,
+		resp.Nodes = append(resp.Nodes, NodeDetail{
+			ID:       node.ID,
+			Addr:     node.Addr,
+			Port:     node.Port,
+			State:    node.State.String(),
+			Region:   node.Meta.Region,
+			Zone:     node.Meta.Zone,
+			Weight:   node.Meta.Weight,
+			HTTPAddr: node.Meta.HTTPAddr,
+			Version:  node.Version,
 		})
 	}
 
-	s.writeJSON(w, http.StatusOK, map[string]interface{}{
-		"nodes": nodeList,
-	})
+	s.writeJSON(w, http.StatusOK, resp)
 }
 
 // writeJSON writes a JSON response.
-func (s *Server) writeJSON(w http.ResponseWriter, status int, data interface{}) {
+func (s *Server) writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(data); err != nil {
@@ -824,7 +807,5 @@ func (s *Server) writeJSON(w http.ResponseWriter, status int, data interface{}) 
 
 // writeError writes an error response.
 func (s *Server) writeError(w http.ResponseWriter, status int, message string) {
-	s.writeJSON(w, status, map[string]interface{}{
-		"error": message,
-	})
+	s.writeJSON(w, status, &ErrorResponse{Error: message})
 }

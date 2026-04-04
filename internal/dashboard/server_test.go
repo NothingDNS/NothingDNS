@@ -227,7 +227,7 @@ func TestHandleZones(t *testing.T) {
 		t.Errorf("Expected status 200, got %d", w.Code)
 	}
 
-	var zones []map[string]interface{}
+	var zones []ZoneAPIEntry
 	if err := json.Unmarshal(w.Body.Bytes(), &zones); err != nil {
 		t.Fatalf("Failed to parse response: %v", err)
 	}

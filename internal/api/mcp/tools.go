@@ -453,9 +453,9 @@ func (h *DNSToolsHandler) callBlocklistCheck(args map[string]interface{}) (*Tool
 	}
 
 	blocked := h.blocklist.IsBlocked(domain)
-	result := map[string]interface{}{
-		"domain":  domain,
-		"blocked": blocked,
+	result := &BlocklistCheckResult{
+		Domain:  domain,
+		Blocked: blocked,
 	}
 
 	return jsonResult(result), nil
@@ -639,6 +639,12 @@ Use record_add to add each record.`, zoneName, zoneName)},
 	default:
 		return nil, fmt.Errorf("unknown prompt: %s", name)
 	}
+}
+
+// BlocklistCheckResult holds the result of a blocklist domain check.
+type BlocklistCheckResult struct {
+	Domain  string `json:"domain"`
+	Blocked bool   `json:"blocked"`
 }
 
 // Helper functions

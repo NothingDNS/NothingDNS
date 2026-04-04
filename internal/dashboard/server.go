@@ -105,19 +105,19 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	s.stats.mu.RLock()
 	defer s.stats.mu.RUnlock()
 
-	stats := map[string]interface{}{
-		"uptime":          time.Since(s.stats.Uptime).Seconds(),
-		"queriesTotal":    s.stats.QueriesTotal,
-		"queriesPerSec":   s.stats.QueriesPerSec,
-		"cacheHitRate":    s.stats.CacheHitRate,
-		"blockedQueries":  s.stats.BlockedQueries,
-		"activeClients":   s.stats.ActiveClients,
-		"zoneCount":       s.stats.ZoneCount,
-		"upstreamLatency": s.stats.UpstreamLatency.Milliseconds(),
+	resp := &StatsAPIResponse{
+		Uptime:          time.Since(s.stats.Uptime).Seconds(),
+		QueriesTotal:    s.stats.QueriesTotal,
+		QueriesPerSec:   s.stats.QueriesPerSec,
+		CacheHitRate:    s.stats.CacheHitRate,
+		BlockedQueries:  s.stats.BlockedQueries,
+		ActiveClients:   s.stats.ActiveClients,
+		ZoneCount:       s.stats.ZoneCount,
+		UpstreamLatency: s.stats.UpstreamLatency.Milliseconds(),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(stats); err != nil {
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		log.Printf("dashboard: failed to encode stats: %v", err)
 	}
 }
@@ -138,10 +138,9 @@ func (s *Server) handleQueryStream(w http.ResponseWriter, r *http.Request) {
 // handleZones handles zone list requests
 func (s *Server) handleZones(w http.ResponseWriter, r *http.Request) {
 	// This would typically fetch from zone manager
-	zones := []map[string]interface{}{
-		{"name": "example.com", "records": 15, "serial": 2024032601},
+	zones := []ZoneAPIEntry{
+		{Name: "example.com", Records: 15, Serial: 2024032601},
 	}
-
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(zones); err != nil {
 		log.Printf("dashboard: failed to encode zones: %v", err)
@@ -239,9 +238,9 @@ func (s *Server) RemoveClient(client *Client) {
 func (s *Server) broadcastLoop() {
 	defer s.wg.Done()
 	for event := range s.broadcastChan {
-		data, err := json.Marshal(map[string]interface{}{
-			"type":  "query",
-			"event": event,
+		data, err := json.Marshal(&BroadcastMessage{
+			Type:  "query",
+			Event: event,
 		})
 		if err != nil {
 			continue
@@ -306,6 +305,33 @@ func (s *Server) Stop() {
 
 	// Wait for broadcastLoop to finish
 	s.wg.Wait()
+}
+
+// StatsAPIResponse is the JSON response for GET /api/dashboard/stats.
+type StatsAPIResponse struct {
+	Uptime          float64 `json:"uptime"`
+	QueriesTotal    int64         `json:"queriesTotal"`
+	QueriesPerSec   float64       `json:"queriesPerSec"`
+	CacheHitRate    float64       `json:"cacheHitRate"`
+	BlockedQueries  int64         `json:"blockedQueries"`
+	ActiveClients   int           `json:"activeClients"`
+	ZoneCount       int           `json:"zoneCount"`
+	UpstreamLatency int64         `json:"upstreamLatency"`
+}
+
+
+
+// ZoneAPIEntry represents a zone in the zones list API response.
+type ZoneAPIEntry struct {
+	Name    string `json:"name"`
+	Records int            `json:"records"`
+	Serial  int            `json:"serial"`
+}
+
+// BroadcastMessage is the JSON WebSocket broadcast envelope.
+type BroadcastMessage struct {
+	Type  string       `json:"type"`
+	Event *QueryEvent `json:"event"`
 }
 
 // GetStats returns current dashboard statistics
