@@ -1163,10 +1163,25 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 			}
 		}
 
-		// Cache successful response
+		// Cache the response
 		if resp.Header.Flags.RCODE == protocol.RcodeSuccess && len(resp.Answers) > 0 {
 			ttl := extractTTL(resp)
 			h.cache.Set(cacheKey, resp, ttl)
+		} else if resp.Header.Flags.RCODE == protocol.RcodeNameError ||
+			(resp.Header.Flags.RCODE == protocol.RcodeSuccess && len(resp.Answers) == 0) {
+			// Negative caching per RFC 2308 §5
+			// Use SOA minimum TTL from authority section, or default 300s
+			negTTL := uint32(300)
+			for _, rr := range resp.Authorities {
+				if soa, ok := rr.Data.(*protocol.RDataSOA); ok {
+					if soa.Minimum > 0 {
+						negTTL = soa.Minimum
+					}
+					break
+				}
+			}
+			h.cache.SetNegative(cacheKey, resp.Header.Flags.RCODE)
+			h.logger.Debugf("Cached negative response for %s (rcode=%d, negTTL=%d)", qname, resp.Header.Flags.RCODE, negTTL)
 		}
 
 		if h.metrics != nil {
