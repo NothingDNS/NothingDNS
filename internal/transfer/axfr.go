@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"sort"
 	"strings"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
+	"github.com/nothingdns/nothingdns/internal/util"
 	"github.com/nothingdns/nothingdns/internal/zone"
 )
 
@@ -202,7 +202,7 @@ func (s *AXFRServer) generateAXFRRecords(z *zone.Zone) ([]*protocol.ResourceReco
 		for _, rec := range zoneRecordsList {
 			rr, err := s.zoneRecordToRR(name, rec, z.Origin)
 			if err != nil {
-				log.Printf("axfr: skipping record %s/%s: %v", name, rec.Type, err)
+				util.Warnf("axfr: skipping record %s/%s: %v", name, rec.Type, err)
 				continue
 			}
 			zoneRecords = append(zoneRecords, rr)

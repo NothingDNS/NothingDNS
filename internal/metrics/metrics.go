@@ -3,11 +3,12 @@ package metrics
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/nothingdns/nothingdns/internal/util"
 )
 
 // MetricsCollector collects and exposes Prometheus-format metrics.
@@ -129,7 +130,7 @@ func (m *MetricsCollector) Start() error {
 	go func() {
 		defer m.wg.Done()
 		if err := m.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("metrics server error: %v", err)
+			util.Warnf("metrics server error: %v", err)
 		}
 	}()
 

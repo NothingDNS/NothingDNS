@@ -6,9 +6,10 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"log"
 	"net"
 	"time"
+
+	"github.com/nothingdns/nothingdns/internal/util"
 
 	"github.com/nothingdns/nothingdns/internal/cache"
 	"github.com/nothingdns/nothingdns/internal/protocol"
@@ -101,7 +102,7 @@ type doqHandlerAdapter struct {
 func (a *doqHandlerAdapter) ServeDoQ(stream *quic.Stream, queryData []byte) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("doq handler panic: %v", r)
+			util.Warnf("doq handler panic: %v", r)
 		}
 	}()
 

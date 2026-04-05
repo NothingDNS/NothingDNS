@@ -33,6 +33,7 @@ import (
 	"github.com/nothingdns/nothingdns/internal/resolver"
 	"github.com/nothingdns/nothingdns/internal/rpz"
 	"github.com/nothingdns/nothingdns/internal/server"
+	"github.com/nothingdns/nothingdns/internal/storage"
 	"github.com/nothingdns/nothingdns/internal/transfer"
 	"github.com/nothingdns/nothingdns/internal/upstream"
 	"github.com/nothingdns/nothingdns/internal/util"
@@ -409,6 +410,21 @@ func run() error {
 		zoneManager.LoadZone(z, zoneFiles[origin])
 	}
 
+	// Initialize KV store and KVPersistence for persistent zone storage (UNWIRED-001+002)
+	var kvPersistence *zone.KVPersistence
+	kvDataDir := cfg.ZoneDir
+	if kvDataDir == "" {
+		kvDataDir = "."
+	}
+	kvStore, err := storage.OpenKVStore(kvDataDir)
+	if err != nil {
+		logger.Warnf("Failed to initialize KV store: %v", err)
+	} else {
+		kvPersistence = zone.NewKVPersistence(zoneManager, kvStore)
+		kvPersistence.Enable()
+		logger.Infof("KV store and KVPersistence initialized at %s", kvDataDir)
+	}
+
 	// Initialize AXFR server for zone transfers
 	// Note: zonesMu is set later after handler is created
 	axfrServer := transfer.NewAXFRServer(zones)
@@ -417,6 +433,15 @@ func run() error {
 	// Initialize IXFR server for incremental zone transfers
 	ixfrServer := transfer.NewIXFRServer(axfrServer)
 	logger.Infof("IXFR server initialized for incremental transfers")
+
+	// Wire KV journal store for persistent IXFR journals
+	journalDataDir := cfg.ZoneDir
+	if journalDataDir == "" {
+		journalDataDir = "."
+	}
+	journalStore := transfer.NewKVJournalStore(journalDataDir)
+	ixfrServer.SetJournalStore(journalStore)
+	logger.Infof("IXFR journal store initialized at %s", journalDataDir)
 
 	// Initialize NOTIFY handler for slave servers
 	notifyHandler := transfer.NewNOTIFYSlaveHandler(zones)
@@ -549,6 +574,7 @@ func run() error {
 		loadBalancer:  loadBalancer,
 		zones:         zones,
 		zoneManager:   zoneManager,
+		kvPersistence: kvPersistence,
 		blocklist:     bl,
 		rpzEngine:     rpzEngine,
 		geoEngine:     geoEngine,
@@ -618,6 +644,14 @@ func run() error {
 	dashboardServer := dashboard.NewServer()
 	apiServer := api.NewServer(cfg.Server.HTTP, zoneManager, dnsCache, func() error {
 		logger.Info("Reloading configuration via API...")
+		now := time.Now().UTC().Format(time.RFC3339)
+		if auditLogger != nil {
+			auditLogger.LogReload(audit.ReloadAuditEntry{
+				Timestamp: now,
+				Action:    "start",
+			})
+		}
+		reloadedZones := 0
 		// Reload zone files
 		for _, zoneFile := range cfg.Zones {
 			z, err := loadZoneFile(zoneFile)
@@ -631,6 +665,13 @@ func run() error {
 			zoneFiles[z.Origin] = zoneFile
 			zoneManager.LoadZone(z, zoneFile)
 			logger.Infof("Reloaded zone %s", z.Origin)
+			reloadedZones++
+			// Persist reloaded zone to KV store
+			if kvPersistence != nil {
+				if err := kvPersistence.PersistZone(z.Origin); err != nil {
+					logger.Warnf("Failed to persist reloaded zone %s to KV store: %v", z.Origin, err)
+				}
+			}
 		}
 		// Reload blocklist
 		if bl != nil {
@@ -662,6 +703,13 @@ func run() error {
 			} else {
 				logger.Infof("Reloaded split-horizon views")
 			}
+		}
+		if auditLogger != nil {
+			auditLogger.LogReload(audit.ReloadAuditEntry{
+				Timestamp: time.Now().UTC().Format(time.RFC3339),
+				Action:    "complete",
+				Zones:     reloadedZones,
+			})
 		}
 		return nil
 	}, handler, clusterMgr, dashboardServer).
@@ -915,8 +963,27 @@ func run() error {
 
 		case syscall.SIGHUP:
 			logger.Info("Received SIGHUP, reloading configuration...")
+			now := time.Now().UTC().Format(time.RFC3339)
+			if auditLogger != nil {
+				auditLogger.LogReload(audit.ReloadAuditEntry{
+					Timestamp: now,
+					Action:    "start",
+				})
+			}
+			// Reload the config file to pick up changes
+			newCfg, cfgErr := loadConfig(*configPath)
+			if cfgErr != nil {
+				logger.Warnf("Failed to reload config: %v", cfgErr)
+			} else {
+				cfg = newCfg
+			}
 			// Reload zone files
-			for _, zoneFile := range cfg.Zones {
+			reloadCfg := cfg
+			if cfgErr != nil {
+				reloadCfg = cfg // keep current config on error
+			}
+			reloadedZones := 0
+			for _, zoneFile := range reloadCfg.Zones {
 				z, err := loadZoneFile(zoneFile)
 				if err != nil {
 					logger.Warnf("Failed to reload zone file %s: %v", zoneFile, err)
@@ -928,6 +995,13 @@ func run() error {
 				zoneFiles[z.Origin] = zoneFile
 				zoneManager.LoadZone(z, zoneFile)
 				logger.Infof("Reloaded zone %s", z.Origin)
+				reloadedZones++
+				// Persist reloaded zone to KV store
+				if kvPersistence != nil {
+					if err := kvPersistence.PersistZone(z.Origin); err != nil {
+						logger.Warnf("Failed to persist reloaded zone %s to KV store: %v", z.Origin, err)
+					}
+				}
 			}
 			// Reload blocklist
 			if bl != nil {
@@ -947,10 +1021,10 @@ func run() error {
 					logger.Infof("Reloaded RPZ with %d rules from %d files", stats.TotalRules, stats.Files)
 				}
 			}
-			// Reload split-horizon views
-			if len(cfg.Views) > 0 {
-				viewConfigs := make([]filter.ViewConfig, len(cfg.Views))
-				for i, v := range cfg.Views {
+			// Reload split-horizon views from the new config
+			if len(reloadCfg.Views) > 0 {
+				viewConfigs := make([]filter.ViewConfig, len(reloadCfg.Views))
+				for i, v := range reloadCfg.Views {
 					viewConfigs[i] = filter.ViewConfig{
 						Name:         v.Name,
 						MatchClients: v.MatchClients,
@@ -962,6 +1036,18 @@ func run() error {
 				} else {
 					logger.Infof("Reloaded split-horizon views")
 				}
+			}
+			if auditLogger != nil {
+				errStr := ""
+				if cfgErr != nil {
+					errStr = cfgErr.Error()
+				}
+				auditLogger.LogReload(audit.ReloadAuditEntry{
+					Timestamp: time.Now().UTC().Format(time.RFC3339),
+					Action:    "complete",
+					Zones:     reloadedZones,
+					Error:     errStr,
+				})
 			}
 		}
 	}

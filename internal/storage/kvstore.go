@@ -4,12 +4,13 @@ import (
 	"encoding/gob"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"sync"
 	"sync/atomic"
+
+	"github.com/nothingdns/nothingdns/internal/util"
 )
 
 // KVStore implements a simple key-value store with ACID transactions.
@@ -318,7 +319,7 @@ func (tx *Tx) Rollback() error {
 	tx.store.rwtx = nil
 	// Reload data from disk to discard changes
 	if err := tx.store.load(); err != nil {
-		log.Printf("kvstore: failed to reload data during rollback: %v", err)
+		util.Warnf("kvstore: failed to reload data during rollback: %v", err)
 	}
 
 	tx.closed = true

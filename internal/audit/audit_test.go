@@ -189,7 +189,7 @@ func TestFormatAuditLine(t *testing.T) {
 		Upstream:  "1.1.1.1:53",
 	}
 
-	line := formatAuditLine(entry)
+	line := formatQueryAuditLine(entry)
 
 	if !strings.Contains(line, "2026-04-02T12:00:00Z") {
 		t.Error("expected timestamp in line")

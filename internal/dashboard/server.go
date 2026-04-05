@@ -3,11 +3,11 @@ package dashboard
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 	"sync"
 	"time"
 
+	"github.com/nothingdns/nothingdns/internal/util"
 	"github.com/nothingdns/nothingdns/internal/websocket"
 )
 
@@ -116,7 +116,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		log.Printf("dashboard: failed to encode stats: %v", err)
+		util.Warnf("dashboard: failed to encode stats: %v", err)
 	}
 }
 
@@ -129,7 +129,7 @@ func (s *Server) handleQueryStream(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(queries); err != nil {
-		log.Printf("dashboard: failed to encode queries: %v", err)
+		util.Warnf("dashboard: failed to encode queries: %v", err)
 	}
 }
 
@@ -141,7 +141,7 @@ func (s *Server) handleZones(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(zones); err != nil {
-		log.Printf("dashboard: failed to encode zones: %v", err)
+		util.Warnf("dashboard: failed to encode zones: %v", err)
 	}
 }
 
@@ -149,7 +149,7 @@ func (s *Server) handleZones(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	conn, err := websocket.Handshake(w, r)
 	if err != nil {
-		log.Printf("dashboard: websocket handshake failed: %v", err)
+		util.Warnf("dashboard: websocket handshake failed: %v", err)
 		return
 	}
 

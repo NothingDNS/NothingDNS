@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -174,7 +173,7 @@ func (s *Server) Start() error {
 
 	go func() {
 		if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("API server error: %v", err)
+			util.Warnf("API server error: %v", err)
 		}
 	}()
 
@@ -1252,7 +1251,7 @@ func (s *Server) writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(data); err != nil {
-		log.Printf("api: failed to encode JSON response: %v", err)
+		util.Warnf("api: failed to encode JSON response: %v", err)
 	}
 }
 

@@ -21,6 +21,7 @@ const (
 
 // testEnv holds a running test server environment.
 type testEnv struct {
+	udpConn   *net.UDPConn
 	udpPort   int
 	udpServer *server.UDPServer
 	tcpServer *server.TCPServer
@@ -31,7 +32,7 @@ type testEnv struct {
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
 
-	udpPort := findFreePort(t)
+	udpConn, udpPort := findFreePort(t)
 	tmpDir := t.TempDir()
 
 	// Create a test zone file
@@ -90,9 +91,7 @@ txt     IN  TXT  "v=spf1 include:_spf.example.com ~all"
 	addr := fmt.Sprintf("%s:%d", testAddr, udpPort)
 
 	udpServer := server.NewUDPServer(addr, handler)
-	if err := udpServer.Listen(); err != nil {
-		t.Fatalf("UDP listen: %v", err)
-	}
+	udpServer.ListenWithConn(udpConn) // use already-bound socket to avoid port race
 
 	tcpServer := server.NewTCPServer(addr, handler)
 	if err := tcpServer.Listen(); err != nil {
@@ -100,6 +99,7 @@ txt     IN  TXT  "v=spf1 include:_spf.example.com ~all"
 	}
 
 	env := &testEnv{
+		udpConn:   udpConn,
 		udpPort:   udpPort,
 		udpServer: udpServer,
 		tcpServer: tcpServer,
@@ -132,14 +132,16 @@ func (e *testEnv) addr() string {
 	return fmt.Sprintf("%s:%d", testAddr, e.udpPort)
 }
 
-func findFreePort(t *testing.T) int {
+func findFreePort(t *testing.T) (*net.UDPConn, int) {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	// Use ListenUDP so we get a *net.UDPConn which satisfies the UDPConn interface
+	// needed by UDPServer.ListenWithConn. Keep listener open to hold the port,
+	// avoiding race with parallel tests grabbing the same port.
+	ln, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP(testAddr), Port: 0})
 	if err != nil {
 		t.Fatalf("find free port: %v", err)
 	}
-	defer ln.Close()
-	return ln.Addr().(*net.TCPAddr).Port
+	return ln, ln.LocalAddr().(*net.UDPAddr).Port
 }
 
 // testHandler is a minimal DNS handler that serves authoritative zones.

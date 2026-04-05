@@ -43,6 +43,7 @@ type integratedHandler struct {
 	zones         map[string]*zone.Zone
 	zonesMu       sync.RWMutex
 	zoneManager   *zone.Manager
+	kvPersistence *zone.KVPersistence
 	blocklist     *blocklist.Blocklist
 	rpzEngine     *rpz.Engine
 	geoEngine     *geodns.Engine
@@ -295,41 +296,50 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 	// Check authoritative zones — try direct lookup first.
 	// If no zone has a direct record, attempt CNAME chasing across zones,
 	// then cache, then upstream.
-	// Hold zonesMu throughout both zone sources to prevent concurrent modification.
+	// Collect matching zones under the read lock, then release before processing
+	// to avoid blocking reload writers (zonesMu.Lock()) for extended periods.
 	h.zonesMu.RLock()
-	var mgrZones map[string]*zone.Zone
-	if h.zoneManager != nil {
-		mgrZones = h.zoneManager.List()
+	var matchedZones []struct {
+		name string
+		z    *zone.Zone
 	}
-	var matchedZone bool
-
-	// Check file-based zones
 	for origin, z := range h.zones {
 		if isSubdomain(qname, origin) {
-			matchedZone = true
-			h.logger.Debugf("Checking zone %s for %s", origin, qname)
-			if h.handleAuthoritative(z, w, r, q) {
-				h.zonesMu.RUnlock()
-				return
-			}
+			matchedZones = append(matchedZones, struct {
+				name string
+				z    *zone.Zone
+			}{origin, z})
 		}
 	}
-
-	// Also check zones created via API (stored in zoneManager)
-	if mgrZones != nil {
-		for name, z := range mgrZones {
-			if !isSubdomain(qname, name) {
-				continue
+	if h.kvPersistence != nil {
+		for name, z := range h.kvPersistence.Manager().List() {
+			if isSubdomain(qname, name) {
+				matchedZones = append(matchedZones, struct {
+					name string
+					z    *zone.Zone
+				}{name, z})
 			}
-			matchedZone = true
-			h.logger.Debugf("Checking zone manager zone %s for %s", name, qname)
-			if h.handleAuthoritative(z, w, r, q) {
-				h.zonesMu.RUnlock()
-				return
+		}
+	} else if h.zoneManager != nil {
+		for name, z := range h.zoneManager.List() {
+			if isSubdomain(qname, name) {
+				matchedZones = append(matchedZones, struct {
+					name string
+					z    *zone.Zone
+				}{name, z})
 			}
 		}
 	}
 	h.zonesMu.RUnlock()
+
+	var matchedZone bool
+	for _, m := range matchedZones {
+		matchedZone = true
+		h.logger.Debugf("Checking zone %s for %s", m.name, qname)
+		if h.handleAuthoritative(m.z, w, r, q) {
+			return
+		}
+	}
 
 	// If the query name falls within one of our zones but no direct record
 	// was found, chase CNAME chains before falling through to upstream.
@@ -347,6 +357,32 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 			// We have a CNAME chain — resolve the target
 			targetAnswers := h.resolveCNAMETarget(w, r, q, result.targetName, qtype)
 			resp := h.buildCNAMEResponse(r, result.cnameRecords, targetAnswers)
+
+			// Check RPZ response IP policy on the resolved target
+			if h.rpzEngine != nil {
+				respIPs := extractResponseIPs(resp)
+				if len(respIPs) > 0 {
+					if rule := h.rpzEngine.ResponseIPPolicy(respIPs); rule != nil {
+						h.logger.Debugf("RPZ response IP match for CNAME target %s (policy: %s)", result.targetName, rule.PolicyName)
+						if h.applyRPZRule(w, r, q, rule) {
+							return
+						}
+					}
+				}
+			}
+
+			// Check RPZ NSDNAME policy on CNAME target response authority section
+			if h.rpzEngine != nil {
+				for _, nsName := range extractNSNames(resp) {
+					if rule := h.rpzEngine.QNAMEPolicy(nsName); rule != nil {
+						h.logger.Debugf("RPZ NSDNAME match for CNAME target %s (policy: %s)", nsName, rule.PolicyName)
+						if h.applyRPZRule(w, r, q, rule) {
+							return
+						}
+					}
+				}
+			}
+
 			if h.metrics != nil {
 				h.metrics.RecordResponse(protocol.RcodeSuccess)
 			}
@@ -386,6 +422,18 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 			if len(respIPs) > 0 {
 				if rule := h.rpzEngine.ResponseIPPolicy(respIPs); rule != nil {
 					h.logger.Debugf("RPZ response IP match for %s (policy: %s)", qname, rule.PolicyName)
+					if h.applyRPZRule(w, r, q, rule) {
+						return
+					}
+				}
+			}
+		}
+
+		// Check RPZ NSDNAME policy (TriggerNSDNAME): check NS names in authority section
+		if h.rpzEngine != nil {
+			for _, nsName := range extractNSNames(resp) {
+				if rule := h.rpzEngine.QNAMEPolicy(nsName); rule != nil {
+					h.logger.Debugf("RPZ NSDNAME match for %s (policy: %s)", nsName, rule.PolicyName)
 					if h.applyRPZRule(w, r, q, rule) {
 						return
 					}
@@ -480,6 +528,18 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 			if len(respIPs) > 0 {
 				if rule := h.rpzEngine.ResponseIPPolicy(respIPs); rule != nil {
 					h.logger.Debugf("RPZ response IP match for %s (policy: %s)", qname, rule.PolicyName)
+					if h.applyRPZRule(w, r, q, rule) {
+						return
+					}
+				}
+			}
+		}
+
+		// Check RPZ NSDNAME policy (TriggerNSDNAME): check NS names in authority section
+		if h.rpzEngine != nil {
+			for _, nsName := range extractNSNames(resp) {
+				if rule := h.rpzEngine.QNAMEPolicy(nsName); rule != nil {
+					h.logger.Debugf("RPZ NSDNAME match for %s (policy: %s)", nsName, rule.PolicyName)
 					if h.applyRPZRule(w, r, q, rule) {
 						return
 					}
@@ -990,7 +1050,8 @@ func (h *integratedHandler) applyRPZRule(w server.ResponseWriter, r *protocol.Me
 	}
 }
 
-// extractResponseIPs extracts IP addresses from answer and authority sections of a DNS response.
+// extractResponseIPs extracts IP addresses from answer, authority, and additional sections of a DNS response.
+// This is used for RPZ response IP policy checking (TriggerResponseIP and TriggerNSIP).
 func extractResponseIPs(resp *protocol.Message) []net.IP {
 	var ips []net.IP
 	for _, rr := range resp.Answers {
@@ -1017,7 +1078,32 @@ func extractResponseIPs(resp *protocol.Message) []net.IP {
 			}
 		}
 	}
+	// Additional section contains glue A/AAAA records for nameservers (NSIP matching)
+	for _, rr := range resp.Additionals {
+		switch rdata := rr.Data.(type) {
+		case *protocol.RDataA:
+			if rdata != nil {
+				ips = append(ips, net.IP(rdata.Address[:]))
+			}
+		case *protocol.RDataAAAA:
+			if rdata != nil {
+				ips = append(ips, net.IP(rdata.Address[:]))
+			}
+		}
+	}
 	return ips
+}
+
+// extractNSNames extracts nameserver names from authority NS records in a DNS response.
+// This is used for RPZ TriggerNSDNAME policy checking.
+func extractNSNames(resp *protocol.Message) []string {
+	var nsNames []string
+	for _, rr := range resp.Authorities {
+		if ns, ok := rr.Data.(*protocol.RDataNS); ok && ns != nil && ns.NSDName != nil {
+			nsNames = append(nsNames, ns.NSDName.String())
+		}
+	}
+	return nsNames
 }
 
 // ReloadViews reloads split-horizon view configuration and zone files.

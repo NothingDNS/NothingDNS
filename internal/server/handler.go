@@ -2,10 +2,10 @@ package server
 
 import (
 	"fmt"
-	"log"
 	"net"
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
+	"github.com/nothingdns/nothingdns/internal/util"
 )
 
 // ClientInfo contains information about the client making the DNS request.
@@ -91,7 +91,7 @@ type ServeDNSWithRecovery struct {
 func (h *ServeDNSWithRecovery) ServeDNS(w ResponseWriter, req *protocol.Message) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("ServeDNS panic recovered: %v", r)
+			util.Warnf("ServeDNS panic recovered: %v", r)
 			sendSERVFAIL(w, req)
 		}
 	}()

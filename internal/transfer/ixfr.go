@@ -3,13 +3,13 @@ package transfer
 import (
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
+	"github.com/nothingdns/nothingdns/internal/util"
 	"github.com/nothingdns/nothingdns/internal/zone"
 )
 
@@ -102,7 +102,7 @@ func (s *IXFRServer) RecordChange(zoneName string, oldSerial, newSerial uint32, 
 	// Persist to journal store if configured
 	if s.journalStore != nil {
 		if err := s.journalStore.SaveEntry(zoneName, entry); err != nil {
-			log.Printf("ixfr: failed to persist journal entry: %v", err)
+			util.Warnf("ixfr: failed to persist journal entry: %v", err)
 		}
 	}
 }
@@ -217,7 +217,7 @@ func (s *IXFRServer) generateIncrementalIXFR(z *zone.Zone, clientSerial uint32) 
 		// Try loading from persistent journal store
 		entries, err := s.journalStore.LoadEntries(zoneName)
 		if err != nil {
-			log.Printf("ixfr: failed to load journal from store: %v", err)
+			util.Warnf("ixfr: failed to load journal from store: %v", err)
 		} else if len(entries) > 0 {
 			s.journalsMu.Lock()
 			s.journals[zoneName] = entries
@@ -276,7 +276,7 @@ func (s *IXFRServer) generateIncrementalIXFR(z *zone.Zone, clientSerial uint32) 
 		for _, del := range entry.Deleted {
 			rr, err := s.changeToRR(del, z.Origin)
 			if err != nil {
-				log.Printf("ixfr: skipping deleted record %s/%d: %v", del.Name, del.Type, err)
+				util.Warnf("ixfr: skipping deleted record %s/%d: %v", del.Name, del.Type, err)
 				continue
 			}
 			records = append(records, rr)
@@ -290,7 +290,7 @@ func (s *IXFRServer) generateIncrementalIXFR(z *zone.Zone, clientSerial uint32) 
 		for _, add := range entry.Added {
 			rr, err := s.changeToRR(add, z.Origin)
 			if err != nil {
-				log.Printf("ixfr: skipping added record %s/%d: %v", add.Name, add.Type, err)
+				util.Warnf("ixfr: skipping added record %s/%d: %v", add.Name, add.Type, err)
 				continue
 			}
 			records = append(records, rr)

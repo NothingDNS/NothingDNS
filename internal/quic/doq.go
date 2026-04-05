@@ -347,6 +347,11 @@ func (s *DoQServer) processStreams(dc *doqConn) {
 // handleStream processes a single DNS query stream.
 func (s *DoQServer) handleStream(dc *doqConn, streamID uint64) {
 	defer dc.wg.Done()
+	defer func() {
+		if r := recover(); r != nil {
+			atomic.AddUint64(&s.errors, 1)
+		}
+	}()
 
 	stream := dc.sc.AcceptStream(streamID)
 
@@ -443,7 +448,21 @@ func (s *DoQServer) sendCryptoPacket(dc *doqConn, level tls.QUICEncryptionLevel,
 func (s *DoQServer) closeConnection(dc *doqConn) {
 	dc.cancel()
 	dc.sc.Close()
-	dc.wg.Wait()
+
+	// Wait with timeout to prevent goroutine leaks blocking shutdown.
+	// Stream handlers that are mid-I/O will still leak until the I/O
+	// completes or the underlying conn closes — but we no longer block forever.
+	done := make(chan struct{}, 1)
+	go func() {
+		dc.wg.Wait()
+		done <- struct{}{}
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		// Log but continue — streams may be stuck on I/O; conn is already closed
+	}
+	_ = done // channel from background goroutine, never blocks
 
 	s.removeConn(dc)
 	<-s.connSem

@@ -4,13 +4,13 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
+	"github.com/nothingdns/nothingdns/internal/util"
 )
 
 // Topology represents the network topology for routing decisions.
@@ -418,7 +418,7 @@ func (lb *LoadBalancer) queryWithFailover(target *Target, msg *protocol.Message)
 	}
 
 	// If UDP fails or truncates, try TCP
-	log.Printf("loadbalancer UDP query failed for %s: %v, trying TCP", target.Address, err)
+	util.Warnf("loadbalancer UDP query failed for %s: %v, trying TCP", target.Address, err)
 	resp, err = lb.queryTCP(target.Address, msg)
 	if err == nil {
 		return resp, nil
@@ -441,7 +441,7 @@ func (lb *LoadBalancer) queryWithFailover(target *Target, msg *protocol.Message)
 	// Retry with failover target
 	resp, retryErr := lb.queryUDP(failoverTarget.Address, msg)
 	if retryErr != nil {
-		log.Printf("loadbalancer failover UDP failed for %s: %v, trying TCP", failoverTarget.Address, retryErr)
+		util.Warnf("loadbalancer failover UDP failed for %s: %v, trying TCP", failoverTarget.Address, retryErr)
 		resp, retryErr = lb.queryTCP(failoverTarget.Address, msg)
 	}
 
@@ -659,7 +659,7 @@ func (lb *LoadBalancer) checkHealth() {
 			query := *msg // copy to avoid data race on Pack
 			_, err := lb.queryUDP(s.Address, &query)
 			if err != nil {
-				log.Printf("health check UDP failed for %s: %v, trying TCP", s.Address, err)
+				util.Warnf("health check UDP failed for %s: %v, trying TCP", s.Address, err)
 				_, err = lb.queryTCP(s.Address, &query)
 			}
 			// queryUDP/TCP already mark success/failure
@@ -680,7 +680,7 @@ func (lb *LoadBalancer) checkHealth() {
 				query := *msg // copy to avoid data race on Pack
 				_, err := lb.queryUDP(b.Address(), &query)
 				if err != nil {
-					log.Printf("health check UDP failed for anycast %s: %v, trying TCP", b.Address(), err)
+					util.Warnf("health check UDP failed for anycast %s: %v, trying TCP", b.Address(), err)
 					_, err = lb.queryTCP(b.Address(), &query)
 				}
 				if err != nil {

@@ -2,13 +2,13 @@ package doh
 
 import (
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
 	"github.com/nothingdns/nothingdns/internal/server"
+	"github.com/nothingdns/nothingdns/internal/util"
 	"github.com/nothingdns/nothingdns/internal/websocket"
 )
 
@@ -50,7 +50,7 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	for {
 		// Set a read deadline to prevent hanging connections.
 		if err := conn.SetReadDeadline(time.Now().Add(wsReadTimeout)); err != nil {
-			log.Printf("dows: failed to set read deadline: %v", err)
+			util.Warnf("dows: failed to set read deadline: %v", err)
 			return
 		}
 
@@ -71,7 +71,7 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		query, err := protocol.UnpackMessage(data)
 		if err != nil {
-			log.Printf("dows: invalid DNS message: %v", err)
+			util.Warnf("dows: invalid DNS message: %v", err)
 			continue
 		}
 

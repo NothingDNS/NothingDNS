@@ -4,13 +4,13 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
+	"github.com/nothingdns/nothingdns/internal/util"
 )
 
 // Server represents an upstream DNS server.
@@ -209,7 +209,7 @@ func (c *Client) Query(msg *protocol.Message) (*protocol.Message, error) {
 	resp, err := c.queryUDP(server, msg)
 	if err != nil {
 		// Try TCP as fallback
-		log.Printf("upstream UDP query failed for %s: %v, trying TCP", server.Address, err)
+		util.Warnf("upstream UDP query failed for %s: %v, trying TCP", server.Address, err)
 		resp, err = c.queryTCP(server, msg)
 	}
 
@@ -568,7 +568,7 @@ func (c *Client) checkHealth() {
 			_, err := c.queryUDP(s, &queryCopy)
 			if err != nil {
 				// Try TCP
-				log.Printf("health check UDP failed for %s: %v, trying TCP", s.Address, err)
+				util.Warnf("health check UDP failed for %s: %v, trying TCP", s.Address, err)
 				_, err = c.queryTCP(s, &queryCopy)
 			}
 			// queryUDP/TCP already mark success/failure

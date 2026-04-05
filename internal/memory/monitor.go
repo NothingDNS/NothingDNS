@@ -3,11 +3,12 @@ package memory
 
 import (
 	"context"
-	"log"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/nothingdns/nothingdns/internal/util"
 )
 
 // State represents the current memory pressure level.
@@ -226,7 +227,7 @@ func (m *Monitor) check() {
 func (m *Monitor) handleStateChange(oldState, newState State, usagePct float64) {
 	switch newState {
 	case StateCritical:
-		log.Printf("memory: CRITICAL - usage %.1f%% of limit (%d/%d bytes), clearing caches",
+		util.Errorf("memory: CRITICAL - usage %.1f%% of limit (%d/%d bytes), clearing caches",
 			usagePct, m.stats.Sys, m.config.LimitBytes)
 		if m.evictor != nil {
 			m.evictor.Clear()
@@ -234,7 +235,7 @@ func (m *Monitor) handleStateChange(oldState, newState State, usagePct float64) 
 		runtime.GC()
 
 	case StateWarning:
-		log.Printf("memory: WARNING - usage %.1f%% of limit (%d/%d bytes), evicting 50%% of cache",
+		util.Warnf("memory: WARNING - usage %.1f%% of limit (%d/%d bytes), evicting 50%% of cache",
 			usagePct, m.stats.Sys, m.config.LimitBytes)
 		if m.evictor != nil {
 			m.evictor.Evict(50)
@@ -245,7 +246,7 @@ func (m *Monitor) handleStateChange(oldState, newState State, usagePct float64) 
 
 	case StateNormal:
 		if oldState != StateNormal {
-			log.Printf("memory: returned to normal - usage %.1f%%", usagePct)
+			util.Infof("memory: returned to normal - usage %.1f%%", usagePct)
 		}
 	}
 }
