@@ -232,3 +232,24 @@ type RoleResponse struct {
 type RolesResponse struct {
 	Roles []RoleResponse `json:"roles"`
 }
+
+// QueryLogEntry represents a single query in the log.
+type QueryLogEntry struct {
+	Timestamp    string `json:"timestamp"`
+	ClientIP     string `json:"client_ip"`
+	Domain       string `json:"domain"`
+	QueryType    string `json:"query_type"`
+	ResponseCode string `json:"response_code"`
+	Duration     int64  `json:"duration_ms"`
+	Cached       bool   `json:"cached"`
+	Blocked      bool   `json:"blocked"`
+	Protocol     string `json:"protocol"`
+}
+
+// QueryLogResponse is returned by GET /api/v1/queries.
+type QueryLogResponse struct {
+	Queries []QueryLogEntry `json:"queries"`
+	Total   int             `json:"total"`
+	Offset  int             `json:"offset"`
+	Limit   int             `json:"limit"`
+}

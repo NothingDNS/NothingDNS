@@ -62,6 +62,27 @@ type DashboardStats struct {
 	RecentQueries   []*QueryEvent `json:"recentQueries"`
 }
 
+// GetRecentQueries returns a paginated copy of recent queries.
+func (ds *DashboardStats) GetRecentQueries(offset, limit int) ([]*QueryEvent, int) {
+	ds.mu.RLock()
+	defer ds.mu.RUnlock()
+
+	total := len(ds.RecentQueries)
+	if total == 0 {
+		return nil, 0
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	if offset >= total {
+		return nil, 0
+	}
+	queries := make([]*QueryEvent, end-offset)
+	copy(queries, ds.RecentQueries[offset:end])
+	return queries, total
+}
+
 // NewServer creates a new dashboard server
 func NewServer() *Server {
 	s := &Server{

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -44,6 +45,12 @@ type Server struct {
 
 	// Goroutine leak detection baseline
 	goroutineBaseline int64
+}
+
+// WithDashboard sets the dashboard server for real-time stats.
+func (s *Server) WithDashboard(ds *dashboard.Server) *Server {
+	s.dashboardServer = ds
+	return s
 }
 
 // NewServer creates a new API server.
@@ -157,6 +164,7 @@ func (s *Server) Start() error {
 
 	// Dashboard UI
 	mux.HandleFunc("/api/dashboard/stats", s.handleDashboardStats)
+	mux.HandleFunc("/api/v1/queries", s.handleQueryLog)
 
 	// OpenAPI / Swagger
 	mux.HandleFunc("/api/openapi.json", s.handleOpenAPISpec)
@@ -380,6 +388,57 @@ func (s *Server) handleDashboardStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, http.StatusOK, resp)
+}
+
+// handleQueryLog returns a paginated query log.
+func (s *Server) handleQueryLog(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	if s.dashboardServer == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Dashboard not available")
+		return
+	}
+
+	offset := 0
+	limit := 100
+	if o := r.URL.Query().Get("offset"); o != "" {
+		if v, err := strconv.Atoi(o); err == nil && v >= 0 {
+			offset = v
+		}
+	}
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if v, err := strconv.Atoi(l); err == nil && v > 0 && v <= 500 {
+			limit = v
+		}
+	}
+
+	stats := s.dashboardServer.GetStats()
+	queries, total := stats.GetRecentQueries(offset, limit)
+
+	entries := make([]QueryLogEntry, 0, len(queries))
+	for _, q := range queries {
+		entries = append(entries, QueryLogEntry{
+			Timestamp:    q.Timestamp.UTC().Format(time.RFC3339),
+			ClientIP:     q.ClientIP,
+			Domain:       q.Domain,
+			QueryType:    q.QueryType,
+			ResponseCode: q.ResponseCode,
+			Duration:     q.Duration,
+			Cached:       q.Cached,
+			Blocked:      q.Blocked,
+			Protocol:     q.Protocol,
+		})
+	}
+
+	s.writeJSON(w, http.StatusOK, &QueryLogResponse{
+		Queries: entries,
+		Total:   total,
+		Offset:  offset,
+		Limit:   limit,
+	})
 }
 
 // handleStatus returns server status.
