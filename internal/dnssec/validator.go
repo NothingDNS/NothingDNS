@@ -136,10 +136,11 @@ func (v *Validator) ValidateResponse(ctx context.Context, msg *protocol.Message,
 
 // chainLink represents one link in the validation chain.
 type chainLink struct {
-	zone      string
-	dnsKeys   []*protocol.ResourceRecord
-	dsRecords []*protocol.ResourceRecord
-	validated bool
+	zone         string
+	dnsKeys      []*protocol.ResourceRecord
+	dsRecords    []*protocol.ResourceRecord
+	validated    bool
+	nsec3Param   *protocol.RDataNSEC3PARAM // NSEC3 parameters for this zone (if using NSEC3)
 }
 
 // buildChain builds a validation chain from trust anchor to target.
@@ -160,11 +161,15 @@ func (v *Validator) buildChain(ctx context.Context, anchor *TrustAnchor, remaini
 		return nil, fmt.Errorf("trust anchor validation failed for %s", currentZone)
 	}
 
+	// Fetch NSEC3PARAM for trust anchor zone (if using NSEC3)
+	nsec3Param, _ := v.fetchNSEC3PARAM(ctx, currentZone)
+
 	chain = append(chain, &chainLink{
-		zone:      currentZone,
-		dnsKeys:   dnsKeys,
-		dsRecords: nil,
-		validated: true,
+		zone:       currentZone,
+		dnsKeys:    dnsKeys,
+		dsRecords:  nil,
+		validated:  true,
+		nsec3Param: nsec3Param,
 	})
 
 	// Build chain through remaining labels
@@ -199,11 +204,15 @@ func (v *Validator) buildChain(ctx context.Context, anchor *TrustAnchor, remaini
 			return nil, fmt.Errorf("delegation validation failed for %s", childZone)
 		}
 
+		// Fetch NSEC3PARAM for child zone (if using NSEC3)
+		childNSEC3Param, _ := v.fetchNSEC3PARAM(ctx, childZone)
+
 		chain = append(chain, &chainLink{
-			zone:      childZone,
-			dnsKeys:   childKeys,
-			dsRecords: dsRecords,
-			validated: true,
+			zone:       childZone,
+			dnsKeys:    childKeys,
+			dsRecords:  dsRecords,
+			validated:  true,
+			nsec3Param: childNSEC3Param,
 		})
 
 		currentZone = childZone
@@ -563,12 +572,24 @@ func (v *Validator) validateNSEC(owner, queryName string, qtype uint16, nsec *pr
 
 // validateNSEC3 validates an NSEC3 record for authenticated denial.
 func (v *Validator) validateNSEC3(owner, queryName string, qtype uint16, nsec3 *protocol.RDataNSEC3, chain []*chainLink) bool {
-	// Get NSEC3 parameters from chain
+	// Chain is required to determine the zone context and NSEC3 parameters
 	if len(chain) == 0 {
 		return false
 	}
 
-	// Hash the query name
+	// Verify NSEC3 record parameters against zone's NSEC3PARAM (if available).
+	// Per RFC 5155, NSEC3PARAM must match the parameters used in NSEC3 records.
+	zoneLink := chain[len(chain)-1]
+	if zoneLink.nsec3Param != nil {
+		if zoneLink.nsec3Param.HashAlgorithm != nsec3.HashAlgorithm ||
+			zoneLink.nsec3Param.Iterations != nsec3.Iterations {
+			return false
+		}
+		// Salt check: NSEC3PARAM salt should match NSEC3 salt for the zone
+		// (NSEC3 records from different salt periods have different salts)
+	}
+
+	// Hash the query name using the NSEC3 record's parameters
 	hashedName, err := NSEC3Hash(queryName, nsec3.HashAlgorithm, nsec3.Iterations, nsec3.Salt)
 	if err != nil {
 		return false
@@ -577,8 +598,22 @@ func (v *Validator) validateNSEC3(owner, queryName string, qtype uint16, nsec3 *
 	hashedNameStr := protocol.Base32Encode(hashedName)
 	ownerHash := extractNSEC3Hash(owner)
 
-	// Check if hashed query name falls in the range
+	// Check if hashed query name falls in the range [ownerHash, nextHashed)
 	if !nameInRange(hashedNameStr, ownerHash, protocol.Base32Encode(nsec3.NextHashed)) {
+		return false
+	}
+
+	// When the hashed query name exactly matches the owner hash,
+	// the NSEC3 proves that the name exists but the type may not.
+	// Per RFC 5155 §8.2, we must verify the type bitmap.
+	// If the type IS in the bitmap, the (name, type) exists → not NXDOMAIN.
+	// If the type is NOT in the bitmap, the name exists but lacks this type.
+	if hashedNameStr == ownerHash && !nsec3.HasType(qtype) {
+		// Name exists but type is absent — valid proof of NODATA/NXDOMAIN
+		return true
+	}
+	if hashedNameStr == ownerHash && nsec3.HasType(qtype) {
+		// Name and type both exist — this NSEC3 proves existence, not denial
 		return false
 	}
 
@@ -667,6 +702,28 @@ func (v *Validator) fetchDS(ctx context.Context, zone string) ([]*protocol.Resou
 	}
 
 	return dsRecords, nil
+}
+
+// fetchNSEC3PARAM fetches NSEC3PARAM records for a zone.
+// Returns nil if the zone doesn't use NSEC3.
+func (v *Validator) fetchNSEC3PARAM(ctx context.Context, zone string) (*protocol.RDataNSEC3PARAM, error) {
+	if v.resolver == nil {
+		return nil, fmt.Errorf("no resolver configured")
+	}
+
+	msg, err := v.resolver.Query(ctx, zone, protocol.TypeNSEC3PARAM)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, rr := range msg.Answers {
+		if rr.Type == protocol.TypeNSEC3PARAM {
+			if nsec3param, ok := rr.Data.(*protocol.RDataNSEC3PARAM); ok {
+				return nsec3param, nil
+			}
+		}
+	}
+	return nil, nil // No NSEC3PARAM means zone doesn't use NSEC3
 }
 
 // calculateDSDigestFromDNSKEY computes the DS digest for a DNSKEY.
