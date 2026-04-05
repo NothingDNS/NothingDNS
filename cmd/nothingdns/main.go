@@ -647,7 +647,10 @@ func run() error {
 			}
 		}
 		return nil
-	}, handler, clusterMgr, dashboardServer)
+	}, handler, clusterMgr, dashboardServer).
+		WithBlocklist(bl).
+		WithUpstream(client, loadBalancer).
+		WithACL(aclChecker)
 	if err := apiServer.Start(); err != nil {
 		logger.Warnf("Failed to start API server: %v", err)
 	} else if cfg.Server.HTTP.Enabled {

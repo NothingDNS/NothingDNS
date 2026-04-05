@@ -152,3 +152,43 @@ type NodeDetail struct {
 type ClusterNodesResponse struct {
 	Nodes []NodeDetail `json:"nodes"`
 }
+
+// BlocklistResponse is returned by GET /api/v1/blocklists.
+type BlocklistResponse struct {
+	Enabled     bool   `json:"enabled"`
+	TotalRules  int    `json:"total_rules"`
+	FilesCount  int    `json:"files_count"`
+}
+
+// BlocklistAddRequest is the request body for POST /api/v1/blocklists.
+type BlocklistAddRequest struct {
+	URL  string `json:"url,omitempty"`
+	File string `json:"file,omitempty"`
+}
+
+// UpstreamStatus represents a single upstream server's status.
+type UpstreamStatus struct {
+	Address   string `json:"address"`
+	Healthy   bool   `json:"healthy"`
+	Queries   uint64 `json:"queries,omitempty"`
+	Failed    uint64 `json:"failed,omitempty"`
+	Failovers uint64 `json:"failovers,omitempty"`
+}
+
+// UpstreamsResponse is returned by GET /api/v1/upstreams.
+type UpstreamsResponse struct {
+	Upstreams []UpstreamStatus `json:"upstreams"`
+}
+
+// ACLRuleResponse represents a single ACL rule.
+type ACLRuleResponse struct {
+	Name     string   `json:"name"`
+	Networks []string `json:"networks"`
+	Action   string   `json:"action"`
+	Types    []string `json:"types,omitempty"`
+}
+
+// ACLResponse is returned by GET /api/v1/acl.
+type ACLResponse struct {
+	Rules []ACLRuleResponse `json:"rules"`
+}

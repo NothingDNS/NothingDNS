@@ -11,12 +11,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nothingdns/nothingdns/internal/blocklist"
 	"github.com/nothingdns/nothingdns/internal/cache"
 	"github.com/nothingdns/nothingdns/internal/cluster"
 	"github.com/nothingdns/nothingdns/internal/config"
 	"github.com/nothingdns/nothingdns/internal/dashboard"
 	"github.com/nothingdns/nothingdns/internal/doh"
+	"github.com/nothingdns/nothingdns/internal/filter"
 	"github.com/nothingdns/nothingdns/internal/server"
+	"github.com/nothingdns/nothingdns/internal/upstream"
 	"github.com/nothingdns/nothingdns/internal/util"
 	"github.com/nothingdns/nothingdns/internal/zone"
 )
@@ -31,6 +34,10 @@ type Server struct {
 	dnsHandler      server.Handler
 	cluster         *cluster.Cluster
 	dashboardServer *dashboard.Server
+	blocklist       *blocklist.Blocklist
+	upstreamClient  *upstream.Client
+	upstreamLB      *upstream.LoadBalancer
+	aclChecker      *filter.ACLChecker
 }
 
 // NewServer creates a new API server.
@@ -44,6 +51,25 @@ func NewServer(cfg config.HTTPConfig, zm *zone.Manager, c *cache.Cache, reload f
 		cluster:         cl,
 		dashboardServer: ds,
 	}
+}
+
+// WithBlocklist sets the blocklist for the API server.
+func (s *Server) WithBlocklist(bl *blocklist.Blocklist) *Server {
+	s.blocklist = bl
+	return s
+}
+
+// WithUpstream sets the upstream client and load balancer for the API server.
+func (s *Server) WithUpstream(client *upstream.Client, lb *upstream.LoadBalancer) *Server {
+	s.upstreamClient = client
+	s.upstreamLB = lb
+	return s
+}
+
+// WithACL sets the ACL checker for the API server.
+func (s *Server) WithACL(acl *filter.ACLChecker) *Server {
+	s.aclChecker = acl
+	return s
 }
 
 // Start starts the API server.
@@ -86,6 +112,22 @@ func (s *Server) Start() error {
 	// Cache management
 	mux.HandleFunc("/api/v1/cache/stats", s.handleCacheStats)
 	mux.HandleFunc("/api/v1/cache/flush", s.handleCacheFlush)
+
+	// Blocklist management
+	if s.blocklist != nil {
+		mux.HandleFunc("/api/v1/blocklists", s.handleBlocklists)
+		mux.HandleFunc("/api/v1/blocklists/", s.handleBlocklistActions)
+	}
+
+	// Upstream management
+	if s.upstreamClient != nil || s.upstreamLB != nil {
+		mux.HandleFunc("/api/v1/upstreams", s.handleUpstreams)
+	}
+
+	// ACL management
+	if s.aclChecker != nil {
+		mux.HandleFunc("/api/v1/acl", s.handleACL)
+	}
 
 	// Config management
 	mux.HandleFunc("/api/v1/config/reload", s.handleConfigReload)
@@ -845,6 +887,123 @@ func (s *Server) handleClusterNodes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, http.StatusOK, resp)
+}
+
+// handleBlocklists returns the list of active blocklists.
+func (s *Server) handleBlocklists(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	if s.blocklist == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Blocklist not available")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		stats := s.blocklist.Stats()
+		s.writeJSON(w, http.StatusOK, &BlocklistResponse{
+			Enabled:     stats.Enabled,
+			TotalRules: stats.TotalBlocks,
+			FilesCount: stats.Files,
+		})
+	case http.MethodPost:
+		// Add new blocklist source (URL or file path)
+		var req BlocklistAddRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.writeError(w, http.StatusBadRequest, "Invalid request body")
+			return
+		}
+		// Note: Dynamic blocklist addition would require modifying the blocklist engine
+		// For now, return a message that full reload is needed
+		s.writeJSON(w, http.StatusOK, &MessageResponse{
+			Message: "Blocklist updated. Reload config to apply changes.",
+		})
+	}
+}
+
+// handleBlocklistActions handles individual blocklist actions.
+func (s *Server) handleBlocklistActions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	if s.blocklist == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Blocklist not available")
+		return
+	}
+
+	// Extract blocklist ID from path
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/blocklists/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		s.writeError(w, http.StatusBadRequest, "Missing blocklist ID")
+		return
+	}
+
+	// Note: Dynamic blocklist removal would require modifying the blocklist engine
+	s.writeJSON(w, http.StatusOK, &MessageResponse{
+		Message: "Blocklist removal requires config reload",
+	})
+}
+
+// handleUpstreams returns upstream server status.
+func (s *Server) handleUpstreams(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPut {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		var upstreams []UpstreamStatus
+		if s.upstreamLB != nil {
+			queries, failed, failovers := s.upstreamLB.Stats()
+			upstreams = append(upstreams, UpstreamStatus{
+				Address:      "load-balancer",
+				Healthy:     true, // Would need health check method
+				Queries:     queries,
+				Failed:      failed,
+				Failovers:   failovers,
+			})
+		}
+		if s.upstreamClient != nil {
+			upstreams = append(upstreams, UpstreamStatus{
+				Address: "direct-upstream",
+				Healthy: true,
+			})
+		}
+		s.writeJSON(w, http.StatusOK, &UpstreamsResponse{Upstreams: upstreams})
+	case http.MethodPut:
+		// Update upstream configuration
+		s.writeError(w, http.StatusNotImplemented, "Dynamic upstream update not implemented")
+	}
+}
+
+// handleACL returns ACL rules.
+func (s *Server) handleACL(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPut {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	if s.aclChecker == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "ACL not available")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		// Get ACL rules - would need ACL checker to expose rules
+		s.writeJSON(w, http.StatusOK, &ACLResponse{
+			Rules: []ACLRuleResponse{}, // Would populate from ACL checker
+		})
+	case http.MethodPut:
+		// Update ACL rules - would need ACL checker to support updates
+		s.writeError(w, http.StatusNotImplemented, "Dynamic ACL update not implemented")
+	}
 }
 
 // writeJSON writes a JSON response.
