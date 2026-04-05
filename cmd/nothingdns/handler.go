@@ -317,7 +317,10 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 	// then cache, then upstream.
 	// Hold zonesMu throughout both zone sources to prevent concurrent modification.
 	h.zonesMu.RLock()
-	mgrZones := h.zoneManager.List()
+	var mgrZones map[string]*zone.Zone
+	if h.zoneManager != nil {
+		mgrZones = h.zoneManager.List()
+	}
 	var matchedZone bool
 
 	// Check file-based zones
@@ -333,15 +336,17 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 	}
 
 	// Also check zones created via API (stored in zoneManager)
-	for name, z := range mgrZones {
-		if !isSubdomain(qname, name) {
-			continue
-		}
-		matchedZone = true
-		h.logger.Debugf("Checking zone manager zone %s for %s", name, qname)
-		if h.handleAuthoritative(z, w, r, q) {
-			h.zonesMu.RUnlock()
-			return
+	if mgrZones != nil {
+		for name, z := range mgrZones {
+			if !isSubdomain(qname, name) {
+				continue
+			}
+			matchedZone = true
+			h.logger.Debugf("Checking zone manager zone %s for %s", name, qname)
+			if h.handleAuthoritative(z, w, r, q) {
+				h.zonesMu.RUnlock()
+				return
+			}
 		}
 	}
 	h.zonesMu.RUnlock()
