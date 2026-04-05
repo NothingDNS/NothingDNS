@@ -616,6 +616,10 @@ func run() error {
 		if resolverConfig.EDNS0BufSize == 0 {
 			resolverConfig.EDNS0BufSize = 4096
 		}
+		if resolverConfig.MaxDepth > 30 {
+			logger.Warnf("MaxDepth %d exceeds safe limit, clamping to 30", resolverConfig.MaxDepth)
+			resolverConfig.MaxDepth = 30
+		}
 		if cfg.Resolution.RootHints != "" {
 			hints, err := loadRootHintsFile(cfg.Resolution.RootHints)
 			if err != nil {
