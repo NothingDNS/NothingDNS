@@ -16,6 +16,7 @@ import (
 
 	"github.com/nothingdns/nothingdns/internal/api"
 	"github.com/nothingdns/nothingdns/internal/audit"
+	"github.com/nothingdns/nothingdns/internal/auth"
 	"github.com/nothingdns/nothingdns/internal/blocklist"
 	"github.com/nothingdns/nothingdns/internal/cache"
 	"github.com/nothingdns/nothingdns/internal/cluster"
@@ -466,6 +467,22 @@ func run() error {
 		logger.Infof("ACL loaded with %d rules", len(cfg.ACL))
 	}
 
+	// Initialize auth store
+	authUsers := make([]auth.User, len(cfg.Server.HTTP.Users))
+	for i, u := range cfg.Server.HTTP.Users {
+		authUsers[i] = auth.User{
+			Username: u.Username,
+			Password: u.Password,
+			Role:     auth.Role(u.Role),
+		}
+	}
+	authStore := auth.NewStore(&auth.Config{
+		Secret:      cfg.Server.HTTP.AuthSecret,
+		Users:       authUsers,
+		TokenExpiry: auth.Duration{24 * time.Hour},
+	})
+	logger.Infof("Auth store initialized with %d users", len(cfg.Server.HTTP.Users))
+
 	// Initialize rate limiter
 	var rateLimiter *filter.RateLimiter
 	if cfg.RRL.Enabled {
@@ -650,7 +667,8 @@ func run() error {
 	}, handler, clusterMgr, dashboardServer).
 		WithBlocklist(bl).
 		WithUpstream(client, loadBalancer).
-		WithACL(aclChecker)
+		WithACL(aclChecker).
+		WithAuth(authStore)
 	if err := apiServer.Start(); err != nil {
 		logger.Warnf("Failed to start API server: %v", err)
 	} else if cfg.Server.HTTP.Enabled {

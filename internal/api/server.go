@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nothingdns/nothingdns/internal/auth"
 	"github.com/nothingdns/nothingdns/internal/blocklist"
 	"github.com/nothingdns/nothingdns/internal/cache"
 	"github.com/nothingdns/nothingdns/internal/cluster"
@@ -38,6 +39,7 @@ type Server struct {
 	upstreamClient  *upstream.Client
 	upstreamLB      *upstream.LoadBalancer
 	aclChecker      *filter.ACLChecker
+	authStore       *auth.Store
 }
 
 // NewServer creates a new API server.
@@ -69,6 +71,12 @@ func (s *Server) WithUpstream(client *upstream.Client, lb *upstream.LoadBalancer
 // WithACL sets the ACL checker for the API server.
 func (s *Server) WithACL(acl *filter.ACLChecker) *Server {
 	s.aclChecker = acl
+	return s
+}
+
+// WithAuth sets the auth store for the API server.
+func (s *Server) WithAuth(store *auth.Store) *Server {
+	s.authStore = store
 	return s
 }
 
@@ -127,6 +135,14 @@ func (s *Server) Start() error {
 	// ACL management
 	if s.aclChecker != nil {
 		mux.HandleFunc("/api/v1/acl", s.handleACL)
+	}
+
+	// Auth endpoints (no auth required for login, all require auth for others)
+	if s.authStore != nil {
+		mux.HandleFunc("/api/v1/auth/login", s.handleLogin)
+		mux.HandleFunc("/api/v1/auth/users", s.handleUsers)
+		mux.HandleFunc("/api/v1/auth/roles", s.handleRoles)
+		mux.HandleFunc("/api/v1/auth/logout", s.handleLogout)
 	}
 
 	// Config management
@@ -196,30 +212,53 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 // authMiddleware adds authentication.
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.config.AuthToken == "" {
+		// Skip auth for login and public endpoints
+		if r.URL.Path == "/api/v1/auth/login" {
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		// Check Authorization header
-		token := r.Header.Get("Authorization")
+		// If no auth configured, allow all
+		if s.config.AuthToken == "" && s.authStore == nil {
+			next.ServeHTTP(w, r)
+			return
+		}
 
-		// Check query parameter
+		// Get token from Authorization header
+		token := r.Header.Get("Authorization")
+		if strings.HasPrefix(token, "Bearer ") {
+			token = token[7:]
+		}
+
+		// Fallback: query parameter
 		if token == "" {
 			token = r.URL.Query().Get("token")
 		}
 
-		// Check cookie
+		// Fallback: cookie
 		if token == "" {
 			if c, err := r.Cookie("ndns_token"); err == nil {
 				token = c.Value
 			}
 		}
 
-		expected := "Bearer " + s.config.AuthToken
-		if token == expected || token == s.config.AuthToken {
-			next.ServeHTTP(w, r)
-			return
+		// Validate token
+		if token != "" {
+			// First try old-style shared token
+			if s.config.AuthToken != "" && (token == s.config.AuthToken) {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			// Try JWT-style token from auth store
+			if s.authStore != nil {
+				if user, err := s.authStore.ValidateToken(token); err == nil {
+					// Set user info in request context
+					ctx := WithUser(r.Context(), user)
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+			}
 		}
 
 		// For SPA routes, serve the login page instead of JSON error
@@ -1004,6 +1043,208 @@ func (s *Server) handleACL(w http.ResponseWriter, r *http.Request) {
 		// Update ACL rules - would need ACL checker to support updates
 		s.writeError(w, http.StatusNotImplemented, "Dynamic ACL update not implemented")
 	}
+}
+
+// contextKey is a custom type for context keys.
+type contextKey string
+
+const userContextKey contextKey = "user"
+
+// WithUser adds user information to a context.
+func WithUser(ctx context.Context, user *auth.User) context.Context {
+	return context.WithValue(ctx, userContextKey, user)
+}
+
+// GetUser retrieves user information from a context.
+func GetUser(ctx context.Context) *auth.User {
+	if user, ok := ctx.Value(userContextKey).(*auth.User); ok {
+		return user
+	}
+	return nil
+}
+
+// handleLogin authenticates a user and returns a token.
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	if s.authStore == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Auth not configured")
+		return
+	}
+
+	var req LoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	// Validate user
+	user, err := s.authStore.GetUser(req.Username)
+	if err != nil {
+		s.writeError(w, http.StatusUnauthorized, "Invalid credentials")
+		return
+	}
+
+	// Verify password
+	if !auth.VerifyPassword(req.Password, user.Hash) {
+		s.writeError(w, http.StatusUnauthorized, "Invalid credentials")
+		return
+	}
+
+	// Generate token
+	token, err := s.authStore.GenerateToken(req.Username, 24*time.Hour)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "Failed to generate token")
+		return
+	}
+
+	// Set cookie
+	http.SetCookie(w, &http.Cookie{
+		Name:     "ndns_token",
+		Value:    token.Token,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   r.TLS != nil,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   86400,
+	})
+
+	s.writeJSON(w, http.StatusOK, &LoginResponse{
+		Token:    token.Token,
+		Username: user.Username,
+		Role:     string(user.Role),
+		Expires:  token.ExpiresAt.Format(time.RFC3339),
+	})
+}
+
+// handleLogout invalidates the current token.
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	token := r.Header.Get("Authorization")
+	if strings.HasPrefix(token, "Bearer ") {
+		token = token[7:]
+	}
+
+	if token != "" && s.authStore != nil {
+		s.authStore.RevokeToken(token)
+	}
+
+	// Clear cookie
+	http.SetCookie(w, &http.Cookie{
+		Name:     "ndns_token",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		MaxAge:   -1,
+	})
+
+	s.writeJSON(w, http.StatusOK, &MessageResponse{Message: "Logged out"})
+}
+
+// handleUsers manages users.
+func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
+	if s.authStore == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Auth not configured")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		users := s.authStore.ListUsers()
+		resp := make([]UserResponse, 0, len(users))
+		for _, u := range users {
+			resp = append(resp, UserResponse{
+				Username:  u.Username,
+				Role:     string(u.Role),
+				Created:  u.CreatedAt,
+				Updated:  u.UpdatedAt,
+			})
+		}
+		s.writeJSON(w, http.StatusOK, resp)
+
+	case http.MethodPost:
+		// Require admin role
+		if !hasRole(r.Context(), s.authStore, auth.RoleAdmin) {
+			s.writeError(w, http.StatusForbidden, "Admin role required")
+			return
+		}
+
+		var req CreateUserRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.writeError(w, http.StatusBadRequest, "Invalid request body")
+			return
+		}
+
+		if req.Username == "" || req.Password == "" {
+			s.writeError(w, http.StatusBadRequest, "Username and password required")
+			return
+		}
+
+		role := auth.RoleViewer
+		if req.Role != "" {
+			role = auth.Role(req.Role)
+		}
+
+		user, err := s.authStore.CreateUser(req.Username, req.Password, role)
+		if err != nil {
+			s.writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+
+		s.writeJSON(w, http.StatusCreated, &UserResponse{
+			Username: user.Username,
+			Role:     string(user.Role),
+			Created:  user.CreatedAt,
+			Updated:  user.UpdatedAt,
+		})
+
+	case http.MethodDelete:
+		// Require admin role
+		if !hasRole(r.Context(), s.authStore, auth.RoleAdmin) {
+			s.writeError(w, http.StatusForbidden, "Admin role required")
+			return
+		}
+
+		username := r.URL.Query().Get("username")
+		if username == "" {
+			s.writeError(w, http.StatusBadRequest, "username required")
+			return
+		}
+
+		if err := s.authStore.DeleteUser(username); err != nil {
+			s.writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+
+		s.writeJSON(w, http.StatusOK, &MessageResponse{Message: "User deleted"})
+	}
+}
+
+// handleRoles returns available roles.
+func (s *Server) handleRoles(w http.ResponseWriter, r *http.Request) {
+	s.writeJSON(w, http.StatusOK, &RolesResponse{
+		Roles: []RoleResponse{
+			{Name: "admin", Description: "Full access to all resources"},
+			{Name: "operator", Description: "Can modify zones, cache, and config"},
+			{Name: "viewer", Description: "Read-only access"},
+		},
+	})
+}
+
+// hasRole checks if the current user has at least the required role.
+func hasRole(ctx context.Context, store *auth.Store, required auth.Role) bool {
+	user := GetUser(ctx)
+	if user == nil {
+		return false
+	}
+	return store.HasRole(user.Username, required)
 }
 
 // writeJSON writes a JSON response.

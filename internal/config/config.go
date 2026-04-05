@@ -269,8 +269,14 @@ type HTTPConfig struct {
 	// Listen address
 	Bind string `yaml:"bind"`
 
-	// Authentication token (optional)
+	// Authentication token (legacy, single shared token)
 	AuthToken string `yaml:"auth_token"`
+
+	// Auth users for multi-user auth (username/password/role)
+	Users []AuthUserConfig `yaml:"users"`
+
+	// Auth secret for JWT signing (auto-generated if empty)
+	AuthSecret string `yaml:"auth_secret"`
 
 	// DoH (DNS over HTTPS) settings
 	DoHEnabled bool   `yaml:"doh_enabled"` // Enable DoH endpoint
@@ -279,6 +285,13 @@ type HTTPConfig struct {
 	// DoWS (DNS over WebSocket) settings
 	DoWSEnabled bool   `yaml:"dows_enabled"` // Enable DoWS endpoint
 	DoWSPath    string `yaml:"dows_path"`    // DoWS endpoint path (default: /dns-ws)
+}
+
+// AuthUserConfig defines a user for authentication.
+type AuthUserConfig struct {
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
+	Role    string `yaml:"role"` // admin, operator, viewer
 }
 
 // ResolutionConfig contains DNS resolution settings.

@@ -192,3 +192,43 @@ type ACLRuleResponse struct {
 type ACLResponse struct {
 	Rules []ACLRuleResponse `json:"rules"`
 }
+
+// LoginRequest is the request body for POST /api/v1/auth/login.
+type LoginRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+// LoginResponse is returned by POST /api/v1/auth/login.
+type LoginResponse struct {
+	Token    string `json:"token"`
+	Username string `json:"username"`
+	Role     string `json:"role"`
+	Expires  string `json:"expires"`
+}
+
+// UserResponse represents a user in API responses.
+type UserResponse struct {
+	Username string `json:"username"`
+	Role     string `json:"role"`
+	Created  string `json:"created_at,omitempty"`
+	Updated  string `json:"updated_at,omitempty"`
+}
+
+// CreateUserRequest is the request body for POST /api/v1/auth/users.
+type CreateUserRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Role     string `json:"role"`
+}
+
+// RoleResponse represents a role in the roles endpoint.
+type RoleResponse struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// RolesResponse is returned by GET /api/v1/auth/roles.
+type RolesResponse struct {
+	Roles []RoleResponse `json:"roles"`
+}
