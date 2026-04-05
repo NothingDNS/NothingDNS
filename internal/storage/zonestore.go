@@ -23,7 +23,7 @@ import (
 // ZoneStore provides persistent storage for DNS zone data.
 type ZoneStore struct {
 	kv *KVStore
-	mu sync.Mutex
+	mu sync.RWMutex
 }
 
 // ZoneMeta holds zone metadata for persistence.
@@ -88,8 +88,8 @@ func (zs *ZoneStore) SaveZone(origin string, meta ZoneMeta, records map[string][
 
 // LoadZone loads a zone's records from the KV store.
 func (zs *ZoneStore) LoadZone(origin string) (ZoneMeta, map[string][]StoredRecord, error) {
-	zs.mu.Lock()
-	defer zs.mu.Unlock()
+	zs.mu.RLock()
+	defer zs.mu.RUnlock()
 
 	var meta ZoneMeta
 	records := make(map[string][]StoredRecord)
@@ -152,8 +152,8 @@ func (zs *ZoneStore) DeleteZone(origin string) error {
 
 // ListZones returns the origins of all stored zones.
 func (zs *ZoneStore) ListZones() ([]string, error) {
-	zs.mu.Lock()
-	defer zs.mu.Unlock()
+	zs.mu.RLock()
+	defer zs.mu.RUnlock()
 
 	var origins []string
 	err := zs.kv.View(func(tx *Tx) error {

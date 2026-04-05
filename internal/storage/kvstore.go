@@ -164,10 +164,17 @@ func (s *KVStore) save() error {
 	return nil
 }
 
-// Begin starts a new transaction
+// Begin starts a new transaction.
+// Read-only transactions acquire a read lock (concurrent with other readers).
+// Writable transactions acquire a write lock (exclusive).
 func (s *KVStore) Begin(writable bool) (*Tx, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	if writable {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+	} else {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+	}
 
 	if s.closed {
 		return nil, ErrDatabaseClosed
@@ -287,21 +294,31 @@ func (tx *Tx) Commit() error {
 	return nil
 }
 
-// Rollback rolls back the transaction
+// Rollback rolls back the transaction.
+// For read-only transactions the lock was already released by Begin,
+// so this acquires only a read lock to perform cleanup.
+// For writable transactions a full write lock is acquired.
 func (tx *Tx) Rollback() error {
 	if tx.closed {
 		return ErrTxClosed
 	}
 
+	// Read-only transactions: lock already released by Begin, just clean up.
+	if !tx.writable {
+		tx.closed = true
+		tx.store.removeTx(tx)
+		atomic.AddInt64(&tx.store.stats.OpenTxCount, -1)
+		return nil
+	}
+
+	// Writable transactions: need write lock for state changes.
 	tx.store.mu.Lock()
 	defer tx.store.mu.Unlock()
 
-	if tx.writable {
-		tx.store.rwtx = nil
-		// Reload data from disk to discard changes
-		if err := tx.store.load(); err != nil {
-			log.Printf("kvstore: failed to reload data during rollback: %v", err)
-		}
+	tx.store.rwtx = nil
+	// Reload data from disk to discard changes
+	if err := tx.store.load(); err != nil {
+		log.Printf("kvstore: failed to reload data during rollback: %v", err)
 	}
 
 	tx.closed = true
