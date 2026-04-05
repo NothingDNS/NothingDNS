@@ -56,6 +56,9 @@ type TCPServer struct {
 	// Connection limiting
 	connSem chan struct{}
 
+	// Buffer pool for zero-alloc response path
+	responsePool sync.Pool
+
 	// Metrics
 	connectionsAccepted uint64
 	connectionsClosed   uint64
@@ -88,6 +91,12 @@ func NewTCPServerWithWorkers(addr string, handler Handler, workers int) *TCPServ
 		ctx:     ctx,
 		cancel:  cancel,
 		connSem: make(chan struct{}, TCPMaxConnections),
+		responsePool: sync.Pool{
+			New: func() interface{} {
+				// Pre-allocate a commonly-used size; larger responses allocate fresh
+				return make([]byte, 4096)
+			},
+		},
 	}
 }
 
@@ -307,7 +316,20 @@ func (w *tcpResponseWriter) Write(msg *protocol.Message) (int, error) {
 	if estimated > TCPMaxMessageSize {
 		estimated = TCPMaxMessageSize
 	}
-	buf := make([]byte, estimated)
+
+	// Try to get a buffer from the pool; fall back to allocation if too small
+	var buf []byte
+	if w.server != nil {
+		buf = w.server.responsePool.Get().([]byte)
+		if cap(buf) < estimated {
+			// Pool buffer too small — allocate fresh and don't return to pool
+			buf = make([]byte, estimated)
+		} else {
+			defer w.server.responsePool.Put(buf)
+		}
+	} else {
+		buf = make([]byte, estimated)
+	}
 
 	// Pack the response (done outside the lock — CPU work, no I/O)
 	n, err := msg.Pack(buf[2:]) // Leave room for length prefix

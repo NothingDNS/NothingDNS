@@ -65,6 +65,10 @@ type ValidatorConfig struct {
 
 	// ClockSkew allows for time difference between systems.
 	ClockSkew time.Duration
+
+	// ValidationCacheTTL is the TTL for cached validation results.
+	// If zero, caching is disabled.
+	ValidationCacheTTL time.Duration
 }
 
 // DefaultValidatorConfig returns recommended validation settings.
@@ -75,14 +79,16 @@ func DefaultValidatorConfig() ValidatorConfig {
 		IgnoreTime:         false,
 		MaxDelegationDepth: 20,
 		ClockSkew:          5 * time.Minute,
+		ValidationCacheTTL:  5 * time.Minute,
 	}
 }
 
 // Validator performs DNSSEC validation.
 type Validator struct {
-	config       ValidatorConfig
-	trustAnchors *TrustAnchorStore
-	resolver     Resolver
+	config          ValidatorConfig
+	trustAnchors    *TrustAnchorStore
+	resolver        Resolver
+	validationCache *ValidationCache
 }
 
 // NewValidator creates a new DNSSEC validator.
@@ -98,10 +104,18 @@ func NewValidator(config ValidatorConfig, anchors *TrustAnchorStore, resolver Re
 	}
 
 	return &Validator{
-		config:       config,
-		trustAnchors: anchors,
-		resolver:     resolver,
+		config:          config,
+		trustAnchors:    anchors,
+		resolver:        resolver,
+		validationCache: newValidationCacheIfNeeded(config),
 	}
+}
+
+func newValidationCacheIfNeeded(config ValidatorConfig) *ValidationCache {
+	if config.ValidationCacheTTL <= 0 {
+		return nil
+	}
+	return NewValidationCache(config.ValidationCacheTTL)
 }
 
 // ValidateResponse validates a DNS response message.
@@ -114,13 +128,30 @@ func (v *Validator) ValidateResponse(ctx context.Context, msg *protocol.Message,
 		return ValidationBogus, fmt.Errorf("nil message")
 	}
 
+	// Extract qtype for cache key
+	var qtype uint16
+	if len(msg.Questions) > 0 {
+		qtype = msg.Questions[0].QType
+	}
+
+	// Check validation cache
+	if v.validationCache != nil && qtype != 0 {
+		if result, ok := v.validationCache.Get(queryName, qtype); ok {
+			return result, nil
+		}
+	}
+
 	// Find closest trust anchor
 	anchor, remaining := v.trustAnchors.FindClosestAnchor(queryName)
 	if anchor == nil {
 		if v.config.RequireDNSSEC {
 			return ValidationBogus, fmt.Errorf("no trust anchor found for %s", queryName)
 		}
-		return ValidationInsecure, nil
+		result := ValidationInsecure
+		if v.validationCache != nil && qtype != 0 {
+			v.validationCache.Set(queryName, qtype, result)
+		}
+		return result, nil
 	}
 
 	// Build validation chain from anchor to query name
@@ -131,6 +162,12 @@ func (v *Validator) ValidateResponse(ctx context.Context, msg *protocol.Message,
 
 	// Validate the answer
 	result := v.validateMessage(ctx, msg, queryName, chain)
+
+	// Cache the result
+	if v.validationCache != nil && qtype != 0 {
+		v.validationCache.Set(queryName, qtype, result)
+	}
+
 	return result, nil
 }
 

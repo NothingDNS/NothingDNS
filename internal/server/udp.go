@@ -56,6 +56,8 @@ type UDPServer struct {
 
 	// Pool for request buffers
 	bufferPool sync.Pool
+	// Pool for response buffers (zero-alloc hot path)
+	responsePool sync.Pool
 }
 
 // NewUDPServer creates a new UDP DNS server.
@@ -85,6 +87,11 @@ func NewUDPServerWithWorkers(addr string, handler Handler, workers int) *UDPServ
 			New: func() interface{} {
 				buf := make([]byte, UDPReadBufferSize)
 				return &buf
+			},
+		},
+		responsePool: sync.Pool{
+			New: func() interface{} {
+				return make([]byte, MaxUDPPayloadSize)
 			},
 		},
 	}
@@ -281,8 +288,21 @@ func (w *udpResponseWriter) Write(msg *protocol.Message) (int, error) {
 	}
 	w.written = true
 
+	// Get a buffer from the pool (zero-alloc hot path)
+	var buf []byte
+	if w.server != nil {
+		buf = w.server.responsePool.Get().([]byte)
+		if cap(buf) < MaxUDPPayloadSize {
+			buf = make([]byte, MaxUDPPayloadSize)
+		} else {
+			defer w.server.responsePool.Put(buf)
+		}
+	}
+	if buf == nil {
+		buf = make([]byte, MaxUDPPayloadSize)
+	}
+
 	// Pack the response
-	buf := make([]byte, MaxUDPPayloadSize)
 	n, err := msg.Pack(buf)
 	if err != nil {
 		return 0, err
