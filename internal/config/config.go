@@ -58,6 +58,9 @@ type Config struct {
 	// DNS64 configuration
 	DNS64 DNS64Config `yaml:"dns64"`
 
+	// Cookie configuration (RFC 7873)
+	Cookie CookieConfig `yaml:"cookie"`
+
 	// Slave zone configuration for automatic zone transfers
 	SlaveZones []SlaveZoneConfig `yaml:"slave_zones"`
 
@@ -66,6 +69,10 @@ type Config struct {
 
 	// Memory limit in MB (0 = unlimited). When exceeded, caches are cleared.
 	MemoryLimitMB int `yaml:"memory_limit_mb"`
+
+	// Shutdown timeout duration (default: 30s). Maximum time to wait for in-flight
+	// queries to complete before force-terminating the server.
+	ShutdownTimeout string `yaml:"shutdown_timeout"`
 }
 
 // ViewConfig holds configuration for a single split-horizon view.
@@ -113,6 +120,15 @@ type GeoDNSRule struct {
 	Type    string            `yaml:"type"`
 	Default string            `yaml:"default"`
 	Records map[string]string `yaml:"records"`
+}
+
+// CookieConfig holds DNS Cookie (RFC 7873) configuration.
+type CookieConfig struct {
+	// Enable DNS cookies
+	Enabled bool `yaml:"enabled"`
+
+	// Secret rotation interval (duration string, e.g., "1h")
+	SecretRotation string `yaml:"secret_rotation"`
 }
 
 // DNS64Config holds DNS64/NAT64 configuration.
@@ -170,6 +186,9 @@ type ServerConfig struct {
 	// TLS configuration
 	TLS TLSConfig `yaml:"tls"`
 
+	// QUIC configuration (DNS over QUIC, RFC 9250)
+	QUIC QUICConfig `yaml:"quic"`
+
 	// HTTP API configuration
 	HTTP HTTPConfig `yaml:"http"`
 
@@ -190,6 +209,21 @@ type TLSConfig struct {
 	KeyFile string `yaml:"key_file"`
 
 	// Listen address
+	Bind string `yaml:"bind"`
+}
+
+// QUICConfig contains DNS over QUIC (RFC 9250) settings.
+type QUICConfig struct {
+	// Enable DoQ
+	Enabled bool `yaml:"enabled"`
+
+	// Certificate file (same as TLS cert)
+	CertFile string `yaml:"cert_file"`
+
+	// Key file (same as TLS key)
+	KeyFile string `yaml:"key_file"`
+
+	// Listen address (default ":853")
 	Bind string `yaml:"bind"`
 }
 
@@ -241,6 +275,10 @@ type HTTPConfig struct {
 	// DoH (DNS over HTTPS) settings
 	DoHEnabled bool   `yaml:"doh_enabled"` // Enable DoH endpoint
 	DoHPath    string `yaml:"doh_path"`    // DoH endpoint path (default: /dns-query)
+
+	// DoWS (DNS over WebSocket) settings
+	DoWSEnabled bool   `yaml:"dows_enabled"` // Enable DoWS endpoint
+	DoWSPath    string `yaml:"dows_path"`    // DoWS endpoint path (default: /dns-ws)
 }
 
 // ResolutionConfig contains DNS resolution settings.
@@ -546,12 +584,17 @@ func DefaultConfig() *Config {
 			Prefix:    "64:ff9b::",
 			PrefixLen: 96,
 		},
+		Cookie: CookieConfig{
+			Enabled:        true,
+			SecretRotation: "1h",
+		},
 		Cluster: ClusterConfig{
 			Enabled:    false,
 			GossipPort: 7946,
 			Weight:     100,
 			CacheSync:  true,
 		},
+		ShutdownTimeout: "30s",
 	}
 }
 
@@ -744,6 +787,13 @@ func unmarshalToConfig(node *Node, cfg *Config) error {
 		}
 	}
 
+	// Cookie config (RFC 7873)
+	if cookieNode := node.Get("cookie"); cookieNode != nil {
+		if err := unmarshalCookie(cookieNode, &cfg.Cookie); err != nil {
+			return fmt.Errorf("cookie: %w", err)
+		}
+	}
+
 	// Cluster config
 	if clusterNode := node.Get("cluster"); clusterNode != nil {
 		if err := unmarshalCluster(clusterNode, &cfg.Cluster); err != nil {
@@ -822,6 +872,13 @@ func unmarshalServer(node *Node, cfg *ServerConfig) error {
 		cfg.TLS.Bind = tlsNode.GetString("bind")
 	}
 
+	if quicNode := node.Get("quic"); quicNode != nil {
+		cfg.QUIC.Enabled = getBool(quicNode, "enabled", cfg.QUIC.Enabled)
+		cfg.QUIC.CertFile = quicNode.GetString("cert_file")
+		cfg.QUIC.KeyFile = quicNode.GetString("key_file")
+		cfg.QUIC.Bind = quicNode.GetString("bind")
+	}
+
 	if httpNode := node.Get("http"); httpNode != nil {
 		cfg.HTTP.Enabled = getBool(httpNode, "enabled", cfg.HTTP.Enabled)
 		cfg.HTTP.Bind = httpNode.GetString("bind")
@@ -830,6 +887,11 @@ func unmarshalServer(node *Node, cfg *ServerConfig) error {
 		cfg.HTTP.DoHPath = httpNode.GetString("doh_path")
 		if cfg.HTTP.DoHPath == "" {
 			cfg.HTTP.DoHPath = "/dns-query"
+		}
+		cfg.HTTP.DoWSEnabled = getBool(httpNode, "dows_enabled", cfg.HTTP.DoWSEnabled)
+		cfg.HTTP.DoWSPath = httpNode.GetString("dows_path")
+		if cfg.HTTP.DoWSPath == "" {
+			cfg.HTTP.DoWSPath = "/dns-ws"
 		}
 	}
 
@@ -1092,6 +1154,19 @@ func unmarshalDNS64(node *Node, cfg *DNS64Config) error {
 		cfg.PrefixLen = pl
 	}
 	cfg.ExcludeNets = getStringSlice(node, "exclude_nets", nil)
+
+	return nil
+}
+
+func unmarshalCookie(node *Node, cfg *CookieConfig) error {
+	if node.Type != NodeMapping {
+		return fmt.Errorf("expected mapping")
+	}
+
+	cfg.Enabled = getBool(node, "enabled", cfg.Enabled)
+	if sr := node.GetString("secret_rotation"); sr != "" {
+		cfg.SecretRotation = sr
+	}
 
 	return nil
 }

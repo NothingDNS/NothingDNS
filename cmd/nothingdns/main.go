@@ -21,11 +21,14 @@ import (
 	"github.com/nothingdns/nothingdns/internal/cluster"
 	"github.com/nothingdns/nothingdns/internal/config"
 	"github.com/nothingdns/nothingdns/internal/dashboard"
+	"github.com/nothingdns/nothingdns/internal/dns64"
+	"github.com/nothingdns/nothingdns/internal/dnscookie"
 	"github.com/nothingdns/nothingdns/internal/dnssec"
 	"github.com/nothingdns/nothingdns/internal/filter"
 	"github.com/nothingdns/nothingdns/internal/geodns"
 	"github.com/nothingdns/nothingdns/internal/memory"
 	"github.com/nothingdns/nothingdns/internal/metrics"
+	"github.com/nothingdns/nothingdns/internal/quic"
 	"github.com/nothingdns/nothingdns/internal/resolver"
 	"github.com/nothingdns/nothingdns/internal/rpz"
 	"github.com/nothingdns/nothingdns/internal/server"
@@ -270,6 +273,22 @@ func run() error {
 		}
 	}
 
+	// Initialize DNS64 synthesizer (RFC 6147)
+	var dns64Synth *dns64.Synthesizer
+	if cfg.DNS64.Enabled {
+		dns64Synth, err = dns64.NewSynthesizer(cfg.DNS64.Prefix, cfg.DNS64.PrefixLen)
+		if err != nil {
+			logger.Warnf("Failed to initialize DNS64: %v", err)
+		} else {
+			for _, cidr := range cfg.DNS64.ExcludeNets {
+				if err := dns64Synth.AddExcludeNet(cidr); err != nil {
+					logger.Warnf("DNS64: invalid exclude network %q: %v", cidr, err)
+				}
+			}
+			logger.Infof("DNS64 enabled with prefix %s/%d", cfg.DNS64.Prefix, cfg.DNS64.PrefixLen)
+		}
+	}
+
 	// Initialize metrics collector
 	metricsCollector := metrics.New(metrics.Config{
 		Enabled: cfg.Metrics.Enabled,
@@ -462,6 +481,14 @@ func run() error {
 		logger.Info("Query audit logging enabled")
 	}
 
+	// Initialize DNS cookie jar (RFC 7873)
+	var cookieJar *dnscookie.CookieJar
+	if cfg.Cookie.Enabled {
+		rotation := parseDurationOrDefault(cfg.Cookie.SecretRotation, 1*time.Hour)
+		cookieJar = dnscookie.NewCookieJar(rotation)
+		logger.Infof("DNS cookies enabled (secret rotation: %s)", rotation)
+	}
+
 	// Initialize split-horizon views
 	var splitHorizon *filter.SplitHorizon
 	var viewZones map[string]map[string]*zone.Zone
@@ -523,16 +550,20 @@ func run() error {
 		viewZones:     viewZones,
 		auditLogger:   auditLogger,
 		nsecCache:     cache.NewNSECCache(10000),
+		dns64Synth:    dns64Synth,
+		cookieJar:     cookieJar,
 	}
 
 	// Initialize iterative recursive resolver if enabled
 	if cfg.Resolution.Recursive {
 		resolverTransport := newResolverTransport(client, loadBalancer)
 		resolverConfig := resolver.Config{
-			MaxDepth:      cfg.Resolution.MaxDepth,
-			MaxCNAMEDepth: 16,
-			Timeout:       5 * time.Second,
-			EDNS0BufSize:  uint16(cfg.Resolution.EDNS0BufferSize),
+			MaxDepth:          cfg.Resolution.MaxDepth,
+			MaxCNAMEDepth:     16,
+			Timeout:           5 * time.Second,
+			EDNS0BufSize:      uint16(cfg.Resolution.EDNS0BufferSize),
+			QnameMinimization: cfg.Resolution.QnameMinimization,
+			Use0x20:           cfg.Resolution.Use0x20,
 		}
 		if cfg.Resolution.Timeout != "" {
 			if d, err := time.ParseDuration(cfg.Resolution.Timeout); err == nil {
@@ -542,8 +573,23 @@ func run() error {
 		if resolverConfig.EDNS0BufSize == 0 {
 			resolverConfig.EDNS0BufSize = 4096
 		}
+		if cfg.Resolution.RootHints != "" {
+			hints, err := loadRootHintsFile(cfg.Resolution.RootHints)
+			if err != nil {
+				logger.Warnf("Failed to load root hints file %s: %v", cfg.Resolution.RootHints, err)
+			} else {
+				resolverConfig.Hints = hints
+				logger.Infof("Loaded %d custom root hints from %s", len(hints), cfg.Resolution.RootHints)
+			}
+		}
 		handler.resolver = resolver.NewResolver(resolverConfig, &resolverCacheAdapter{cache: dnsCache}, resolverTransport)
 		logger.Info("Iterative recursive resolver enabled")
+		if resolverConfig.QnameMinimization {
+			logger.Info("QNAME minimization enabled (RFC 7816)")
+		}
+		if resolverConfig.Use0x20 {
+			logger.Info("0x20 encoding enabled for spoofing resistance")
+		}
 	}
 
 	// Share the zones mutex between handler, AXFR server, and DDNS handler
@@ -596,11 +642,25 @@ func run() error {
 	}
 
 	// Create and start DNS servers
-	udpAddr := fmt.Sprintf(":%d", cfg.Server.Port)
-	tcpAddr := fmt.Sprintf(":%d", cfg.Server.Port)
+	// Use configured bind addresses if set, otherwise default to ":PORT"
+	defaultAddr := fmt.Sprintf(":%d", cfg.Server.Port)
 
-	udpServer := server.NewUDPServer(udpAddr, handler)
-	tcpServer := server.NewTCPServer(tcpAddr, handler)
+	udpAddr := defaultAddr
+	if len(cfg.Server.UDPBind) > 0 {
+		udpAddr = cfg.Server.UDPBind[0]
+	} else if len(cfg.Server.Bind) > 0 {
+		udpAddr = cfg.Server.Bind[0]
+	}
+
+	tcpAddr := defaultAddr
+	if len(cfg.Server.TCPBind) > 0 {
+		tcpAddr = cfg.Server.TCPBind[0]
+	} else if len(cfg.Server.Bind) > 0 {
+		tcpAddr = cfg.Server.Bind[0]
+	}
+
+	udpServer := server.NewUDPServerWithWorkers(udpAddr, handler, cfg.Server.UDPWorkers)
+	tcpServer := server.NewTCPServerWithWorkers(tcpAddr, handler, cfg.Server.TCPWorkers)
 
 	// Start UDP server
 	if err := udpServer.Listen(); err != nil {
@@ -654,6 +714,49 @@ func run() error {
 		logger.Infof("TLS server listening on %s (DoT)", tlsAddr)
 	}
 
+	// Start QUIC server (DNS over QUIC, RFC 9250) if enabled
+	var doqServer *quic.DoQServer
+	if cfg.Server.QUIC.Enabled {
+		doqAddr := cfg.Server.QUIC.Bind
+		if doqAddr == "" {
+			doqAddr = fmt.Sprintf(":%d", quic.DefaultDoQPort)
+		}
+
+		certFile := cfg.Server.QUIC.CertFile
+		keyFile := cfg.Server.QUIC.KeyFile
+		// Fall back to TLS cert if QUIC-specific cert is not set
+		if certFile == "" && cfg.Server.TLS.CertFile != "" {
+			certFile = cfg.Server.TLS.CertFile
+			keyFile = cfg.Server.TLS.KeyFile
+		}
+
+		if certFile != "" {
+			cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+			if err != nil {
+				return fmt.Errorf("loading QUIC certificate: %w", err)
+			}
+
+			quicTLSConfig := &tls.Config{
+				Certificates: []tls.Certificate{cert},
+				NextProtos:   []string{"doq"},
+			}
+
+			doqHandler := &doqHandlerAdapter{handler: handler}
+			doqServer = quic.NewDoQServer(doqAddr, doqHandler, quicTLSConfig)
+			if err := doqServer.Listen(); err != nil {
+				return fmt.Errorf("starting DoQ server: %w", err)
+			}
+			go func() {
+				if err := doqServer.Serve(); err != nil {
+					logger.Errorf("DoQ server error: %v", err)
+				}
+			}()
+			logger.Infof("DoQ server listening on %s (DNS over QUIC)", doqAddr)
+		} else {
+			logger.Warn("QUIC enabled but no certificate configured; skipping DoQ server")
+		}
+	}
+
 	// Periodically collect transport stats
 	go func() {
 		ticker := time.NewTicker(10 * time.Second)
@@ -691,7 +794,8 @@ func run() error {
 			// Signal goroutines to stop
 			close(stopCh)
 
-			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			shutdownTimeout := parseDurationOrDefault(cfg.ShutdownTimeout, 30*time.Second)
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 			defer shutdownCancel()
 
 			done := make(chan struct{})
@@ -703,6 +807,9 @@ func run() error {
 				tcpServer.Stop()
 				if tlsServer != nil {
 					tlsServer.Stop()
+				}
+				if doqServer != nil {
+					doqServer.Stop()
 				}
 
 				// Close upstream client

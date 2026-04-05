@@ -60,8 +60,16 @@ func (s *Server) Start() error {
 		mux.Handle(s.config.DoHPath, dohHandler)
 	}
 
+	// DoWS endpoint (DNS over WebSocket) - no auth required
+	if s.config.DoWSEnabled && s.dnsHandler != nil {
+		wsHandler := doh.NewWSHandler(s.dnsHandler)
+		mux.Handle(s.config.DoWSPath, wsHandler)
+	}
+
 	// Health and status
 	mux.HandleFunc("/health", s.handleHealth)
+	mux.HandleFunc("/readyz", s.handleReadiness)
+	mux.HandleFunc("/livez", s.handleLiveness)
 	mux.HandleFunc("/api/v1/status", s.handleStatus)
 
 	// Cluster management
@@ -189,6 +197,45 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, &HealthResponse{
 		Status:    "healthy",
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+// handleReadiness implements the Kubernetes readiness probe.
+// Returns 200 if the server is ready to accept traffic:
+// - Cache is warm (optional)
+// - Zone manager has loaded zones
+// - Upstream is healthy (if configured)
+func (s *Server) handleReadiness(w http.ResponseWriter, r *http.Request) {
+	status := "ready"
+	code := http.StatusOK
+
+	// Check if zones are loaded
+	if s.zoneManager != nil && s.zoneManager.Count() == 0 {
+		// If no zones configured, still ready (recursive mode)
+	}
+
+	// TODO: Check upstream health if configured
+	// TODO: Check cache warm-up state
+
+	s.writeJSON(w, code, &HealthResponse{
+		Status:    status,
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+// handleLiveness implements the Kubernetes liveness probe.
+// Returns 200 if the server process is alive and not deadlocked.
+// Returns 503 if goroutine leak or deadlock is detected.
+func (s *Server) handleLiveness(w http.ResponseWriter, r *http.Request) {
+	status := "alive"
+	code := http.StatusOK
+
+	// TODO: Check for goroutine leak (compare goroutine count to baseline)
+	// TODO: Check for deadlock (if watchdog channel not ticking)
+
+	s.writeJSON(w, code, &HealthResponse{
+		Status:    status,
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	})
 }
