@@ -38,9 +38,6 @@ func NewClusterIntegration(nodeID NodeID, peers []NodeID, addr string, dataDir s
 	config := DefaultConfig()
 	config.NodeID = nodeID
 
-	// Create Raft node
-	node := NewNode(config, peers)
-
 	// Create transport
 	transport := NewTCPTransport()
 
@@ -48,6 +45,9 @@ func NewClusterIntegration(nodeID NodeID, peers []NodeID, addr string, dataDir s
 	for _, peerID := range peers {
 		transport.SetPeerAddr(peerID, string(peerID)) // Placeholder
 	}
+
+	// Create Raft node
+	node := NewNode(config, peers, transport)
 
 	// Create RPC server
 	rpcServer, err := NewRPCServer(addr, node)

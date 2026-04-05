@@ -75,7 +75,8 @@ const (
 
 // Node is a single Raft node.
 type Node struct {
-	config Config
+	config   Config
+	transport Transport // Network transport for RPC
 
 	// Persistent state (must survive crashes)
 	mu sync.Mutex
@@ -187,7 +188,7 @@ type LeadershipState struct {
 }
 
 // NewNode creates a new Raft node.
-func NewNode(config Config, peers []NodeID) *Node {
+func NewNode(config Config, peers []NodeID, transport Transport) *Node {
 	if config.HeartbeatInterval == 0 {
 		config.HeartbeatInterval = 150 * time.Millisecond
 	}
@@ -199,14 +200,15 @@ func NewNode(config Config, peers []NodeID) *Node {
 	}
 
 	n := &Node{
-		config:       config,
-		state:        StateFollower,
-		currentTerm:  0,
-		votedFor:     "",
-		log:          make([]entry, 0),
-		nextIndex:    make(map[NodeID]Index),
-		matchIndex:   make(map[NodeID]Index),
-		peers:        make(map[NodeID]*Peer),
+		config:     config,
+		transport: transport,
+		state:      StateFollower,
+		currentTerm: 0,
+		votedFor:   "",
+		log:        make([]entry, 0),
+		nextIndex:  make(map[NodeID]Index),
+		matchIndex: make(map[NodeID]Index),
+		peers:      make(map[NodeID]*Peer),
 		voteCh:       make(chan VoteRequest, 10),
 		appendCh:     make(chan AppendRequest, 10),
 		voteRespCh:   make(chan VoteResponse, 10),
@@ -864,15 +866,34 @@ func (n *Node) replicateToFollowers(newEntry entry) {
 	}
 }
 
-// sendVoteRequest sends a vote request to a peer (placeholder for network layer).
+// sendVoteRequest sends a vote request to a peer via the transport.
 func (n *Node) sendVoteRequest(peerID NodeID, req VoteRequest) {
-	// This would be implemented via an injected transport interface
-	// For now, the RPC layer is assumed external
+	if n.transport == nil {
+		return
+	}
+	go func() {
+		resp, err := n.transport.SendRequestVote(peerID, req)
+		if err != nil {
+			// Log error but don't block
+			return
+		}
+		n.voteRespCh <- *resp
+	}()
 }
 
-// sendAppendRequest sends an AppendEntries request to a peer (placeholder).
+// sendAppendRequest sends an AppendEntries request to a peer via the transport.
 func (n *Node) sendAppendRequest(peerID NodeID, req AppendRequest) {
-	// This would be implemented via an injected transport interface
+	if n.transport == nil {
+		return
+	}
+	go func() {
+		resp, err := n.transport.SendAppendEntries(peerID, req)
+		if err != nil {
+			// Log error but don't block
+			return
+		}
+		n.appendRespCh <- *resp
+	}()
 }
 
 // AddPeer adds a new peer to the cluster.

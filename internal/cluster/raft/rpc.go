@@ -177,15 +177,17 @@ func (s *RPCServer) readMessage(r io.Reader, msg interface{}) error {
 // TCPTransport is a TCP-based Raft transport.
 type TCPTransport struct {
 	dialTimeout time.Duration
-	conns       map[NodeID]net.Conn
-	mu          sync.RWMutex
+	conns      map[NodeID]net.Conn
+	peerAddrs  map[NodeID]string
+	mu         sync.RWMutex
 }
 
 // NewTCPTransport creates a new TCP transport.
 func NewTCPTransport() *TCPTransport {
 	return &TCPTransport{
 		dialTimeout: 5 * time.Second,
-		conns:       make(map[NodeID]net.Conn),
+		conns:      make(map[NodeID]net.Conn),
+		peerAddrs:  make(map[NodeID]string),
 	}
 }
 
@@ -255,23 +257,39 @@ func (t *TCPTransport) SendSnapshot(peerID NodeID, req SnapshotRequest) error {
 
 // getConn gets or creates a connection to a peer.
 func (t *TCPTransport) getConn(peerID NodeID) (net.Conn, error) {
+	// Check for existing connection
 	t.mu.RLock()
 	conn, ok := t.conns[peerID]
+	addr, addrOk := t.peerAddrs[peerID]
 	t.mu.RUnlock()
-	if ok {
+
+	if ok && conn != nil {
 		return conn, nil
 	}
 
-	// Would need address lookup — placeholder
-	return nil, fmt.Errorf("peer address unknown for %s", peerID)
+	if !addrOk || addr == "" {
+		return nil, fmt.Errorf("peer address unknown for %s", peerID)
+	}
+
+	// Dial new connection
+	dialConn, err := net.DialTimeout("tcp", addr, t.dialTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("dial %s: %w", addr, err)
+	}
+
+	// Store connection
+	t.mu.Lock()
+	t.conns[peerID] = dialConn
+	t.mu.Unlock()
+
+	return dialConn, nil
 }
 
 // SetPeerAddr sets the address for a peer.
 func (t *TCPTransport) SetPeerAddr(peerID NodeID, addr string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	// Store addr for dialing
-	t.conns[peerID] = nil // Placeholder
+	t.peerAddrs[peerID] = addr
 }
 
 // Stats contains transport statistics.

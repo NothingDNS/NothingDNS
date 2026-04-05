@@ -410,7 +410,11 @@ func (c *Cluster) InvalidateCache(keys []string) error {
 		return nil
 	}
 
-	return c.gossip.BroadcastCacheInvalidation(keys)
+	// Gossip mode
+	if c.gossip != nil {
+		return c.gossip.BroadcastCacheInvalidation(keys)
+	}
+	return nil
 }
 
 // InvalidateCacheLocal invalidates cache entries locally.
