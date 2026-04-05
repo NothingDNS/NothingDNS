@@ -718,7 +718,8 @@ func run() error {
 		WithACL(aclChecker).
 		WithAuth(authStore).
 		WithDashboard(dashboardServer).
-		WithMetrics(metricsCollector)
+		WithMetrics(metricsCollector).
+		WithDNSSEC(validator)
 	if err := apiServer.Start(); err != nil {
 		logger.Warnf("Failed to start API server: %v", err)
 	} else if cfg.Server.HTTP.Enabled {

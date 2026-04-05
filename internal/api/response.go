@@ -1,6 +1,9 @@
 package api
 
-import "github.com/nothingdns/nothingdns/internal/dashboard"
+import (
+	"github.com/nothingdns/nothingdns/internal/dashboard"
+	"github.com/nothingdns/nothingdns/internal/dnssec"
+)
 
 // API response types — replaces map[string]interface{} usage per AGENT_DIRECTIVES §2.3.
 
@@ -258,6 +261,9 @@ type QueryLogResponse struct {
 
 // TopDomainsEntry represents a domain with its query count.
 type TopDomainsEntry = dashboard.TopDomainsEntry
+
+// DNSSECStatusResponse is returned by GET /api/v1/dnssec/status.
+type DNSSECStatusResponse = dnssec.DNSSECStatus
 
 // TopDomainsResponse is returned by GET /api/v1/topdomains.
 type TopDomainsResponse struct {

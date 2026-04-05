@@ -118,6 +118,20 @@ func newValidationCacheIfNeeded(config ValidatorConfig) *ValidationCache {
 	return NewValidationCache(config.ValidationCacheTTL)
 }
 
+// DNSSECStatus returns the current DNSSEC validation status.
+func (v *Validator) DNSSECStatus() DNSSECStatus {
+	return DNSSECStatus{
+		Enabled:      v.config.Enabled,
+		RequireDNSSEC: v.config.RequireDNSSEC,
+	}
+}
+
+// DNSSECStatus holds DNSSEC configuration status for the API.
+type DNSSECStatus struct {
+	Enabled       bool `json:"enabled"`
+	RequireDNSSEC bool `json:"require_dnssec"`
+}
+
 // ValidateResponse validates a DNS response message.
 func (v *Validator) ValidateResponse(ctx context.Context, msg *protocol.Message, queryName string) (ValidationResult, error) {
 	if !v.config.Enabled {

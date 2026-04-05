@@ -20,6 +20,7 @@ import (
 	"github.com/nothingdns/nothingdns/internal/config"
 	"github.com/nothingdns/nothingdns/internal/dashboard"
 	"github.com/nothingdns/nothingdns/internal/doh"
+	"github.com/nothingdns/nothingdns/internal/dnssec"
 	"github.com/nothingdns/nothingdns/internal/filter"
 	"github.com/nothingdns/nothingdns/internal/metrics"
 	"github.com/nothingdns/nothingdns/internal/server"
@@ -44,6 +45,7 @@ type Server struct {
 	aclChecker      *filter.ACLChecker
 	authStore       *auth.Store
 	metrics         *metrics.MetricsCollector
+	validator       *dnssec.Validator
 
 	// Goroutine leak detection baseline
 	goroutineBaseline int64
@@ -96,6 +98,12 @@ func (s *Server) WithAuth(store *auth.Store) *Server {
 // WithMetrics sets the metrics collector for the API server.
 func (s *Server) WithMetrics(mc *metrics.MetricsCollector) *Server {
 	s.metrics = mc
+	return s
+}
+
+// WithDNSSEC sets the DNSSEC validator for the API server.
+func (s *Server) WithDNSSEC(v *dnssec.Validator) *Server {
+	s.validator = v
 	return s
 }
 
@@ -169,6 +177,11 @@ func (s *Server) Start() error {
 
 	// Config management
 	mux.HandleFunc("/api/v1/config/reload", s.handleConfigReload)
+
+	// DNSSEC status
+	if s.validator != nil {
+		mux.HandleFunc("/api/v1/dnssec/status", s.handleDNSSECStatus)
+	}
 
 	// Dashboard UI
 	mux.HandleFunc("/api/dashboard/stats", s.handleDashboardStats)
@@ -497,6 +510,17 @@ func (s *Server) handleMetricsHistory(w http.ResponseWriter, r *http.Request) {
 
 	history := s.metrics.GetHistory()
 	s.writeJSON(w, http.StatusOK, history)
+}
+
+// handleDNSSECStatus returns DNSSEC validation status.
+func (s *Server) handleDNSSECStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	status := s.validator.DNSSECStatus()
+	s.writeJSON(w, http.StatusOK, status)
 }
 
 // handleStatus returns server status.
