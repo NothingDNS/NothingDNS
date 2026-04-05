@@ -3,12 +3,16 @@
 package main
 
 import (
+	"bufio"
+	"fmt"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
+	"github.com/nothingdns/nothingdns/internal/resolver"
 	"github.com/nothingdns/nothingdns/internal/util"
 )
 
@@ -230,4 +234,85 @@ func logFormatFromString(s string) util.LogFormat {
 	default:
 		return util.TextFormat
 	}
+}
+
+// loadRootHintsFile parses a named.root format file into resolver.RootHint entries.
+// Lines are whitespace-delimited: NAME TTL CLASS TYPE RDATA
+// NS records define root server names; A/AAAA records provide their addresses.
+func loadRootHintsFile(path string) ([]resolver.RootHint, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	// Map server name -> hint (accumulates IPv4/IPv6)
+	hintMap := make(map[string]*resolver.RootHint)
+	var order []string
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || line[0] == ';' {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
+
+		// Fields: NAME [TTL] [CLASS] TYPE RDATA
+		name := strings.ToLower(fields[0])
+		rtype := ""
+		rdata := ""
+
+		// Find the type field — skip optional TTL and CLASS
+		idx := 1
+		for idx < len(fields)-1 {
+			upper := strings.ToUpper(fields[idx])
+			if upper == "A" || upper == "AAAA" || upper == "NS" {
+				rtype = upper
+				rdata = fields[idx+1]
+				break
+			}
+			idx++
+		}
+		if rtype == "" {
+			continue
+		}
+
+		switch rtype {
+		case "NS":
+			nsName := strings.ToLower(rdata)
+			if !strings.HasSuffix(nsName, ".") {
+				nsName += "."
+			}
+			if _, exists := hintMap[nsName]; !exists {
+				hintMap[nsName] = &resolver.RootHint{Name: nsName}
+				order = append(order, nsName)
+			}
+		case "A":
+			if h, ok := hintMap[name]; ok {
+				h.IPv4 = append(h.IPv4, rdata)
+			}
+		case "AAAA":
+			if h, ok := hintMap[name]; ok {
+				h.IPv6 = append(h.IPv6, rdata)
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("reading root hints: %w", err)
+	}
+
+	if len(order) == 0 {
+		return nil, fmt.Errorf("no root hints found in %s", path)
+	}
+
+	hints := make([]resolver.RootHint, 0, len(order))
+	for _, name := range order {
+		hints = append(hints, *hintMap[name])
+	}
+	return hints, nil
 }

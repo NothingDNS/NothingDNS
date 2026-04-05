@@ -35,6 +35,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Set security headers
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 
+	// Route to JSON API handler if the client accepts DNS JSON or uses
+	// the ?name= query parameter (Google/Cloudflare JSON API convention).
+	if h.isJSONRequest(r) {
+		h.serveJSON(w, r)
+		return
+	}
+
 	var queryData []byte
 	var err error
 
@@ -70,6 +77,128 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Create DoH response writer and handle the query
 	rw := newDoHResponseWriter(w, r, query)
 	h.dnsHandler.ServeDNS(rw, query)
+}
+
+// isJSONRequest returns true if the request should be handled as a JSON API
+// request rather than wire-format DoH. This is determined by the Accept header
+// or the presence of a ?name= query parameter.
+func (h *Handler) isJSONRequest(r *http.Request) bool {
+	if r.Header.Get("Accept") == ContentTypeDNSJSON {
+		return true
+	}
+	if r.URL.Query().Get("name") != "" {
+		return true
+	}
+	return false
+}
+
+// serveJSON handles DNS-over-HTTPS JSON API requests in the
+// Google/Cloudflare format.
+func (h *Handler) serveJSON(w http.ResponseWriter, r *http.Request) {
+	var query *protocol.Message
+	var err error
+
+	switch r.Method {
+	case http.MethodGet:
+		name := r.URL.Query().Get("name")
+		qtype := r.URL.Query().Get("type")
+		query, err = ParseJSONQueryParams(name, qtype)
+
+	case http.MethodPost:
+		ct := r.Header.Get("Content-Type")
+		if ct != ContentTypeDNSJSON {
+			http.Error(w, fmt.Sprintf("unsupported Content-Type: %s (expected %s)", ct, ContentTypeDNSJSON), http.StatusBadRequest)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, MaxDNSMessageSize)
+		defer r.Body.Close()
+
+		var data []byte
+		data, err = io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("failed to read body: %v", err), http.StatusBadRequest)
+			return
+		}
+		query, err = DecodeJSONQuery(data)
+
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Create a JSON response writer that captures the DNS response
+	jrw := &jsonResponseWriter{
+		httpWriter: w,
+		httpReq:    r,
+	}
+	h.dnsHandler.ServeDNS(jrw, query)
+
+	// If the handler didn't produce a response, return a server error
+	if jrw.response == nil {
+		http.Error(w, "no DNS response generated", http.StatusInternalServerError)
+		return
+	}
+
+	// Encode the captured response as JSON
+	jsonData, err := EncodeJSON(jrw.response)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to encode JSON response: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", ContentTypeDNSJSON)
+	w.WriteHeader(http.StatusOK)
+	w.Write(jsonData)
+}
+
+// jsonResponseWriter captures a DNS response for subsequent JSON encoding.
+// It implements server.ResponseWriter.
+type jsonResponseWriter struct {
+	httpWriter http.ResponseWriter
+	httpReq    *http.Request
+	response   *protocol.Message
+}
+
+// Write captures the DNS message for later JSON encoding.
+func (rw *jsonResponseWriter) Write(msg *protocol.Message) (int, error) {
+	if rw.response != nil {
+		return 0, fmt.Errorf("response already written")
+	}
+	rw.response = msg
+	return 0, nil
+}
+
+// ClientInfo returns information about the client from the HTTP request.
+func (rw *jsonResponseWriter) ClientInfo() *server.ClientInfo {
+	host, port, err := net.SplitHostPort(rw.httpReq.RemoteAddr)
+	if err != nil {
+		return &server.ClientInfo{
+			Protocol: "https",
+		}
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		ip = net.IPv4(0, 0, 0, 0)
+	}
+
+	return &server.ClientInfo{
+		Addr: &net.TCPAddr{
+			IP:   ip,
+			Port: parsePort(port),
+		},
+		Protocol: "https",
+	}
+}
+
+// MaxSize returns the maximum response size for JSON DoH.
+func (rw *jsonResponseWriter) MaxSize() int {
+	return MaxDNSMessageSize
 }
 
 // handleGET processes GET requests with base64url-encoded DNS query.

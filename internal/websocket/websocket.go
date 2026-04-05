@@ -8,8 +8,10 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // WebSocket GUID per RFC 6455 Section 4.2.1.5
@@ -87,6 +89,15 @@ type Conn struct {
 // Close closes the underlying connection.
 func (c *Conn) Close() error {
 	return c.conn.Close()
+}
+
+// SetReadDeadline sets the read deadline on the underlying connection.
+// Returns an error if the underlying connection does not support deadlines.
+func (c *Conn) SetReadDeadline(t time.Time) error {
+	if nc, ok := c.conn.(net.Conn); ok {
+		return nc.SetReadDeadline(t)
+	}
+	return errors.New("websocket: underlying connection does not support deadlines")
 }
 
 // ReadMessage reads a single text or binary message.

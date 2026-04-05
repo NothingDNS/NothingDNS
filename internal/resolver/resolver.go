@@ -41,6 +41,7 @@ type Config struct {
 	EDNS0BufSize      uint16        // EDNS0 UDP buffer size (default 4096)
 	QnameMinimization bool          // RFC 7816 QNAME minimization (default false)
 	Use0x20           bool          // DNS 0x20 encoding for spoofing resistance (default false)
+	Hints             []RootHint    // Custom root hints (if nil, uses IANA defaults)
 }
 
 func DefaultConfig() Config {
@@ -74,11 +75,15 @@ func NewResolver(config Config, cache Cache, transport Transport) *Resolver {
 	if config.EDNS0BufSize == 0 {
 		config.EDNS0BufSize = 4096
 	}
+	hints := config.Hints
+	if len(hints) == 0 {
+		hints = RootHints()
+	}
 	return &Resolver{
 		config:    config,
 		cache:     cache,
 		transport: transport,
-		hints:     RootHints(),
+		hints:     hints,
 	}
 }
 

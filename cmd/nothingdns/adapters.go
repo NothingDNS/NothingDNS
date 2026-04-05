@@ -4,12 +4,16 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
+	"net"
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/cache"
 	"github.com/nothingdns/nothingdns/internal/protocol"
+	"github.com/nothingdns/nothingdns/internal/quic"
 	"github.com/nothingdns/nothingdns/internal/resolver"
+	"github.com/nothingdns/nothingdns/internal/server"
 	"github.com/nothingdns/nothingdns/internal/upstream"
 )
 
@@ -84,4 +88,50 @@ func (a *resolverCacheAdapter) Set(key string, msg *protocol.Message, ttl uint32
 
 func (a *resolverCacheAdapter) SetNegative(key string, rcode uint8) {
 	a.cache.SetNegative(key, rcode)
+}
+
+// doqHandlerAdapter adapts a server.Handler (ServeDNS) into a quic.DoQHandler (ServeDoQ).
+// It unpacks the DNS query from raw bytes, runs it through the DNS handler, and
+// writes the wire-format response back to the QUIC stream.
+type doqHandlerAdapter struct {
+	handler server.Handler
+}
+
+func (a *doqHandlerAdapter) ServeDoQ(stream *quic.Stream, queryData []byte) {
+	msg, err := protocol.UnpackMessage(queryData)
+	if err != nil {
+		return
+	}
+	if len(msg.Questions) == 0 {
+		return
+	}
+
+	rw := &doqResponseWriter{stream: stream}
+	a.handler.ServeDNS(rw, msg)
+}
+
+// doqResponseWriter implements server.ResponseWriter for QUIC streams.
+type doqResponseWriter struct {
+	stream *quic.Stream
+}
+
+func (w *doqResponseWriter) Write(msg *protocol.Message) (int, error) {
+	buf := make([]byte, msg.WireLength()+2)
+	n, err := msg.Pack(buf[2:])
+	if err != nil {
+		return 0, err
+	}
+	binary.BigEndian.PutUint16(buf[0:2], uint16(n))
+	return w.stream.Write(buf[:n+2])
+}
+
+func (w *doqResponseWriter) ClientInfo() *server.ClientInfo {
+	return &server.ClientInfo{
+		Addr:     &net.UDPAddr{},
+		Protocol: "quic",
+	}
+}
+
+func (w *doqResponseWriter) MaxSize() int {
+	return quic.DoQMaxMessageSize
 }
