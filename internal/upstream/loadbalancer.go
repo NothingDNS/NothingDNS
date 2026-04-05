@@ -702,6 +702,29 @@ func (lb *LoadBalancer) Stats() (queries, failed, failovers uint64) {
 		atomic.LoadUint64(&lb.failoverCount)
 }
 
+// IsHealthy returns true if at least one server or anycast backend is healthy.
+func (lb *LoadBalancer) IsHealthy() bool {
+	lb.mu.RLock()
+	defer lb.mu.RUnlock()
+
+	for _, s := range lb.servers {
+		if s.IsHealthy() {
+			return true
+		}
+	}
+	for _, group := range lb.anycastGroups {
+		group.mu.RLock()
+		for _, b := range group.Backends {
+			if b.IsHealthy() {
+				group.mu.RUnlock()
+				return true
+			}
+		}
+		group.mu.RUnlock()
+	}
+	return false
+}
+
 // GetAnycastGroups returns all anycast groups.
 func (lb *LoadBalancer) GetAnycastGroups() map[string]*AnycastGroup {
 	lb.mu.RLock()

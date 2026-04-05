@@ -584,6 +584,19 @@ func (c *Client) Stats() (queries, failed, responses uint64) {
 		atomic.LoadUint64(&c.responsesTotal)
 }
 
+// IsHealthy returns true if at least one upstream server is healthy.
+func (c *Client) IsHealthy() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	for _, s := range c.servers {
+		if s.IsHealthy() {
+			return true
+		}
+	}
+	return false
+}
+
 // Servers returns the list of upstream servers.
 func (c *Client) Servers() []*Server {
 	return c.servers
