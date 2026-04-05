@@ -79,7 +79,7 @@ func NewUDPServerWithWorkers(addr string, handler Handler, workers int) *UDPServ
 
 	s := &UDPServer{
 		addr:     addr,
-		handler:  handler,
+		handler:  &ServeDNSWithRecovery{Handler: handler},
 		workers:  workers,
 		ctx:      ctx,
 		cancel:   cancel,

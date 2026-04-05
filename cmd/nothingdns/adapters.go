@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"log"
 	"net"
 	"time"
 
@@ -98,6 +99,12 @@ type doqHandlerAdapter struct {
 }
 
 func (a *doqHandlerAdapter) ServeDoQ(stream *quic.Stream, queryData []byte) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("doq handler panic: %v", r)
+		}
+	}()
+
 	msg, err := protocol.UnpackMessage(queryData)
 	if err != nil {
 		return

@@ -86,7 +86,7 @@ func NewTCPServerWithWorkers(addr string, handler Handler, workers int) *TCPServ
 
 	return &TCPServer{
 		addr:    addr,
-		handler: handler,
+		handler: &ServeDNSWithRecovery{Handler: handler},
 		workers: workers,
 		ctx:     ctx,
 		cancel:  cancel,

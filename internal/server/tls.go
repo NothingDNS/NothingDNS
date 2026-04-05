@@ -80,7 +80,7 @@ func NewTLSServerWithWorkers(addr string, handler Handler, tlsConfig *tls.Config
 
 	return &TLSServer{
 		addr:      addr,
-		handler:   handler,
+		handler:   &ServeDNSWithRecovery{Handler: handler},
 		tlsConfig: tlsConfig,
 		workers:   workers,
 		ctx:       ctx,

@@ -32,7 +32,7 @@ type WSHandler struct {
 // NewWSHandler creates a new DNS-over-WebSocket handler.
 func NewWSHandler(dnsHandler server.Handler) *WSHandler {
 	return &WSHandler{
-		dnsHandler: dnsHandler,
+		dnsHandler: &server.ServeDNSWithRecovery{Handler: dnsHandler},
 	}
 }
 

@@ -26,7 +26,7 @@ type Handler struct {
 // NewHandler creates a new DoH handler.
 func NewHandler(dnsHandler server.Handler) *Handler {
 	return &Handler{
-		dnsHandler: dnsHandler,
+		dnsHandler: &server.ServeDNSWithRecovery{Handler: dnsHandler},
 	}
 }
 

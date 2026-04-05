@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"log"
 	"net"
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
@@ -78,6 +79,39 @@ type Handler interface {
 
 // HandlerFunc is an adapter to allow use of functions as handlers.
 type HandlerFunc func(w ResponseWriter, req *protocol.Message)
+
+// ServeDNSWithRecovery wraps a Handler to recover from panics and return
+// a SERVFAIL response instead of crashing the server.
+type ServeDNSWithRecovery struct {
+	Handler Handler
+}
+
+// ServeDNS calls h.ServeDNS, recovering from any panic and sending
+// a SERVFAIL response to prevent server crash.
+func (h *ServeDNSWithRecovery) ServeDNS(w ResponseWriter, req *protocol.Message) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("ServeDNS panic recovered: %v", r)
+			sendSERVFAIL(w, req)
+		}
+	}()
+	h.Handler.ServeDNS(w, req)
+}
+
+// sendSERVFAIL sends a minimal SERVFAIL response.
+func sendSERVFAIL(w ResponseWriter, req *protocol.Message) {
+	if req == nil || len(req.Questions) == 0 {
+		return
+	}
+	resp := &protocol.Message{
+		Header: protocol.Header{
+			ID:    req.Header.ID,
+			Flags: protocol.NewResponseFlags(protocol.RcodeServerFailure),
+		},
+		Questions: req.Questions,
+	}
+	w.Write(resp)
+}
 
 // ServeDNS calls f(w, req).
 func (f HandlerFunc) ServeDNS(w ResponseWriter, req *protocol.Message) {
