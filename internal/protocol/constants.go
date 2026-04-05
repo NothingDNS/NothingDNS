@@ -163,6 +163,37 @@ const (
 	OptionCodeExtendedError = 15 // Extended DNS Error (RFC 8914)
 )
 
+// Extended DNS Error (EDE) Info Codes per RFC 8914.
+const (
+	EDEOtherError             = 0  // Other Error
+	EDEUnsupportedDNSKEYAlgo  = 1  // Unsupported DNSKEY Algorithm
+	EDEUnsupportedDSDigest    = 2  // Unsupported DS Digest Type
+	EDEStaleAnswer            = 3  // Stale Answer
+	EDEForgedAnswer           = 4  // Forged Answer
+	EDEDNSSECIndeterminate    = 5  // DNSSEC Indeterminate
+	EDEDNSSECBogus            = 6  // DNSSEC Bogus
+	EDENSECMissing            = 7  // Signature Expired
+	EDECachedError            = 8  // Cached Error
+	EDENotReady               = 9  // Not Ready
+	EDEBlocked                = 10 // Blocked
+	EDECensored               = 11 // Censored
+	EDEFiltered               = 12 // Filtered
+	EDEProhibited             = 13 // Prohibited
+	EDEStaleNXDOMAIN          = 14 // Stale NXDOMAIN Answer
+	EDENotAuthoritative       = 15 // Not Authoritative
+	EDENotSupported           = 16 // Not Supported
+	EDENoReachableAuthority   = 17 // No Reachable Authority
+	EDENetworkError           = 18 // Network Error
+	EDEInvalidData            = 19 // Invalid Data
+	EDESignatureExpiredBefore = 20 // Signature Expired Before Valid Period
+	EDESignatureNotYetValid   = 21 // Signature Not Yet Valid
+	EDETooEarly               = 22 // DNSKEY Missing
+	EDEUnsupportedNSEC3Iter   = 23 // Unsupported NSEC3 Iterations Value
+	EDENoNSECRecords          = 24 // Unable to Conform to Policy
+	EDENoZoneKeyBitSet        = 25 // Synthesized
+	EDENSECMissingCoverage    = 26 // NSEC Missing Coverage
+)
+
 // Header flag bits.
 const (
 	FlagQR = 1 << 15 // Query/Response (0 = query, 1 = response)

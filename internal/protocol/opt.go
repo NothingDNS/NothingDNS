@@ -279,6 +279,152 @@ func (e *EDNS0ClientSubnet) ToEDNS0Option() EDNS0Option {
 }
 
 // ============================================================================
+// Extended DNS Error (EDE) Support - RFC 8914
+// ============================================================================
+
+// EDNS0ExtendedError represents an Extended DNS Error (RFC 8914).
+// EDE provides additional error information beyond the RCODE via EDNS0 option code 15.
+type EDNS0ExtendedError struct {
+	// InfoCode is the EDE info code (0-65535) identifying the error type.
+	InfoCode uint16
+	// ExtraText is optional human-readable UTF-8 text providing additional context.
+	ExtraText string
+}
+
+// NewEDNS0ExtendedError creates a new Extended DNS Error with the given info code and text.
+func NewEDNS0ExtendedError(infoCode uint16, extraText string) *EDNS0ExtendedError {
+	return &EDNS0ExtendedError{
+		InfoCode:  infoCode,
+		ExtraText: extraText,
+	}
+}
+
+// Pack serializes the Extended DNS Error to wire format.
+// Wire format: 2-byte info code (big-endian) followed by optional UTF-8 extra text.
+func (e *EDNS0ExtendedError) Pack() []byte {
+	data := make([]byte, 2+len(e.ExtraText))
+	PutUint16(data[0:], e.InfoCode)
+	if len(e.ExtraText) > 0 {
+		copy(data[2:], e.ExtraText)
+	}
+	return data
+}
+
+// UnpackEDNS0ExtendedError deserializes an Extended DNS Error from wire format data.
+func UnpackEDNS0ExtendedError(data []byte) (*EDNS0ExtendedError, error) {
+	if len(data) < 2 {
+		return nil, fmt.Errorf("truncated EDE option: need at least 2 bytes, got %d", len(data))
+	}
+
+	e := &EDNS0ExtendedError{}
+	e.InfoCode = Uint16(data[0:])
+
+	if len(data) > 2 {
+		e.ExtraText = string(data[2:])
+	}
+
+	return e, nil
+}
+
+// ToEDNS0Option converts the Extended DNS Error to an EDNS0Option.
+func (e *EDNS0ExtendedError) ToEDNS0Option() EDNS0Option {
+	return EDNS0Option{
+		Code: OptionCodeExtendedError,
+		Data: e.Pack(),
+	}
+}
+
+// String returns a human-readable representation of the Extended DNS Error.
+func (e *EDNS0ExtendedError) String() string {
+	name := EDEInfoCodeString(e.InfoCode)
+	if e.ExtraText != "" {
+		return fmt.Sprintf("%s (%d): %s", name, e.InfoCode, e.ExtraText)
+	}
+	return fmt.Sprintf("%s (%d)", name, e.InfoCode)
+}
+
+// EDEInfoCodeString returns the human-readable name for an EDE info code.
+func EDEInfoCodeString(code uint16) string {
+	switch code {
+	case EDEOtherError:
+		return "Other Error"
+	case EDEUnsupportedDNSKEYAlgo:
+		return "Unsupported DNSKEY Algorithm"
+	case EDEUnsupportedDSDigest:
+		return "Unsupported DS Digest Type"
+	case EDEStaleAnswer:
+		return "Stale Answer"
+	case EDEForgedAnswer:
+		return "Forged Answer"
+	case EDEDNSSECIndeterminate:
+		return "DNSSEC Indeterminate"
+	case EDEDNSSECBogus:
+		return "DNSSEC Bogus"
+	case EDENSECMissing:
+		return "Signature Expired"
+	case EDECachedError:
+		return "Cached Error"
+	case EDENotReady:
+		return "Not Ready"
+	case EDEBlocked:
+		return "Blocked"
+	case EDECensored:
+		return "Censored"
+	case EDEFiltered:
+		return "Filtered"
+	case EDEProhibited:
+		return "Prohibited"
+	case EDEStaleNXDOMAIN:
+		return "Stale NXDOMAIN Answer"
+	case EDENotAuthoritative:
+		return "Not Authoritative"
+	case EDENotSupported:
+		return "Not Supported"
+	case EDENoReachableAuthority:
+		return "No Reachable Authority"
+	case EDENetworkError:
+		return "Network Error"
+	case EDEInvalidData:
+		return "Invalid Data"
+	case EDESignatureExpiredBefore:
+		return "Signature Expired Before Valid Period"
+	case EDESignatureNotYetValid:
+		return "Signature Not Yet Valid"
+	case EDETooEarly:
+		return "DNSKEY Missing"
+	case EDEUnsupportedNSEC3Iter:
+		return "Unsupported NSEC3 Iterations Value"
+	case EDENoNSECRecords:
+		return "Unable to Conform to Policy"
+	case EDENoZoneKeyBitSet:
+		return "Synthesized"
+	case EDENSECMissingCoverage:
+		return "NSEC Missing Coverage"
+	default:
+		return fmt.Sprintf("EDE%d", code)
+	}
+}
+
+// AddExtendedError adds an Extended DNS Error option to a message.
+// If the message already has an OPT record, the EDE option is appended to it.
+// If no OPT record exists, one is created with a default UDP payload size of 4096.
+func AddExtendedError(msg *Message, infoCode uint16, extraText string) {
+	ede := NewEDNS0ExtendedError(infoCode, extraText)
+	opt := msg.GetOPT()
+
+	if opt == nil {
+		// Create a new OPT record with sensible defaults
+		msg.SetEDNS0(4096, false)
+		opt = msg.GetOPT()
+	}
+
+	if optData, ok := opt.Data.(*RDataOPT); ok {
+		edeOption := ede.ToEDNS0Option()
+		optData.AddOption(edeOption.Code, edeOption.Data)
+	}
+}
+
+// ============================================================================
 // Helper Functions
 // ============================================================================
 
