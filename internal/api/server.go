@@ -165,6 +165,7 @@ func (s *Server) Start() error {
 	// Dashboard UI
 	mux.HandleFunc("/api/dashboard/stats", s.handleDashboardStats)
 	mux.HandleFunc("/api/v1/queries", s.handleQueryLog)
+	mux.HandleFunc("/api/v1/topdomains", s.handleTopDomains)
 
 	// OpenAPI / Swagger
 	mux.HandleFunc("/api/openapi.json", s.handleOpenAPISpec)
@@ -437,6 +438,34 @@ func (s *Server) handleQueryLog(w http.ResponseWriter, r *http.Request) {
 		Queries: entries,
 		Total:   total,
 		Offset:  offset,
+		Limit:   limit,
+	})
+}
+
+// handleTopDomains returns the top N most-queried domains.
+func (s *Server) handleTopDomains(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	if s.dashboardServer == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Dashboard not available")
+		return
+	}
+
+	limit := 10
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if v, err := strconv.Atoi(l); err == nil && v > 0 && v <= 100 {
+			limit = v
+		}
+	}
+
+	stats := s.dashboardServer.GetStats()
+	domains := stats.GetTopDomains(limit)
+
+	s.writeJSON(w, http.StatusOK, &TopDomainsResponse{
+		Domains: domains,
 		Limit:   limit,
 	})
 }

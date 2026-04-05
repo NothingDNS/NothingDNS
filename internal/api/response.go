@@ -1,5 +1,7 @@
 package api
 
+import "github.com/nothingdns/nothingdns/internal/dashboard"
+
 // API response types — replaces map[string]interface{} usage per AGENT_DIRECTIVES §2.3.
 
 // ErrorResponse is returned for all API errors.
@@ -252,4 +254,13 @@ type QueryLogResponse struct {
 	Total   int             `json:"total"`
 	Offset  int             `json:"offset"`
 	Limit   int             `json:"limit"`
+}
+
+// TopDomainsEntry represents a domain with its query count.
+type TopDomainsEntry = dashboard.TopDomainsEntry
+
+// TopDomainsResponse is returned by GET /api/v1/topdomains.
+type TopDomainsResponse struct {
+	Domains []TopDomainsEntry `json:"domains"`
+	Limit   int              `json:"limit"`
 }

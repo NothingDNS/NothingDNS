@@ -83,6 +83,57 @@ func (ds *DashboardStats) GetRecentQueries(offset, limit int) ([]*QueryEvent, in
 	return queries, total
 }
 
+// TopDomainsEntry represents a domain with its query count.
+type TopDomainsEntry struct {
+	Domain string `json:"domain"`
+	Count  int    `json:"count"`
+}
+
+// GetTopDomains returns the top N most-queried domains.
+func (ds *DashboardStats) GetTopDomains(limit int) []TopDomainsEntry {
+	ds.mu.RLock()
+	defer ds.mu.RUnlock()
+
+	if len(ds.RecentQueries) == 0 {
+		return nil
+	}
+
+	countByDomain := make(map[string]int)
+	for _, q := range ds.RecentQueries {
+		countByDomain[q.Domain]++
+	}
+
+	type domainCount struct {
+		domain string
+		count  int
+	}
+	var sorted []domainCount
+	for domain, count := range countByDomain {
+		sorted = append(sorted, domainCount{domain, count})
+	}
+
+	// Sort by count descending
+	for i := 0; i < len(sorted)-1; i++ {
+		for j := i + 1; j < len(sorted); j++ {
+			if sorted[j].count > sorted[i].count {
+				sorted[i], sorted[j] = sorted[j], sorted[i]
+			}
+		}
+	}
+
+	if limit > len(sorted) {
+		limit = len(sorted)
+	}
+	result := make([]TopDomainsEntry, limit)
+	for i := 0; i < limit; i++ {
+		result[i] = TopDomainsEntry{
+			Domain: sorted[i].domain,
+			Count:  sorted[i].count,
+		}
+	}
+	return result
+}
+
 // NewServer creates a new dashboard server
 func NewServer() *Server {
 	s := &Server{
