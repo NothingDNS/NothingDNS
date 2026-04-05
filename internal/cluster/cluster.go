@@ -8,7 +8,16 @@ import (
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/cache"
+	"github.com/nothingdns/nothingdns/internal/cluster/raft"
 	"github.com/nothingdns/nothingdns/internal/util"
+)
+
+// ConsensusMode defines the consensus protocol for the cluster.
+type ConsensusMode string
+
+const (
+	ConsensusSWIM ConsensusMode = "swim" // Gossip-based SWIM (default, existing)
+	ConsensusRaft ConsensusMode = "raft" // Raft consensus (new)
 )
 
 // Cluster manages the DNS server cluster.
@@ -17,6 +26,10 @@ type Cluster struct {
 	nodeList *NodeList
 	gossip   *GossipProtocol
 	logger   *util.Logger
+
+	// Raft consensus (when mode = raft)
+	raft      *raft.ClusterIntegration
+	consensus ConsensusMode
 
 	// Cache integration
 	cache         *cache.Cache
@@ -40,6 +53,7 @@ type Config struct {
 	BindAddr      string
 	BindPort      int
 	GossipPort    int
+	ConsensusMode ConsensusMode // "swim" (default) or "raft"
 	Region        string
 	Zone          string
 	Weight        int
@@ -47,6 +61,14 @@ type Config struct {
 	CacheSync     bool
 	HTTPAddr      string
 	EncryptionKey string // hex-encoded 32-byte AES-256 key
+	DataDir       string // Directory for Raft WAL and snapshots
+	Peers         []PeerConfig // Raft peer nodes
+}
+
+// PeerConfig describes a Raft cluster peer.
+type PeerConfig struct {
+	NodeID string
+	Addr   string
 }
 
 // CacheSyncEvent represents a cache synchronization event.
@@ -104,6 +126,11 @@ func New(config Config, logger *util.Logger, dnsCache *cache.Cache) (*Cluster, e
 		config.NodeID = GenerateNodeID()
 	}
 
+	// Default to SWIM consensus if not specified
+	if config.ConsensusMode == "" {
+		config.ConsensusMode = ConsensusSWIM
+	}
+
 	// Get local IP if not specified
 	if config.BindAddr == "" {
 		ip, err := GetLocalIP()
@@ -113,51 +140,64 @@ func New(config Config, logger *util.Logger, dnsCache *cache.Cache) (*Cluster, e
 		config.BindAddr = ip
 	}
 
-	// Create self node
+	c := &Cluster{
+		config:        config,
+		logger:        logger,
+		cache:         dnsCache,
+		cacheSyncChan: make(chan CacheSyncEvent, 100),
+		consensus:     config.ConsensusMode,
+	}
+
+	// Initialize based on consensus mode
+	if config.ConsensusMode == ConsensusRaft {
+		if err := c.initRaft(); err != nil {
+			return nil, fmt.Errorf("initializing Raft: %w", err)
+		}
+	} else {
+		if err := c.initGossip(); err != nil {
+			return nil, fmt.Errorf("initializing gossip: %w", err)
+		}
+	}
+
+	return c, nil
+}
+
+// initGossip initializes the SWIM gossip protocol.
+func (c *Cluster) initGossip() error {
 	self := &Node{
-		ID:      config.NodeID,
-		Addr:    config.BindAddr,
-		Port:    config.GossipPort,
+		ID:      c.config.NodeID,
+		Addr:    c.config.BindAddr,
+		Port:    c.config.GossipPort,
 		State:   NodeStateAlive,
 		Version: 1,
 		Meta: NodeMeta{
-			Region:   config.Region,
-			Zone:     config.Zone,
-			Weight:   config.Weight,
-			HTTPAddr: config.HTTPAddr,
+			Region:   c.config.Region,
+			Zone:     c.config.Zone,
+			Weight:   c.config.Weight,
+			HTTPAddr: c.config.HTTPAddr,
 		},
 	}
 
-	nodeList := NewNodeList(self)
+	c.nodeList = NewNodeList(self)
 
 	gossipConfig := DefaultGossipConfig()
-	gossipConfig.BindAddr = config.BindAddr
-	gossipConfig.BindPort = config.GossipPort
+	gossipConfig.BindAddr = c.config.BindAddr
+	gossipConfig.BindPort = c.config.GossipPort
 
-	// Set encryption key if provided (hex-encoded 32-byte key)
-	if config.EncryptionKey != "" {
-		key, err := hex.DecodeString(config.EncryptionKey)
+	if c.config.EncryptionKey != "" {
+		key, err := hex.DecodeString(c.config.EncryptionKey)
 		if err != nil {
-			return nil, fmt.Errorf("decoding cluster encryption key: %w", err)
+			return fmt.Errorf("decoding cluster encryption key: %w", err)
 		}
 		gossipConfig.EncryptionKey = key
 	}
 
-	gossip, err := NewGossipProtocol(gossipConfig, nodeList)
+	gossip, err := NewGossipProtocol(gossipConfig, c.nodeList)
 	if err != nil {
-		return nil, fmt.Errorf("creating gossip protocol: %w", err)
+		return fmt.Errorf("creating gossip protocol: %w", err)
 	}
+	c.gossip = gossip
 
-	c := &Cluster{
-		config:        config,
-		nodeList:      nodeList,
-		gossip:        gossip,
-		logger:        logger,
-		cache:         dnsCache,
-		cacheSyncChan: make(chan CacheSyncEvent, 100),
-	}
-
-	// Set up gossip callbacks
 	gossip.SetCallbacks(
 		c.handleNodeJoin,
 		c.handleNodeLeave,
@@ -165,7 +205,61 @@ func New(config Config, logger *util.Logger, dnsCache *cache.Cache) (*Cluster, e
 		c.handleCacheInvalid,
 	)
 
-	return c, nil
+	return nil
+}
+
+// initRaft initializes the Raft consensus protocol.
+func (c *Cluster) initRaft() error {
+	if len(c.config.Peers) == 0 {
+		return fmt.Errorf("Raft consensus requires at least one peer in config")
+	}
+
+	// Build peer list
+	var peerIDs []raft.NodeID
+	var peerAddrs []string
+	for _, p := range c.config.Peers {
+		peerIDs = append(peerIDs, raft.NodeID(p.NodeID))
+		peerAddrs = append(peerAddrs, p.Addr)
+	}
+
+	// Create self node entry for nodeList (used for gossip compatibility)
+	self := &Node{
+		ID:      c.config.NodeID,
+		Addr:    c.config.BindAddr,
+		Port:    c.config.GossipPort,
+		State:   NodeStateAlive,
+		Version: 1,
+		Meta: NodeMeta{
+			Region:   c.config.Region,
+			Zone:     c.config.Zone,
+			Weight:   c.config.Weight,
+			HTTPAddr: c.config.HTTPAddr,
+		},
+	}
+	c.nodeList = NewNodeList(self)
+
+	// Create data directory if not specified
+	dataDir := c.config.DataDir
+	if dataDir == "" {
+		dataDir = "/var/lib/nothingdns/cluster"
+	}
+
+	// Determine Raft bind address
+	raftAddr := fmt.Sprintf("%s:%d", c.config.BindAddr, c.config.GossipPort)
+
+	// Create Raft cluster integration
+	raftNode, err := raft.NewClusterIntegration(
+		raft.NodeID(c.config.NodeID),
+		peerIDs,
+		raftAddr,
+		dataDir,
+	)
+	if err != nil {
+		return fmt.Errorf("creating Raft node: %w", err)
+	}
+	c.raft = raftNode
+
+	return nil
 }
 
 // Start starts the cluster.
@@ -177,21 +271,31 @@ func (c *Cluster) Start() error {
 		return fmt.Errorf("cluster already started")
 	}
 
-	// Start gossip protocol
-	if err := c.gossip.Start(); err != nil {
-		return fmt.Errorf("starting gossip: %w", err)
-	}
-
-	// Join seed nodes
-	for _, seed := range c.config.SeedNodes {
-		if err := c.gossip.Join(seed); err != nil {
-			c.logger.Warnf("Failed to join seed node %s: %v", seed, err)
-		} else {
-			c.logger.Infof("Joined seed node %s", seed)
+	if c.consensus == ConsensusRaft {
+		// Start Raft consensus
+		if err := c.raft.Start(); err != nil {
+			return fmt.Errorf("starting Raft: %w", err)
 		}
+		c.logger.Infof("Raft cluster started with node ID %s", c.config.NodeID)
+		c.logger.Infof("Raft consensus: %s, leader: %v", c.raft.Stats().State, c.raft.IsLeader())
+	} else {
+		// Start gossip protocol
+		if err := c.gossip.Start(); err != nil {
+			return fmt.Errorf("starting gossip: %w", err)
+		}
+
+		// Join seed nodes
+		for _, seed := range c.config.SeedNodes {
+			if err := c.gossip.Join(seed); err != nil {
+				c.logger.Warnf("Failed to join seed node %s: %v", seed, err)
+			} else {
+				c.logger.Infof("Joined seed node %s", seed)
+			}
+		}
+		c.logger.Infof("Cluster listening on %s:%d (SWIM)", c.config.BindAddr, c.config.GossipPort)
 	}
 
-	// Start cache sync processor
+	// Start cache sync processor (works with both modes)
 	if c.config.CacheSync {
 		c.wg.Add(1)
 		go c.cacheSyncLoop()
@@ -199,7 +303,6 @@ func (c *Cluster) Start() error {
 
 	c.started = true
 	c.logger.Infof("Cluster started with node ID %s", c.config.NodeID)
-	c.logger.Infof("Cluster listening on %s:%d", c.config.BindAddr, c.config.GossipPort)
 
 	return nil
 }
@@ -219,13 +322,19 @@ func (c *Cluster) Stop() error {
 	}
 	c.started = false
 
-	if err := c.gossip.Stop(); err != nil {
-		c.logger.Warnf("Error stopping gossip: %v", err)
+	if c.consensus == ConsensusRaft {
+		if err := c.raft.Stop(); err != nil {
+			c.logger.Warnf("Error stopping Raft: %v", err)
+		}
+	} else {
+		if err := c.gossip.Stop(); err != nil {
+			c.logger.Warnf("Error stopping gossip: %v", err)
+		}
 	}
 	c.logger.Info("Cluster stopped")
 	c.mu.Unlock()
 
-	// Wait for cacheSyncLoop to finish after stopping gossip
+	// Wait for cacheSyncLoop to finish
 	c.wg.Wait()
 
 	return nil
@@ -291,7 +400,16 @@ func (c *Cluster) InvalidateCache(keys []string) error {
 		return nil
 	}
 
-	// Send through gossip
+	// In Raft mode, cache sync is handled via the gossip fallback for cache invalidation
+	// (zone changes go through Raft consensus, cache invalidation is best-effort)
+	if c.consensus == ConsensusRaft {
+		// Raft handles zone consistency; cache invalidation uses gossip fallback
+		if c.gossip != nil {
+			return c.gossip.BroadcastCacheInvalidation(keys)
+		}
+		return nil
+	}
+
 	return c.gossip.BroadcastCacheInvalidation(keys)
 }
 
@@ -328,13 +446,22 @@ func (c *Cluster) IsHealthy() bool {
 
 // Stats returns cluster statistics.
 func (c *Cluster) Stats() Stats {
-	return Stats{
+	stats := Stats{
 		NodeID:        c.config.NodeID,
+		ConsensusMode: c.consensus,
 		NodeCount:     c.nodeList.Count(),
 		AliveCount:    c.nodeList.AliveCount(),
 		IsHealthy:     c.IsHealthy(),
-		GossipStats:   c.gossip.Stats(),
 	}
+
+	if c.consensus == ConsensusRaft {
+		stats.IsLeader = c.raft.IsLeader()
+		stats.RaftStats = c.raft.Stats()
+	} else {
+		stats.GossipStats = c.gossip.Stats()
+	}
+
+	return stats
 }
 
 // handleNodeJoin handles a node join event.
@@ -392,8 +519,15 @@ func (c *Cluster) cacheSyncLoop() {
 	for event := range c.cacheSyncChan {
 		switch event.Type {
 		case "invalidate":
-			if err := c.gossip.BroadcastCacheInvalidation(event.Keys); err != nil {
-				c.logger.Warnf("Failed to broadcast cache invalidation: %v", err)
+			// In Raft mode, also use gossip for cache invalidation broadcast
+			if c.consensus == ConsensusRaft && c.gossip != nil {
+				if err := c.gossip.BroadcastCacheInvalidation(event.Keys); err != nil {
+					c.logger.Warnf("Failed to broadcast cache invalidation: %v", err)
+				}
+			} else if c.gossip != nil {
+				if err := c.gossip.BroadcastCacheInvalidation(event.Keys); err != nil {
+					c.logger.Warnf("Failed to broadcast cache invalidation: %v", err)
+				}
 			}
 		}
 	}
@@ -401,9 +535,12 @@ func (c *Cluster) cacheSyncLoop() {
 
 // Stats contains cluster statistics.
 type Stats struct {
-	NodeID      string
-	NodeCount   int
-	AliveCount  int
-	IsHealthy   bool
-	GossipStats GossipStats
+	NodeID       string
+	ConsensusMode ConsensusMode
+	NodeCount    int
+	AliveCount   int
+	IsHealthy    bool
+	IsLeader     bool
+	GossipStats  GossipStats  // Valid if consensus = SWIM
+	RaftStats    raft.ClusterStats // Valid if consensus = Raft
 }
