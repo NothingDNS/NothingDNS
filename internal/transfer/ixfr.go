@@ -48,8 +48,9 @@ type IXFRJournalEntry struct {
 type IXFRServer struct {
 	axfrServer     *AXFRServer                    // For AXFR fallback
 	zones          map[string]*zone.Zone
-	journals       map[string][]*IXFRJournalEntry // zone name -> journal entries
+ journals       map[string][]*IXFRJournalEntry // zone name -> journal entries (in-memory cache)
 	journalsMu     sync.RWMutex                   // Protects journals map
+	journalStore   JournalStore                   // Optional persistent storage
 	maxJournalSize int                            // Maximum entries per zone
 }
 
@@ -61,6 +62,13 @@ func NewIXFRServer(axfrServer *AXFRServer) *IXFRServer {
 		journals:       make(map[string][]*IXFRJournalEntry),
 		maxJournalSize: 100, // Default: keep last 100 changes
 	}
+}
+
+// SetJournalStore sets the persistent journal store.
+// If a store is set, journal entries are persisted to disk.
+// If nil, only in-memory storage is used.
+func (s *IXFRServer) SetJournalStore(store JournalStore) {
+	s.journalStore = store
 }
 
 // SetMaxJournalSize sets the maximum number of journal entries per zone
@@ -90,6 +98,13 @@ func (s *IXFRServer) RecordChange(zoneName string, oldSerial, newSerial uint32, 
 		s.journals[zoneName] = s.journals[zoneName][len(s.journals[zoneName])-s.maxJournalSize:]
 	}
 	s.journalsMu.Unlock()
+
+	// Persist to journal store if configured
+	if s.journalStore != nil {
+		if err := s.journalStore.SaveEntry(zoneName, entry); err != nil {
+			log.Printf("ixfr: failed to persist journal entry: %v", err)
+		}
+	}
 }
 
 // HandleIXFR handles an IXFR request message
@@ -197,6 +212,19 @@ func (s *IXFRServer) generateIncrementalIXFR(z *zone.Zone, clientSerial uint32) 
 	s.journalsMu.RLock()
 	journal := s.journals[zoneName]
 	s.journalsMu.RUnlock()
+
+	if len(journal) == 0 && s.journalStore != nil {
+		// Try loading from persistent journal store
+		entries, err := s.journalStore.LoadEntries(zoneName)
+		if err != nil {
+			log.Printf("ixfr: failed to load journal from store: %v", err)
+		} else if len(entries) > 0 {
+			s.journalsMu.Lock()
+			s.journals[zoneName] = entries
+			journal = entries
+			s.journalsMu.Unlock()
+		}
+	}
 
 	if len(journal) == 0 {
 		return nil, ErrNoJournal
