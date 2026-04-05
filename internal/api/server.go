@@ -21,6 +21,7 @@ import (
 	"github.com/nothingdns/nothingdns/internal/dashboard"
 	"github.com/nothingdns/nothingdns/internal/doh"
 	"github.com/nothingdns/nothingdns/internal/filter"
+	"github.com/nothingdns/nothingdns/internal/metrics"
 	"github.com/nothingdns/nothingdns/internal/server"
 	"github.com/nothingdns/nothingdns/internal/upstream"
 	"github.com/nothingdns/nothingdns/internal/util"
@@ -42,6 +43,7 @@ type Server struct {
 	upstreamLB      *upstream.LoadBalancer
 	aclChecker      *filter.ACLChecker
 	authStore       *auth.Store
+	metrics         *metrics.MetricsCollector
 
 	// Goroutine leak detection baseline
 	goroutineBaseline int64
@@ -88,6 +90,12 @@ func (s *Server) WithACL(acl *filter.ACLChecker) *Server {
 // WithAuth sets the auth store for the API server.
 func (s *Server) WithAuth(store *auth.Store) *Server {
 	s.authStore = store
+	return s
+}
+
+// WithMetrics sets the metrics collector for the API server.
+func (s *Server) WithMetrics(mc *metrics.MetricsCollector) *Server {
+	s.metrics = mc
 	return s
 }
 
@@ -166,6 +174,11 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/dashboard/stats", s.handleDashboardStats)
 	mux.HandleFunc("/api/v1/queries", s.handleQueryLog)
 	mux.HandleFunc("/api/v1/topdomains", s.handleTopDomains)
+
+	// Metrics history
+	if s.metrics != nil {
+		mux.HandleFunc("/api/v1/metrics/history", s.handleMetricsHistory)
+	}
 
 	// OpenAPI / Swagger
 	mux.HandleFunc("/api/openapi.json", s.handleOpenAPISpec)
@@ -468,6 +481,22 @@ func (s *Server) handleTopDomains(w http.ResponseWriter, r *http.Request) {
 		Domains: domains,
 		Limit:   limit,
 	})
+}
+
+// handleMetricsHistory returns metrics history from the ring buffer.
+func (s *Server) handleMetricsHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	if s.metrics == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Metrics not available")
+		return
+	}
+
+	history := s.metrics.GetHistory()
+	s.writeJSON(w, http.StatusOK, history)
 }
 
 // handleStatus returns server status.

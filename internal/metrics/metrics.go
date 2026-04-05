@@ -17,6 +17,8 @@ type MetricsCollector struct {
 	config Config
 	server *http.Server
 	wg     sync.WaitGroup
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	// Query metrics
 	queriesTotal   map[string]*uint64 // by query type
@@ -57,6 +59,17 @@ type MetricsCollector struct {
 	// Latency histograms
 	latencyMu      sync.RWMutex
 	latencyHists   map[string]*latencyHistogram // by query type
+
+	// Metrics history ring buffer (snapshots every minute, last 60 minutes)
+	historyMu          sync.RWMutex
+	historyIndex       int
+	historyCount       int
+	historySize        int
+	historyTimestamps  []int64
+	historyQueries     []uint64
+	historyCacheHits   []uint64
+	historyCacheMisses  []uint64
+	historyUpstreamMs   []int64 // average upstream latency in ms per minute
 }
 
 // latencyHistogram implements a fixed-bucket histogram without external dependencies.
@@ -97,6 +110,7 @@ func New(cfg Config) *MetricsCollector {
 		cfg.Path = "/metrics"
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
 	return &MetricsCollector{
 		config:          cfg,
 		queriesTotal:    make(map[string]*uint64),
@@ -104,6 +118,14 @@ func New(cfg Config) *MetricsCollector {
 		upstreamQueries: make(map[string]*uint64),
 		latencyHists:    make(map[string]*latencyHistogram),
 		startTime:       time.Now(),
+		ctx:             ctx,
+		cancel:          cancel,
+		historySize:     60, // 60 minutes of history
+		historyTimestamps: make([]int64, 60),
+		historyQueries:    make([]uint64, 60),
+		historyCacheHits:  make([]uint64, 60),
+		historyCacheMisses: make([]uint64, 60),
+		historyUpstreamMs: make([]int64, 60),
 	}
 }
 
@@ -134,7 +156,66 @@ func (m *MetricsCollector) Start() error {
 		}
 	}()
 
+	// Start metrics history snapshot goroutine
+	m.wg.Add(1)
+	go m.historyLoop()
+
 	return nil
+}
+
+// historyLoop snapshots metrics every minute into a ring buffer.
+func (m *MetricsCollector) historyLoop() {
+	defer m.wg.Done()
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-ticker.C:
+			m.recordHistorySnapshot()
+		}
+	}
+}
+
+// recordHistorySnapshot records a single metrics snapshot.
+func (m *MetricsCollector) recordHistorySnapshot() {
+	m.historyMu.Lock()
+	defer m.historyMu.Unlock()
+
+	idx := m.historyIndex % m.historySize
+
+	var totalQueries uint64
+	m.mu.RLock()
+	for _, v := range m.queriesTotal {
+		totalQueries += atomic.LoadUint64(v)
+	}
+	m.mu.RUnlock()
+
+	m.historyTimestamps[idx] = time.Now().Unix()
+	m.historyQueries[idx] = totalQueries
+	m.historyCacheHits[idx] = atomic.LoadUint64(&m.cacheHits)
+	m.historyCacheMisses[idx] = atomic.LoadUint64(&m.cacheMisses)
+
+	// Average upstream latency
+	m.mu.RLock()
+	var totalLatency int64
+	var count int
+	for _, h := range m.latencyHists {
+		totalLatency += int64(atomic.LoadUint64(&h.sumNs))
+		count++
+	}
+	m.mu.RUnlock()
+
+	if count > 0 {
+		m.historyUpstreamMs[idx] = totalLatency / int64(count) / 1e6
+	}
+
+	m.historyIndex++
+	if m.historyCount < m.historySize {
+		m.historyCount++
+	}
 }
 
 // Stop stops the metrics HTTP server.
@@ -145,6 +226,10 @@ func (m *MetricsCollector) Stop() error {
 
 	if srv == nil {
 		return nil
+	}
+
+	if m.cancel != nil {
+		m.cancel()
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -448,7 +533,46 @@ func (m *MetricsCollector) handleMetrics(w http.ResponseWriter, r *http.Request)
 	fmt.Fprintf(w, "nothingdns_tcp_errors_total %d\n", atomic.LoadUint64(&m.tcpErrors))
 }
 
-// handleHealth serves a simple health check endpoint.
+// MetricsHistoryResponse is returned by GET /api/v1/metrics/history.
+type MetricsHistoryResponse struct {
+	Timestamps   []int64 `json:"timestamps"`
+	Queries     []uint64 `json:"queries"`
+	CacheHits   []uint64 `json:"cache_hits"`
+	CacheMisses []uint64 `json:"cache_misses"`
+	LatencyMs   []int64  `json:"latency_ms"`
+	Count       int      `json:"count"`
+}
+
+// GetHistory returns the metrics history ring buffer data.
+func (m *MetricsCollector) GetHistory() MetricsHistoryResponse {
+	m.historyMu.RLock()
+	defer m.historyMu.RUnlock()
+
+	count := m.historyCount
+	timestamps := make([]int64, count)
+	queries := make([]uint64, count)
+	cacheHits := make([]uint64, count)
+	cacheMisses := make([]uint64, count)
+	latencyMs := make([]int64, count)
+
+	for i := 0; i < count; i++ {
+		idx := (m.historyIndex - count + i) % m.historySize
+		timestamps[i] = m.historyTimestamps[idx]
+		queries[i] = m.historyQueries[idx]
+		cacheHits[i] = m.historyCacheHits[idx]
+		cacheMisses[i] = m.historyCacheMisses[idx]
+		latencyMs[i] = m.historyUpstreamMs[idx]
+	}
+
+	return MetricsHistoryResponse{
+		Timestamps:   timestamps,
+		Queries:     queries,
+		CacheHits:   cacheHits,
+		CacheMisses: cacheMisses,
+		LatencyMs:   latencyMs,
+		Count:       count,
+	}
+}
 func (m *MetricsCollector) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

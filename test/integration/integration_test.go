@@ -33,8 +33,8 @@ type testEnv struct {
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
 
-	udpConn, tcpLn, udpPort := findFreePort(t)
-	tcpPort := udpPort
+	udpConn, tcpLn, tcpPort := findFreePort(t)
+	udpPort := tcpPort
 	tmpDir := t.TempDir()
 
 	// Create a test zone file
@@ -135,18 +135,21 @@ func (e *testEnv) addr() string {
 
 func findFreePort(t *testing.T) (*net.UDPConn, *net.TCPListener, int) {
 	t.Helper()
-	lnUDP, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP(testAddr), Port: 0})
+	// Bind TCP first on port 0 (kernel picks free port), then
+	// bind UDP to the same port so both share the same port number.
+	// On Windows, SO_REUSEADDR allows this sharing.
+	lnTCP, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP(testAddr), Port: 0})
 	if err != nil {
-		t.Fatalf("find free port: %v", err)
-	}
-	udpPort := lnUDP.LocalAddr().(*net.UDPAddr).Port
-
-	lnTCP, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP(testAddr), Port: udpPort})
-	if err != nil {
-		lnUDP.Close()
 		t.Fatalf("find free port (TCP): %v", err)
 	}
-	return lnUDP, lnTCP, udpPort
+	tcpPort := lnTCP.Addr().(*net.TCPAddr).Port
+
+	lnUDP, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP(testAddr), Port: tcpPort})
+	if err != nil {
+		lnTCP.Close()
+		t.Fatalf("find free port (UDP): %v", err)
+	}
+	return lnUDP, lnTCP, tcpPort
 }
 
 // testHandler is a minimal DNS handler that serves authoritative zones.
