@@ -15,6 +15,9 @@ A zero-dependency DNS server written in pure Go. NothingDNS is designed to be li
 - **Caching** - Thread-safe LRU cache with TTL support, prefetching, and negative caching (RFC 2308)
 - **Upstream Forwarding** - Multiple upstream servers with health checking, failover, and TCP connection pooling
 - **Iterative Resolver** - Full recursive resolution with CNAME chasing and delegation following
+- **QNAME Minimization** - RFC 7816 privacy protection during iterative resolution
+- **DNS64/NAT64** - IPv6 transition mechanism synthesizing AAAA from A records (RFC 6147)
+- **SVCB/HTTPS Records** - Service Binding and HTTPS record types (RFC 9460)
 
 ### Security
 - **DNSSEC** - DNS Security Extensions validation and zone signing (RFC 4033/4034/4035)
@@ -22,6 +25,7 @@ A zero-dependency DNS server written in pure Go. NothingDNS is designed to be li
 - **DNSSEC Key Rollover** - Automatic key lifecycle management (RFC 7583)
 - **DNS over HTTPS (DoH)** - RFC 8484 compliant DoH support
 - **DNS over TLS (DoT)** - RFC 7858 compliant DoT support
+- **DNS Cookies** - RFC 7873 anti-spoofing with HMAC-SHA256 client/server cookies
 - **DNS over QUIC (DoQ)** - QUIC-based encrypted DNS transport
 - **Blocklist Support** - Block domains using hosts file format
 - **Response Policy Zones (RPZ)** - Policy-based DNS filtering with NXDOMAIN, NODATA, redirect, and DROP actions
@@ -652,6 +656,8 @@ cluster:
 │   ├── cluster/        # Gossip-based clustering with AES-256-GCM
 │   ├── config/         # Custom YAML configuration parser
 │   ├── dashboard/      # Web dashboard (React 19 SPA)
+│   ├── dns64/          # DNS64/NAT64 synthesis (RFC 6147)
+│   ├── dnscookie/      # DNS Cookies (RFC 7873)
 │   ├── dnssec/         # DNSSEC validation, signing, key rollover
 │   ├── doh/            # DNS over HTTPS (RFC 8484)
 │   ├── filter/         # Split-horizon views, rate limiting
@@ -947,4 +953,7 @@ Contributions are welcome! Please ensure:
 - [x] Runtime memory monitoring and OOM protection
 - [x] Audit logging
 - [x] Production-ready code quality (see [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md))
-- [ ] DNS64/NAT64 support
+- [x] DNS64/NAT64 support (RFC 6147)
+- [x] SVCB/HTTPS record types (RFC 9460)
+- [x] DNS Cookies anti-spoofing (RFC 7873)
+- [x] QNAME Minimization privacy (RFC 7816)
