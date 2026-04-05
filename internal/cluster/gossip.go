@@ -420,7 +420,10 @@ func (gp *GossipProtocol) handleGossip(msg Message, from *net.UDPAddr) {
 			if gp.nodeList.Add(newNode) {
 				gp.callbacksMu.RLock()
 				if gp.onNodeJoin != nil {
-					gp.onNodeJoin(newNode)
+					func() {
+						defer recover()
+						gp.onNodeJoin(newNode)
+					}()
 				}
 				gp.callbacksMu.RUnlock()
 			}
@@ -429,7 +432,10 @@ func (gp *GossipProtocol) handleGossip(msg Message, from *net.UDPAddr) {
 			gp.nodeList.UpdateState(info.ID, info.State)
 			gp.callbacksMu.RLock()
 			if gp.onNodeUpdate != nil {
-				gp.onNodeUpdate(existing)
+				func() {
+					defer recover()
+					gp.onNodeUpdate(existing)
+				}()
 			}
 			gp.callbacksMu.RUnlock()
 		}
@@ -450,7 +456,10 @@ func (gp *GossipProtocol) handleCacheInvalidate(msg Message, from *net.UDPAddr) 
 
 	gp.callbacksMu.RLock()
 	if gp.onCacheInvalid != nil {
-		gp.onCacheInvalid(payload.Keys)
+		func() {
+			defer recover()
+			gp.onCacheInvalid(payload.Keys)
+		}()
 	}
 	gp.callbacksMu.RUnlock()
 }
@@ -569,7 +578,10 @@ func (gp *GossipProtocol) probeNodes() {
 				gp.nodeList.UpdateState(node.ID, NodeStateDead)
 				gp.callbacksMu.RLock()
 				if gp.onNodeLeave != nil {
-					gp.onNodeLeave(node)
+					func() {
+						defer recover()
+						gp.onNodeLeave(node)
+					}()
 				}
 				gp.callbacksMu.RUnlock()
 			} else {

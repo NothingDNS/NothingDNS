@@ -57,9 +57,10 @@ func (h *integratedHandler) handleAXFR(w server.ResponseWriter, r *protocol.Mess
 			tsigRR, signErr := transfer.SignMessage(resp, tsigKey, 300)
 			if signErr != nil {
 				h.logger.Warnf("Failed to sign AXFR response: %v", signErr)
-			} else {
-				resp.Additionals = append(resp.Additionals, tsigRR)
+				sendError(w, r, protocol.RcodeServerFailure)
+				return
 			}
+			resp.Additionals = append(resp.Additionals, tsigRR)
 		}
 
 		if _, err := w.Write(resp); err != nil {

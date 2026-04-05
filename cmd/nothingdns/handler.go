@@ -144,6 +144,14 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 		}
 	}
 
+	// Check RPZ client IP policy
+	if h.rpzEngine != nil && clientIP != nil {
+		if rule := h.rpzEngine.ClientIPPolicy(clientIP); rule != nil {
+			h.applyRPZRule(w, r, q, rule)
+			return
+		}
+	}
+
 	// Check rate limit
 	if h.rateLimiter != nil && clientIP != nil {
 		if !h.rateLimiter.Allow(clientIP) {
@@ -223,36 +231,8 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 	// Check RPZ QNAME policy
 	if h.rpzEngine != nil {
 		if rule := h.rpzEngine.QNAMEPolicy(qname); rule != nil {
-			switch rule.Action {
-			case rpz.ActionNXDOMAIN:
-				h.logger.Debugf("RPZ NXDOMAIN for %s (policy: %s)", qname, rule.PolicyName)
-				if h.metrics != nil {
-					h.metrics.RecordBlocklistBlock()
-				}
-				sendError(w, r, protocol.RcodeNameError)
+			if h.applyRPZRule(w, r, q, rule) {
 				return
-			case rpz.ActionNODATA:
-				h.logger.Debugf("RPZ NODATA for %s (policy: %s)", qname, rule.PolicyName)
-				if h.metrics != nil {
-					h.metrics.RecordBlocklistBlock()
-				}
-				sendError(w, r, protocol.RcodeSuccess)
-				return
-			case rpz.ActionDrop:
-				h.logger.Debugf("RPZ DROP for %s (policy: %s)", qname, rule.PolicyName)
-				return // silently drop
-			case rpz.ActionPassThrough:
-				// Allow the query to proceed normally
-			case rpz.ActionTCPOnly:
-				// Set TC bit to force TCP retry
-				resp := r.Copy()
-				resp.Header.Flags.TC = true
-				resp.Header.Flags.QR = true
-				resp.Header.Flags.RCODE = protocol.RcodeSuccess
-				w.Write(resp)
-				return
-			case rpz.ActionOverride, rpz.ActionCNAME:
-				// Will be handled after resolution as override
 			}
 		}
 	}
@@ -400,6 +380,19 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 		// Copy query ID from original request
 		resp.Header.ID = r.Header.ID
 
+		// Check RPZ response IP policy
+		if h.rpzEngine != nil {
+			respIPs := extractResponseIPs(resp)
+			if len(respIPs) > 0 {
+				if rule := h.rpzEngine.ResponseIPPolicy(respIPs); rule != nil {
+					h.logger.Debugf("RPZ response IP match for %s (policy: %s)", qname, rule.PolicyName)
+					if h.applyRPZRule(w, r, q, rule) {
+						return
+					}
+				}
+			}
+		}
+
 		// DNS64: synthesize AAAA from A if the AAAA response is empty
 		if h.tryDNS64Synthesis(w, r, q, resp) {
 			if h.metrics != nil {
@@ -478,6 +471,19 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 				h.logger.Debugf("DNSSEC insecure zone for %s", qname)
 			case dnssec.ValidationIndeterminate:
 				h.logger.Debugf("DNSSEC indeterminate for %s", qname)
+			}
+		}
+
+		// Check RPZ response IP policy
+		if h.rpzEngine != nil {
+			respIPs := extractResponseIPs(resp)
+			if len(respIPs) > 0 {
+				if rule := h.rpzEngine.ResponseIPPolicy(respIPs); rule != nil {
+					h.logger.Debugf("RPZ response IP match for %s (policy: %s)", qname, rule.PolicyName)
+					if h.applyRPZRule(w, r, q, rule) {
+						return
+					}
+				}
 			}
 		}
 
@@ -886,4 +892,130 @@ func (cw *cookieResponseWriter) ClientInfo() *server.ClientInfo {
 // MaxSize delegates to the inner writer.
 func (cw *cookieResponseWriter) MaxSize() int {
 	return cw.inner.MaxSize()
+}
+
+// applyRPZRule applies an RPZ rule action and returns true if the query was handled.
+// This handles all RPZ policy actions consistently.
+func (h *integratedHandler) applyRPZRule(w server.ResponseWriter, r *protocol.Message, q *protocol.Question, rule *rpz.Rule) bool {
+	switch rule.Action {
+	case rpz.ActionNXDOMAIN:
+		h.logger.Debugf("RPZ NXDOMAIN for %s (policy: %s)", q.Name.String(), rule.PolicyName)
+		if h.metrics != nil {
+			h.metrics.RecordBlocklistBlock()
+		}
+		sendError(w, r, protocol.RcodeNameError)
+		return true
+	case rpz.ActionNODATA:
+		h.logger.Debugf("RPZ NODATA for %s (policy: %s)", q.Name.String(), rule.PolicyName)
+		if h.metrics != nil {
+			h.metrics.RecordBlocklistBlock()
+		}
+		sendError(w, r, protocol.RcodeSuccess)
+		return true
+	case rpz.ActionDrop:
+		h.logger.Debugf("RPZ DROP for %s (policy: %s)", q.Name.String(), rule.PolicyName)
+		return true // silently drop
+	case rpz.ActionPassThrough:
+		// Allow the query to proceed normally
+		return false
+	case rpz.ActionTCPOnly:
+		// Set TC bit to force TCP retry
+		resp := r.Copy()
+		resp.Header.Flags.TC = true
+		resp.Header.Flags.QR = true
+		resp.Header.Flags.RCODE = protocol.RcodeSuccess
+		w.Write(resp)
+		return true
+	case rpz.ActionOverride:
+		// Return override IP
+		overrideIP := net.ParseIP(rule.OverrideData)
+		if overrideIP == nil {
+			h.logger.Warnf("RPZ override invalid IP: %s", rule.OverrideData)
+			return false
+		}
+		resp := &protocol.Message{
+			Header: protocol.Header{
+				ID:    r.Header.ID,
+				Flags: protocol.NewResponseFlags(protocol.RcodeSuccess),
+			},
+			Questions: r.Questions,
+		}
+		if ip4 := overrideIP.To4(); ip4 != nil {
+			var addr [4]byte
+			copy(addr[:], ip4)
+			resp.AddAnswer(&protocol.ResourceRecord{
+				Name:  q.Name,
+				Type:  protocol.TypeA,
+				Class: protocol.ClassIN,
+				TTL:   rule.TTL,
+				Data:  &protocol.RDataA{Address: addr},
+			})
+		} else {
+			var addr [16]byte
+			copy(addr[:], overrideIP.To16())
+			resp.AddAnswer(&protocol.ResourceRecord{
+				Name:  q.Name,
+				Type:  protocol.TypeAAAA,
+				Class: protocol.ClassIN,
+				TTL:   rule.TTL,
+				Data:  &protocol.RDataAAAA{Address: addr},
+			})
+		}
+		w.Write(resp)
+		return true
+	case rpz.ActionCNAME:
+		targetName, err := protocol.ParseName(rule.OverrideData)
+		if err != nil {
+			h.logger.Warnf("RPZ CNAME invalid target: %s", rule.OverrideData)
+			return false
+		}
+		resp := &protocol.Message{
+			Header: protocol.Header{
+				ID:    r.Header.ID,
+				Flags: protocol.NewResponseFlags(protocol.RcodeSuccess),
+			},
+			Questions: r.Questions,
+		}
+		resp.AddAnswer(&protocol.ResourceRecord{
+			Name:  q.Name,
+			Type:  protocol.TypeCNAME,
+			Class: protocol.ClassIN,
+			TTL:   rule.TTL,
+			Data:  &protocol.RDataCNAME{CName: targetName},
+		})
+		w.Write(resp)
+		return true
+	default:
+		return false
+	}
+}
+
+// extractResponseIPs extracts IP addresses from answer and authority sections of a DNS response.
+func extractResponseIPs(resp *protocol.Message) []net.IP {
+	var ips []net.IP
+	for _, rr := range resp.Answers {
+		switch rdata := rr.Data.(type) {
+		case *protocol.RDataA:
+			if rdata != nil {
+				ips = append(ips, net.IP(rdata.Address[:]))
+			}
+		case *protocol.RDataAAAA:
+			if rdata != nil {
+				ips = append(ips, net.IP(rdata.Address[:]))
+			}
+		}
+	}
+	for _, rr := range resp.Authorities {
+		switch rdata := rr.Data.(type) {
+		case *protocol.RDataA:
+			if rdata != nil {
+				ips = append(ips, net.IP(rdata.Address[:]))
+			}
+		case *protocol.RDataAAAA:
+			if rdata != nil {
+				ips = append(ips, net.IP(rdata.Address[:]))
+			}
+		}
+	}
+	return ips
 }
