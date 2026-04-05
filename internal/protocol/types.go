@@ -177,6 +177,58 @@ func (r *RDataCNAME) Copy() RData {
 }
 
 // ============================================================================
+// DNAME Record (Delegation Name) - RFC 6672
+// ============================================================================
+
+// RDataDNAME represents a DNAME record.
+type RDataDNAME struct {
+	DName *Name
+}
+
+// Type returns TypeDNAME.
+func (r *RDataDNAME) Type() uint16 { return TypeDNAME }
+
+// Pack serializes the DNAME record.
+func (r *RDataDNAME) Pack(buf []byte, offset int) (int, error) {
+	return PackName(r.DName, buf, offset, nil)
+}
+
+// Unpack deserializes the DNAME record.
+func (r *RDataDNAME) Unpack(buf []byte, offset int, rdlength uint16) (int, error) {
+	name, n, err := UnpackName(buf, offset)
+	if err != nil {
+		return 0, err
+	}
+	r.DName = name
+	return n, nil
+}
+
+// String returns the delegation target name.
+func (r *RDataDNAME) String() string {
+	if r.DName == nil {
+		return "."
+	}
+	return r.DName.String()
+}
+
+// Len returns the wire length.
+func (r *RDataDNAME) Len() int {
+	if r.DName == nil {
+		return 1
+	}
+	return r.DName.WireLength()
+}
+
+// Copy creates a copy.
+func (r *RDataDNAME) Copy() RData {
+	var dname *Name
+	if r.DName != nil {
+		dname = NewName(r.DName.Labels, r.DName.FQDN)
+	}
+	return &RDataDNAME{DName: dname}
+}
+
+// ============================================================================
 // NS Record (Name Server) - RFC 1035
 // ============================================================================
 

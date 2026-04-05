@@ -245,6 +245,8 @@ func createRData(rrtype uint16) RData {
 		return &RDataAAAA{}
 	case TypeCNAME:
 		return &RDataCNAME{}
+	case TypeDNAME:
+		return &RDataDNAME{}
 	case TypeNS:
 		return &RDataNS{}
 	case TypePTR:
