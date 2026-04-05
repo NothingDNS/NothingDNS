@@ -212,24 +212,21 @@ func (c *Cluster) Stop() error {
 		return nil
 	}
 
+	// Atomically close cache sync channel if not already closed
 	if !c.cacheClosed {
 		close(c.cacheSyncChan)
 		c.cacheClosed = true
 	}
-	c.mu.Unlock()
+	c.started = false
 
-	// Wait for cacheSyncLoop to finish before stopping gossip
-	c.wg.Wait()
-
-	c.mu.Lock()
 	if err := c.gossip.Stop(); err != nil {
 		c.logger.Warnf("Error stopping gossip: %v", err)
 	}
-
-	c.started = false
-	c.cacheClosed = true
 	c.logger.Info("Cluster stopped")
 	c.mu.Unlock()
+
+	// Wait for cacheSyncLoop to finish after stopping gossip
+	c.wg.Wait()
 
 	return nil
 }

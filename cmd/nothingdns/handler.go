@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 	"sync"
@@ -15,6 +16,8 @@ import (
 	"github.com/nothingdns/nothingdns/internal/cache"
 	"github.com/nothingdns/nothingdns/internal/cluster"
 	"github.com/nothingdns/nothingdns/internal/config"
+	"github.com/nothingdns/nothingdns/internal/dns64"
+	"github.com/nothingdns/nothingdns/internal/dnscookie"
 	"github.com/nothingdns/nothingdns/internal/dnssec"
 	"github.com/nothingdns/nothingdns/internal/filter"
 	"github.com/nothingdns/nothingdns/internal/geodns"
@@ -58,6 +61,8 @@ type integratedHandler struct {
 	viewZones     map[string]map[string]*zone.Zone // view name -> origin -> Zone
 	auditLogger   *audit.AuditLogger
 	nsecCache     *cache.NSECCache // RFC 8198 aggressive NSEC caching
+	dns64Synth    *dns64.Synthesizer
+	cookieJar     *dnscookie.CookieJar
 
 	notifyOnce sync.Once
 	updateOnce sync.Once
@@ -65,6 +70,17 @@ type integratedHandler struct {
 
 // ServeDNS implements the server.Handler interface.
 func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Message) {
+	// Panic recovery — prevents handler crashes from crashing the server
+	defer func() {
+		if rec := recover(); rec != nil {
+			h.logger.Errorf("Panic in ServeDNS: %v", rec)
+			if h.metrics != nil {
+				h.metrics.RecordResponse(protocol.RcodeServerFailure)
+			}
+			sendError(w, r, protocol.RcodeServerFailure)
+		}
+	}()
+
 	start := time.Now()
 
 	// Defer latency recording and audit logging
@@ -137,6 +153,36 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 			}
 			sendError(w, r, protocol.RcodeRefused)
 			return
+		}
+	}
+
+	// RFC 7873: DNS Cookie validation
+	if h.cookieJar != nil && clientIP != nil {
+		cookieData, valid := h.processCookies(r, clientIP)
+		if !valid {
+			// Client sent an invalid server cookie — respond with BADCOOKIE
+			resp := &protocol.Message{
+				Header: protocol.Header{
+					ID:    r.Header.ID,
+					Flags: protocol.NewResponseFlags(protocol.RcodeBadCookie),
+				},
+				Questions: r.Questions,
+			}
+			// Include a fresh server cookie so the client can retry
+			resp.SetEDNS0(4096, false)
+			if opt := resp.GetOPT(); opt != nil {
+				if optData, ok := opt.Data.(*protocol.RDataOPT); ok {
+					optData.AddOption(protocol.OptionCodeCookie, cookieData)
+				}
+			}
+			if _, err := w.Write(resp); err != nil {
+				fmt.Fprintf(os.Stderr, "failed to write BADCOOKIE response: %v\n", err)
+			}
+			return
+		}
+		// Wrap the response writer to inject the server cookie into every response
+		if cookieData != nil {
+			w = &cookieResponseWriter{inner: w, cookieData: cookieData}
 		}
 	}
 
@@ -269,8 +315,12 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 	// Check authoritative zones — try direct lookup first.
 	// If no zone has a direct record, attempt CNAME chasing across zones,
 	// then cache, then upstream.
+	// Hold zonesMu throughout both zone sources to prevent concurrent modification.
 	h.zonesMu.RLock()
+	mgrZones := h.zoneManager.List()
 	var matchedZone bool
+
+	// Check file-based zones
 	for origin, z := range h.zones {
 		if isSubdomain(qname, origin) {
 			matchedZone = true
@@ -281,29 +331,20 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 			}
 		}
 	}
-	h.zonesMu.RUnlock()
 
 	// Also check zones created via API (stored in zoneManager)
-	if h.zoneManager != nil {
-		for name, z := range h.zoneManager.List() {
-			if !isSubdomain(qname, name) {
-				continue
-			}
-			// Skip if already checked in h.zones (file-loaded zones)
-			h.zonesMu.RLock()
-			_, inLocal := h.zones[name]
+	for name, z := range mgrZones {
+		if !isSubdomain(qname, name) {
+			continue
+		}
+		matchedZone = true
+		h.logger.Debugf("Checking zone manager zone %s for %s", name, qname)
+		if h.handleAuthoritative(z, w, r, q) {
 			h.zonesMu.RUnlock()
-			if inLocal {
-				matchedZone = true
-				continue
-			}
-			matchedZone = true
-			h.logger.Debugf("Checking zone manager zone %s for %s", name, qname)
-			if h.handleAuthoritative(z, w, r, q) {
-				return
-			}
+			return
 		}
 	}
+	h.zonesMu.RUnlock()
 
 	// If the query name falls within one of our zones but no direct record
 	// was found, chase CNAME chains before falling through to upstream.
@@ -353,6 +394,14 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 
 		// Copy query ID from original request
 		resp.Header.ID = r.Header.ID
+
+		// DNS64: synthesize AAAA from A if the AAAA response is empty
+		if h.tryDNS64Synthesis(w, r, q, resp) {
+			if h.metrics != nil {
+				h.metrics.RecordResponse(protocol.RcodeSuccess)
+			}
+			return
+		}
 
 		if h.metrics != nil {
 			h.metrics.RecordResponse(resp.Header.Flags.RCODE)
@@ -427,6 +476,14 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 			}
 		}
 
+		// DNS64: synthesize AAAA from A if the AAAA response is empty
+		if h.tryDNS64Synthesis(w, r, q, resp) {
+			if h.metrics != nil {
+				h.metrics.RecordResponse(protocol.RcodeSuccess)
+			}
+			return
+		}
+
 		// Cache the response
 		if resp.Header.Flags.RCODE == protocol.RcodeSuccess && len(resp.Answers) > 0 {
 			ttl := extractTTL(resp)
@@ -466,6 +523,55 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 		h.metrics.RecordResponse(protocol.RcodeNameError)
 	}
 	sendError(w, r, protocol.RcodeNameError)
+}
+
+// tryDNS64Synthesis checks whether DNS64 synthesis is needed for an AAAA query
+// that received no AAAA answers. If synthesis is appropriate, it re-queries for
+// A records via the same upstream path and returns a synthesized AAAA response.
+// Returns true if a synthesized response was written, false otherwise.
+func (h *integratedHandler) tryDNS64Synthesis(w server.ResponseWriter, r *protocol.Message, q *protocol.Question, resp *protocol.Message) bool {
+	if h.dns64Synth == nil {
+		return false
+	}
+	if !h.dns64Synth.ShouldSynthesize(q, resp) {
+		return false
+	}
+
+	// Build a new query for the same name but type A.
+	qname := q.Name.String()
+	aQuery, err := protocol.NewQuery(r.Header.ID, qname, protocol.TypeA)
+	if err != nil {
+		h.logger.Warnf("DNS64: failed to build A query for %s: %v", qname, err)
+		return false
+	}
+
+	// Send the A query through the same upstream path.
+	var aResp *protocol.Message
+	if h.loadBalancer != nil {
+		aResp, err = h.loadBalancer.Query(aQuery)
+	} else if h.upstream != nil {
+		aResp, err = h.upstream.Query(aQuery)
+	} else {
+		return false
+	}
+	if err != nil {
+		h.logger.Warnf("DNS64: upstream A query failed for %s: %v", qname, err)
+		return false
+	}
+
+	// Only synthesize if the A response has answers.
+	if aResp.Header.Flags.RCODE != protocol.RcodeSuccess || len(aResp.Answers) == 0 {
+		return false
+	}
+
+	synthesized := h.dns64Synth.SynthesizeResponse(q, aResp)
+	if synthesized == nil || len(synthesized.Answers) == 0 {
+		return false
+	}
+
+	h.logger.Debugf("DNS64: synthesized %d AAAA records for %s", len(synthesized.Answers), qname)
+	reply(w, r, synthesized)
+	return true
 }
 
 // reply sends a response message.
@@ -687,4 +793,92 @@ func minimizeResponse(resp *protocol.Message) {
 		}
 		resp.Additionals = filtered
 	}
+}
+
+// processCookies extracts and validates DNS cookies from the query (RFC 7873).
+// It returns the packed cookie option data to include in the response and whether
+// the cookie validation passed. If the client did not send a cookie at all, this
+// returns (nil, true) so the query proceeds normally — cookies are optional.
+// If the client sent only a client cookie (first query), a fresh server cookie is
+// generated and returned with valid=true. If the client sent a server cookie that
+// fails validation, a fresh cookie option is returned with valid=false.
+func (h *integratedHandler) processCookies(r *protocol.Message, clientIP net.IP) (cookieOptionData []byte, valid bool) {
+	// Find the OPT record in the query
+	opt := r.GetOPT()
+	if opt == nil {
+		return nil, true // No EDNS0, no cookies — allow the query
+	}
+
+	optData, ok := opt.Data.(*protocol.RDataOPT)
+	if !ok {
+		return nil, true
+	}
+
+	// Look for the cookie option
+	cookieOpt := optData.GetOption(protocol.OptionCodeCookie)
+	if cookieOpt == nil {
+		return nil, true // Client did not send a cookie — allow the query
+	}
+
+	// Parse the cookie option
+	cookie, err := dnscookie.ParseCookieOption(cookieOpt.Data)
+	if err != nil {
+		h.logger.Debugf("Invalid cookie option from %s: %v", clientIP, err)
+		// Malformed cookie — generate a fresh response cookie
+		var emptyClient [dnscookie.ClientCookieLen]byte
+		serverCookie := h.cookieJar.GenerateServerCookie(emptyClient, clientIP)
+		return dnscookie.PackCookieOption(emptyClient, serverCookie), false
+	}
+
+	// Generate a fresh server cookie for the response
+	serverCookie := h.cookieJar.GenerateServerCookie(cookie.ClientCookie, clientIP)
+	responseCookieData := dnscookie.PackCookieOption(cookie.ClientCookie, serverCookie)
+
+	// If the client sent a server cookie, validate it
+	if len(cookie.ServerCookie) > 0 {
+		if !h.cookieJar.ValidateServerCookie(cookie.ClientCookie, cookie.ServerCookie, clientIP) {
+			h.logger.Debugf("Invalid server cookie from %s", clientIP)
+			return responseCookieData, false
+		}
+	}
+
+	// Cookie is valid (or client only sent a client cookie — first query)
+	return responseCookieData, true
+}
+
+// cookieResponseWriter wraps a server.ResponseWriter to inject DNS cookie
+// option data into the OPT record of every outgoing response.
+type cookieResponseWriter struct {
+	inner      server.ResponseWriter
+	cookieData []byte // packed cookie option (client + server cookie)
+}
+
+// Write injects the cookie into the response OPT record, then delegates
+// to the inner writer.
+func (cw *cookieResponseWriter) Write(msg *protocol.Message) (int, error) {
+	if msg != nil && cw.cookieData != nil {
+		opt := msg.GetOPT()
+		if opt == nil {
+			msg.SetEDNS0(4096, false)
+			opt = msg.GetOPT()
+		}
+		if opt != nil {
+			if optData, ok := opt.Data.(*protocol.RDataOPT); ok {
+				// Remove any existing cookie option to avoid duplicates
+				optData.RemoveOption(protocol.OptionCodeCookie)
+				optData.AddOption(protocol.OptionCodeCookie, cw.cookieData)
+			}
+		}
+	}
+	return cw.inner.Write(msg)
+}
+
+// ClientInfo delegates to the inner writer.
+func (cw *cookieResponseWriter) ClientInfo() *server.ClientInfo {
+	return cw.inner.ClientInfo()
+}
+
+// MaxSize delegates to the inner writer.
+func (cw *cookieResponseWriter) MaxSize() int {
+	return cw.inner.MaxSize()
 }

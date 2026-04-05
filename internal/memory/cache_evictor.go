@@ -14,11 +14,11 @@ func NewCacheEvictor(c *cache.Cache) *CacheEvictor {
 	return &CacheEvictor{cache: c}
 }
 
-// Evict removes cached entries. For LRU caches without a partial-evict API,
-// we clear the entire cache to free memory quickly.
-func (e *CacheEvictor) Evict(_ int) {
+// Evict removes approximately percent of entries from the cache,
+// starting with the least recently used entries.
+func (e *CacheEvictor) Evict(percent int) {
 	if e.cache != nil {
-		e.cache.Clear()
+		e.cache.EvictPercent(percent)
 	}
 }
 

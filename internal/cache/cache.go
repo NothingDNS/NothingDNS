@@ -375,6 +375,32 @@ func (c *Cache) evictOldest() {
 	c.stats.Evictions++
 }
 
+// EvictPercent removes approximately percent of entries from the cache,
+// starting with the least recently used entries.
+func (c *Cache) EvictPercent(percent int) {
+	if percent <= 0 || percent > 100 {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	count := len(c.entries) * percent / 100
+	if count == 0 && len(c.entries) > 0 {
+		count = 1 // Always evict at least one if cache has entries
+	}
+
+	for i := 0; i < count; i++ {
+		element := c.lruList.Back()
+		if element == nil {
+			break
+		}
+		entry := element.Value.(*Entry)
+		c.removeEntry(entry)
+		c.stats.Evictions++
+	}
+}
+
 // SetInvalidateFunc sets the callback function for cache invalidation.
 func (c *Cache) SetInvalidateFunc(fn func(key string)) {
 	c.mu.Lock()
