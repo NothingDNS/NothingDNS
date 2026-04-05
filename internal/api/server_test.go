@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"testing"
 	"time"
@@ -12,9 +13,17 @@ import (
 )
 
 func TestAPIServer(t *testing.T) {
+	// Use a free port dynamically to avoid conflicts
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to find free port: %v", err)
+	}
+	addr := l.Addr().String()
+	l.Close()
+
 	cfg := config.HTTPConfig{
 		Enabled: true,
-		Bind:    "127.0.0.1:18080",
+		Bind:    addr,
 	}
 
 	server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
@@ -26,7 +35,7 @@ func TestAPIServer(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Test health endpoint
-	resp, err := http.Get("http://127.0.0.1:18080/health")
+	resp, err := http.Get("http://" + addr + "/health")
 	if err != nil {
 		t.Fatalf("Failed to get health: %v", err)
 	}

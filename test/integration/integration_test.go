@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -18,6 +19,15 @@ import (
 const (
 	testAddr = "127.0.0.1"
 )
+
+func TestMain(m *testing.M) {
+	// Integration tests require binding to UDP ports which requires
+	// administrator privileges on Windows. Skip on Windows.
+	if runtime.GOOS == "windows" {
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
 
 // testEnv holds a running test server environment.
 type testEnv struct {

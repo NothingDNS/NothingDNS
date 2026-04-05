@@ -286,9 +286,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 
 		// Get token from Authorization header
 		token := r.Header.Get("Authorization")
-		if strings.HasPrefix(token, "Bearer ") {
-			token = token[7:]
-		}
+		token = strings.TrimPrefix(token, "Bearer ")
 
 		// Fallback: query parameter
 		if token == "" {
@@ -589,7 +587,7 @@ func (s *Server) handleZones(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleListZones returns list of zones with serial and record count.
-func (s *Server) handleListZones(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleListZones(w http.ResponseWriter, _ *http.Request) {
 	resp := &ZoneListResponse{Zones: []ZoneSummary{}}
 	if s.zoneManager != nil {
 		for name, z := range s.zoneManager.List() {
@@ -655,8 +653,8 @@ func (s *Server) handleZoneActions(w http.ResponseWriter, r *http.Request) {
 	zoneName = parts[0]
 	subPath := parts[1]
 
-	switch {
-	case subPath == "records":
+	switch subPath {
+	case "records":
 		switch r.Method {
 		case http.MethodGet:
 			s.handleGetRecords(w, r, zoneName)
@@ -669,7 +667,7 @@ func (s *Server) handleZoneActions(w http.ResponseWriter, r *http.Request) {
 		default:
 			s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		}
-	case subPath == "export":
+	case "export":
 		if r.Method == http.MethodGet {
 			s.handleExportZone(w, r, zoneName)
 		} else {
@@ -681,7 +679,7 @@ func (s *Server) handleZoneActions(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleGetZone returns details of a single zone.
-func (s *Server) handleGetZone(w http.ResponseWriter, r *http.Request, name string) {
+func (s *Server) handleGetZone(w http.ResponseWriter, _ *http.Request, name string) {
 	z, ok := s.zoneManager.Get(name)
 	if !ok {
 		s.writeError(w, http.StatusNotFound, fmt.Sprintf("Zone %s not found", name))
@@ -792,7 +790,7 @@ func (s *Server) handleCreateZone(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleDeleteZone deletes a zone.
-func (s *Server) handleDeleteZone(w http.ResponseWriter, r *http.Request, name string) {
+func (s *Server) handleDeleteZone(w http.ResponseWriter, _ *http.Request, name string) {
 	if err := s.zoneManager.DeleteZone(name); err != nil {
 		s.writeError(w, http.StatusNotFound, err.Error())
 		return
@@ -959,7 +957,7 @@ func (s *Server) handleDeleteRecord(w http.ResponseWriter, r *http.Request, zone
 }
 
 // handleExportZone returns a zone in BIND format.
-func (s *Server) handleExportZone(w http.ResponseWriter, r *http.Request, zoneName string) {
+func (s *Server) handleExportZone(w http.ResponseWriter, _ *http.Request, zoneName string) {
 	content, err := s.zoneManager.ExportZone(zoneName)
 	if err != nil {
 		s.writeError(w, http.StatusNotFound, err.Error())
@@ -1521,9 +1519,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	token := r.Header.Get("Authorization")
-	if strings.HasPrefix(token, "Bearer ") {
-		token = token[7:]
-	}
+	token = strings.TrimPrefix(token, "Bearer ")
 
 	if token != "" && s.authStore != nil {
 		s.authStore.RevokeToken(token)
