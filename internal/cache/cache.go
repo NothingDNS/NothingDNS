@@ -31,6 +31,7 @@ type Entry struct {
 
 	// Entry type
 	IsNegative bool // True for NXDOMAIN/NODATA entries
+	IsStale    bool // True when serving a stale entry (RFC 8767)
 
 	// Access tracking for LRU
 	element *list.Element // Position in LRU list
@@ -67,6 +68,7 @@ type Stats struct {
 	Misses      uint64
 	Evictions   uint64
 	Expirations uint64
+	StaleServed uint64
 	Size        int
 	Capacity    int
 }
@@ -96,6 +98,11 @@ type Cache struct {
 	prefetchEnabled   bool
 	prefetchThreshold time.Duration
 
+	// Serve-stale (RFC 8767) configuration
+	serveStale     bool
+	staleGrace     time.Duration // How long past expiry to serve stale entries
+	staleServed    uint64        // Count of stale entries served
+
 	// Storage
 	mu      sync.RWMutex
 	entries map[string]*Entry
@@ -120,6 +127,8 @@ type Config struct {
 	NegativeTTL       time.Duration
 	PrefetchEnabled   bool
 	PrefetchThreshold time.Duration
+	ServeStale        bool          // RFC 8767: serve stale entries when upstream fails
+	StaleGrace        time.Duration // How long past expiry to keep stale entries
 }
 
 // DefaultConfig returns the default cache configuration.
@@ -132,6 +141,8 @@ func DefaultConfig() Config {
 		NegativeTTL:       60 * time.Second,
 		PrefetchEnabled:   false,
 		PrefetchThreshold: 60 * time.Second,
+		ServeStale:        false,
+		StaleGrace:        24 * time.Hour, // RFC 8767 recommends at least 1-3 days
 	}
 }
 
@@ -145,6 +156,8 @@ func New(config Config) *Cache {
 		negativeTTL:       config.NegativeTTL,
 		prefetchEnabled:   config.PrefetchEnabled,
 		prefetchThreshold: config.PrefetchThreshold,
+		serveStale:        config.ServeStale,
+		staleGrace:        config.StaleGrace,
 		entries:           make(map[string]*Entry, config.Capacity),
 		lruList:           list.New(),
 		stats:             Stats{Capacity: config.Capacity},
@@ -158,6 +171,8 @@ func MakeKey(name string, qtype uint16) string {
 
 // Get retrieves an entry from the cache.
 // Returns nil if not found or expired.
+// When serve-stale is enabled, expired entries are kept in the cache
+// but not returned by Get — use GetStale to retrieve them.
 func (c *Cache) Get(key string) *Entry {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -170,8 +185,18 @@ func (c *Cache) Get(key string) *Entry {
 
 	now := time.Now()
 	if entry.IsExpired(now) {
-		// Entry expired, remove it
-		c.removeEntry(entry)
+		if c.serveStale {
+			// Keep the entry for stale serving but don't return it
+			// from a normal Get — the caller should use GetStale
+			// after upstream failure.
+			staleDeadline := entry.ExpireTime.Add(c.staleGrace)
+			if now.After(staleDeadline) {
+				// Past stale grace period — truly remove it
+				c.removeEntry(entry)
+			}
+		} else {
+			c.removeEntry(entry)
+		}
 		c.stats.Expirations++
 		c.stats.Misses++
 		return nil
@@ -182,6 +207,60 @@ func (c *Cache) Get(key string) *Entry {
 	c.stats.Hits++
 
 	return entry
+}
+
+// GetStale retrieves a stale (expired but within grace period) cache entry.
+// Per RFC 8767, stale entries should only be served when the upstream is
+// unavailable. Returns nil if no stale entry exists or serve-stale is disabled.
+// The returned entry has IsStale=true and TTL set to 30s (RFC 8767 §4).
+func (c *Cache) GetStale(key string) *Entry {
+	if !c.serveStale {
+		return nil
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	entry, exists := c.entries[key]
+	if !exists {
+		return nil
+	}
+
+	now := time.Now()
+	if !entry.IsExpired(now) {
+		// Not expired — normal Get should be used
+		return nil
+	}
+
+	// Check if within stale grace period
+	staleDeadline := entry.ExpireTime.Add(c.staleGrace)
+	if now.After(staleDeadline) {
+		// Past stale grace — remove it
+		c.removeEntry(entry)
+		return nil
+	}
+
+	// Serve the stale entry with a short TTL (RFC 8767 §4 recommends 30s)
+	c.lruList.MoveToFront(entry.element)
+	c.staleServed++
+
+	staleEntry := &Entry{
+		Key:        entry.Key,
+		Message:    entry.Message,
+		RCode:      entry.RCode,
+		TTL:        30, // RFC 8767: stale TTL
+		ExpireTime: entry.ExpireTime,
+		IsNegative: entry.IsNegative,
+		IsStale:    true,
+	}
+	return staleEntry
+}
+
+// StaleServed returns the count of stale entries served.
+func (c *Cache) StaleServed() uint64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.staleServed
 }
 
 // Set adds or updates an entry in the cache.
@@ -386,7 +465,9 @@ func (c *Cache) Stats() Stats {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	return c.stats
+	s := c.stats
+	s.StaleServed = c.staleServed
+	return s
 }
 
 // Size returns the current number of entries in the cache.

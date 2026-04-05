@@ -376,7 +376,7 @@ func TestParseFileErrors(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:    "$INCLUDE not supported",
+			name:    "$INCLUDE file not found",
 			content: "$ORIGIN example.com.\n$INCLUDE other.zone",
 			wantErr: true,
 		},

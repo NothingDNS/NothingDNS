@@ -468,8 +468,12 @@ func TestParseRData(t *testing.T) {
 
 	// NS record
 	rd = parseRData("NS", "ns1.example.com.")
-	if _, ok := rd.(*protocol.RDataCNAME); !ok {
-		t.Fatalf("expected RDataCNAME for NS, got %T", rd)
+	nsRd, ok := rd.(*protocol.RDataNS)
+	if !ok {
+		t.Fatalf("expected RDataNS for NS, got %T", rd)
+	}
+	if nsRd.NSDName.String() != "ns1.example.com." {
+		t.Errorf("NS NSDName = %q, want ns1.example.com.", nsRd.NSDName.String())
 	}
 
 	// MX record
@@ -723,5 +727,263 @@ func TestReply(t *testing.T) {
 	}
 	if len(w.msg.Questions) != 1 {
 		t.Errorf("expected 1 question, got %d", len(w.msg.Questions))
+	}
+}
+
+// --- minimizeResponse tests ---
+
+func TestMinimizeResponse_NilMessage(t *testing.T) {
+	// Must not panic.
+	minimizeResponse(nil)
+}
+
+func TestMinimizeResponse_AuthoritativeWithSOA(t *testing.T) {
+	resp := &protocol.Message{
+		Header: protocol.Header{
+			Flags: protocol.Flags{QR: true, AA: true, RCODE: protocol.RcodeNameError},
+		},
+		Authorities: []*protocol.ResourceRecord{
+			{
+				Name:  mustParseName(t, "example.com."),
+				Type:  protocol.TypeSOA,
+				Class: protocol.ClassIN,
+				TTL:   300,
+				Data: &protocol.RDataSOA{
+					MName:   mustParseName(t, "ns1.example.com."),
+					RName:   mustParseName(t, "admin.example.com."),
+					Serial:  2024010101,
+					Refresh: 3600,
+					Retry:   600,
+					Expire:  604800,
+					Minimum: 86400,
+				},
+			},
+			{
+				Name:  mustParseName(t, "example.com."),
+				Type:  protocol.TypeNS,
+				Class: protocol.ClassIN,
+				TTL:   300,
+				Data:  &protocol.RDataNS{NSDName: mustParseName(t, "ns1.example.com.")},
+			},
+		},
+	}
+
+	minimizeResponse(resp)
+
+	// AA=true with SOA present: keep only SOA, strip NS.
+	if len(resp.Authorities) != 1 {
+		t.Fatalf("expected 1 authority record, got %d", len(resp.Authorities))
+	}
+	if resp.Authorities[0].Type != protocol.TypeSOA {
+		t.Errorf("expected SOA in authority, got type %d", resp.Authorities[0].Type)
+	}
+}
+
+func TestMinimizeResponse_AuthoritativeWithoutSOA(t *testing.T) {
+	resp := &protocol.Message{
+		Header: protocol.Header{
+			Flags: protocol.Flags{QR: true, AA: true, RCODE: protocol.RcodeSuccess},
+		},
+		Answers: []*protocol.ResourceRecord{
+			{
+				Name:  mustParseName(t, "www.example.com."),
+				Type:  protocol.TypeA,
+				Class: protocol.ClassIN,
+				TTL:   300,
+				Data:  &protocol.RDataA{Address: [4]byte{192, 168, 1, 1}},
+			},
+		},
+		Authorities: []*protocol.ResourceRecord{
+			{
+				Name:  mustParseName(t, "example.com."),
+				Type:  protocol.TypeNS,
+				Class: protocol.ClassIN,
+				TTL:   300,
+				Data:  &protocol.RDataNS{NSDName: mustParseName(t, "ns1.example.com.")},
+			},
+		},
+	}
+
+	minimizeResponse(resp)
+
+	// AA=true without SOA: strip entire authority section.
+	if len(resp.Authorities) != 0 {
+		t.Fatalf("expected 0 authority records for AA without SOA, got %d", len(resp.Authorities))
+	}
+	// Answers must be preserved.
+	if len(resp.Answers) != 1 {
+		t.Errorf("expected 1 answer, got %d", len(resp.Answers))
+	}
+}
+
+func TestMinimizeResponse_NonAuthoritativeKeepsNSAndSOA(t *testing.T) {
+	resp := &protocol.Message{
+		Header: protocol.Header{
+			Flags: protocol.Flags{QR: true, RCODE: protocol.RcodeSuccess},
+		},
+		Authorities: []*protocol.ResourceRecord{
+			{
+				Name:  mustParseName(t, "example.com."),
+				Type:  protocol.TypeNS,
+				Class: protocol.ClassIN,
+				TTL:   300,
+				Data:  &protocol.RDataNS{NSDName: mustParseName(t, "ns1.example.com.")},
+			},
+			{
+				Name:  mustParseName(t, "example.com."),
+				Type:  protocol.TypeSOA,
+				Class: protocol.ClassIN,
+				TTL:   300,
+				Data: &protocol.RDataSOA{
+					MName: mustParseName(t, "ns1.example.com."),
+					RName: mustParseName(t, "admin.example.com."),
+				},
+			},
+			{
+				Name:  mustParseName(t, "example.com."),
+				Type:  protocol.TypeA,
+				Class: protocol.ClassIN,
+				TTL:   300,
+				Data:  &protocol.RDataA{Address: [4]byte{10, 0, 0, 1}},
+			},
+		},
+	}
+
+	minimizeResponse(resp)
+
+	// Non-authoritative: keep NS and SOA, strip A.
+	if len(resp.Authorities) != 2 {
+		t.Fatalf("expected 2 authority records (NS+SOA), got %d", len(resp.Authorities))
+	}
+	for _, rr := range resp.Authorities {
+		if rr.Type != protocol.TypeNS && rr.Type != protocol.TypeSOA {
+			t.Errorf("unexpected authority type %d", rr.Type)
+		}
+	}
+}
+
+func TestMinimizeResponse_NonAuthoritativeStripsUnrelated(t *testing.T) {
+	resp := &protocol.Message{
+		Header: protocol.Header{
+			Flags: protocol.Flags{QR: true, RCODE: protocol.RcodeSuccess},
+		},
+		Authorities: []*protocol.ResourceRecord{
+			{
+				Name:  mustParseName(t, "example.com."),
+				Type:  protocol.TypeA,
+				Class: protocol.ClassIN,
+				TTL:   300,
+				Data:  &protocol.RDataA{Address: [4]byte{10, 0, 0, 1}},
+			},
+		},
+	}
+
+	minimizeResponse(resp)
+
+	// No NS or SOA: entire authority section stripped.
+	if resp.Authorities != nil && len(resp.Authorities) != 0 {
+		t.Fatalf("expected nil/empty authority, got %d records", len(resp.Authorities))
+	}
+}
+
+func TestMinimizeResponse_AdditionalGluePreserved(t *testing.T) {
+	resp := &protocol.Message{
+		Header: protocol.Header{
+			Flags: protocol.Flags{QR: true, RCODE: protocol.RcodeSuccess},
+		},
+		Authorities: []*protocol.ResourceRecord{
+			{
+				Name:  mustParseName(t, "example.com."),
+				Type:  protocol.TypeNS,
+				Class: protocol.ClassIN,
+				TTL:   300,
+				Data:  &protocol.RDataNS{NSDName: mustParseName(t, "ns1.example.com.")},
+			},
+		},
+		Additionals: []*protocol.ResourceRecord{
+			// Glue A for ns1.example.com. -- should be kept.
+			{
+				Name:  mustParseName(t, "ns1.example.com."),
+				Type:  protocol.TypeA,
+				Class: protocol.ClassIN,
+				TTL:   300,
+				Data:  &protocol.RDataA{Address: [4]byte{10, 0, 0, 1}},
+			},
+			// Non-glue A for unrelated.example.com. -- should be stripped.
+			{
+				Name:  mustParseName(t, "unrelated.example.com."),
+				Type:  protocol.TypeA,
+				Class: protocol.ClassIN,
+				TTL:   300,
+				Data:  &protocol.RDataA{Address: [4]byte{10, 0, 0, 2}},
+			},
+			// OPT pseudo-record -- should be kept.
+			{
+				Type:  protocol.TypeOPT,
+				Class: 4096,
+			},
+			// TXT record -- should be stripped.
+			{
+				Name:  mustParseName(t, "example.com."),
+				Type:  protocol.TypeTXT,
+				Class: protocol.ClassIN,
+				TTL:   300,
+				Data:  &protocol.RDataTXT{Strings: []string{"v=spf1"}},
+			},
+		},
+	}
+
+	minimizeResponse(resp)
+
+	// Expect: glue A + OPT = 2 additionals.
+	if len(resp.Additionals) != 2 {
+		t.Fatalf("expected 2 additionals (glue + OPT), got %d", len(resp.Additionals))
+	}
+
+	hasGlue := false
+	hasOPT := false
+	for _, rr := range resp.Additionals {
+		if rr.Type == protocol.TypeA && rr.Name.String() == "ns1.example.com." {
+			hasGlue = true
+		}
+		if rr.Type == protocol.TypeOPT {
+			hasOPT = true
+		}
+	}
+	if !hasGlue {
+		t.Error("expected glue A record for ns1.example.com. to be preserved")
+	}
+	if !hasOPT {
+		t.Error("expected OPT pseudo-record to be preserved")
+	}
+}
+
+func TestMinimizeResponse_EmptySections(t *testing.T) {
+	resp := &protocol.Message{
+		Header: protocol.Header{
+			Flags: protocol.Flags{QR: true, RCODE: protocol.RcodeSuccess},
+		},
+		Answers: []*protocol.ResourceRecord{
+			{
+				Name:  mustParseName(t, "www.example.com."),
+				Type:  protocol.TypeA,
+				Class: protocol.ClassIN,
+				TTL:   300,
+				Data:  &protocol.RDataA{Address: [4]byte{1, 2, 3, 4}},
+			},
+		},
+	}
+
+	minimizeResponse(resp)
+
+	// No authority or additional to begin with -- answers untouched.
+	if len(resp.Answers) != 1 {
+		t.Errorf("expected 1 answer, got %d", len(resp.Answers))
+	}
+	if len(resp.Authorities) != 0 {
+		t.Errorf("expected 0 authorities, got %d", len(resp.Authorities))
+	}
+	if len(resp.Additionals) != 0 {
+		t.Errorf("expected 0 additionals, got %d", len(resp.Additionals))
 	}
 }

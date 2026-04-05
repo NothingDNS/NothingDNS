@@ -5,10 +5,16 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 )
+
+// maxIncludeDepth is the maximum nesting depth for $INCLUDE directives
+// to prevent infinite recursion from circular includes.
+const maxIncludeDepth = 10
 
 // RecordChange represents a single record addition or deletion
 // Used for IXFR (Incremental Zone Transfer) journaling
@@ -198,14 +204,15 @@ func ParseFile(filename string, r io.Reader) (*Zone, error) {
 
 // parser handles the parsing of zone files.
 type parser struct {
-	filename   string
-	scanner    *bufio.Scanner
-	lineNum    int
-	zone       *Zone
-	lastOwner  string // Last seen owner name (for continuation lines)
-	parenDepth int    // Parenthesis nesting depth for multi-line records
-	lineBuf    string // Accumulated line content across parenthesized spans
-	lineStart  int    // Line number where the current multi-line record started
+	filename     string
+	scanner      *bufio.Scanner
+	lineNum      int
+	zone         *Zone
+	lastOwner    string // Last seen owner name (for continuation lines)
+	parenDepth   int    // Parenthesis nesting depth for multi-line records
+	lineBuf      string // Accumulated line content across parenthesized spans
+	lineStart    int    // Line number where the current multi-line record started
+	includeDepth int    // Current $INCLUDE nesting depth (0 = top-level file)
 }
 
 // parse performs the actual parsing.
@@ -323,12 +330,73 @@ func (p *parser) handleControl(line string) error {
 		return p.handleGenerate(fields[1:])
 
 	case "$INCLUDE":
-		// $INCLUDE not supported in basic version
-		return fmt.Errorf("$INCLUDE not supported")
+		return p.handleInclude(fields[1:])
 
 	default:
 		return fmt.Errorf("unknown control directive: %s", directive)
 	}
+
+	return nil
+}
+
+// handleInclude processes the $INCLUDE directive per RFC 1035.
+// Syntax: $INCLUDE filename [origin]
+//
+// The named file is read and parsed at the current point in the zone.
+// If an optional origin is given, it temporarily overrides $ORIGIN for
+// the scope of the included file only. After parsing completes, the
+// original origin is restored.
+//
+// Nested includes are allowed up to maxIncludeDepth to prevent infinite
+// recursion from circular references.
+func (p *parser) handleInclude(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("$INCLUDE requires a filename")
+	}
+
+	if p.includeDepth >= maxIncludeDepth {
+		return fmt.Errorf("$INCLUDE depth limit exceeded (max %d)", maxIncludeDepth)
+	}
+
+	includeFile := args[0]
+
+	// Resolve relative paths against the directory of the current file
+	if !filepath.IsAbs(includeFile) && p.filename != "" {
+		includeFile = filepath.Join(filepath.Dir(p.filename), includeFile)
+	}
+
+	// Save current origin so we can restore it after the include
+	savedOrigin := p.zone.Origin
+
+	// If an origin override was specified, apply it for the included file
+	if len(args) >= 2 {
+		p.zone.Origin = canonicalize(args[1])
+	}
+
+	f, err := os.Open(includeFile)
+	if err != nil {
+		// Restore origin before returning error
+		p.zone.Origin = savedOrigin
+		return fmt.Errorf("$INCLUDE %s: %w", includeFile, err)
+	}
+	defer f.Close()
+
+	// Create a child parser that shares the same zone and inherits state
+	child := &parser{
+		filename:     includeFile,
+		scanner:      bufio.NewScanner(f),
+		zone:         p.zone,
+		lastOwner:    p.lastOwner,
+		includeDepth: p.includeDepth + 1,
+	}
+
+	if _, err := child.parse(); err != nil {
+		p.zone.Origin = savedOrigin
+		return err
+	}
+
+	// Restore the origin after the included file has been parsed
+	p.zone.Origin = savedOrigin
 
 	return nil
 }
@@ -772,6 +840,170 @@ func (z *Zone) LookupAll(name string) []Record {
 	defer z.mu.RUnlock()
 	name = strings.ToLower(canonicalize(name))
 	return z.Records[name]
+}
+
+// NameExists returns true if the given name has any records in the zone.
+// This is needed for wildcard matching — a name that exists but has no
+// records of the requested type is NODATA, not a wildcard match.
+func (z *Zone) NameExists(name string) bool {
+	z.mu.RLock()
+	defer z.mu.RUnlock()
+	name = strings.ToLower(canonicalize(name))
+	return len(z.Records[name]) > 0
+}
+
+// LookupWildcard performs RFC 4592 wildcard matching for a query name.
+// It is called only after an exact match has failed and the name does not
+// exist in the zone (not a NODATA situation).
+//
+// Algorithm:
+//  1. Starting from the query name, strip one label at a time from the left
+//     to find the "closest encloser" — the longest ancestor that exists.
+//  2. Check if *.closestEncloser exists in the zone.
+//  3. If it does, return matching records with the wildcard owner name.
+//
+// Returns the matching records, the wildcard name used, and whether a match
+// was found. The caller must rewrite the owner name to the original query name.
+func (z *Zone) LookupWildcard(name, rrtype string) (records []Record, wildcardName string, found bool) {
+	z.mu.RLock()
+	defer z.mu.RUnlock()
+
+	name = strings.ToLower(canonicalize(name))
+	rrtype = strings.ToUpper(rrtype)
+	origin := strings.ToLower(z.Origin)
+
+	// The query name must be within this zone
+	if !strings.HasSuffix(name, origin) && name != origin {
+		return nil, "", false
+	}
+
+	// Strip labels from the left to find the closest encloser
+	current := name
+	for {
+		// Don't go above the zone origin
+		if current == origin || current == "." {
+			break
+		}
+
+		// Strip the leftmost label
+		dot := strings.IndexByte(current, '.')
+		if dot < 0 || dot+1 >= len(current) {
+			break
+		}
+		parent := current[dot+1:]
+
+		// Check if a wildcard exists at this parent: *.parent
+		wildcard := "*." + parent
+		if recs, ok := z.Records[wildcard]; ok && len(recs) > 0 {
+			// Found a wildcard — filter by requested type
+			if rrtype == "" || rrtype == "ANY" {
+				return recs, wildcard, true
+			}
+			var matched []Record
+			for _, r := range recs {
+				if strings.ToUpper(r.Type) == rrtype {
+					matched = append(matched, r)
+				}
+			}
+			// Even if no records match the type, the wildcard name exists,
+			// so this is a wildcard NODATA (not NXDOMAIN). Return found=true.
+			return matched, wildcard, true
+		}
+
+		current = parent
+	}
+
+	return nil, "", false
+}
+
+// FindDelegation checks if the query name crosses a delegation point
+// (zone cut) within this zone. A delegation exists when an intermediate
+// name between the zone apex and the query name has NS records.
+//
+// Per RFC 1034 §4.2.1, the zone apex NS records are NOT a delegation —
+// they describe the zone's own nameservers.
+//
+// Returns the NS records at the delegation point, the delegation name,
+// and whether a delegation was found.
+func (z *Zone) FindDelegation(name string) (nsRecords []Record, delegationPoint string, found bool) {
+	z.mu.RLock()
+	defer z.mu.RUnlock()
+
+	name = strings.ToLower(canonicalize(name))
+	origin := strings.ToLower(z.Origin)
+
+	// Query name must be within this zone
+	if !strings.HasSuffix(name, origin) && name != origin {
+		return nil, "", false
+	}
+
+	// If the query is exactly the origin, no delegation is possible
+	if name == origin {
+		return nil, "", false
+	}
+
+	// Build the list of intermediate names from origin toward query name.
+	// For example: query=a.b.example.com., origin=example.com.
+	// intermediates = [b.example.com.]  (skip origin itself and query name)
+	//
+	// We walk from the query name upward to find names between it and the origin.
+	var intermediates []string
+	current := name
+	for {
+		dot := strings.IndexByte(current, '.')
+		if dot < 0 || dot+1 >= len(current) {
+			break
+		}
+		parent := current[dot+1:]
+		if parent == origin {
+			// current is one label beyond origin — this IS an intermediate
+			intermediates = append(intermediates, current)
+			break
+		}
+		intermediates = append(intermediates, current)
+		current = parent
+	}
+
+	// Check intermediates from closest-to-origin first (most specific delegation wins).
+	// Walk in reverse since intermediates are built from query toward origin.
+	for i := len(intermediates) - 1; i >= 0; i-- {
+		candidate := intermediates[i]
+		// Skip the query name itself if it's the only intermediate
+		if candidate == name {
+			continue
+		}
+		for _, rec := range z.Records[candidate] {
+			if strings.ToUpper(rec.Type) == "NS" {
+				// Found a delegation point — collect all NS records
+				var ns []Record
+				for _, r := range z.Records[candidate] {
+					if strings.ToUpper(r.Type) == "NS" {
+						ns = append(ns, r)
+					}
+				}
+				return ns, candidate, true
+			}
+		}
+	}
+
+	return nil, "", false
+}
+
+// FindGlue returns A and AAAA records for the given nameserver name
+// if they exist within this zone (glue records).
+func (z *Zone) FindGlue(nsName string) []Record {
+	z.mu.RLock()
+	defer z.mu.RUnlock()
+
+	nsName = strings.ToLower(canonicalize(nsName))
+	var glue []Record
+	for _, rec := range z.Records[nsName] {
+		t := strings.ToUpper(rec.Type)
+		if t == "A" || t == "AAAA" {
+			glue = append(glue, rec)
+		}
+	}
+	return glue
 }
 
 // Validate checks the zone for required records and consistency.

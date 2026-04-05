@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -56,6 +57,7 @@ type integratedHandler struct {
 	splitHorizon  *filter.SplitHorizon
 	viewZones     map[string]map[string]*zone.Zone // view name -> origin -> Zone
 	auditLogger   *audit.AuditLogger
+	nsecCache     *cache.NSECCache // RFC 8198 aggressive NSEC caching
 
 	notifyOnce sync.Once
 	updateOnce sync.Once
@@ -236,6 +238,18 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 		h.metrics.RecordCacheMiss()
 	}
 
+	// RFC 8198: Check aggressive NSEC cache before going upstream
+	if h.nsecCache != nil {
+		if synthResp := h.nsecCache.Lookup(qname, qtype); synthResp != nil {
+			h.logger.Debugf("NSEC cache hit for %s (aggressive negative)", qname)
+			if h.metrics != nil {
+				h.metrics.RecordResponse(synthResp.Header.Flags.RCODE)
+			}
+			reply(w, r, synthResp)
+			return
+		}
+	}
+
 	// Split-horizon: if views are configured, check view-specific zones first.
 	if h.splitHorizon != nil && clientIP != nil {
 		if view := h.splitHorizon.SelectView(clientIP); view != nil {
@@ -321,6 +335,15 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 		resp, err := h.resolver.Resolve(context.Background(), qname, qtype)
 		if err != nil {
 			h.logger.Warnf("Iterative resolution failed for %s: %v", qname, err)
+			// RFC 8767: Try serve-stale when resolution fails
+			if stale := h.cache.GetStale(cacheKey); stale != nil && stale.Message != nil {
+				h.logger.Debugf("Serving stale cache entry for %s (resolver failed)", qname)
+				if h.metrics != nil {
+					h.metrics.RecordResponse(protocol.RcodeSuccess)
+				}
+				reply(w, r, stale.Message)
+				return
+			}
 			if h.metrics != nil {
 				h.metrics.RecordResponse(protocol.RcodeServerFailure)
 			}
@@ -358,6 +381,15 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 		}
 		if err != nil {
 			h.logger.Warnf("Upstream query failed for %s: %v", qname, err)
+			// RFC 8767: Try serve-stale when upstream is unavailable
+			if stale := h.cache.GetStale(cacheKey); stale != nil && stale.Message != nil {
+				h.logger.Debugf("Serving stale cache entry for %s (upstream failed)", qname)
+				if h.metrics != nil {
+					h.metrics.RecordResponse(protocol.RcodeSuccess)
+				}
+				reply(w, r, stale.Message)
+				return
+			}
 			if h.metrics != nil {
 				h.metrics.RecordResponse(protocol.RcodeServerFailure)
 			}
@@ -414,6 +446,11 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 			}
 			h.cache.SetNegative(cacheKey, resp.Header.Flags.RCODE)
 			h.logger.Debugf("Cached negative response for %s (rcode=%d, negTTL=%d)", qname, resp.Header.Flags.RCODE, negTTL)
+
+			// RFC 8198: Cache NSEC records from NXDOMAIN responses for aggressive negative caching
+			if h.nsecCache != nil && resp.Header.Flags.RCODE == protocol.RcodeNameError {
+				h.nsecCache.AddFromResponse(resp)
+			}
 		}
 
 		if h.metrics != nil {
@@ -438,6 +475,7 @@ func reply(w server.ResponseWriter, query, response *protocol.Message) {
 	if len(response.Questions) == 0 {
 		response.Questions = query.Questions
 	}
+	minimizeResponse(response)
 	if _, err := w.Write(response); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to write response: %v\n", err)
 	}
@@ -560,4 +598,93 @@ func (h *integratedHandler) buildSignedResponse(query *protocol.Message, records
 	}
 
 	return resp
+}
+
+// minimizeResponse strips unnecessary authority and additional section records
+// from a DNS response per RFC 6604 minimal responses guidance.
+//
+// Rules:
+//  1. Authoritative (AA=true): keep authority only if it contains SOA (negative caching).
+//  2. Non-authoritative (forwarded): keep authority NS (referrals) and SOA (negative caching),
+//     strip everything else.
+//  3. Additional section: keep only glue records (A/AAAA whose name matches an NS
+//     target in the authority section). Always preserve OPT pseudo-records.
+func minimizeResponse(resp *protocol.Message) {
+	if resp == nil {
+		return
+	}
+
+	// Collect NS target names from authority section for glue filtering.
+	nsNames := make(map[string]struct{})
+	hasSOA := false
+	hasNS := false
+	for _, rr := range resp.Authorities {
+		if rr == nil {
+			continue
+		}
+		switch rr.Type {
+		case protocol.TypeSOA:
+			hasSOA = true
+		case protocol.TypeNS:
+			hasNS = true
+			if ns, ok := rr.Data.(*protocol.RDataNS); ok && ns.NSDName != nil {
+				nsNames[strings.ToLower(ns.NSDName.String())] = struct{}{}
+			}
+		}
+	}
+
+	// Filter authority section.
+	if resp.Header.Flags.AA {
+		// Authoritative: keep only SOA records (for negative caching).
+		if hasSOA {
+			filtered := make([]*protocol.ResourceRecord, 0, len(resp.Authorities))
+			for _, rr := range resp.Authorities {
+				if rr != nil && rr.Type == protocol.TypeSOA {
+					filtered = append(filtered, rr)
+				}
+			}
+			resp.Authorities = filtered
+		} else {
+			resp.Authorities = nil
+		}
+	} else {
+		// Non-authoritative: keep NS (referrals) and SOA (negative caching).
+		if hasSOA || hasNS {
+			filtered := make([]*protocol.ResourceRecord, 0, len(resp.Authorities))
+			for _, rr := range resp.Authorities {
+				if rr == nil {
+					continue
+				}
+				if rr.Type == protocol.TypeSOA || rr.Type == protocol.TypeNS {
+					filtered = append(filtered, rr)
+				}
+			}
+			resp.Authorities = filtered
+		} else {
+			resp.Authorities = nil
+		}
+	}
+
+	// Filter additional section: keep OPT (EDNS0) and glue (A/AAAA for NS names).
+	if len(resp.Additionals) > 0 {
+		filtered := make([]*protocol.ResourceRecord, 0, len(resp.Additionals))
+		for _, rr := range resp.Additionals {
+			if rr == nil {
+				continue
+			}
+			// Always keep OPT pseudo-records.
+			if rr.Type == protocol.TypeOPT {
+				filtered = append(filtered, rr)
+				continue
+			}
+			// Keep A/AAAA if the name matches an NS target (glue record).
+			if (rr.Type == protocol.TypeA || rr.Type == protocol.TypeAAAA) && rr.Name != nil {
+				name := strings.ToLower(rr.Name.String())
+				if _, isGlue := nsNames[name]; isGlue {
+					filtered = append(filtered, rr)
+				}
+			}
+		}
+		resp.Additionals = filtered
+	}
 }

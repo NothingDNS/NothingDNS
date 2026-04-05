@@ -31,6 +31,9 @@ const (
 
 	// TCPMaxConnections is the maximum number of concurrent TCP connections.
 	TCPMaxConnections = 1000
+
+	// TCPMaxPipelineQueries is the maximum number of concurrent in-flight queries per TCP connection.
+	TCPMaxPipelineQueries = 16
 )
 
 // TCPConn is a wrapper around net.Conn for testing/mocking.
@@ -167,8 +170,15 @@ func (s *TCPServer) worker(connChan <-chan net.Conn) {
 }
 
 // handleConnection processes a single TCP connection.
+// Reads are sequential (TCP requires this), but message processing is concurrent
+// up to TCPMaxPipelineQueries in-flight queries (TCP pipelining).
 func (s *TCPServer) handleConnection(conn net.Conn) {
+	var writeMu sync.Mutex
+	var wg sync.WaitGroup
+	pipeSem := make(chan struct{}, TCPMaxPipelineQueries)
+
 	defer func() {
+		wg.Wait()
 		conn.Close()
 		atomic.AddUint64(&s.connectionsClosed, 1)
 	}()
@@ -208,13 +218,22 @@ func (s *TCPServer) handleConnection(conn net.Conn) {
 
 		atomic.AddUint64(&s.messagesReceived, 1)
 
-		// Process the message
-		s.handleMessage(conn, msgBuf)
+		// Acquire pipeline semaphore slot
+		pipeSem <- struct{}{}
+
+		// Process the message concurrently
+		wg.Add(1)
+		go func(data []byte) {
+			defer wg.Done()
+			defer func() { <-pipeSem }()
+			s.handleMessage(conn, data, &writeMu)
+		}(msgBuf)
 	}
 }
 
 // handleMessage processes a single DNS message over TCP.
-func (s *TCPServer) handleMessage(conn net.Conn, data []byte) {
+// writeMu serializes writes on the connection to prevent interleaving during pipelining.
+func (s *TCPServer) handleMessage(conn net.Conn, data []byte, writeMu *sync.Mutex) {
 	// Unpack the message
 	msg, err := protocol.UnpackMessage(data)
 	if err != nil {
@@ -254,6 +273,7 @@ func (s *TCPServer) handleMessage(conn net.Conn, data []byte) {
 		client:  client,
 		maxSize: TCPMaxMessageSize,
 		server:  s,
+		writeMu: writeMu,
 	}
 
 	// Call handler
@@ -265,8 +285,9 @@ type tcpResponseWriter struct {
 	conn       net.Conn
 	client     *ClientInfo
 	maxSize    int
-	writeCount int        // Number of writes (for AXFR support)
-	server     *TCPServer // Reference for metrics
+	writeCount int          // Number of writes (for AXFR support)
+	server     *TCPServer   // Reference for metrics
+	writeMu    *sync.Mutex  // Serializes writes for pipelining safety
 }
 
 func (w *tcpResponseWriter) ClientInfo() *ClientInfo {
@@ -288,7 +309,7 @@ func (w *tcpResponseWriter) Write(msg *protocol.Message) (int, error) {
 	}
 	buf := make([]byte, estimated)
 
-	// Pack the response
+	// Pack the response (done outside the lock — CPU work, no I/O)
 	n, err := msg.Pack(buf[2:]) // Leave room for length prefix
 	if err != nil {
 		return 0, err
@@ -305,6 +326,10 @@ func (w *tcpResponseWriter) Write(msg *protocol.Message) (int, error) {
 
 	// Write length prefix
 	binary.BigEndian.PutUint16(buf[0:], uint16(n))
+
+	// Serialize writes on the connection to prevent interleaving
+	w.writeMu.Lock()
+	defer w.writeMu.Unlock()
 
 	// Set write timeout
 	w.conn.SetWriteDeadline(time.Now().Add(TCPWriteTimeout))

@@ -1780,7 +1780,7 @@ func TestTCPServerHandleMessageEDNS0ECSExtract(t *testing.T) {
 	defer clientConn.Close()
 
 	// Call handleMessage directly
-	go server.handleMessage(serverConn, buf[:n])
+	go server.handleMessage(serverConn, buf[:n], &sync.Mutex{})
 
 	// Read the response from the pipe
 	var lengthBuf [2]byte
@@ -1868,7 +1868,7 @@ func TestTCPServerHandleMessageEDNS0NoECS(t *testing.T) {
 	defer serverConn.Close()
 	defer clientConn.Close()
 
-	go server.handleMessage(serverConn, buf[:n])
+	go server.handleMessage(serverConn, buf[:n], &sync.Mutex{})
 
 	var lengthBuf [2]byte
 	io.ReadFull(clientConn, lengthBuf[:])
@@ -1915,6 +1915,7 @@ func TestTCPResponseWriterPackError(t *testing.T) {
 		conn:    serverConn,
 		client:  &ClientInfo{Protocol: "tcp"},
 		maxSize: 10, // Very small to trigger truncation path
+		writeMu: &sync.Mutex{},
 	}
 
 	// Build a message that is larger than maxSize-2
@@ -1958,6 +1959,7 @@ func TestTCPResponseWriterTruncationSmallMaxSize(t *testing.T) {
 		conn:    serverConn,
 		client:  &ClientInfo{Protocol: "tcp"},
 		maxSize: 20, // Very small, much less than message size
+		writeMu: &sync.Mutex{},
 	}
 
 	name := mustParseName("truncate.example.com.")

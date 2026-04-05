@@ -65,10 +65,20 @@ func parseRData(rtype, rdata string) protocol.RData {
 			copy(addr[:], ip.To16())
 			return &protocol.RDataAAAA{Address: addr}
 		}
-	case "CNAME", "NS", "PTR":
+	case "CNAME":
 		name, err := protocol.ParseName(rdata)
 		if err == nil {
 			return &protocol.RDataCNAME{CName: name}
+		}
+	case "NS":
+		name, err := protocol.ParseName(rdata)
+		if err == nil {
+			return &protocol.RDataNS{NSDName: name}
+		}
+	case "PTR":
+		name, err := protocol.ParseName(rdata)
+		if err == nil {
+			return &protocol.RDataPTR{PtrDName: name}
 		}
 	case "MX":
 		parts := strings.Fields(rdata)

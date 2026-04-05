@@ -188,7 +188,7 @@ func TestHandleControlEdgeCases(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:    "$INCLUDE",
+			name:    "$INCLUDE file not found",
 			content: "$INCLUDE other.zone",
 			wantErr: true,
 		},

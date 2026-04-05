@@ -157,6 +157,7 @@ func TestTCPResponseWriterWriteDetailedV2(t *testing.T) {
 		conn:    serverConn,
 		client:  &ClientInfo{Protocol: "tcp"},
 		maxSize: TCPMaxMessageSize,
+		writeMu: &sync.Mutex{},
 	}
 
 	name := mustParseName("detailv2.example.com.")
@@ -239,6 +240,7 @@ func TestTCPResponseWriterWriteVerifyData(t *testing.T) {
 		conn:    serverConn,
 		client:  &ClientInfo{Protocol: "tcp"},
 		maxSize: TCPMaxMessageSize,
+		writeMu: &sync.Mutex{},
 	}
 
 	msg := &protocol.Message{

@@ -10,6 +10,7 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -301,6 +302,7 @@ func TestTCPResponseWriterTruncationSmallMaxSize3(t *testing.T) {
 		conn:    serverConn,
 		client:  &ClientInfo{Protocol: "tcp"},
 		maxSize: 50, // Small to trigger truncation
+		writeMu: &sync.Mutex{},
 	}
 
 	name := mustParseName("tcp-trunc3.example.com.")

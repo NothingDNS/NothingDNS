@@ -262,6 +262,9 @@ type ResolutionConfig struct {
 
 	// QNAME Minimization (RFC 7816) — reduces privacy leakage
 	QnameMinimization bool `yaml:"qname_minimization"`
+
+	// DNS 0x20 encoding (Vixie/Dagon) — randomizes query name case for spoofing resistance
+	Use0x20 bool `yaml:"use_0x20"`
 }
 
 // UpstreamConfig contains upstream DNS server settings.
@@ -352,6 +355,12 @@ type CacheConfig struct {
 
 	// Prefetch threshold (seconds before expiration)
 	PrefetchThreshold int `yaml:"prefetch_threshold"`
+
+	// RFC 8767: Serve stale responses when upstream is unavailable
+	ServeStale bool `yaml:"serve_stale"`
+
+	// Stale grace period in seconds (how long past TTL expiry to keep entries)
+	StaleGraceSecs int `yaml:"stale_grace_secs"`
 }
 
 // LoggingConfig contains logging settings.
@@ -502,6 +511,8 @@ func DefaultConfig() *Config {
 			NegativeTTL:       60,
 			Prefetch:          false,
 			PrefetchThreshold: 60,
+			ServeStale:        false,
+			StaleGraceSecs:    86400, // 24 hours
 		},
 		Logging: LoggingConfig{
 			Level:      "info",
@@ -839,6 +850,7 @@ func unmarshalResolution(node *Node, cfg *ResolutionConfig) error {
 	}
 	cfg.EDNS0BufferSize = getInt(node, "edns0_buffer_size", cfg.EDNS0BufferSize)
 	cfg.QnameMinimization = node.GetBool("qname_minimization")
+	cfg.Use0x20 = getBool(node, "use_0x20", cfg.Use0x20)
 
 	return nil
 }

@@ -97,6 +97,8 @@ func run() error {
 		NegativeTTL:       time.Duration(cfg.Cache.NegativeTTL) * time.Second,
 		PrefetchEnabled:   cfg.Cache.Prefetch,
 		PrefetchThreshold: time.Duration(cfg.Cache.PrefetchThreshold) * time.Second,
+		ServeStale:        cfg.Cache.ServeStale,
+		StaleGrace:        time.Duration(cfg.Cache.StaleGraceSecs) * time.Second,
 	}
 	dnsCache := cache.New(cacheConfig)
 	logger.Infof("Cache initialized with capacity %d", cfg.Cache.Size)
@@ -520,6 +522,7 @@ func run() error {
 		splitHorizon:  splitHorizon,
 		viewZones:     viewZones,
 		auditLogger:   auditLogger,
+		nsecCache:     cache.NewNSECCache(10000),
 	}
 
 	// Initialize iterative recursive resolver if enabled

@@ -40,6 +40,7 @@ type Config struct {
 	Timeout           time.Duration // Per-query timeout (default 5s)
 	EDNS0BufSize      uint16        // EDNS0 UDP buffer size (default 4096)
 	QnameMinimization bool          // RFC 7816 QNAME minimization (default false)
+	Use0x20           bool          // DNS 0x20 encoding for spoofing resistance (default false)
 }
 
 func DefaultConfig() Config {
@@ -249,8 +250,14 @@ func (r *Resolver) queryDelegation(ctx context.Context, name string, qtype uint1
 
 	var lastErr error
 	for _, addr := range addrs {
+		// Apply 0x20 encoding: randomize case of the query name per attempt
+		queryName := name
+		if r.config.Use0x20 {
+			queryName = Encode0x20(name)
+		}
+
 		qctx, cancel := context.WithTimeout(ctx, r.config.Timeout)
-		resp, err := r.sendQuery(qctx, name, qtype, addr)
+		resp, err := r.sendQuery(qctx, queryName, qtype, addr)
 		cancel()
 
 		if err != nil {
@@ -258,9 +265,19 @@ func (r *Resolver) queryDelegation(ctx context.Context, name string, qtype uint1
 			continue
 		}
 
-		if resp != nil {
-			return resp, nil
+		if resp == nil {
+			continue
 		}
+
+		// Verify 0x20 encoding: response must echo the exact query name
+		if r.config.Use0x20 {
+			if !verify0x20Response(queryName, resp) {
+				lastErr = fmt.Errorf("resolver: 0x20 verification failed from %s", addr)
+				continue
+			}
+		}
+
+		return resp, nil
 	}
 
 	return nil, fmt.Errorf("resolver: all nameservers failed for %s %s: %w",

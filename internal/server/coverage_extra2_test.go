@@ -65,7 +65,7 @@ func TestTCPServerHandleMessageNoAdditionals(t *testing.T) {
 	defer serverConn.Close()
 	defer clientConn.Close()
 
-	go server.handleMessage(serverConn, buf[:n])
+	go server.handleMessage(serverConn, buf[:n], &sync.Mutex{})
 
 	var lengthBuf [2]byte
 	io.ReadFull(clientConn, lengthBuf[:])
@@ -137,7 +137,7 @@ func TestTCPServerHandleMessageNonOPTAdditional(t *testing.T) {
 	defer serverConn.Close()
 	defer clientConn.Close()
 
-	go server.handleMessage(serverConn, buf[:n])
+	go server.handleMessage(serverConn, buf[:n], &sync.Mutex{})
 
 	var lengthBuf [2]byte
 	io.ReadFull(clientConn, lengthBuf[:])
@@ -198,7 +198,7 @@ func TestTCPServerHandleMessageEmptyAdditionals(t *testing.T) {
 	defer serverConn.Close()
 	defer clientConn.Close()
 
-	go server.handleMessage(serverConn, buf[:n])
+	go server.handleMessage(serverConn, buf[:n], &sync.Mutex{})
 
 	var lengthBuf [2]byte
 	io.ReadFull(clientConn, lengthBuf[:])
@@ -236,7 +236,7 @@ func TestTCPServerHandleMessageUnpackError(t *testing.T) {
 	defer serverConn.Close()
 
 	// Should not panic, should increment errors
-	server.handleMessage(serverConn, malformedData)
+	server.handleMessage(serverConn, malformedData, &sync.Mutex{})
 
 	stats := server.Stats()
 	if stats.Errors == 0 {
@@ -490,6 +490,7 @@ func TestTCPResponseWriterPackErrorOversized(t *testing.T) {
 		conn:    serverConn,
 		client:  &ClientInfo{Protocol: "tcp"},
 		maxSize: TCPMaxMessageSize,
+		writeMu: &sync.Mutex{},
 	}
 
 	// Build a message so large that Pack will fail on the internal buffer.
@@ -780,6 +781,7 @@ func TestTCPResponseWriterConnWriteError(t *testing.T) {
 		conn:    serverConn,
 		client:  &ClientInfo{Protocol: "tcp"},
 		maxSize: TCPMaxMessageSize,
+		writeMu: &sync.Mutex{},
 	}
 
 	msg := &protocol.Message{
@@ -842,7 +844,7 @@ func TestTCPServerHandleMessageOPTRawData(t *testing.T) {
 	defer serverConn.Close()
 	defer clientConn.Close()
 
-	go server.handleMessage(serverConn, packBuf[:n])
+	go server.handleMessage(serverConn, packBuf[:n], &sync.Mutex{})
 
 	var lengthBuf [2]byte
 	io.ReadFull(clientConn, lengthBuf[:])
@@ -994,6 +996,7 @@ func TestTCPResponseWriterTruncationEdgeCase(t *testing.T) {
 		conn:    serverConn,
 		client:  &ClientInfo{Protocol: "tcp"},
 		maxSize: 0, // maxSize-2 = -2, so n > -2 is always true, triggering truncation
+		writeMu: &sync.Mutex{},
 	}
 
 	msg := &protocol.Message{
@@ -1378,6 +1381,7 @@ func TestTCPResponseWriterWriteThenCount(t *testing.T) {
 		conn:    serverConn,
 		client:  &ClientInfo{Protocol: "tcp"},
 		maxSize: TCPMaxMessageSize,
+		writeMu: &sync.Mutex{},
 	}
 
 	msg := &protocol.Message{
