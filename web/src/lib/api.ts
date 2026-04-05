@@ -70,3 +70,117 @@ export interface ServerStatus {
   cache?: { size: number; capacity: number; hits: number; misses: number; hit_ratio: number };
   cluster?: { enabled: boolean; node_id?: string; node_count?: number; alive_count?: number; healthy?: boolean };
 }
+
+export interface QueryLogEntry {
+  timestamp: string;
+  client_ip: string;
+  domain: string;
+  query_type: string;
+  response_code: string;
+  duration_ms: number;
+  cached: boolean;
+  blocked: boolean;
+  protocol: string;
+}
+
+export interface QueryLogResponse {
+  queries: QueryLogEntry[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
+export interface TopDomainsEntry {
+  domain: string;
+  count: number;
+}
+
+export interface TopDomainsResponse {
+  domains: TopDomainsEntry[];
+  limit: number;
+}
+
+export interface MetricsHistoryResponse {
+  timestamps: number[];
+  queries: number[];
+  cache_hits: number[];
+  cache_misses: number[];
+  latency_ms: number[];
+  count: number;
+}
+
+export interface DNSSECStatus {
+  enabled: boolean;
+  require_dnssec: boolean;
+}
+
+export interface BlocklistStatus {
+  enabled: boolean;
+  total_rules: number;
+  files_count: number;
+}
+
+export interface UpstreamServer {
+  address: string;
+  healthy: boolean;
+  queries: number;
+  failed: number;
+  failovers: number;
+}
+
+export interface UpstreamsResponse {
+  upstreams: UpstreamServer[];
+}
+
+export interface UserInfo {
+  username: string;
+  role: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface CreateUserRequest {
+  username: string;
+  password: string;
+  role: string;
+}
+
+export interface MetricsHistory {
+  timestamps: number[];
+  queries: number[];
+  cache_hits: number[];
+  cache_misses: number[];
+  latency_ms: number[];
+  count: number;
+}
+
+export interface RPZStats {
+  enabled: boolean;
+  total_rules: number;
+  qname_rules: number;
+  client_ip_rules: number;
+  resp_ip_rules: number;
+  files_count: number;
+  total_matches: number;
+  total_lookups: number;
+  last_reload?: string;
+}
+
+export interface RPZRule {
+  pattern: string;
+  action: string;
+  trigger: string;
+  override_data?: string;
+  policy_name: string;
+  priority: number;
+}
+
+export interface RPZRulesResponse {
+  rules: RPZRule[];
+}
+
+export interface ServerConfig {
+  version: string;
+  listen_port: number;
+  log_level: string;
+}

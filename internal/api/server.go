@@ -23,6 +23,7 @@ import (
 	"github.com/nothingdns/nothingdns/internal/dnssec"
 	"github.com/nothingdns/nothingdns/internal/filter"
 	"github.com/nothingdns/nothingdns/internal/metrics"
+	"github.com/nothingdns/nothingdns/internal/rpz"
 	"github.com/nothingdns/nothingdns/internal/server"
 	"github.com/nothingdns/nothingdns/internal/upstream"
 	"github.com/nothingdns/nothingdns/internal/util"
@@ -46,6 +47,7 @@ type Server struct {
 	authStore       *auth.Store
 	metrics         *metrics.MetricsCollector
 	validator       *dnssec.Validator
+	rpzEngine       *rpz.Engine
 
 	// Goroutine leak detection baseline
 	goroutineBaseline int64
@@ -104,6 +106,12 @@ func (s *Server) WithMetrics(mc *metrics.MetricsCollector) *Server {
 // WithDNSSEC sets the DNSSEC validator for the API server.
 func (s *Server) WithDNSSEC(v *dnssec.Validator) *Server {
 	s.validator = v
+	return s
+}
+
+// WithRPZ sets the RPZ engine for the API server.
+func (s *Server) WithRPZ(e *rpz.Engine) *Server {
+	s.rpzEngine = e
 	return s
 }
 
@@ -166,6 +174,16 @@ func (s *Server) Start() error {
 	if s.aclChecker != nil {
 		mux.HandleFunc("/api/v1/acl", s.handleACL)
 	}
+
+	// RPZ management
+	if s.rpzEngine != nil {
+		mux.HandleFunc("/api/v1/rpz", s.handleRPZ)
+		mux.HandleFunc("/api/v1/rpz/rules", s.handleRPZRules)
+		mux.HandleFunc("/api/v1/rpz/", s.handleRPZActions)
+	}
+
+	// Server config (read-only)
+	mux.HandleFunc("/api/v1/server/config", s.handleServerConfig)
 
 	// Auth endpoints (no auth required for login, all require auth for others)
 	if s.authStore != nil {
@@ -1101,7 +1119,7 @@ func (s *Server) handleClusterNodes(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, resp)
 }
 
-// handleBlocklists returns the list of active blocklists.
+// handleBlocklists returns blocklist stats or adds a new blocklist entry.
 func (s *Server) handleBlocklists(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodPost {
 		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
@@ -1122,43 +1140,65 @@ func (s *Server) handleBlocklists(w http.ResponseWriter, r *http.Request) {
 			FilesCount: stats.Files,
 		})
 	case http.MethodPost:
-		// Add new blocklist source (URL or file path)
 		var req BlocklistAddRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			s.writeError(w, http.StatusBadRequest, "Invalid request body")
 			return
 		}
-		// Note: Dynamic blocklist addition would require modifying the blocklist engine
-		// For now, return a message that full reload is needed
-		s.writeJSON(w, http.StatusOK, &MessageResponse{
-			Message: "Blocklist updated. Reload config to apply changes.",
-		})
+		if req.File != "" {
+			if err := s.blocklist.AddFile(req.File); err != nil {
+				s.writeError(w, http.StatusBadRequest, fmt.Sprintf("Failed to load blocklist file: %v", err))
+				return
+			}
+			s.writeJSON(w, http.StatusCreated, &MessageResponse{Message: "Blocklist file added"})
+		} else if req.URL != "" {
+			// URL addition would require downloading — not implemented
+			s.writeError(w, http.StatusNotImplemented, "URL-based blocklist not implemented; use file path instead")
+		} else {
+			s.writeError(w, http.StatusBadRequest, "file or url is required")
+		}
 	}
 }
 
-// handleBlocklistActions handles individual blocklist actions.
+// handleBlocklistActions handles toggle and file-based removal.
 func (s *Server) handleBlocklistActions(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodDelete {
-		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-
 	if s.blocklist == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Blocklist not available")
 		return
 	}
 
-	// Extract blocklist ID from path
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/blocklists/"), "/")
-	if len(parts) == 0 || parts[0] == "" {
-		s.writeError(w, http.StatusBadRequest, "Missing blocklist ID")
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/blocklists/")
+
+	// Toggle: /api/v1/blocklists/toggle
+	if path == "toggle" {
+		if r.Method != http.MethodPost {
+			s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+			return
+		}
+		stats := s.blocklist.Stats()
+		s.blocklist.SetEnabled(!stats.Enabled)
+		s.writeJSON(w, http.StatusOK, &MessageResponse{
+			Message: fmt.Sprintf("Blocklist %s", map[bool]string{true: "enabled", false: "disabled"}[!stats.Enabled]),
+		})
 		return
 	}
 
-	// Note: Dynamic blocklist removal would require modifying the blocklist engine
-	s.writeJSON(w, http.StatusOK, &MessageResponse{
-		Message: "Blocklist removal requires config reload",
-	})
+	// Delete by file path: /api/v1/blocklists/{filepath}
+	if r.Method == http.MethodDelete {
+		// URL-decode the path to handle encoded slashes
+		decodedPath, err := url.QueryUnescape(path)
+		if err != nil {
+			decodedPath = path
+		}
+		if err := s.blocklist.RemoveFile(decodedPath); err != nil {
+			s.writeError(w, http.StatusBadRequest, fmt.Sprintf("Failed to remove blocklist file: %v", err))
+			return
+		}
+		s.writeJSON(w, http.StatusOK, &MessageResponse{Message: "Blocklist file removed"})
+		return
+	}
+
+	s.writeError(w, http.StatusNotFound, "Not found")
 }
 
 // handleUpstreams returns upstream server status.
@@ -1208,13 +1248,193 @@ func (s *Server) handleACL(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		// Get ACL rules - would need ACL checker to expose rules
 		s.writeJSON(w, http.StatusOK, &ACLResponse{
-			Rules: []ACLRuleResponse{}, // Would populate from ACL checker
+			Rules: []ACLRuleResponse{}, // Populated via ACL getter if available
 		})
 	case http.MethodPut:
-		// Update ACL rules - would need ACL checker to support updates
 		s.writeError(w, http.StatusNotImplemented, "Dynamic ACL update not implemented")
+	}
+}
+
+// handleRPZ returns RPZ statistics.
+func (s *Server) handleRPZ(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	if s.rpzEngine == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "RPZ not available")
+		return
+	}
+
+	stats := s.rpzEngine.Stats()
+	lastReload := ""
+	if !stats.LastReload.IsZero() {
+		lastReload = stats.LastReload.Format(time.RFC3339)
+	}
+	s.writeJSON(w, http.StatusOK, &RPZStatsResponse{
+		Enabled:       stats.Enabled,
+		TotalRules:    stats.TotalRules,
+		QNAMERules:    stats.QNAMERules,
+		ClientIPRules: stats.ClientIPRules,
+		RespIPRules:   stats.RespIPRules,
+		FilesCount:    stats.Files,
+		TotalMatches:  stats.TotalMatches,
+		TotalLookups:  stats.TotalLookups,
+		LastReload:    lastReload,
+	})
+}
+
+// handleRPZRules returns RPZ QNAME rules list.
+func (s *Server) handleRPZRules(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost && r.Method != http.MethodDelete {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	if s.rpzEngine == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "RPZ not available")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		rules := s.rpzEngine.ListQNAMERules()
+		resp := make([]RPZRuleResponse, 0, len(rules))
+		for _, r := range rules {
+			resp = append(resp, RPZRuleResponse{
+				Pattern:      r.Pattern,
+				Action:       actionToString(r.Action),
+				Trigger:      triggerToString(r.Trigger),
+				OverrideData: r.OverrideData,
+				PolicyName:   r.PolicyName,
+				Priority:     r.Priority,
+			})
+		}
+		s.writeJSON(w, http.StatusOK, &RPZRulesResponse{Rules: resp})
+	case http.MethodPost:
+		var req RPZAddRuleRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.writeError(w, http.StatusBadRequest, "Invalid request body")
+			return
+		}
+		if req.Pattern == "" {
+			s.writeError(w, http.StatusBadRequest, "pattern is required")
+			return
+		}
+		action := parseAction(req.Action)
+		s.rpzEngine.AddQNAMERule(req.Pattern, action, req.OverrideData)
+		s.writeJSON(w, http.StatusCreated, &MessageResponse{Message: "Rule added"})
+	case http.MethodDelete:
+		// DELETE /api/v1/rpz/rules?pattern=domain.com
+		pattern := r.URL.Query().Get("pattern")
+		if pattern == "" {
+			s.writeError(w, http.StatusBadRequest, "pattern query parameter required")
+			return
+		}
+		s.rpzEngine.RemoveQNAMERule(pattern)
+		s.writeJSON(w, http.StatusOK, &MessageResponse{Message: "Rule removed"})
+	}
+}
+
+// handleRPZActions handles RPZ enable/disable toggle.
+func (s *Server) handleRPZActions(w http.ResponseWriter, r *http.Request) {
+	if s.rpzEngine == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "RPZ not available")
+		return
+	}
+
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/rpz/")
+	if strings.HasPrefix(path, "toggle") {
+		if r.Method != http.MethodPost {
+			s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+			return
+		}
+		// Toggle enabled state
+		s.rpzEngine.SetEnabled(!s.rpzEngine.IsEnabled())
+		s.writeJSON(w, http.StatusOK, &MessageResponse{
+			Message: fmt.Sprintf("RPZ %s", map[bool]string{true: "enabled", false: "disabled"}[s.rpzEngine.IsEnabled()]),
+		})
+		return
+	}
+
+	s.writeError(w, http.StatusNotFound, "Not found")
+}
+
+// handleServerConfig returns the current server configuration (read-only, sanitized).
+func (s *Server) handleServerConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, &ServerConfigResponse{
+		Version:    util.Version,
+		ListenPort: 0, // Not available in HTTPConfig
+		LogLevel:   "", // Not available in HTTPConfig
+	})
+}
+
+// actionToString converts a PolicyAction to a string.
+func actionToString(a rpz.PolicyAction) string {
+	switch a {
+	case rpz.ActionNXDOMAIN:
+		return "NXDOMAIN"
+	case rpz.ActionNODATA:
+		return "NODATA"
+	case rpz.ActionCNAME:
+		return "CNAME"
+	case rpz.ActionOverride:
+		return "Override"
+	case rpz.ActionDrop:
+		return "Drop"
+	case rpz.ActionPassThrough:
+		return "PassThrough"
+	case rpz.ActionTCPOnly:
+		return "TCPOnly"
+	default:
+		return "Unknown"
+	}
+}
+
+// triggerToString converts a TriggerType to a string.
+func triggerToString(t rpz.TriggerType) string {
+	switch t {
+	case rpz.TriggerQNAME:
+		return "QNAME"
+	case rpz.TriggerResponseIP:
+		return "ResponseIP"
+	case rpz.TriggerClientIP:
+		return "ClientIP"
+	case rpz.TriggerNSDNAME:
+		return "NSDNAME"
+	case rpz.TriggerNSIP:
+		return "NSIP"
+	default:
+		return "Unknown"
+	}
+}
+
+// parseAction converts a string to a PolicyAction.
+func parseAction(s string) rpz.PolicyAction {
+	switch strings.ToUpper(s) {
+	case "NXDOMAIN":
+		return rpz.ActionNXDOMAIN
+	case "NODATA":
+		return rpz.ActionNODATA
+	case "CNAME":
+		return rpz.ActionCNAME
+	case "OVERRIDE":
+		return rpz.ActionOverride
+	case "DROP":
+		return rpz.ActionDrop
+	case "PASSTHROUGH":
+		return rpz.ActionPassThrough
+	case "TCPONLY":
+		return rpz.ActionTCPOnly
+	default:
+		return rpz.ActionNXDOMAIN
 	}
 }
 

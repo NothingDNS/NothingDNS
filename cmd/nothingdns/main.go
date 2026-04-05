@@ -719,7 +719,8 @@ func run() error {
 		WithAuth(authStore).
 		WithDashboard(dashboardServer).
 		WithMetrics(metricsCollector).
-		WithDNSSEC(validator)
+		WithDNSSEC(validator).
+		WithRPZ(rpzEngine)
 	if err := apiServer.Start(); err != nil {
 		logger.Warnf("Failed to start API server: %v", err)
 	} else if cfg.Server.HTTP.Enabled {

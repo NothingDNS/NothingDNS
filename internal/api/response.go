@@ -270,3 +270,45 @@ type TopDomainsResponse struct {
 	Domains []TopDomainsEntry `json:"domains"`
 	Limit   int              `json:"limit"`
 }
+
+// RPZStatsResponse is returned by GET /api/v1/rpz.
+type RPZStatsResponse struct {
+	Enabled       bool   `json:"enabled"`
+	TotalRules    int    `json:"total_rules"`
+	QNAMERules    int    `json:"qname_rules"`
+	ClientIPRules int    `json:"client_ip_rules"`
+	RespIPRules   int    `json:"resp_ip_rules"`
+	FilesCount    int    `json:"files_count"`
+	TotalMatches  uint64 `json:"total_matches"`
+	TotalLookups  uint64 `json:"total_lookups"`
+	LastReload    string `json:"last_reload,omitempty"`
+}
+
+// RPZRuleResponse represents a single RPZ rule in API responses.
+type RPZRuleResponse struct {
+	Pattern      string `json:"pattern"`
+	Action       string `json:"action"`
+	Trigger      string `json:"trigger"`
+	OverrideData string `json:"override_data,omitempty"`
+	PolicyName   string `json:"policy_name"`
+	Priority     int    `json:"priority"`
+}
+
+// RPZRulesResponse is returned by GET /api/v1/rpz/rules.
+type RPZRulesResponse struct {
+	Rules []RPZRuleResponse `json:"rules"`
+}
+
+// RPZAddRuleRequest is the request body for POST /api/v1/rpz/rules.
+type RPZAddRuleRequest struct {
+	Pattern      string `json:"pattern"`
+	Action       string `json:"action"`
+	OverrideData string `json:"override_data,omitempty"`
+}
+
+// ServerConfigResponse is returned by GET /api/v1/server/config.
+type ServerConfigResponse struct {
+	Version    string `json:"version"`
+	ListenPort int    `json:"listen_port"`
+	LogLevel   string `json:"log_level"`
+}

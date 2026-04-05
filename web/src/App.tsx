@@ -8,6 +8,12 @@ import { ZoneDetailPage } from '@/pages/zone-detail';
 import { SettingsPage } from '@/pages/settings';
 import { AboutPage } from '@/pages/about';
 import { LoginPage } from '@/pages/login';
+import { QueryLogPage } from '@/pages/query-log';
+import { TopDomainsPage } from '@/pages/top-domains';
+import { BlocklistPage } from '@/pages/blocklist';
+import { UpstreamsPage } from '@/pages/upstreams';
+import { UsersPage } from '@/pages/users';
+import { HistoricalChartsPage } from '@/pages/historical-charts';
 import { useState, useEffect } from 'react';
 
 function getToken(): string | null {
@@ -42,6 +48,12 @@ function AppContent() {
               <Route path="/zones/:name" element={<ZoneDetailPage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/about" element={<AboutPage />} />
+              <Route path="/query-log" element={<QueryLogPage />} />
+              <Route path="/top-domains" element={<TopDomainsPage />} />
+              <Route path="/blocklist" element={<BlocklistPage />} />
+              <Route path="/upstreams" element={<UpstreamsPage />} />
+              <Route path="/users" element={<UsersPage />} />
+              <Route path="/charts" element={<HistoricalChartsPage />} />
             </Routes>
           </div>
         </main>

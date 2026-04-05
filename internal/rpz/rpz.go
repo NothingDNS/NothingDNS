@@ -90,6 +90,9 @@ type Engine struct {
 	lookups   uint64
 	drops     uint64
 	overrides uint64
+
+	// Last reload time.
+	lastReload time.Time
 }
 
 // Config holds RPZ engine configuration.
@@ -137,6 +140,7 @@ func (e *Engine) Load() error {
 		}
 	}
 
+	e.lastReload = time.Now()
 	return nil
 }
 
@@ -497,12 +501,69 @@ func (e *Engine) Stats() Stats {
 		Files:         len(e.files),
 		TotalMatches:  atomic.LoadUint64(&e.matches),
 		TotalLookups:  atomic.LoadUint64(&e.lookups),
+		LastReload:    e.lastReload,
 	}
 }
 
 // IsEnabled returns whether the engine is enabled.
 func (e *Engine) IsEnabled() bool {
 	return e.enabled
+}
+
+// SetEnabled enables or disables the RPZ engine.
+func (e *Engine) SetEnabled(enabled bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.enabled = enabled
+}
+
+// AddQNAMERule adds a QNAME trigger rule dynamically.
+func (e *Engine) AddQNAMERule(pattern string, action PolicyAction, overrideData string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	rule := &Rule{
+		Action:       action,
+		Trigger:      TriggerQNAME,
+		Pattern:      strings.ToLower(pattern),
+		OverrideData: overrideData,
+		TTL:          300,
+		PolicyName:   "dynamic",
+		Priority:     0,
+	}
+	e.addRule(rule)
+}
+
+// RemoveQNAMERule removes a QNAME rule by pattern.
+func (e *Engine) RemoveQNAMERule(pattern string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	delete(e.qnameRules, strings.ToLower(pattern))
+}
+
+// ListQNAMERules returns all QNAME rules as a slice.
+func (e *Engine) ListQNAMERules() []*Rule {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	rules := make([]*Rule, 0, len(e.qnameRules))
+	for _, r := range e.qnameRules {
+		rules = append(rules, r)
+	}
+	return rules
+}
+
+// GetPolicies returns the list of policy zone names with their priorities.
+func (e *Engine) GetPolicies() map[string]int {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	policies := make(map[string]int, len(e.policies))
+	for k, v := range e.policies {
+		policies[k] = v
+	}
+	return policies
 }
 
 // Stats holds RPZ engine statistics.

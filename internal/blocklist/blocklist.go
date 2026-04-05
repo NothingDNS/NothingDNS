@@ -167,3 +167,74 @@ func (bl *Blocklist) GetEntries() []Entry {
 	}
 	return entries
 }
+
+// AddFile loads a new blocklist file and merges its entries.
+func (bl *Blocklist) AddFile(path string) error {
+	bl.mu.Lock()
+	defer bl.mu.Unlock()
+
+	if err := bl.loadFile(path); err != nil {
+		return err
+	}
+	bl.files = append(bl.files, path)
+	return nil
+}
+
+// RemoveFile removes all entries that originated from a given file path.
+func (bl *Blocklist) RemoveFile(path string) error {
+	bl.mu.Lock()
+	defer bl.mu.Unlock()
+
+	// Reload without the target file
+	newFiles := make([]string, 0, len(bl.files))
+	for _, f := range bl.files {
+		if f != path {
+			newFiles = append(newFiles, f)
+		}
+	}
+	bl.files = newFiles
+
+	// Rebuild entries from remaining files
+	bl.entries = make(map[string]Entry)
+	for _, f := range bl.files {
+		if err := bl.loadFile(f); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SetEnabled enables or disables the blocklist.
+func (bl *Blocklist) SetEnabled(enabled bool) {
+	bl.mu.Lock()
+	defer bl.mu.Unlock()
+	bl.enabled = enabled
+}
+
+// AddDomain adds a single domain to the blocklist in-memory.
+func (bl *Blocklist) AddDomain(domain string) {
+	bl.mu.Lock()
+	defer bl.mu.Unlock()
+
+	d := strings.ToLower(strings.TrimSuffix(domain, "."))
+	bl.entries[d] = Entry{Domain: d}
+}
+
+// RemoveDomain removes a single domain from the blocklist in-memory.
+func (bl *Blocklist) RemoveDomain(domain string) {
+	bl.mu.Lock()
+	defer bl.mu.Unlock()
+
+	d := strings.ToLower(strings.TrimSuffix(domain, "."))
+	delete(bl.entries, d)
+}
+
+// ListFiles returns the list of configured blocklist file paths.
+func (bl *Blocklist) ListFiles() []string {
+	bl.mu.RLock()
+	defer bl.mu.RUnlock()
+
+	files := make([]string, len(bl.files))
+	copy(files, bl.files)
+	return files
+}
