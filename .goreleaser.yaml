@@ -1,0 +1,157 @@
+# .goreleaser.yaml — NothingDNS Release Configuration
+#
+# Usage: goreleaser release --clean
+# Prerequisites: goreleaser installed (brew install goreleaser or go install github.com/goreleaser/goreleaser@latest)
+
+project_name: nothingdns
+
+version: 0
+
+# Syntactic sugar to avoid repeating the version template.
+# All `{{ .Env.VERSION }}` references will resolve to the --id flag (set via Makefile).
+env:
+  - VERSION={{ .Env.VERSION }}
+
+before:
+  hooks:
+    # Verify zero external dependencies before building
+    - make verify-zero-deps
+
+builds:
+  - id: nothingdns
+    binary: nothingdns
+    main: ./cmd/nothingdns
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+      - freebsd
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - v7
+    ldflags:
+      - -s -w -X github.com/nothingdns/nothingdns/internal/util.Version={{ .Env.VERSION }}
+    targets:
+      - linux_amd64
+      - linux_arm64
+      - linux_arm_v7
+      - darwin_amd64
+      - darwin_arm64
+      - windows_amd64
+      - freebsd_amd64
+
+  - id: dnsctl
+    binary: dnsctl
+    main: ./cmd/dnsctl
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+      - freebsd
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - v7
+    ldflags:
+      - -s -w -X github.com/nothingdns/nothingdns/internal/util.Version={{ .Env.VERSION }}
+    targets:
+      - linux_amd64
+      - linux_arm64
+      - linux_arm_v7
+      - darwin_amd64
+      - darwin_arm64
+      - windows_amd64
+      - freebsd_amd64
+
+archives:
+  - id: default
+    format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip
+    builds:
+      - nothingdns
+    files:
+      - none*
+    replacements:
+      darwin: macOS
+      linux: Linux
+      windows: Windows
+      freebsd: FreeBSD
+      amd64: x86_64
+      arm64: ARM64
+      arm_v7: ARMv7
+
+  - id: cli
+    format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip
+    builds:
+      - dnsctl
+    files:
+      - none*
+    replacements:
+      darwin: macOS
+      linux: Linux
+      windows: Windows
+      freebsd: FreeBSD
+      amd64: x86_64
+      arm64: ARM64
+      arm_v7: ARMv7
+
+checksum:
+  id: default
+  algorithm: sha256
+  format: markdown
+  output: "CHECKSUMS.md"
+
+signs:
+  - id: windows
+    artifacts: checksum
+    args: ["gpg", "--batch", "--yes", "--armor", "--detach-sign", "${artifact}"]
+
+dockers:
+  - image_templates:
+      - "nothingdns/nothingdns:{{ .Env.VERSION }}"
+      - "nothingdns/nothingdns:latest"
+    goos: linux
+    goarch: amd64
+    dockerfile: Dockerfile
+    ids:
+      - nothingdns
+    build_flag_templates:
+      - "--build-arg=VERSION={{ .Env.VERSION }}"
+      - "--build-arg=BINARY=nothingdns"
+
+docker_manifests:
+  - image_templates:
+      - "nothingdns/nothingdns:{{ .Env.VERSION }}"
+      - "nothingdns/nothingdns:latest"
+    platforms:
+      - linux/amd64
+      - linux/arm64
+
+release:
+  github:
+    owner: NothingDNS
+    name: NothingDNS
+  draft: true
+  prerelease: auto
+  name_template: "{{ .Tag }}"
+
+snapshot:
+  name_template: "{{ .Env.VERSION }}-next"
+
+announce:
+  twitter:
+    enabled: false

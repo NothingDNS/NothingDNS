@@ -1,0 +1,20 @@
+# CODEOWNERS — NothingDNS
+
+# Default owners for everything
+*       @ersinkoc
+
+# Package owners (add yourself here when you own a package)
+/cmd/nothingdns/       @ersinkoc
+/cmd/dnsctl/           @ersinkoc
+/internal/auth/        @ersinkoc
+/internal/dnssec/      @ersinkoc
+/internal/server/      @ersinkoc
+/internal/cluster/    @ersinkoc
+/internal/storage/     @ersinkoc
+/internal/transfer/   @ersinkoc
+/internal/resolver/   @ersinkoc
+/internal/upstream/   @ersinkoc
+/internal/api/        @ersinkoc
+/internal/zone/       @ersinkoc
+/internal/protocol/   @ersinkoc
+/web/                 @ersinkoc

@@ -4,14 +4,14 @@
 # Variables
 NAME := nothingdns
 CLI_NAME := dnsctl
-VERSION := 0.1.0
+VERSION := $(shell cat VERSION)
 BUILD_DIR := build
 CMD_DIR := cmd
 
 # Go settings
 GO := go
 GOFLAGS := -trimpath
-LDFLAGS := -ldflags "-s -w -X main.Version=$(VERSION)"
+LDFLAGS := -ldflags "-s -w -X github.com/nothingdns/nothingdns/internal/util.Version=$(VERSION)"
 
 # Build targets
 .PHONY: all build build-cli build-all test bench lint fmt vet clean install release docker
