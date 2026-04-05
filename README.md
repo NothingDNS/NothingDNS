@@ -1,5 +1,9 @@
 # NothingDNS
 
+<p align="center">
+  <img src="assets/banner.jpeg" alt="NothingDNS" width="100%">
+</p>
+
 [![Go Version](https://img.shields.io/badge/Go-1.23%2B-00ADD8?style=flat&logo=go)](https://golang.org)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Go Report Card](https://goreportcard.com/badge/github.com/nothingdns/nothingdns)](https://goreportcard.com/report/github.com/nothingdns/nothingdns)
