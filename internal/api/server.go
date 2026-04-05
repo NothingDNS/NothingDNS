@@ -1034,7 +1034,7 @@ func (s *Server) handleUpstreams(w http.ResponseWriter, r *http.Request) {
 			queries, failed, failovers := s.upstreamLB.Stats()
 			upstreams = append(upstreams, UpstreamStatus{
 				Address:      "load-balancer",
-				Healthy:     true, // Would need health check method
+				Healthy:     s.upstreamLB.IsHealthy(),
 				Queries:     queries,
 				Failed:      failed,
 				Failovers:   failovers,
@@ -1043,7 +1043,7 @@ func (s *Server) handleUpstreams(w http.ResponseWriter, r *http.Request) {
 		if s.upstreamClient != nil {
 			upstreams = append(upstreams, UpstreamStatus{
 				Address: "direct-upstream",
-				Healthy: true,
+				Healthy: s.upstreamClient.IsHealthy(),
 			})
 		}
 		s.writeJSON(w, http.StatusOK, &UpstreamsResponse{Upstreams: upstreams})

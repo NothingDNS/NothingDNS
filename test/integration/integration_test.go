@@ -23,6 +23,7 @@ const (
 type testEnv struct {
 	udpConn   *net.UDPConn
 	udpPort   int
+	tcpPort   int
 	udpServer *server.UDPServer
 	tcpServer *server.TCPServer
 	handler   *testHandler
@@ -32,7 +33,8 @@ type testEnv struct {
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
 
-	udpConn, udpPort := findFreePort(t)
+	udpConn, tcpLn, udpPort := findFreePort(t)
+	tcpPort := udpPort
 	tmpDir := t.TempDir()
 
 	// Create a test zone file
@@ -94,13 +96,12 @@ txt     IN  TXT  "v=spf1 include:_spf.example.com ~all"
 	udpServer.ListenWithConn(udpConn) // use already-bound socket to avoid port race
 
 	tcpServer := server.NewTCPServer(addr, handler)
-	if err := tcpServer.Listen(); err != nil {
-		t.Fatalf("TCP listen: %v", err)
-	}
+	tcpServer.ListenWithListener(tcpLn) // use already-bound TCP listener
 
 	env := &testEnv{
 		udpConn:   udpConn,
 		udpPort:   udpPort,
+		tcpPort:   tcpPort,
 		udpServer: udpServer,
 		tcpServer: tcpServer,
 		handler:   handler,
@@ -129,19 +130,23 @@ txt     IN  TXT  "v=spf1 include:_spf.example.com ~all"
 }
 
 func (e *testEnv) addr() string {
-	return fmt.Sprintf("%s:%d", testAddr, e.udpPort)
+	return fmt.Sprintf("%s:%d", testAddr, e.tcpPort)
 }
 
-func findFreePort(t *testing.T) (*net.UDPConn, int) {
+func findFreePort(t *testing.T) (*net.UDPConn, *net.TCPListener, int) {
 	t.Helper()
-	// Use ListenUDP so we get a *net.UDPConn which satisfies the UDPConn interface
-	// needed by UDPServer.ListenWithConn. Keep listener open to hold the port,
-	// avoiding race with parallel tests grabbing the same port.
-	ln, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP(testAddr), Port: 0})
+	lnUDP, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP(testAddr), Port: 0})
 	if err != nil {
 		t.Fatalf("find free port: %v", err)
 	}
-	return ln, ln.LocalAddr().(*net.UDPAddr).Port
+	udpPort := lnUDP.LocalAddr().(*net.UDPAddr).Port
+
+	lnTCP, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP(testAddr), Port: udpPort})
+	if err != nil {
+		lnUDP.Close()
+		t.Fatalf("find free port (TCP): %v", err)
+	}
+	return lnUDP, lnTCP, udpPort
 }
 
 // testHandler is a minimal DNS handler that serves authoritative zones.
