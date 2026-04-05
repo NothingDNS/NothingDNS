@@ -55,6 +55,9 @@ type Config struct {
 	// GeoDNS configuration
 	GeoDNS GeoDNSConfig `yaml:"geodns"`
 
+	// DNS64 configuration
+	DNS64 DNS64Config `yaml:"dns64"`
+
 	// Slave zone configuration for automatic zone transfers
 	SlaveZones []SlaveZoneConfig `yaml:"slave_zones"`
 
@@ -110,6 +113,14 @@ type GeoDNSRule struct {
 	Type    string            `yaml:"type"`
 	Default string            `yaml:"default"`
 	Records map[string]string `yaml:"records"`
+}
+
+// DNS64Config holds DNS64/NAT64 configuration.
+type DNS64Config struct {
+	Enabled     bool     `yaml:"enabled"`
+	Prefix      string   `yaml:"prefix"`
+	PrefixLen   int      `yaml:"prefix_len"`
+	ExcludeNets []string `yaml:"exclude_nets"`
 }
 
 // SlaveZoneConfig represents configuration for a slave zone.
@@ -248,6 +259,9 @@ type ResolutionConfig struct {
 
 	// EDNS0 UDP buffer size
 	EDNS0BufferSize int `yaml:"edns0_buffer_size"`
+
+	// QNAME Minimization (RFC 7816) — reduces privacy leakage
+	QnameMinimization bool `yaml:"qname_minimization"`
 }
 
 // UpstreamConfig contains upstream DNS server settings.
@@ -467,10 +481,11 @@ func DefaultConfig() *Config {
 			TCPWorkers: 0, // Will use NumCPU * 2
 		},
 		Resolution: ResolutionConfig{
-			Recursive:       false,
-			MaxDepth:        10,
-			Timeout:         "5s",
-			EDNS0BufferSize: 4096,
+			Recursive:         false,
+			MaxDepth:          10,
+			Timeout:           "5s",
+			EDNS0BufferSize:   4096,
+			QnameMinimization: true,
 		},
 		Upstream: UpstreamConfig{
 			Servers:         []string{"8.8.8.8:53", "8.8.4.4:53"},
@@ -515,6 +530,10 @@ func DefaultConfig() *Config {
 		},
 		GeoDNS: GeoDNSConfig{
 			Enabled: false,
+		},
+		DNS64: DNS64Config{
+			Prefix:    "64:ff9b::",
+			PrefixLen: 96,
 		},
 		Cluster: ClusterConfig{
 			Enabled:    false,
@@ -707,6 +726,13 @@ func unmarshalToConfig(node *Node, cfg *Config) error {
 		}
 	}
 
+	// DNS64 config
+	if dns64Node := node.Get("dns64"); dns64Node != nil {
+		if err := unmarshalDNS64(dns64Node, &cfg.DNS64); err != nil {
+			return fmt.Errorf("dns64: %w", err)
+		}
+	}
+
 	// Cluster config
 	if clusterNode := node.Get("cluster"); clusterNode != nil {
 		if err := unmarshalCluster(clusterNode, &cfg.Cluster); err != nil {
@@ -812,6 +838,7 @@ func unmarshalResolution(node *Node, cfg *ResolutionConfig) error {
 		cfg.Timeout = "5s"
 	}
 	cfg.EDNS0BufferSize = getInt(node, "edns0_buffer_size", cfg.EDNS0BufferSize)
+	cfg.QnameMinimization = node.GetBool("qname_minimization")
 
 	return nil
 }
@@ -1036,6 +1063,23 @@ func unmarshalGeoDNS(node *Node, cfg *GeoDNSConfig) error {
 			}
 		}
 	}
+
+	return nil
+}
+
+func unmarshalDNS64(node *Node, cfg *DNS64Config) error {
+	if node.Type != NodeMapping {
+		return fmt.Errorf("expected mapping")
+	}
+
+	cfg.Enabled = getBool(node, "enabled", cfg.Enabled)
+	if p := node.GetString("prefix"); p != "" {
+		cfg.Prefix = p
+	}
+	if pl := getInt(node, "prefix_len", 0); pl > 0 {
+		cfg.PrefixLen = pl
+	}
+	cfg.ExcludeNets = getStringSlice(node, "exclude_nets", nil)
 
 	return nil
 }

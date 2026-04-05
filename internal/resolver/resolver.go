@@ -35,10 +35,11 @@ type Transport interface {
 
 // Config holds resolver configuration.
 type Config struct {
-	MaxDepth       int           // Maximum delegation depth (default 30)
-	MaxCNAMEDepth  int           // Maximum CNAME chain length (default 16)
-	Timeout        time.Duration // Per-query timeout (default 5s)
-	EDNS0BufSize   uint16        // EDNS0 UDP buffer size (default 4096)
+	MaxDepth          int           // Maximum delegation depth (default 30)
+	MaxCNAMEDepth     int           // Maximum CNAME chain length (default 16)
+	Timeout           time.Duration // Per-query timeout (default 5s)
+	EDNS0BufSize      uint16        // EDNS0 UDP buffer size (default 4096)
+	QnameMinimization bool          // RFC 7816 QNAME minimization (default false)
 }
 
 func DefaultConfig() Config {
@@ -131,10 +132,39 @@ func (r *Resolver) resolve(ctx context.Context, name string, qtype uint16, cname
 		deleg.addrs[h.Name] = all
 	}
 
+	// Track the known zone cut for QNAME minimization (RFC 7816).
+	// Starts at "." (root) and narrows as we follow referrals.
+	currentZoneCut := "."
+
 	for depth := 0; depth < r.config.MaxDepth; depth++ {
-		resp, err := r.queryDelegation(ctx, name, qtype, deleg)
+		// Determine query name and type for this iteration.
+		qName := name
+		qTypeToSend := qtype
+		if r.config.QnameMinimization {
+			minName := minimizedName(name, currentZoneCut)
+			if !isMinimizedTarget(minName, name) {
+				// We haven't reached the target zone yet — query for
+				// the minimized name with type NS to discover the next
+				// delegation without revealing the full query name.
+				qName = minName
+				qTypeToSend = protocol.TypeNS
+			}
+		}
+
+		resp, err := r.queryDelegation(ctx, qName, qTypeToSend, deleg)
 		if err != nil {
 			continue // try was exhausted, fail below
+		}
+
+		// If we sent a minimized NS query and got an answer (not a
+		// referral), it means the server is authoritative for that
+		// zone. Re-query with the full name + original type.
+		if r.config.QnameMinimization && qTypeToSend == protocol.TypeNS && qName != name {
+			if isAnswer(resp) || isNXDomain(resp) {
+				// Update the zone cut and re-query with full name
+				currentZoneCut = qName
+				continue
+			}
 		}
 
 		switch {
@@ -178,6 +208,11 @@ func (r *Resolver) resolve(ctx context.Context, name string, qtype uint16, cname
 			if newDeleg == nil || len(newDeleg.nsNames) == 0 {
 				// No usable NS records in referral — SERVFAIL
 				return servfail(name, qtype), nil
+			}
+
+			// Update zone cut from referral NS records
+			if r.config.QnameMinimization {
+				currentZoneCut = zoneCutFromNS(resp.Authorities)
 			}
 
 			// Resolve NS names that don't have glue

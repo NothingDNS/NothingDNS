@@ -279,6 +279,10 @@ func createRData(rrtype uint16) RData {
 		return &RDataNSEC3PARAM{}
 	case TypeOPT:
 		return &RDataOPT{}
+	case TypeSVCB:
+		return &RDataSVCB{}
+	case TypeHTTPS:
+		return &RDataHTTPS{}
 	default:
 		return nil
 	}
