@@ -331,7 +331,7 @@ func (s *DoQServer) handshakeConnection(dc *doqConn) {
 
 // processStreams handles incoming streams for a connection.
 func (s *DoQServer) processStreams(dc *doqConn) {
-	defer s.wg.Done()
+	defer dc.wg.Done()
 
 	for {
 		select {

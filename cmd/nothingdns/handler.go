@@ -1019,3 +1019,36 @@ func extractResponseIPs(resp *protocol.Message) []net.IP {
 	}
 	return ips
 }
+
+// ReloadViews reloads split-horizon view configuration and zone files.
+// Called during config reload to pick up view changes without restart.
+func (h *integratedHandler) ReloadViews(viewConfigs []filter.ViewConfig, loadZoneFileFunc func(string) (*zone.Zone, error)) error {
+	if len(viewConfigs) == 0 {
+		h.splitHorizon = nil
+		h.viewZones = nil
+		return nil
+	}
+
+	newSH, err := filter.NewSplitHorizon(viewConfigs)
+	if err != nil {
+		return fmt.Errorf("reloading split-horizon: %w", err)
+	}
+
+	newViewZones := make(map[string]map[string]*zone.Zone)
+	for _, v := range viewConfigs {
+		vzMap := make(map[string]*zone.Zone)
+		for _, zf := range v.ZoneFiles {
+			vz, err := loadZoneFileFunc(zf)
+			if err != nil {
+				h.logger.Warnf("Failed to load zone file %q for view %q: %v", zf, v.Name, err)
+				continue
+			}
+			vzMap[vz.Origin] = vz
+		}
+		newViewZones[v.Name] = vzMap
+	}
+
+	h.splitHorizon = newSH
+	h.viewZones = newViewZones
+	return nil
+}

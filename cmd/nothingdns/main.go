@@ -630,6 +630,22 @@ func run() error {
 				logger.Infof("Reloaded RPZ with %d rules from %d files", stats.TotalRules, stats.Files)
 			}
 		}
+		// Reload split-horizon views
+		if len(cfg.Views) > 0 {
+			viewConfigs := make([]filter.ViewConfig, len(cfg.Views))
+			for i, v := range cfg.Views {
+				viewConfigs[i] = filter.ViewConfig{
+					Name:         v.Name,
+					MatchClients: v.MatchClients,
+					ZoneFiles:    v.ZoneFiles,
+				}
+			}
+			if err := handler.ReloadViews(viewConfigs, loadZoneFile); err != nil {
+				logger.Warnf("Failed to reload split-horizon views: %v", err)
+			} else {
+				logger.Infof("Reloaded split-horizon views")
+			}
+		}
 		return nil
 	}, handler, clusterMgr, dashboardServer)
 	if err := apiServer.Start(); err != nil {
@@ -908,6 +924,22 @@ func run() error {
 				} else {
 					stats := rpzEngine.Stats()
 					logger.Infof("Reloaded RPZ with %d rules from %d files", stats.TotalRules, stats.Files)
+				}
+			}
+			// Reload split-horizon views
+			if len(cfg.Views) > 0 {
+				viewConfigs := make([]filter.ViewConfig, len(cfg.Views))
+				for i, v := range cfg.Views {
+					viewConfigs[i] = filter.ViewConfig{
+						Name:         v.Name,
+						MatchClients: v.MatchClients,
+						ZoneFiles:    v.ZoneFiles,
+					}
+				}
+				if err := handler.ReloadViews(viewConfigs, loadZoneFile); err != nil {
+					logger.Warnf("Failed to reload split-horizon views: %v", err)
+				} else {
+					logger.Infof("Reloaded split-horizon views")
 				}
 			}
 		}
