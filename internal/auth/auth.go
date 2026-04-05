@@ -296,7 +296,7 @@ func (s *Store) ListUsers() []*User {
 	return users
 }
 
-// GetUser returns a user by username.
+// GetUser returns a user by username (without password hash).
 func (s *Store) GetUser(username string) (*User, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -311,6 +311,18 @@ func (s *Store) GetUser(username string) (*User, error) {
 		CreatedAt: user.CreatedAt,
 		UpdatedAt: user.UpdatedAt,
 	}, nil
+}
+
+// VerifyUserPassword checks username + password against stored credentials.
+func (s *Store) VerifyUserPassword(username, password string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	user, ok := s.users[username]
+	if !ok {
+		return false
+	}
+	return VerifyPassword(password, user.Hash)
 }
 
 // Save persists users to a file.

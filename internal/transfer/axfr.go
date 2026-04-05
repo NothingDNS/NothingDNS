@@ -592,7 +592,11 @@ func (c *AXFRClient) receiveAXFRResponse(conn net.Conn, key *TSIGKey) ([]*protoc
 				return nil, fmt.Errorf("TSIG verification failed: %w", err)
 			}
 			// Extract MAC for next message verification
-			previousMAC = extractMAC(msg)
+			mac, err := extractMAC(msg)
+			if err != nil {
+				return nil, fmt.Errorf("failed to extract TSIG MAC: %w", err)
+			}
+			previousMAC = mac
 		}
 
 		// Process answer records
@@ -619,18 +623,21 @@ func (c *AXFRClient) receiveAXFRResponse(conn net.Conn, key *TSIGKey) ([]*protoc
 }
 
 // extractMAC extracts the TSIG MAC from a message for multi-message verification
-func extractMAC(msg *protocol.Message) []byte {
+func extractMAC(msg *protocol.Message) ([]byte, error) {
 	for _, rr := range msg.Additionals {
 		if rr.Type == protocol.TypeTSIG {
 			if rdata, ok := rr.Data.(*RDataTSIG); ok {
-				ts, _, _ := UnpackTSIGRecord(rdata.Raw, 0)
+				ts, _, err := UnpackTSIGRecord(rdata.Raw, 0)
+				if err != nil {
+					return nil, fmt.Errorf("failed to parse TSIG record for MAC extraction: %w", err)
+				}
 				if ts != nil {
-					return ts.MAC
+					return ts.MAC, nil
 				}
 			}
 		}
 	}
-	return nil
+	return nil, nil
 }
 
 // generateMessageID generates a random message ID

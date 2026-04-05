@@ -1090,7 +1090,10 @@ func TestExtractMAC_NoTSIG(t *testing.T) {
 		Header:     protocol.Header{ID: 1234},
 		Additionals: []*protocol.ResourceRecord{},
 	}
-	mac := extractMAC(msg)
+	mac, err := extractMAC(msg)
+	if err != nil {
+		t.Errorf("extractMAC() returned unexpected error: %v", err)
+	}
 	if mac != nil {
 		t.Error("Expected nil MAC for message without TSIG")
 	}
@@ -1108,7 +1111,10 @@ func TestExtractMAC_InvalidData(t *testing.T) {
 			{Name: keyName, Type: protocol.TypeTSIG, Class: protocol.ClassANY, Data: &RDataTSIG{Raw: []byte("invalid")}},
 		},
 	}
-	mac := extractMAC(msg)
+	mac, err := extractMAC(msg)
+	if err == nil {
+		t.Error("extractMAC() should return error for invalid TSIG data")
+	}
 	if mac != nil {
 		t.Error("Expected nil MAC for invalid TSIG data")
 	}

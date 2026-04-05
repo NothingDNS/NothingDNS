@@ -615,14 +615,20 @@ func TestExtractMAC(t *testing.T) {
 		Additionals: []*protocol.ResourceRecord{tsigRR},
 	}
 
-	mac := extractMAC(msg)
+	mac, err := extractMAC(msg)
+	if err != nil {
+		t.Fatalf("extractMAC() returned error: %v", err)
+	}
 	if !equalBytes(mac, tsig.MAC) {
 		t.Errorf("Expected MAC %v, got %v", tsig.MAC, mac)
 	}
 
 	// Message without TSIG
 	msg2 := &protocol.Message{}
-	mac2 := extractMAC(msg2)
+	mac2, err := extractMAC(msg2)
+	if err != nil {
+		t.Fatalf("extractMAC() returned error for empty message: %v", err)
+	}
 	if mac2 != nil {
 		t.Errorf("Expected nil MAC, got %v", mac2)
 	}

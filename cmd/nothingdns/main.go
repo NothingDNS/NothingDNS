@@ -479,7 +479,7 @@ func run() error {
 	authStore := auth.NewStore(&auth.Config{
 		Secret:      cfg.Server.HTTP.AuthSecret,
 		Users:       authUsers,
-		TokenExpiry: auth.Duration{24 * time.Hour},
+		TokenExpiry: auth.Duration{Duration: 24 * time.Hour},
 	})
 	logger.Infof("Auth store initialized with %d users", len(cfg.Server.HTTP.Users))
 

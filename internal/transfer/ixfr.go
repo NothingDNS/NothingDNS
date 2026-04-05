@@ -518,7 +518,11 @@ func (c *IXFRClient) receiveIXFRResponse(conn net.Conn, key *TSIGKey) ([]*protoc
 			if err := VerifyMessage(msg, key, previousMAC); err != nil {
 				return nil, fmt.Errorf("TSIG verification failed: %w", err)
 			}
-			previousMAC = extractMAC(msg)
+			mac, err := extractMAC(msg)
+			if err != nil {
+				return nil, fmt.Errorf("failed to extract TSIG MAC: %w", err)
+			}
+			previousMAC = mac
 		}
 
 		// Process answer records
