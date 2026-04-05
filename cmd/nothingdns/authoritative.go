@@ -82,6 +82,14 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 		return false // signal to ServeDNS to chase the CNAME
 	}
 
+	// ── Step 3b: DNAME check (RFC 6672) ──
+	// Check for a DNAME record whose owner is a suffix of the query name.
+	// If found, synthesize a CNAME response and resolve the target.
+	if dnameRec, synthTarget, found := z.FindDNAME(qname); found {
+		h.handleDNAMERecord(w, r, q, dnameRec, synthTarget)
+		return true
+	}
+
 	// ── Step 4: Wildcard matching (RFC 4592) ──
 	// Only attempt wildcards if the exact name doesn't exist at all.
 	// If the name exists but has no records of the requested type,
@@ -258,6 +266,61 @@ func (h *integratedHandler) addSOAAuthority(resp *protocol.Message, z *zone.Zone
 		},
 	}
 	resp.Authorities = append(resp.Authorities, rr)
+}
+
+// handleDNAMERecord synthesizes a CNAME from a DNAME record and resolves
+// the target, returning a complete DNS response with both DNAME and CNAME
+// records plus the resolved target answers.
+// Per RFC 6672, a DNAME at a superdomain synthesizes a CNAME for subdomains.
+func (h *integratedHandler) handleDNAMERecord(w server.ResponseWriter, r *protocol.Message, q *protocol.Question, dnameRecord zone.Record, synthCNAMETarget string) {
+	qname := q.Name.String()
+	qtype := q.QType
+
+	// Build the DNAME resource record
+	qnameParsed, _ := protocol.ParseName(qname)
+	dnameOwner, _ := protocol.ParseName(dnameRecord.Name)
+	dnameData := parseRData("DNAME", dnameRecord.RData)
+
+	dnameRR := &protocol.ResourceRecord{
+		Name:  dnameOwner,
+		Type:  protocol.TypeDNAME,
+		Class: protocol.ClassIN,
+		TTL:   dnameRecord.TTL,
+		Data:  dnameData,
+	}
+
+	// Build the synthesized CNAME resource record
+	synthCNAMETargetParsed, _ := protocol.ParseName(synthCNAMETarget)
+	cnameRR := &protocol.ResourceRecord{
+		Name:  qnameParsed,
+		Type:  protocol.TypeCNAME,
+		Class: protocol.ClassIN,
+		TTL:   dnameRecord.TTL,
+		Data:  &protocol.RDataCNAME{CName: synthCNAMETargetParsed},
+	}
+
+	// Resolve the synthesized CNAME target
+	targetAnswers := h.resolveCNAMETarget(w, r, q, synthCNAMETarget, qtype)
+
+	// Build the response
+	resp := &protocol.Message{
+		Header: protocol.Header{
+			ID:    r.Header.ID,
+			Flags: protocol.NewResponseFlags(protocol.RcodeSuccess),
+		},
+		Questions: r.Questions,
+	}
+	resp.Header.Flags.AA = true
+	resp.AddAnswer(dnameRR)
+	resp.AddAnswer(cnameRR)
+	for _, rr := range targetAnswers {
+		resp.AddAnswer(rr)
+	}
+
+	if h.metrics != nil {
+		h.metrics.RecordResponse(protocol.RcodeSuccess)
+	}
+	reply(w, r, resp)
 }
 
 // cnameChainResult holds the result of chasing a CNAME chain.

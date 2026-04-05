@@ -989,6 +989,62 @@ func (z *Zone) FindDelegation(name string) (nsRecords []Record, delegationPoint 
 	return nil, "", false
 }
 
+// FindDNAME searches for a DNAME record whose owner is a suffix of the given name.
+// Per RFC 6672, a DNAME record at a superdomain synthesizes a CNAME for any
+// subdomain beneath it.
+//
+// For example, with zone "example.com." and DNAME "example.com. DNAME bar.example.net.":
+//   - Query "foo.example.com." matches the DNAME (owner "example.com." is a suffix)
+//   - Synthesized CNAME target = "foo.bar.example.net."
+//     (replace suffix "example.com." with "bar.example.net.")
+//
+// Returns the DNAME record, the synthesized CNAME target name, and whether found.
+func (z *Zone) FindDNAME(name string) (dnameRecord Record, synthCNAMETarget string, found bool) {
+	z.mu.RLock()
+	defer z.mu.RUnlock()
+
+	name = strings.ToLower(canonicalize(name))
+	origin := strings.ToLower(z.Origin)
+
+	// Name must be within this zone
+	if !strings.HasSuffix(name, origin) && name != origin {
+		return Record{}, "", false
+	}
+
+	// Build intermediates: from query name toward origin (excluding origin itself).
+	var intermediates []string
+	current := name
+	for {
+		dot := strings.IndexByte(current, '.')
+		if dot < 0 || dot+1 >= len(current) {
+			break
+		}
+		parent := current[dot+1:]
+		if parent == origin {
+			break
+		}
+		intermediates = append(intermediates, current)
+		current = parent
+	}
+
+	// Check from closest-to-origin (least specific) to most specific DNAME.
+	// RFC 6672: if multiple DNAME records could apply, the most specific wins.
+	// Walk intermediates in reverse: [a.b.c, a.b, a] → [a, b, a.b, a.b.c]
+	for i := len(intermediates) - 1; i >= 0; i-- {
+		candidate := intermediates[i]
+		for _, rec := range z.Records[candidate] {
+			if strings.ToUpper(rec.Type) == "DNAME" {
+				// Synthesize CNAME target: replace DNAME owner suffix with target
+				dnameOwner := canonicalize(rec.Name)
+				synthTarget := strings.TrimSuffix(name, dnameOwner) + rec.RData
+				return rec, synthTarget, true
+			}
+		}
+	}
+
+	return Record{}, "", false
+}
+
 // FindGlue returns A and AAAA records for the given nameserver name
 // if they exist within this zone (glue records).
 func (z *Zone) FindGlue(nsName string) []Record {

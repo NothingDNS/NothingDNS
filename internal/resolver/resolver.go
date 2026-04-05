@@ -8,6 +8,7 @@ import (
 	"log"
 	"math/rand"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -178,8 +179,46 @@ func (r *Resolver) resolve(ctx context.Context, name string, qtype uint16, cname
 			// Got authoritative answer
 			r.cacheResponse(name, qtype, resp)
 
-			// Check for CNAME that needs chasing (RFC 1034 §4.3.2)
-			if qtype != protocol.TypeCNAME && len(resp.Answers) > 0 {
+			// Check for DNAME that needs synthesis (RFC 6672)
+			// DNAME takes precedence over CNAME per RFC 6672 §2.1
+			if qtype != protocol.TypeCNAME && qtype != protocol.TypeDNAME && len(resp.Answers) > 0 {
+				if dname := findDNAME(resp.Answers, name); dname.found {
+					// Synthesize a CNAME from the DNAME and chase it
+					cnameName, _ := protocol.ParseName(dname.synthTarget)
+					qnameParsed, _ := protocol.ParseName(name)
+					synthCNAME := &protocol.ResourceRecord{
+						Name:  qnameParsed,
+						Type:  protocol.TypeCNAME,
+						Class: protocol.ClassIN,
+						TTL:   dname.dnameRR.TTL,
+						Data:  &protocol.RDataCNAME{CName: cnameName},
+					}
+
+					// Resolve the synthesized CNAME target
+					target, err := r.resolve(ctx, dname.synthTarget, qtype, cnameDepth+1)
+					if err != nil {
+						resp.Header.Flags.RA = true
+						return resp, nil
+					}
+
+					// Build a new response: DNAME + synthesized CNAME + target answers
+					result := &protocol.Message{
+						Header: protocol.Header{
+							ID:    resp.Header.ID,
+							Flags: protocol.NewResponseFlags(protocol.RcodeSuccess),
+						},
+						Questions: resp.Questions,
+					}
+					result.Header.Flags.RA = true
+					result.AddAnswer(dname.dnameRR)
+					result.AddAnswer(synthCNAME)
+					for _, rr := range target.Answers {
+						result.AddAnswer(rr)
+					}
+					return result, nil
+				}
+
+				// Check for CNAME that needs chasing (RFC 1034 §4.3.2)
 				if cname := findCNAME(resp.Answers, name); cname != "" {
 					// Save the CNAME records before chasing
 					cnameAnswers := resp.Answers
@@ -510,6 +549,51 @@ func findCNAME(answers []*protocol.ResourceRecord, name string) string {
 		}
 	}
 	return ""
+}
+
+// dnameResult holds the result of finding a DNAME that applies to a query name.
+type dnameResult struct {
+	// dnameRR is the DNAME resource record found.
+	dnameRR *protocol.ResourceRecord
+	// synthTarget is the synthesized CNAME target name.
+	synthTarget string
+	// found is true if a DNAME was found.
+	found bool
+}
+
+// findDNAME searches the answer section for a DNAME record whose owner is a
+// suffix of the given name and returns the synthesized CNAME target per RFC 6672.
+// For example, if name="foo.example.com." and a DNAME "example.com. DNAME bar.example.net."
+// exists, the synthesized target is "foo.bar.example.net.".
+func findDNAME(answers []*protocol.ResourceRecord, name string) dnameResult {
+	// Normalize name for suffix comparison
+	nameLower := strings.ToLower(name)
+
+	for _, rr := range answers {
+		if rr.Type != protocol.TypeDNAME {
+			continue
+		}
+		dnameData, ok := rr.Data.(*protocol.RDataDNAME)
+		if !ok {
+			continue
+		}
+
+		// The DNAME owner must be a suffix of the query name
+		dnameOwner := strings.ToLower(rr.Name.String())
+		if !strings.HasSuffix(nameLower, dnameOwner) || nameLower == dnameOwner {
+			continue
+		}
+
+		// Synthesize CNAME target: replace the DNAME owner suffix with the target
+		dnameTarget := strings.ToLower(dnameData.DName.String())
+		synthTarget := strings.TrimSuffix(nameLower, dnameOwner) + dnameTarget
+		return dnameResult{
+			dnameRR:    rr,
+			synthTarget: synthTarget,
+			found:      true,
+		}
+	}
+	return dnameResult{}
 }
 
 // hasAnyAddress returns true if any NS name in the delegation has at least one address.
