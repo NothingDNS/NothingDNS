@@ -121,158 +121,89 @@ Every feature below is initialized in `cmd/nothingdns/main.go`, connected to the
 
 ## 4. BUGS
 
-### BUG-001: Cluster Encryption Transition Failure (HIGH)
-- **File:** `internal/cluster/gossip.go:724-728`
-- **Issue:** When encryption is enabled, messages that fail to decrypt result in a hard failure. In a mixed cluster (during rolling upgrade) with encrypted/unencrypted nodes, all gossip communication breaks.
-- **Impact:** Zero-downtime encryption transition is impossible.
-- **Fix:** Add fallback to unencrypted parsing when decryption fails.
+All bugs have been fixed as of commits 6f5d8c7, 2682ac5, 18cbc49, 13972f0, and 3da5615.
 
-### BUG-002: Race Condition — cacheSyncLoop Double Close (HIGH)
-- **File:** `internal/cluster/cluster.go:215-220`
-- **Issue:** In `Stop()`, the `cacheClosed` flag is set again outside the lock scope. Concurrent `Stop()` calls can trigger a double-close panic on `cacheSyncChan`.
-- **Impact:** Panic during server shutdown.
-- **Fix:** Ensure flag check and close operation happen within a single lock scope.
-
-### BUG-003: TCP Server Nil Listener Panic (HIGH)
-- **File:** `internal/server/tcp.go:129-140`
-- **Issue:** Worker goroutines can call `Accept()` on `s.listener` while it is still nil, before `Serve()` has been called.
-- **Impact:** Nil pointer panic if called out of order.
-- **Fix:** Workers should wait until listener is set, or enforce `Listen()` → `Serve()` ordering.
-
-### BUG-004: Memory Evictor Clears Entire Cache (HIGH)
-- **File:** `internal/memory/cache_evictor.go:19-23`
-- **Issue:** `Evict(percent int)` completely ignores the `percent` parameter and calls `cache.Clear()`. When 5% eviction is requested, 100% is cleared.
-- **Impact:** Full DNS cache loss under memory pressure → instant upstream load spike.
-- **Fix:** Implement LRU or TTL-based partial eviction.
-
-### BUG-005: Zone Manager Concurrent Map Access (HIGH)
-- **File:** `cmd/nothingdns/handler.go:321-341`
-- **Issue:** Handler iterates over `zoneManager.List()` while the API server concurrently calls `zoneManager.LoadZone()` to add/delete zones. In Go, concurrent map read+write = panic.
-- **Impact:** Handler panic when adding/deleting zones via API.
-- **Fix:** Protect zone manager with RWMutex or use copy-on-write pattern.
-
-### BUG-006: AXFR TSIG Signing Error Silently Ignored (MEDIUM)
-- **File:** `cmd/nothingdns/transfer.go:56-63`
-- **Issue:** When `transfer.SignMessage()` fails, the RRSIG is silently skipped, returning an unsigned AXFR response.
-- **Impact:** Slaves requiring TSIG receive unsigned transfers → security vulnerability.
-- **Fix:** Signing error should return SERVFAIL or abort the transfer.
-
-### BUG-007: RPZ Response IP Policy Never Applied (HIGH)
-- **File:** `cmd/nothingdns/handler.go:213-246`, `internal/rpz/rpz.go:74-77`
-- **Issue:** Handler only checks `QNAMEPolicy()`. `respIPRules`, `respActions`, and client IP policies are never invoked.
-- **Impact:** Only 1 of 3 RPZ policy triggers (QNAME) works. Response IP and Client IP rules are dead code.
-- **Fix:** Add post-response `ResponseIPPolicy()` and pre-query `ClientIPPolicy()` checks to handler.
-
-### BUG-008: RPZ NSDNAME and NSIP Triggers Are Dead Code (MEDIUM)
-- **File:** `internal/rpz/rpz.go:44-47`
-- **Issue:** `TriggerNSDNAME` and `TriggerNSIP` constants are defined but never checked in the handler.
-- **Impact:** NS-based RPZ rules do not work.
-- **Fix:** Add NS name/IP checks during recursive resolution.
-
-### BUG-009: Split-Horizon Views Not Updated on Config Reload (MEDIUM)
-- **File:** `cmd/nothingdns/main.go:602-634`
-- **Issue:** API reload callback reloads zones, blocklist, and RPZ but skips split-horizon view configuration.
-- **Impact:** View changes require server restart.
-- **Fix:** Add view re-parsing to the reload callback.
-
-### BUG-010: No Panic Recovery in Gossip Callbacks (MEDIUM)
-- **File:** `internal/cluster/gossip.go:421-425, 430-434, 451-455, 570-574`
-- **Issue:** `onNodeJoin`, `onNodeUpdate`, `onNodeLeave`, `onCacheInvalid` callbacks are invoked without `recover()`.
-- **Impact:** A panic in any callback crashes the entire gossip protocol → cluster down.
-- **Fix:** Wrap each callback invocation with `defer recover()`.
-
-### BUG-011: QUIC Server Goroutine Leak (MEDIUM)
-- **File:** `internal/quic/doq.go:283-284, 328-329`
-- **Issue:** In `handshakeConnection()` and `processStreams()`, goroutines may not reach `wg.Done()` when connections time out or drop.
-- **Impact:** Goroutine accumulation under adverse network conditions → memory leak.
-- **Fix:** Use context timeout + defer cleanup pattern.
-
-### BUG-012: Handler Zones Mutex Deadlock Risk (MEDIUM)
-- **File:** `cmd/nothingdns/handler.go:307-340`
-- **Issue:** `zonesMu.RLock()` is acquired and released inside a loop, then `handleAuthoritative()` is called. If a zone write lock is requested in between, deadlock can occur.
-- **Impact:** Deadlock when zone API update and query arrive simultaneously.
-- **Fix:** Complete zone lookup within lock scope, then process after unlock.
+| # | Status | Fix Commit | Description |
+|---|--------|------------|-------------|
+| BUG-001 | ✅ Fixed | 6f5d8c7 | Cluster encryption transition failure |
+| BUG-002 | ✅ Fixed | 6f5d8c7 | cacheSyncLoop double close race |
+| BUG-003 | ✅ Safe | - | TCP nil listener - workers don't access listener directly |
+| BUG-004 | ✅ Fixed | 6f5d8c7 | Memory evictor clears entire cache |
+| BUG-005 | ✅ Fixed | 6f5d8c7 | Zone manager concurrent map access |
+| BUG-006 | ✅ Fixed | 2682ac5 | AXFR TSIG signing error silently ignored |
+| BUG-007 | ✅ Fixed | 13972f0 | RPZ Response IP Policy never applied |
+| BUG-008 | ✅ Fixed | 13972f0 | RPZ NSDNAME and NSIP triggers are dead code |
+| BUG-009 | ✅ Fixed | 18cbc49 | Split-horizon views not updated on reload |
+| BUG-010 | ✅ Fixed | 2682ac5 | No panic recovery in gossip callbacks |
+| BUG-011 | ✅ Fixed | 13972f0 | QUIC server goroutine leak |
+| BUG-012 | ✅ Fixed | 13972f0 | Handler zones mutex deadlock risk |
 
 ---
 
-## 5. UNWIRED FEATURES (On the Shelf)
+## 5. UNWIRED FEATURES
 
-These features are implemented and tested but never used in `main.go`:
+All unwired features have been wired as of commit 13972f0.
 
-### UNWIRED-001: Storage / KVStore / WAL
-- **Files:** `internal/storage/kvstore.go`, `wal.go`, `serializer.go`
-- **Status:** Full implementation + tests available. Not imported anywhere.
-- **Potential:** Cache persistence, zone metadata, config state persistence.
-- **Action:** Wire up with `zonestore.go` for zone persistence.
-
-### UNWIRED-002: ZoneStore (KVStore-backed Zone Persistence)
-- **File:** `internal/storage/zonestore.go`
-- **Status:** Zone read/write interface over KVStore. Not used.
-- **Potential:** Can replace file-based zone persistence with structured storage.
-
-### UNWIRED-003: Transfer Journal (IXFR Journal Backend)
-- **File:** `internal/transfer/journal.go`
-- **Status:** IXFR journal mechanism is implemented but the journal backend is not connected to the IXFR server in main.go.
-- **Impact:** IXFR always fails to find a journal and falls back to AXFR.
-- **Action:** Create journal instance and pass it to the IXFR server as a parameter.
+| # | Status | Fix Commit | Description |
+|---|--------|------------|-------------|
+| UNWIRED-001 | ✅ Wired | 13972f0 | KVStore/KVPersistence wired in main.go |
+| UNWIRED-002 | ✅ Wired | 13972f0 | ZoneStore wired via KVPersistence |
+| UNWIRED-003 | ✅ Wired | 13972f0 | IXFR journal connected via SetJournalStore() |
 
 ---
 
 ## 6. CODE QUALITY / TECHNICAL DEBT
 
 ### DEBT-001: stdlib log.Printf Usage (13+ files)
-- **Issue:** The entire project has `util.Logger`, yet the following files use `log.Printf()` directly:
-  - `internal/cluster/gossip.go` (13 occurrences)
-  - `internal/doh/wshandler.go` (2 occurrences)
-  - `internal/api/server.go` (2 occurrences)
-  - `internal/dashboard/server.go` (4 occurrences)
-  - `internal/transfer/axfr.go` (1 occurrence)
-  - `internal/transfer/ixfr.go` (2 occurrences)
-  - `internal/metrics/metrics.go` (1 occurrence)
-  - `internal/storage/kvstore.go` (1 occurrence)
-  - `internal/upstream/client.go` (2 occurrences)
-  - `internal/upstream/loadbalancer.go` (3 occurrences)
-- **Impact:** Configured log level/format is not applied to these messages. Text mixes into JSON log format.
-- **Fix:** Convert all `log.Printf` → `logger.Infof/Warnf/Errorf`.
+- **Status:** ✅ Fixed (commit 13972f0)
+- **Issue:** 13+ files used `log.Printf()` instead of structured logger.
+- **Fix:** All converted to `util.Logger.Infof/Warnf/Errorf`.
 
 ### DEBT-002: Silent Error Swallowing (Gossip)
+- **Status:** ✅ Fixed (commit 13972f0)
 - **File:** `internal/cluster/gossip.go:274-279, 362-380, 521-527`
 - **Issue:** `ResolveUDPAddr`, `WriteToUDP`, and encoding errors are logged then ignored.
-- **Impact:** Cluster communication errors are silently lost.
+- **Fix:** Errors now properly propagated in cluster communication.
 
 ### DEBT-003: DNSSEC On-the-fly Signing (Performance)
+- **Status:** ⚠️ Known limitation
 - **File:** `cmd/nothingdns/handler.go:656-701`
 - **Issue:** RRSIG is computed on-the-fly for every authoritative response. BIND/PowerDNS use offline pre-signing.
 - **Impact:** High CPU usage when DNSSEC is active.
-- **Fix:** Pre-sign during zone load/update + cache signatures.
+- **Note:** Pre-signing is a significant architectural change; acceptable for current use cases.
 
 ### DEBT-004: Audit Only Logs Queries
+- **Status:** ✅ Fixed (commit 13972f0)
 - **File:** `cmd/nothingdns/handler.go:84-97`
-- **Issue:** Audit logger only logs DNS queries. Zone transfers, DDNS updates, NOTIFY, config reload, and other security-critical operations are not logged.
-- **Fix:** Expand audit event types: `QUERY`, `AXFR`, `IXFR`, `UPDATE`, `NOTIFY`, `CONFIG_RELOAD`, `ZONE_CREATE`, `ZONE_DELETE`.
+- **Issue:** Audit logger only logs DNS queries.
+- **Fix:** Added AXFR, IXFR, UPDATE, NOTIFY, CONFIG_RELOAD audit event types.
 
 ### DEBT-005: Missing Config Validation
+- **Status:** ✅ Fixed (commit 13972f0)
 - **Issue:** Invalid config values (negative TTL, port > 65535, empty upstream list) are silently accepted.
-- **Fix:** Add `config.Validate()` function + `nothingdns --validate` CLI flag.
+- **Fix:** `config.Validate()` function exists and is called from main.go.
 
 ### DEBT-006: No Resolver MaxDepth Bounds Check
-- **File:** `cmd/nothingdns/main.go:561`
+- **Status:** ✅ Fixed (commit 15721d6)
+- **File:** `cmd/nothingdns/main.go:619`
 - **Issue:** `cfg.Resolution.MaxDepth` is passed to the resolver without bounds checking. Very large values = infinite-recursion-like behavior.
-- **Fix:** `MaxDepth > 30` → warning + clamp.
+- **Fix:** `MaxDepth > 30` → warning + clamp to 30.
 
 ---
 
 ## 7. CONCURRENCY ISSUES
 
-| # | File | Issue | Severity |
-|---|------|-------|----------|
-| C-001 | `cluster/cluster.go:215-220` | `cacheClosed` double-close race | HIGH |
-| C-002 | `handler.go:321-341` | Zone manager concurrent map iteration | HIGH |
-| C-003 | `handler.go:307-340` | zones RWMutex lock/unlock ordering | MEDIUM |
-| C-004 | `server/tcp.go:129-140` | nil listener before worker start | HIGH |
-| C-005 | `metrics/metrics.go:268-276` | 32-bit torn reads on uint64 atomics | LOW |
-| C-006 | `quic/doq.go:283-329` | goroutine leak on connection drop | MEDIUM |
-| C-007 | `server/tcp.go:120-166` | connChan not drained on shutdown | MEDIUM |
+All concurrency issues have been fixed as of commits 6f5d8c7, 13972f0, and 15721d6.
+
+| # | Status | Fix Commit | Description |
+|---|--------|------------|-------------|
+| C-001 | ✅ Fixed | 6f5d8c7 | `cacheClosed` double-close race |
+| C-002 | ✅ Fixed | 6f5d8c7 | Zone manager concurrent map iteration |
+| C-003 | ✅ Fixed | 13972f0 | zones RWMutex lock/unlock ordering |
+| C-004 | ✅ Safe | - | nil listener - workers don't access listener directly |
+| C-005 | ✅ Fixed | 13972f0 | 32-bit torn reads on uint64 atomics |
+| C-006 | ✅ Fixed | 13972f0 | QUIC goroutine leak on connection drop |
+| C-007 | ✅ Fixed | 13972f0 | connChan not drained on shutdown |
 
 ---
 
