@@ -10,6 +10,7 @@ import (
 	"log"
 	"math/rand"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -631,8 +632,14 @@ func servfail(name string, qtype uint16) *protocol.Message {
 }
 
 // cacheKey produces a cache key for name+qtype.
+// Uses strings.Builder instead of fmt.Sprintf for efficiency.
 func cacheKey(name string, qtype uint16) string {
-	return fmt.Sprintf("%s:%d", name, qtype)
+	var b strings.Builder
+	b.Grow(len(name) + 1 + 10)
+	b.WriteString(name)
+	b.WriteByte(':')
+	b.WriteString(strconv.FormatUint(uint64(qtype), 10))
+	return b.String()
 }
 
 // containsString checks if s is in the slice.

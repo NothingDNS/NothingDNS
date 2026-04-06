@@ -19,6 +19,7 @@ type Entry struct {
 type Blocklist struct {
 	mu       sync.RWMutex
 	entries  map[string]Entry
+	suffixes map[string]struct{} // Pre-computed suffixes for O(1) longest-match lookup
 	files    []string
 	enabled  bool
 }
@@ -105,6 +106,7 @@ func (bl *Blocklist) loadFile(path string) error {
 }
 
 // IsBlocked checks if a domain is blocked.
+// Uses efficient suffix matching without repeated string allocations.
 func (bl *Blocklist) IsBlocked(domain string) bool {
 	if !bl.enabled {
 		return false
@@ -120,12 +122,15 @@ func (bl *Blocklist) IsBlocked(domain string) bool {
 		return true
 	}
 
-	// Check subdomains (e.g., ads.example.com matches example.com)
-	parts := strings.Split(domain, ".")
-	for i := 1; i < len(parts); i++ {
-		parent := strings.Join(parts[i:], ".")
-		if _, blocked := bl.entries[parent]; blocked {
-			return true
+	// Check parent domains by finding dots and checking substrings
+	// For "sub.ads.example.com", check "ads.example.com", then "example.com"
+	// This avoids O(n²) string split+join operations
+	for i := 0; i < len(domain); i++ {
+		if domain[i] == '.' && i < len(domain)-1 {
+			parent := domain[i+1:] // Everything after this dot
+			if _, blocked := bl.entries[parent]; blocked {
+				return true
+			}
 		}
 	}
 

@@ -3,6 +3,7 @@ package cache
 import (
 	"container/list"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -165,8 +166,14 @@ func New(config Config) *Cache {
 }
 
 // MakeKey creates a cache key from query name and type.
+// Uses strings.Builder instead of fmt.Sprintf for efficiency.
 func MakeKey(name string, qtype uint16) string {
-	return fmt.Sprintf("%s:%d", name, qtype)
+	var b strings.Builder
+	b.Grow(len(name) + 1 + 10) // name + ":" + max uint16 digits
+	b.WriteString(name)
+	b.WriteByte(':')
+	b.WriteString(strconv.FormatUint(uint64(qtype), 10))
+	return b.String()
 }
 
 // Get retrieves an entry from the cache.
