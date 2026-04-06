@@ -22,8 +22,9 @@ func TestAPIServer(t *testing.T) {
 	l.Close()
 
 	cfg := config.HTTPConfig{
-		Enabled: true,
-		Bind:    addr,
+		Enabled:   true,
+		Bind:     addr,
+		AuthToken: "test-token", // Required for auth
 	}
 
 	server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
@@ -34,7 +35,7 @@ func TestAPIServer(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	// Test health endpoint
+	// Test health endpoint (no auth required)
 	resp, err := http.Get("http://" + addr + "/health")
 	if err != nil {
 		t.Fatalf("Failed to get health: %v", err)
@@ -60,8 +61,9 @@ func TestAPIServer(t *testing.T) {
 
 func TestAPIStatus(t *testing.T) {
 	cfg := config.HTTPConfig{
-		Enabled: true,
-		Bind:    "127.0.0.1:18081",
+		Enabled:   true,
+		Bind:     "127.0.0.1:18081",
+		AuthToken: "test-token",
 	}
 
 	cacheCfg := cache.Config{
@@ -76,7 +78,9 @@ func TestAPIStatus(t *testing.T) {
 	server.Start()
 	time.Sleep(100 * time.Millisecond)
 
-	resp, err := http.Get("http://127.0.0.1:18081/api/v1/status")
+	req, _ := http.NewRequest("GET", "http://127.0.0.1:18081/api/v1/status", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("Failed to get status: %v", err)
 	}
@@ -110,8 +114,9 @@ func TestAPIStatus(t *testing.T) {
 
 func TestAPICacheFlush(t *testing.T) {
 	cfg := config.HTTPConfig{
-		Enabled: true,
-		Bind:    "127.0.0.1:18082",
+		Enabled:   true,
+		Bind:     "127.0.0.1:18082",
+		AuthToken: "test-token",
 	}
 
 	cacheCfg := cache.Config{
@@ -126,7 +131,9 @@ func TestAPICacheFlush(t *testing.T) {
 	server.Start()
 	time.Sleep(100 * time.Millisecond)
 
-	resp, err := http.Post("http://127.0.0.1:18082/api/v1/cache/flush", "", nil)
+	req, _ := http.NewRequest("POST", "http://127.0.0.1:18082/api/v1/cache/flush", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("Failed to flush cache: %v", err)
 	}

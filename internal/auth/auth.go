@@ -83,14 +83,23 @@ func NewStore(cfg *Config) *Store {
 	}
 
 	// Add default admin user if no users configured
+	// SECURITY: Generate a secure random password instead of using a known default
 	if len(s.users) == 0 {
+		defaultPassword, err := generateSecurePassword(24)
+		if err != nil {
+			// Fallback - this should never happen with crypto/rand
+			defaultPassword = "admin"
+		}
 		s.users["admin"] = &User{
 			Username:  "admin",
-			Hash:      HashPassword("admin", nil), // Default password, should be changed
+			Hash:      HashPassword(defaultPassword, nil),
 			Role:      RoleAdmin,
 			CreatedAt: time.Now().UTC().Format(time.RFC3339),
 			UpdatedAt: time.Now().UTC().Format(time.RFC3339),
 		}
+		// Log the generated password - operator must change this
+		fmt.Printf("WARNING: No users configured. Default admin password generated: %s\n", defaultPassword)
+		fmt.Printf("WARNING: Change this password immediately via the dashboard or API.\n")
 	}
 
 	return s
@@ -126,6 +135,23 @@ func HashPassword(password string, salt []byte) []byte {
 	copy(result, salt)
 	copy(result[len(salt):], key)
 	return result
+}
+
+// generateSecurePassword generates a cryptographically secure random password.
+func generateSecurePassword(length int) (string, error) {
+	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*"
+	charsetLen := len(charset)
+
+	bytes := make([]byte, length)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+
+	for i := range bytes {
+		bytes[i] = charset[int(bytes[i])%charsetLen]
+	}
+
+	return string(bytes), nil
 }
 
 // VerifyPassword checks if a password matches a stored hash.

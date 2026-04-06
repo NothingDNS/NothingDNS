@@ -4,6 +4,8 @@ package resolver
 
 import (
 	"context"
+	cryptorand "crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"log"
 	"math/rand"
@@ -14,6 +16,16 @@ import (
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
 )
+
+// nextSecureID returns a cryptographically secure random DNS transaction ID.
+func nextSecureID() uint16 {
+	var b [2]byte
+	if _, err := cryptorand.Read(b[:]); err != nil {
+		// Fallback to math/rand if crypto/rand fails (should never happen)
+		return uint16(rand.Int31n(65536))
+	}
+	return binary.BigEndian.Uint16(b[:])
+}
 
 // Cache is the interface the resolver uses for caching.
 type Cache interface {
@@ -337,7 +349,7 @@ func (r *Resolver) sendQuery(ctx context.Context, name string, qtype uint16, add
 
 	msg := &protocol.Message{
 		Header: protocol.Header{
-			ID:    uint16(rand.Int31n(65536)),
+			ID:    nextSecureID(),
 			Flags: protocol.Flags{RD: false}, // Non-recursive — iterative query
 		},
 		Questions: []*protocol.Question{q},

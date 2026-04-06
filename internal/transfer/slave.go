@@ -193,6 +193,11 @@ func (sm *SlaveManager) AddSlaveZone(config SlaveZoneConfig) error {
 	sm.wg.Add(1)
 	go func() {
 		defer sm.wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Printf("panic in performZoneTransfer for %s: %v\n", zoneName, r)
+			}
+		}()
 		sm.performZoneTransfer(zoneName)
 	}()
 
@@ -258,6 +263,11 @@ func (sm *SlaveManager) GetNotifyChannel() chan<- *NOTIFYRequest {
 // notifyListener listens for NOTIFY events and triggers zone transfers.
 func (sm *SlaveManager) notifyListener() {
 	defer sm.wg.Done()
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("panic in notifyListener: %v\n", r)
+		}
+	}()
 
 	for {
 		select {
@@ -296,6 +306,11 @@ func (sm *SlaveManager) handleNotify(req *NOTIFYRequest) {
 	sm.wg.Add(1)
 	go func() {
 		defer sm.wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Printf("panic in zone transfer for %s: %v\n", zoneName, r)
+			}
+		}()
 		sm.performZoneTransfer(zoneName)
 	}()
 }
@@ -335,6 +350,11 @@ func (sm *SlaveManager) performZoneTransfer(zoneName string) {
 		sm.wg.Add(1)
 		go func() {
 			defer sm.wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Printf("panic in scheduleRetry for %s: %v\n", zoneName, r)
+				}
+			}()
 			sm.scheduleRetry(zoneName)
 		}()
 		return
@@ -345,6 +365,11 @@ func (sm *SlaveManager) performZoneTransfer(zoneName string) {
 		sm.wg.Add(1)
 		go func() {
 			defer sm.wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Printf("panic in applyTransferredZone retry for %s: %v\n", zoneName, r)
+				}
+			}()
 			sm.scheduleRetry(zoneName)
 		}()
 		return

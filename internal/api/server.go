@@ -278,9 +278,17 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// If no auth configured, allow all
-		if s.config.AuthToken == "" && s.authStore == nil {
+		// Skip auth for health and readiness endpoints (public information)
+		if r.URL.Path == "/health" || r.URL.Path == "/ready" {
 			next.ServeHTTP(w, r)
+			return
+		}
+
+		// SECURITY: If neither AuthToken nor authStore is configured,
+		// authentication is required. Deny all API requests.
+		// To allow unauthenticated access, set auth_token or configure users.
+		if s.config.AuthToken == "" && s.authStore == nil {
+			http.Error(w, `{"error":"authentication required: set auth_token or configure users"}`, http.StatusUnauthorized)
 			return
 		}
 

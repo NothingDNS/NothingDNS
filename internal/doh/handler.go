@@ -114,7 +114,9 @@ func (h *Handler) serveJSON(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 
 		var data []byte
-		data, err = io.ReadAll(r.Body)
+		// Use LimitReader to prevent unbounded allocation even if MaxBytesReader
+		// limit is reached
+		data, err = io.ReadAll(io.LimitReader(r.Body, MaxDNSMessageSize))
 		if err != nil {
 			http.Error(w, fmt.Sprintf("failed to read body: %v", err), http.StatusBadRequest)
 			return
@@ -228,7 +230,7 @@ func (h *Handler) handlePOST(w http.ResponseWriter, r *http.Request) ([]byte, er
 	r.Body = http.MaxBytesReader(w, r.Body, MaxDNSMessageSize)
 	defer r.Body.Close()
 
-	data, err := io.ReadAll(r.Body)
+	data, err := io.ReadAll(io.LimitReader(r.Body, MaxDNSMessageSize))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read body: %w", err)
 	}

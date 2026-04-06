@@ -38,6 +38,11 @@ type ReloadError struct {
 	Error     error
 }
 
+// Unwrap returns the underlying error for errors.Is/errors.As support.
+func (e *ReloadError) Unwrap() error {
+	return e.Error
+}
+
 // NewReloadHandler creates a new reload handler
 func NewReloadHandler() *ReloadHandler {
 	h := &ReloadHandler{
@@ -69,6 +74,11 @@ func (h *ReloadHandler) Start() {
 	h.wg.Add(1)
 	go func() {
 		defer h.wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Printf("panic in reload handler: %v\n", r)
+			}
+		}()
 		for range h.reloadSig {
 			if !h.enabled.Load() {
 				continue
@@ -97,12 +107,22 @@ func (h *ReloadHandler) Reload() []ReloadError {
 	// For simplicity, we execute in map order
 	// A more sophisticated implementation would sort by priority
 	for component, cb := range h.callbacks {
-		if err := cb(); err != nil {
-			errors = append(errors, ReloadError{
-				Component: component,
-				Error:     err,
-			})
-		}
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					errors = append(errors, ReloadError{
+						Component: component,
+						Error:     fmt.Errorf("panic in %s reload callback: %v", component, r),
+					})
+				}
+			}()
+			if err := cb(); err != nil {
+				errors = append(errors, ReloadError{
+					Component: component,
+					Error:     err,
+				})
+			}
+		}()
 	}
 
 	return errors

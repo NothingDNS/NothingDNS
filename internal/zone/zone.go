@@ -360,9 +360,26 @@ func (p *parser) handleInclude(args []string) error {
 
 	includeFile := args[0]
 
+	// SECURITY: Check for path traversal in the include path itself
+	// Block obvious traversal attempts before any path resolution
+	if strings.Contains(includeFile, "..") {
+		return fmt.Errorf("$INCLUDE path traversal attempt blocked: %s", includeFile)
+	}
+
 	// Resolve relative paths against the directory of the current file
 	if !filepath.IsAbs(includeFile) && p.filename != "" {
 		includeFile = filepath.Join(filepath.Dir(p.filename), includeFile)
+	}
+
+	// Validate the resolved path doesn't escape the zone directory
+	// For absolute paths, we already checked for .. above
+	// For relative paths, the Join result is already safe
+	cleanPath := filepath.Clean(includeFile)
+	if p.filename != "" && !filepath.IsAbs(args[0]) {
+		zoneDir := filepath.Dir(p.filename)
+		if !strings.HasPrefix(cleanPath, zoneDir+string(filepath.Separator)) && cleanPath != zoneDir {
+			return fmt.Errorf("$INCLUDE path traversal attempt blocked: %s", includeFile)
+		}
 	}
 
 	// Save current origin so we can restore it after the include

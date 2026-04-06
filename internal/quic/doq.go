@@ -355,7 +355,8 @@ func (s *DoQServer) handleStream(dc *doqConn, streamID uint64) {
 
 	stream := dc.sc.AcceptStream(streamID)
 
-	query, err := io.ReadAll(stream)
+	// Limit read to prevent unbounded memory allocation
+	query, err := io.ReadAll(io.LimitReader(stream, DoQMaxMessageSize))
 	if err != nil && !errors.Is(err, io.EOF) {
 		atomic.AddUint64(&s.errors, 1)
 		dc.sc.DeleteStream(streamID)
