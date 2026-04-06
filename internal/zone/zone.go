@@ -810,6 +810,12 @@ func parseTTL(s string) (uint32, error) {
 		return 0, err
 	}
 
+	// Check for overflow: val * multiplier could exceed uint32 max
+	maxVal := uint64(1<<32 - 1)
+	if val > 0 && multiplier > 0 && val > maxVal/uint64(multiplier) {
+		return 0, fmt.Errorf("TTL overflow: %d * %d exceeds uint32 max", val, multiplier)
+	}
+
 	return uint32(val) * multiplier, nil
 }
 

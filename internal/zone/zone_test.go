@@ -3,6 +3,8 @@ package zone
 import (
 	"strings"
 	"testing"
+
+	"github.com/nothingdns/nothingdns/internal/storage"
 )
 
 func TestCanonicalize(t *testing.T) {
@@ -59,6 +61,8 @@ func TestParseTTL(t *testing.T) {
 		{"2h30m", 0, true}, // Not supported in basic parser
 		{"", 0, true},
 		{"invalid", 0, true},
+		// Overflow test: 4294967295 * 3600 (1H) exceeds uint32 max
+		{"4294967295H", 0, true},
 	}
 
 	for _, tt := range tests {
@@ -517,5 +521,465 @@ func TestZone_LookupAll(t *testing.T) {
 	recordsEmpty := z.LookupAll("nonexistent.example.com.")
 	if len(recordsEmpty) != 0 {
 		t.Errorf("expected 0 records for non-existent name, got %d", len(recordsEmpty))
+	}
+}
+
+func TestManager_CreateZone(t *testing.T) {
+	m := NewManager()
+	m.SetZoneDir("") // no file writing
+
+	soa := &SOARecord{
+		MName:   "ns1.example.com.",
+		RName:   "hostmaster.example.com.",
+		Serial:  2024010101,
+		Refresh: 3600,
+		Retry:   900,
+		Expire:  604800,
+		Minimum: 86400,
+	}
+	nsRecords := []NSRecord{{NSDName: "ns1.example.com."}}
+
+	err := m.CreateZone("example.com.", 3600, soa, nsRecords)
+	if err != nil {
+		t.Fatalf("CreateZone: %v", err)
+	}
+
+	// Verify zone was created
+	z, ok := m.Get("example.com.")
+	if !ok {
+		t.Fatal("expected to find zone after CreateZone")
+	}
+	if z.Origin != "example.com." {
+		t.Errorf("origin = %q, want example.com.", z.Origin)
+	}
+	if z.DefaultTTL != 3600 {
+		t.Errorf("defaultTTL = %d, want 3600", z.DefaultTTL)
+	}
+	if z.SOA == nil {
+		t.Fatal("expected SOA record")
+	}
+	if z.SOA.Serial != 2024010101 {
+		t.Errorf("soa serial = %d, want 2024010101", z.SOA.Serial)
+	}
+	if len(z.NS) != 1 {
+		t.Errorf("NS count = %d, want 1", len(z.NS))
+	}
+
+	// Test duplicate - should fail
+	err = m.CreateZone("example.com.", 3600, soa, nsRecords)
+	if err == nil {
+		t.Error("expected error for duplicate zone")
+	}
+
+	// Test invalid origin
+	err = m.CreateZone("", 3600, soa, nsRecords)
+	if err == nil {
+		t.Error("expected error for empty origin")
+	}
+
+	// Test missing SOA
+	err = m.CreateZone("test.com.", 3600, nil, nsRecords)
+	if err == nil {
+		t.Error("expected error for nil SOA")
+	}
+
+	// Test missing NS
+	err = m.CreateZone("test.com.", 3600, soa, nil)
+	if err == nil {
+		t.Error("expected error for nil NS records")
+	}
+
+	err = m.CreateZone("test.com.", 3600, soa, []NSRecord{})
+	if err == nil {
+		t.Error("expected error for empty NS records")
+	}
+}
+
+func TestManager_AddRecord(t *testing.T) {
+	m := NewManager()
+	m.SetZoneDir("")
+
+	// Create zone first
+	soa := &SOARecord{MName: "ns1.example.com.", RName: "hostmaster.example.com.", Serial: 1}
+	m.CreateZone("example.com.", 3600, soa, []NSRecord{{NSDName: "ns1.example.com."}})
+
+	// Add A record
+	rec := Record{Name: "www.example.com.", TTL: 300, Type: "A", RData: "192.0.2.1"}
+	err := m.AddRecord("example.com.", rec)
+	if err != nil {
+		t.Fatalf("AddRecord: %v", err)
+	}
+
+	// Verify
+	records, err := m.GetRecords("example.com.", "www.example.com.")
+	if err != nil {
+		t.Fatalf("GetRecords: %v", err)
+	}
+	if len(records) != 1 {
+		t.Errorf("records count = %d, want 1", len(records))
+	}
+	if records[0].RData != "192.0.2.1" {
+		t.Errorf("rdata = %q, want 192.0.2.1", records[0].RData)
+	}
+
+	// Test non-existent zone
+	err = m.AddRecord("nonexistent.com.", rec)
+	if err == nil {
+		t.Error("expected error for non-existent zone")
+	}
+}
+
+func TestManager_DeleteRecord(t *testing.T) {
+	m := NewManager()
+	m.SetZoneDir("")
+
+	soa := &SOARecord{MName: "ns1.example.com.", RName: "hostmaster.example.com.", Serial: 1}
+	m.CreateZone("example.com.", 3600, soa, []NSRecord{{NSDName: "ns1.example.com."}})
+
+	// Add then delete
+	m.AddRecord("example.com.", Record{Name: "www.example.com.", Type: "A", RData: "192.0.2.1"})
+
+	err := m.DeleteRecord("example.com.", "www.example.com.", "A")
+	if err != nil {
+		t.Fatalf("DeleteRecord: %v", err)
+	}
+
+	// Verify deleted
+	records, _ := m.GetRecords("example.com.", "www.example.com.")
+	if len(records) != 0 {
+		t.Errorf("records count after delete = %d, want 0", len(records))
+	}
+
+	// Test non-existent
+	err = m.DeleteRecord("example.com.", "nonexistent.example.com.", "A")
+	if err == nil {
+		t.Error("expected error for non-existent record")
+	}
+}
+
+func TestManager_UpdateRecord(t *testing.T) {
+	m := NewManager()
+	m.SetZoneDir("")
+
+	soa := &SOARecord{MName: "ns1.example.com.", RName: "hostmaster.example.com.", Serial: 1}
+	m.CreateZone("example.com.", 3600, soa, []NSRecord{{NSDName: "ns1.example.com."}})
+
+	// Add record
+	m.AddRecord("example.com.", Record{Name: "www.example.com.", Type: "A", RData: "192.0.2.1"})
+
+	// Update it
+	newRec := Record{Name: "www.example.com.", TTL: 600, Type: "A", RData: "192.0.2.2"}
+	err := m.UpdateRecord("example.com.", "www.example.com.", "A", "192.0.2.1", newRec)
+	if err != nil {
+		t.Fatalf("UpdateRecord: %v", err)
+	}
+
+	records, _ := m.GetRecords("example.com.", "www.example.com.")
+	if len(records) != 1 || records[0].RData != "192.0.2.2" {
+		t.Errorf("updated record = %+v", records)
+	}
+}
+
+func TestManager_DeleteZone(t *testing.T) {
+	m := NewManager()
+	m.SetZoneDir("")
+
+	soa := &SOARecord{MName: "ns1.example.com.", RName: "hostmaster.example.com.", Serial: 1}
+	m.CreateZone("example.com.", 3600, soa, []NSRecord{{NSDName: "ns1.example.com."}})
+
+	if m.Count() != 1 {
+		t.Fatalf("count before delete = %d, want 1", m.Count())
+	}
+
+	err := m.DeleteZone("example.com.")
+	if err != nil {
+		t.Fatalf("DeleteZone: %v", err)
+	}
+
+	if m.Count() != 0 {
+		t.Errorf("count after delete = %d, want 0", m.Count())
+	}
+
+	// Test non-existent
+	err = m.DeleteZone("nonexistent.com.")
+	if err == nil {
+		t.Error("expected error for non-existent zone")
+	}
+}
+
+func TestManager_ExportZone(t *testing.T) {
+	m := NewManager()
+	m.SetZoneDir("")
+
+	soa := &SOARecord{MName: "ns1.example.com.", RName: "hostmaster.example.com.", Serial: 1, Refresh: 3600, Retry: 900, Expire: 604800, Minimum: 86400}
+	m.CreateZone("example.com.", 3600, soa, []NSRecord{{NSDName: "ns1.example.com."}})
+
+	export, err := m.ExportZone("example.com.")
+	if err != nil {
+		t.Fatalf("ExportZone: %v", err)
+	}
+	if export == "" {
+		t.Error("expected non-empty export")
+	}
+
+	// Non-existent should error
+	_, err = m.ExportZone("nonexistent.com.")
+	if err == nil {
+		t.Error("expected error for non-existent zone")
+	}
+}
+
+func TestManager_GetRecords(t *testing.T) {
+	m := NewManager()
+	m.SetZoneDir("")
+
+	soa := &SOARecord{MName: "ns1.example.com.", RName: "hostmaster.example.com.", Serial: 1}
+	m.CreateZone("example.com.", 3600, soa, []NSRecord{{NSDName: "ns1.example.com."}})
+	m.AddRecord("example.com.", Record{Name: "www.example.com.", Type: "A", RData: "192.0.2.1"})
+
+	// Get specific name
+	records, err := m.GetRecords("example.com.", "www.example.com.")
+	if err != nil {
+		t.Fatalf("GetRecords: %v", err)
+	}
+	if len(records) != 1 {
+		t.Errorf("www records = %d, want 1", len(records))
+	}
+
+	// Get all
+	all, err := m.GetRecords("example.com.", "")
+	if err != nil {
+		t.Fatalf("GetRecords all: %v", err)
+	}
+	if len(all) < 2 { // SOA + NS + www
+		t.Errorf("all records = %d, want >= 2", len(all))
+	}
+}
+
+func TestManager_PersistZone(t *testing.T) {
+	m := NewManager()
+
+	// PersistZone with no zoneDir should return nil
+	err := m.PersistZone("example.com.")
+	if err != nil {
+		t.Errorf("PersistZone with no zoneDir: %v", err)
+	}
+}
+
+func TestIncrementSerial(t *testing.T) {
+	m := NewManager()
+	m.SetZoneDir("")
+	soa := &SOARecord{MName: "ns1.example.com.", RName: "hostmaster.example.com.", Serial: 2024010101}
+	m.CreateZone("example.com.", 3600, soa, []NSRecord{{NSDName: "ns1.example.com."}})
+
+	z, _ := m.Get("example.com.")
+	oldSerial := z.SOA.Serial
+
+	IncrementSerial(z)
+
+	if z.SOA.Serial <= oldSerial {
+		t.Errorf("serial did not increment: was %d, is %d", oldSerial, z.SOA.Serial)
+	}
+}
+
+func TestNormalizeZoneName(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"example.com", "example.com."},
+		{"example.com.", "example.com."},
+		{"EXAMPLE.COM", "example.com."},
+		{" EXAMPLE.COM ", "example.com."},
+		{"", ""},
+		{".", "."},
+	}
+
+	for _, tt := range tests {
+		result := normalizeZoneName(tt.input)
+		if result != tt.expected {
+			t.Errorf("normalizeZoneName(%q) = %q, want %q", tt.input, result, tt.expected)
+		}
+	}
+}
+
+func TestKVPersistence_EnableDisable(t *testing.T) {
+	m := NewManager()
+	kv, err := storage.OpenKVStore(t.TempDir())
+	if err != nil {
+		t.Skipf("skipping KV test: %v", err)
+	}
+	defer kv.Close()
+
+	kvp := NewKVPersistence(m, kv)
+	kvp.Enable() // Should not panic
+}
+
+func TestKVPersistence_PersistZone_Disabled(t *testing.T) {
+	m := NewManager()
+	kv, err := storage.OpenKVStore(t.TempDir())
+	if err != nil {
+		t.Skipf("skipping KV test: %v", err)
+	}
+	defer kv.Close()
+
+	kvp := NewKVPersistence(m, kv)
+	err = kvp.PersistZone("example.com.")
+	if err != nil {
+		t.Errorf("PersistZone disabled: %v", err)
+	}
+}
+
+func TestKVPersistence_PersistZone_Enabled(t *testing.T) {
+	m := NewManager()
+	m.SetZoneDir("")
+
+	kv, err := storage.OpenKVStore(t.TempDir())
+	if err != nil {
+		t.Skipf("skipping KV test: %v", err)
+	}
+	defer kv.Close()
+
+	soa := &SOARecord{MName: "ns1.example.com.", RName: "hostmaster.example.com.", Serial: 1}
+	m.CreateZone("example.com.", 3600, soa, []NSRecord{{NSDName: "ns1.example.com."}})
+
+	kvp := NewKVPersistence(m, kv)
+	kvp.Enable()
+
+	err = kvp.PersistZone("example.com.")
+	if err != nil {
+		t.Errorf("PersistZone enabled: %v", err)
+	}
+}
+
+func TestKVPersistence_LoadFromKV_Disabled(t *testing.T) {
+	m := NewManager()
+	kv, err := storage.OpenKVStore(t.TempDir())
+	if err != nil {
+		t.Skipf("skipping KV test: %v", err)
+	}
+	defer kv.Close()
+
+	kvp := NewKVPersistence(m, kv)
+
+	z, found, err := kvp.LoadFromKV("example.com.")
+	if err != nil {
+		t.Errorf("LoadFromKV disabled: %v", err)
+	}
+	if found || z != nil {
+		t.Errorf("expected not found when disabled")
+	}
+}
+
+func TestKVPersistence_DeleteFromKV_Disabled(t *testing.T) {
+	m := NewManager()
+	kv, err := storage.OpenKVStore(t.TempDir())
+	if err != nil {
+		t.Skipf("skipping KV test: %v", err)
+	}
+	defer kv.Close()
+
+	kvp := NewKVPersistence(m, kv)
+
+	err = kvp.DeleteFromKV("example.com.")
+	if err != nil {
+		t.Errorf("DeleteFromKV disabled: %v", err)
+	}
+}
+
+func TestKVPersistence_ListKVZones_Disabled(t *testing.T) {
+	m := NewManager()
+	kv, err := storage.OpenKVStore(t.TempDir())
+	if err != nil {
+		t.Skipf("skipping KV test: %v", err)
+	}
+	defer kv.Close()
+
+	kvp := NewKVPersistence(m, kv)
+
+	zones, err := kvp.ListKVZones()
+	if err != nil {
+		t.Errorf("ListKVZones disabled: %v", err)
+	}
+	if zones != nil {
+		t.Errorf("expected nil when disabled")
+	}
+}
+
+func TestKVPersistence_Manager(t *testing.T) {
+	m := NewManager()
+	kv, err := storage.OpenKVStore(t.TempDir())
+	if err != nil {
+		t.Skipf("skipping KV test: %v", err)
+	}
+	defer kv.Close()
+
+	kvp := NewKVPersistence(m, kv)
+	if kvp.Manager() != m {
+		t.Error("Manager() did not return expected manager")
+	}
+}
+
+func TestKVPersistence_zoneToStoredRecords(t *testing.T) {
+	m := NewManager()
+	kv, err := storage.OpenKVStore(t.TempDir())
+	if err != nil {
+		t.Skipf("skipping KV test: %v", err)
+	}
+	defer kv.Close()
+
+	kvp := NewKVPersistence(m, kv)
+	z := NewZone("example.com.")
+	z.Records["www.example.com."] = []Record{
+		{Name: "www.example.com.", TTL: 300, Class: "IN", Type: "A", RData: "192.0.2.1"},
+	}
+
+	records := kvp.zoneToStoredRecords(z)
+	if len(records) != 1 {
+		t.Fatalf("records count = %d, want 1", len(records))
+	}
+	if records["www.example.com."][0].RData != "192.0.2.1" {
+		t.Errorf("rdata = %q, want 192.0.2.1", records["www.example.com."][0].RData)
+	}
+}
+
+func TestKVPersistence_storedRecordsToZone(t *testing.T) {
+	m := NewManager()
+	kv, err := storage.OpenKVStore(t.TempDir())
+	if err != nil {
+		t.Skipf("skipping KV test: %v", err)
+	}
+	defer kv.Close()
+
+	kvp := NewKVPersistence(m, kv)
+	meta := storage.ZoneMeta{Origin: "example.com.", DefaultTTL: 3600}
+	records := map[string][]storage.StoredRecord{
+		"www.example.com.": {
+			{Name: "www.example.com.", TTL: 300, Class: "IN", Type: "A", RData: "192.0.2.1"},
+		},
+	}
+
+	z := kvp.storedRecordsToZone(meta, records)
+	if z.Origin != "example.com." {
+		t.Errorf("origin = %q, want example.com.", z.Origin)
+	}
+	if z.DefaultTTL != 3600 {
+		t.Errorf("defaultTTL = %d, want 3600", z.DefaultTTL)
+	}
+}
+
+func TestKVPersistence_PersistAll_Disabled(t *testing.T) {
+	m := NewManager()
+	kv, err := storage.OpenKVStore(t.TempDir())
+	if err != nil {
+		t.Skipf("skipping KV test: %v", err)
+	}
+	defer kv.Close()
+
+	kvp := NewKVPersistence(m, kv)
+
+	err = kvp.PersistAll()
+	if err != nil {
+		t.Errorf("PersistAll disabled: %v", err)
 	}
 }
