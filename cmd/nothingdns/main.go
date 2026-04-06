@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -742,14 +743,14 @@ func run() error {
 	if len(cfg.Server.UDPBind) > 0 {
 		udpAddr = cfg.Server.UDPBind[0]
 	} else if len(cfg.Server.Bind) > 0 {
-		udpAddr = cfg.Server.Bind[0]
+		udpAddr = net.JoinHostPort(cfg.Server.Bind[0], fmt.Sprintf("%d", cfg.Server.Port))
 	}
 
 	tcpAddr := defaultAddr
 	if len(cfg.Server.TCPBind) > 0 {
 		tcpAddr = cfg.Server.TCPBind[0]
 	} else if len(cfg.Server.Bind) > 0 {
-		tcpAddr = cfg.Server.Bind[0]
+		tcpAddr = net.JoinHostPort(cfg.Server.Bind[0], fmt.Sprintf("%d", cfg.Server.Port))
 	}
 
 	udpServer := server.NewUDPServerWithWorkers(udpAddr, handler, cfg.Server.UDPWorkers)
