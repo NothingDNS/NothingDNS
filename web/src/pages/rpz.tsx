@@ -14,7 +14,7 @@ export function RPZPage() {
   const [toggling, setToggling] = useState(false);
   const [adding, setAdding] = useState(false);
   const [newPattern, setNewPattern] = useState('');
-  const [newAction, setNewAction] = useState('nxdomain');
+  const [newAction, setNewAction] = useState('NXDOMAIN');
 
   const fetchData = () => {
     Promise.all([
@@ -139,11 +139,11 @@ export function RPZPage() {
               onChange={e => setNewAction(e.target.value)}
               className="h-10 px-3 rounded-md border border-input bg-background text-sm"
             >
-              <option value="nxdomain">NXDOMAIN</option>
-              <option value="nodata">NODATA</option>
-              <option value="cname">CNAME</option>
-              <option value="override">Override</option>
-              <option value="drop">Drop</option>
+              <option value="NXDOMAIN">NXDOMAIN</option>
+              <option value="NODATA">NODATA</option>
+              <option value="CNAME">CNAME</option>
+              <option value="OVERRIDE">Override</option>
+              <option value="DROP">Drop</option>
             </select>
             <Button onClick={handleAddRule} disabled={adding || !newPattern.trim()}>
               {adding ? 'Adding...' : 'Add Rule'}

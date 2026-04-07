@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Input } from '@/components/ui/input';
 import { api, type QueryLogResponse } from '@/lib/api';
-import { Search, ChevronLeft, ChevronRight } from 'lucide-react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 const PAGE_SIZE = 50;
 
@@ -35,16 +36,12 @@ export function QueryLogPage() {
       <div><h1 className="text-2xl font-bold tracking-tight">Query Log</h1><p className="text-muted-foreground text-sm">Historical DNS query log</p></div>
 
       <div className="flex items-center gap-3">
-        <div className="relative flex-1 max-w-sm">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <input
-            type="text"
-            placeholder="Filter by domain..."
-            value={filter}
-            onChange={e => setFilter(e.target.value)}
-            className="w-full pl-9 pr-4 py-2 text-sm border rounded-lg bg-background"
-          />
-        </div>
+        <Input
+          placeholder="Filter by domain..."
+          value={filter}
+          onChange={e => setFilter(e.target.value)}
+          className="max-w-sm"
+        />
         <Badge variant="secondary">{total} total</Badge>
       </div>
 

@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogTitle } from '@/components/ui/dialog';
 import { api, type DnsRecord } from '@/lib/api';
-import { Plus, Pencil, Trash2, Undo, Redo, GripVertical, Search, X, Check, AlertTriangle } from 'lucide-react';
+import { Plus, Pencil, Trash2, Undo, Redo, GripVertical, Search, X, Check, AlertTriangle, Network } from 'lucide-react';
 
 export interface EditableRecord extends DnsRecord {
   selected?: boolean;
@@ -33,6 +33,7 @@ export function ZoneEditor({ zoneName, initialRecords, onRefresh }: ZoneEditorPr
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   const [showAdd, setShowAdd] = useState(false);
+  const [showBulkPTR, setShowBulkPTR] = useState(false);
   const [selectedRecords, setSelectedRecords] = useState<Set<number>>(new Set());
   const dragItem = useRef<number | null>(null);
   const dragOverItem = useRef<number | null>(null);
@@ -209,6 +210,9 @@ export function ZoneEditor({ zoneName, initialRecords, onRefresh }: ZoneEditorPr
         <Button size="sm" onClick={() => setShowAdd(true)}>
           <Plus className="h-4 w-4" /> Add Record
         </Button>
+        <Button size="sm" variant="outline" onClick={() => setShowBulkPTR(true)}>
+          <Network className="h-4 w-4" /> Bulk PTR
+        </Button>
       </div>
 
       {/* Stats */}
@@ -327,6 +331,13 @@ export function ZoneEditor({ zoneName, initialRecords, onRefresh }: ZoneEditorPr
         zoneName={zoneName}
         onSaved={() => { onRefresh(); setShowAdd(false); saveToHistory('Added record'); }}
       />
+
+      <BulkPTRDialog
+        open={showBulkPTR}
+        onClose={() => setShowBulkPTR(false)}
+        zoneName={zoneName}
+        onSaved={() => { onRefresh(); setShowBulkPTR(false); saveToHistory('Added bulk PTR records'); }}
+      />
     </div>
   );
 }
@@ -436,21 +447,15 @@ function AddRecordDialog({ open, onClose, zoneName, onSaved }: {
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="text-sm font-medium mb-1.5 block">TTL</label>
-            <Input type="number" value={ttl} onChange={e => setTtl(e.target.value)} />
-          </div>
-          <div>
-            <label className="text-sm font-medium mb-1.5 block">Priority (MX/SRV)</label>
-            <Input placeholder="0" />
-          </div>
+        <div>
+          <label className="text-sm font-medium mb-1.5 block">TTL</label>
+          <Input type="number" value={ttl} onChange={e => setTtl(e.target.value)} />
         </div>
 
         <div>
           <label className="text-sm font-medium mb-1.5 block">Data</label>
           <Input
-            placeholder={type === 'A' ? '192.168.1.1' : type === 'AAAA' ? '::1' : type === 'MX' ? '10 mail.example.com.' : type === 'TXT' ? '"v=spf1 mx ~all"' : 'value'}
+            placeholder={type === 'A' ? '192.168.1.1' : type === 'AAAA' ? '::1' : type === 'MX' ? '10 mail.example.com.' : type === 'TXT' ? '"v=spf1 mx ~all"' : type === 'SRV' ? '10 60 443 service.example.com' : 'value'}
             value={data}
             onChange={e => setData(e.target.value)}
           />
@@ -460,6 +465,202 @@ function AddRecordDialog({ open, onClose, zoneName, onSaved }: {
           <Button variant="outline" onClick={onClose}>Cancel</Button>
           <Button onClick={handleSave} disabled={saving}>
             {saving ? 'Adding...' : 'Add Record'}
+          </Button>
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
+function BulkPTRDialog({ open, onClose, zoneName, onSaved }: {
+  open: boolean;
+  onClose: () => void;
+  zoneName: string;
+  onSaved: () => void;
+}) {
+  const [cidr, setCidr] = useState('');
+  const [pattern, setPattern] = useState('ip-[A]-[B]-[C]-[D].example.com');
+  const [override, setOverride] = useState(false);
+  const [addA, setAddA] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
+  const [error, setError] = useState('');
+  const [preview, setPreview] = useState<{
+    total: number;
+    willAdd: number;
+    willAddA: number;
+    willSkip: number;
+    willOverride: number;
+    changes: { ip: string; ptrName: string; aName?: string; action: string; ptrExist: boolean; aExist?: boolean; oldPtr?: string; oldA?: string }[];
+  } | null>(null);
+  const [result, setResult] = useState<{ added: number; addedA: number; exists: number; existsA: number; skipped: number } | null>(null);
+
+  const handlePreview = async () => {
+    setError('');
+    if (!cidr.trim()) {
+      setError('CIDR is required');
+      return;
+    }
+    if (!pattern.includes('[A]') || !pattern.includes('[B]') ||
+        !pattern.includes('[C]') || !pattern.includes('[D]')) {
+      setError('Pattern must contain [A], [B], [C], [D] placeholders');
+      return;
+    }
+    setPreviewing(true);
+    try {
+      const res = await api<typeof preview>(
+        'POST',
+        `/api/v1/zones/${encodeURIComponent(zoneName)}/ptr-bulk`,
+        { cidr: cidr.trim(), pattern: pattern.trim(), override, addA, preview: true }
+      );
+      setPreview(res);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to preview');
+    } finally {
+      setPreviewing(false);
+    }
+  };
+
+  const handleSave = async () => {
+    setError('');
+    if (!cidr.trim()) {
+      setError('CIDR is required');
+      return;
+    }
+    if (!pattern.includes('[A]') || !pattern.includes('[B]') ||
+        !pattern.includes('[C]') || !pattern.includes('[D]')) {
+      setError('Pattern must contain [A], [B], [C], [D] placeholders');
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await api<{ added: number; addedA: number; exists: number; existsA: number; skipped: number }>(
+        'POST',
+        `/api/v1/zones/${encodeURIComponent(zoneName)}/ptr-bulk`,
+        { cidr: cidr.trim(), pattern: pattern.trim(), override, addA, preview: false }
+      );
+      setResult(res);
+      setPreview(null);
+      if (res.added > 0 || res.skipped > 0 || res.addedA > 0) {
+        setCidr('');
+        onSaved();
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to add PTR records');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const reset = () => {
+    setPreview(null);
+    setResult(null);
+    setError('');
+  };
+
+  return (
+    <Dialog open={open} onClose={onClose}>
+      <DialogTitle>Bulk PTR Records</DialogTitle>
+      <div className="space-y-4 mt-5">
+        {error && (
+          <div className="text-sm text-destructive bg-destructive/10 px-3 py-2 rounded-lg flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4" /> {error}
+          </div>
+        )}
+
+        {result && (
+          <div className="text-sm bg-success/10 text-success px-3 py-2 rounded-lg space-y-1">
+            <div>PTR: +{result.added} / {result.exists} exists / {result.skipped} skipped</div>
+            {result.addedA > 0 && <div>A: +{result.addedA} / {result.existsA} exists</div>}
+            <button onClick={reset} className="text-xs underline mt-1">Clear</button>
+          </div>
+        )}
+
+        {!result && preview && (
+          <div className="text-sm bg-primary/10 px-3 py-2 rounded-lg">
+            <div className="flex justify-between mb-2">
+              <span className="text-primary font-medium">Preview: {preview.total} IPs</span>
+              <button onClick={() => setPreview(null)} className="text-xs underline">Edit</button>
+            </div>
+            <div className="grid grid-cols-3 gap-2 text-xs mb-2">
+              <div className="text-success">+{preview.willAdd} add</div>
+              {preview.willAddA > 0 && <div className="text-success">+{preview.willAddA} A</div>}
+              {preview.willSkip > 0 && <div className="text-warning">~{preview.willSkip} skip</div>}
+              {preview.willOverride > 0 && <div className="text-destructive">!{preview.willOverride} override</div>}
+            </div>
+            <div className="max-h-48 overflow-y-auto space-y-1">
+              {preview.changes.slice(0, 20).map((ch, i) => (
+                <div key={i} className={`text-xs font-mono flex items-center gap-1 ${
+                  ch.action === 'skip' ? 'text-warning' : ch.action === 'override' ? 'text-destructive' : 'text-success'
+                }`}>
+                  <span>{ch.ip}</span>
+                  <span>→</span>
+                  <span className="truncate">{ch.ptrName}</span>
+                  {ch.action === 'skip' && <span className="text-muted-foreground">exists</span>}
+                  {ch.action === 'override' && <span className="text-destructive">→ {ch.oldPtr}</span>}
+                </div>
+              ))}
+              {preview.changes.length > 20 && (
+                <div className="text-xs text-muted-foreground text-center">
+                  +{preview.changes.length - 20} more...
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        <div>
+          <label className="text-sm font-medium mb-1.5 block">CIDR Range</label>
+          <Input
+            placeholder="192.168.1.0/24"
+            value={cidr}
+            onChange={e => { setCidr(e.target.value); setPreview(null); }}
+            autoFocus
+          />
+          <p className="text-xs text-muted-foreground mt-1">IPv4 range (max /16)</p>
+        </div>
+
+        <div>
+          <label className="text-sm font-medium mb-1.5 block">Pattern</label>
+          <Input
+            placeholder="ip-[A]-[B]-[C]-[D].example.com"
+            value={pattern}
+            onChange={e => { setPattern(e.target.value); setPreview(null); }}
+          />
+          <p className="text-xs text-muted-foreground mt-1">Use [A], [B], [C], [D] for IP octets</p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            id="addA"
+            checked={addA}
+            onChange={e => { setAddA(e.target.checked); setPreview(null); }}
+            className="h-4 w-4 rounded border-input"
+          />
+          <label htmlFor="addA" className="text-sm">Also add A records (pattern name → IP)</label>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            id="override"
+            checked={override}
+            onChange={e => { setOverride(e.target.checked); setPreview(null); }}
+            className="h-4 w-4 rounded border-input"
+          />
+          <label htmlFor="override" className="text-sm">Override existing records</label>
+        </div>
+
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="outline" onClick={onClose}>Close</Button>
+          {!preview ? (
+            <Button variant="outline" onClick={handlePreview} disabled={previewing || !cidr.trim()}>
+              {previewing ? 'Preview...' : 'Preview'}
+            </Button>
+          ) : null}
+          <Button onClick={handleSave} disabled={saving}>
+            {saving ? 'Adding...' : preview ? 'Confirm & Add' : 'Add PTR Records'}
           </Button>
         </div>
       </div>

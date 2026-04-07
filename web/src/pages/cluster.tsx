@@ -42,8 +42,11 @@ export function ClusterPage() {
   }, []);
 
   const handleRemoveNode = async (_id: string) => {
-    // Cluster node removal is not yet implemented in the API
-    console.warn('Cluster node removal is not available');
+    alert('Node removal requires configuration change and server restart. Use the Reload Config action after editing your configuration file.');
+  };
+
+  const handleJoinNode = () => {
+    alert('Adding nodes requires configuration change and server restart. Edit your configuration file to add new cluster nodes.');
   };
 
   if (loading && nodes.length === 0) {
@@ -72,7 +75,7 @@ export function ClusterPage() {
           <Button variant="outline" size="sm" onClick={load}>
             <RefreshCw className="h-4 w-4 mr-2" /> Refresh
           </Button>
-          <Button size="sm">
+          <Button size="sm" onClick={handleJoinNode}>
             <Plus className="h-4 w-4 mr-2" /> Join Node
           </Button>
         </div>
@@ -147,7 +150,7 @@ export function ClusterPage() {
               <p className="text-sm text-muted-foreground mb-4">
                 Add your first node to start clustering.
               </p>
-              <Button>
+              <Button onClick={handleJoinNode}>
                 <Plus className="h-4 w-4 mr-2" /> Add Node
               </Button>
             </div>

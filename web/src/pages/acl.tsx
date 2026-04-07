@@ -31,6 +31,8 @@ export function ACLPage() {
     allow: 'text-success bg-success/10 border-success/20',
     deny: 'text-destructive bg-destructive/10 border-destructive/20',
     redirect: 'text-warning bg-warning/10 border-warning/20',
+    drop: 'text-muted-foreground bg-muted border-muted',
+    refuse: 'text-chart-5 bg-chart-5/10 border-chart-5/20',
   };
 
   return (

@@ -2,24 +2,40 @@ import { useEffect, useState, useRef } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Button } from '@/components/ui/button';
 import { api, type DashboardStats, type QueryEvent } from '@/lib/api';
 import { useWebSocket } from '@/hooks/useWebSocket';
-import { Activity, Database, Shield, Globe, Zap, Clock, Server, TrendingUp } from 'lucide-react';
+import { Activity, Database, Shield, Clock, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [queries, setQueries] = useState<QueryEvent[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const streamRef = useRef<HTMLDivElement>(null);
 
   const { connected } = useWebSocket('/ws', {
-    onQuery: (event) => setQueries((p) => [event, ...p].slice(0, 50)),
+    onQuery: (event) => setQueries((p) => [event, ...p].slice(0, 100)),
   });
 
+  const loadStats = async () => {
+    try {
+      const data = await api<DashboardStats>('GET', '/api/dashboard/stats');
+      setStats(data);
+      setLastUpdate(new Date());
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load stats');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    api<DashboardStats>('GET', '/api/dashboard/stats').then((d) => setStats(d)).catch(console.error).finally(() => setLoading(false));
-    const iv = setInterval(() => api<DashboardStats>('GET', '/api/dashboard/stats').then(setStats).catch(() => {}), 5000);
+    loadStats();
+    const iv = setInterval(loadStats, 5000);
     return () => clearInterval(iv);
   }, []);
 
@@ -36,7 +52,23 @@ export function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <div><h1 className="text-2xl font-bold tracking-tight">Dashboard</h1><p className="text-muted-foreground text-sm">Real-time DNS server monitoring</p></div>
+      <div className="flex items-center justify-between">
+        <div><h1 className="text-2xl font-bold tracking-tight">Dashboard</h1><p className="text-muted-foreground text-sm">Real-time DNS server monitoring</p></div>
+        <div className="flex items-center gap-2">
+          {lastUpdate && <span className="text-xs text-muted-foreground">Updated {lastUpdate.toLocaleTimeString()}</span>}
+          <Button variant="outline" size="sm" onClick={loadStats}><RefreshCw className="h-4 w-4" /></Button>
+        </div>
+      </div>
+
+      {error && (
+        <Card className="border-destructive/50">
+          <CardContent className="p-4 flex items-center gap-3">
+            <AlertCircle className="h-5 w-5 text-destructive" />
+            <div className="text-sm text-destructive">{error}</div>
+          </CardContent>
+        </Card>
+      )}
+
       <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
         {loading ? Array.from({ length: 8 }).map((_, i) => <Card key={i}><CardContent className="p-6"><Skeleton className="h-4 w-20 mb-3" /><Skeleton className="h-8 w-16 mb-1" /><Skeleton className="h-3 w-12" /></CardContent></Card>)
         : cards.map(({ t, v, s, i: I, c, b }) => (
@@ -70,6 +102,7 @@ export function DashboardPage() {
 }
 
 function fmtUptime(s: number): string {
+  if (s <= 0) return '0m';
   const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
   if (d > 0) return `${d}d ${h}h`; if (h > 0) return `${h}h ${m}m`; return `${m}m`;
 }
