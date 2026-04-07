@@ -530,7 +530,11 @@ func run() error {
 	var cookieJar *dnscookie.CookieJar
 	if cfg.Cookie.Enabled {
 		rotation := parseDurationOrDefault(cfg.Cookie.SecretRotation, 1*time.Hour)
-		cookieJar = dnscookie.NewCookieJar(rotation)
+		jar, err := dnscookie.NewCookieJar(rotation)
+		if err != nil {
+			return fmt.Errorf("failed to initialize DNS cookie jar: %w", err)
+		}
+		cookieJar = jar
 		logger.Infof("DNS cookies enabled (secret rotation: %s)", rotation)
 	}
 
@@ -728,6 +732,7 @@ func run() error {
 		}
 		return nil
 	}, handler, clusterMgr, dashboardServer).
+		WithConfigGetter(func() *config.Config { return cfg }).
 		WithBlocklist(bl).
 		WithUpstream(client, loadBalancer).
 		WithACL(aclChecker).

@@ -2,7 +2,7 @@ package cluster
 
 import (
 	"bytes"
-	"encoding/gob"
+	"encoding/json"
 	"net"
 	"testing"
 	"time"
@@ -118,14 +118,14 @@ func TestGossipProtocol_Gossip_EncodeMessage_Unreachable(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// gossip.go:553-555 - encodeMessage gob.Encode error path
+// gossip.go:553-555 - encodeMessage json.Marshal error path
 // ---------------------------------------------------------------------------
 // Message struct contains only encodable types (uint8, string, time.Time, []byte).
-// gob.Encode always succeeds for this struct.
+// json.Marshal always succeeds for this struct.
 
-func TestEncodeMessage_GobEncodeError_Unreachable(t *testing.T) {
+func TestEncodeMessage_JsonMarshalError_Unreachable(t *testing.T) {
 	t.Skip("encodeMessage creates Message{Type:uint8, Timestamp:time.Time, " +
-		"Payload:[]byte} which always encodes successfully with gob. " +
+		"Payload:[]byte} which always encodes successfully with json. " +
 		"The error path at gossip.go:553-555 is unreachable.")
 }
 
@@ -708,7 +708,7 @@ func TestGossipProtocol_HandleMessage_AckRoundTrip(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
+	enc := json.NewEncoder(&buf)
 	if err := enc.Encode(msg); err != nil {
 		t.Fatalf("Failed to encode ack message: %v", err)
 	}
@@ -764,7 +764,7 @@ func TestGossipProtocol_HandleMessage_CacheInvalidate(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
+	enc := json.NewEncoder(&buf)
 	if err := enc.Encode(msg); err != nil {
 		t.Fatalf("Failed to encode cache invalidate message: %v", err)
 	}

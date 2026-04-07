@@ -2,7 +2,7 @@ package cluster
 
 import (
 	"bytes"
-	"encoding/gob"
+	"encoding/json"
 	"net"
 	"testing"
 	"time"
@@ -486,7 +486,7 @@ func TestGossipProtocol_HandleMessage_SelfFromGob(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
+	enc := json.NewEncoder(&buf)
 	if err := enc.Encode(msg); err != nil {
 		t.Fatalf("Failed to encode message: %v", err)
 	}

@@ -15,6 +15,12 @@ type Manager struct {
 	zones   map[string]*Zone
 	files   map[string]string // zone name -> file path
 	zoneDir string            // directory for zone file storage
+	logger  Logger            // optional logger for errors
+}
+
+// Logger interface for logging errors.
+type Logger interface {
+	Warnf(format string, args ...any)
 }
 
 // NewManager creates a new zone manager.
@@ -23,6 +29,11 @@ func NewManager() *Manager {
 		zones: make(map[string]*Zone),
 		files: make(map[string]string),
 	}
+}
+
+// SetLogger sets the logger for the manager.
+func (m *Manager) SetLogger(logger Logger) {
+	m.logger = logger
 }
 
 // SetZoneDir sets the directory where zone files are stored.
@@ -193,8 +204,10 @@ func (m *Manager) CreateZone(origin string, defaultTTL uint32, soa *SOARecord, n
 	if m.zoneDir != "" {
 		path := filepath.Join(m.zoneDir, strings.TrimSuffix(origin, ".")+".zone")
 		if err := m.writeZoneFile(z, path); err != nil {
-			// Zone is loaded in memory; log but don't fail
-			_ = err
+			// Zone is loaded in memory; log the error but don't fail the operation
+			if m.logger != nil {
+				m.logger.Warnf("zone: failed to persist zone %s to %s: %v", origin, path, err)
+			}
 		}
 		m.files[origin] = path
 	}
@@ -245,7 +258,9 @@ func (m *Manager) AddRecord(zoneName string, record Record) error {
 		path := m.files[zoneName]
 		m.mu.RUnlock()
 		if path != "" {
-			_ = m.writeZoneFile(z, path)
+			if err := m.writeZoneFile(z, path); err != nil && m.logger != nil {
+				m.logger.Warnf("zone: failed to persist zone %s to %s: %v", zoneName, path, err)
+			}
 		}
 	}
 
@@ -301,7 +316,9 @@ func (m *Manager) DeleteRecord(zoneName, name, rtype string) error {
 		path := m.files[zoneName]
 		m.mu.RUnlock()
 		if path != "" {
-			_ = m.writeZoneFile(z, path)
+			if err := m.writeZoneFile(z, path); err != nil && m.logger != nil {
+				m.logger.Warnf("zone: failed to persist zone %s to %s: %v", zoneName, path, err)
+			}
 		}
 	}
 
@@ -354,7 +371,9 @@ func (m *Manager) UpdateRecord(zoneName string, name, rtype, oldData string, new
 		path := m.files[zoneName]
 		m.mu.RUnlock()
 		if path != "" {
-			_ = m.writeZoneFile(z, path)
+			if err := m.writeZoneFile(z, path); err != nil && m.logger != nil {
+				m.logger.Warnf("zone: failed to persist zone %s to %s: %v", zoneName, path, err)
+			}
 		}
 	}
 

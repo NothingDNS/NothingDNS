@@ -246,8 +246,13 @@ func (c *Client) QueryContext(ctx context.Context, msg *protocol.Message) (*prot
 
 	select {
 	case <-ctx.Done():
-		go func() { <-done }() // drain to prevent goroutine leak
-		return nil, ctx.Err()
+		// Check if query completed anyway before returning cancellation error
+		select {
+		case r := <-done:
+			return r.resp, r.err
+		default:
+			return nil, ctx.Err()
+		}
 	case r := <-done:
 		return r.resp, r.err
 	}
@@ -346,7 +351,11 @@ func (c *Client) queryUDP(server *Server, msg *protocol.Message) (*protocol.Mess
 	var buf []byte
 	var putBack func()
 	if pool != nil {
-		buf = pool.Get().([]byte)
+		if p, ok := pool.Get().([]byte); ok {
+			buf = p
+		} else {
+			buf = make([]byte, 4096)
+		}
 		putBack = func() { pool.Put(buf) }
 	} else {
 		buf = make([]byte, 4096)
@@ -416,7 +425,11 @@ func (c *Client) queryTCP(server *Server, msg *protocol.Message) (*protocol.Mess
 	var buf []byte
 	var putBack func()
 	if pool != nil {
-		buf = pool.Get().([]byte)
+		if p, ok := pool.Get().([]byte); ok {
+			buf = p
+		} else {
+			buf = make([]byte, 65535)
+		}
 		poolBuf := buf
 		putBack = func() { pool.Put(poolBuf) }
 	} else {

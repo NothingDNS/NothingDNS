@@ -2,7 +2,7 @@ package cluster
 
 import (
 	"bytes"
-	"encoding/gob"
+	"encoding/json"
 	"errors"
 	"net"
 	"runtime"
@@ -265,13 +265,13 @@ func TestGossipProtocol_Join_EncodePayloadError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestEncodeMessage_Error(t *testing.T) {
-	// Encode a message with an unencodable type by using gob directly
+	// Encode a message with an unencodable type by using json directly
 	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
+	enc := json.NewEncoder(&buf)
 	ch := make(chan int)
 	err := enc.Encode(ch)
 	if err == nil {
-		t.Error("gob.Encode should fail for channel type")
+		t.Error("json.Encode should fail for channel type")
 	}
 
 	// Verify encodeMessage works with valid data
@@ -360,7 +360,7 @@ func TestGossipProtocol_handleMessage_IgnoresFromSelf(t *testing.T) {
 
 	// We need to encode this message properly with the From field set
 	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
+	enc := json.NewEncoder(&buf)
 	msg.Timestamp = time.Now()
 	gossipPayload := GossipPayload{
 		Nodes: []NodeInfo{
@@ -677,7 +677,7 @@ func TestGossipProtocol_handleMessage_UnknownType(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
+	enc := json.NewEncoder(&buf)
 	if err := enc.Encode(msg); err != nil {
 		t.Fatalf("Failed to encode message: %v", err)
 	}

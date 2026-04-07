@@ -729,11 +729,16 @@ func (n *Node) becomeLeader(term Term) {
 func (n *Node) broadcastVoteRequest(term Term, lastLogIndex Index, lastLogTerm Term) {
 	for id := range n.peers {
 		go func(peerID NodeID) {
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Printf("raft: panic in broadcastVoteRequest for peer %s: %v\n", peerID, r)
+				}
+			}()
 			req := VoteRequest{
 				Term:         term,
 				CandidateID:  n.config.NodeID,
-				LastLogIndex:  lastLogIndex,
-				LastLogTerm:   lastLogTerm,
+				LastLogIndex: lastLogIndex,
+				LastLogTerm:  lastLogTerm,
 			}
 			// RPC call — would be injected in real implementation
 			n.sendVoteRequest(peerID, req)
@@ -745,6 +750,11 @@ func (n *Node) broadcastVoteRequest(term Term, lastLogIndex Index, lastLogTerm T
 func (n *Node) broadcastHeartbeat(term Term) {
 	for id := range n.peers {
 		go func(peerID NodeID) {
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Printf("raft: panic in broadcastHeartbeat for peer %s: %v\n", peerID, r)
+				}
+			}()
 			n.sendHeartbeat(peerID, term)
 		}(id)
 	}
@@ -900,6 +910,11 @@ func (n *Node) replicateToFollowers(newEntry entry) {
 
 	for id := range n.peers {
 		go func(peerID NodeID) {
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Printf("raft: panic in replicateToFollowers for peer %s: %v\n", peerID, r)
+				}
+			}()
 			n.mu.Lock()
 			nextIdx := n.nextIndex[peerID]
 			n.mu.Unlock()
@@ -943,6 +958,11 @@ func (n *Node) sendVoteRequest(peerID NodeID, req VoteRequest) {
 		return
 	}
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Printf("raft: panic in sendVoteRequest: %v\n", r)
+			}
+		}()
 		resp, err := n.transport.SendRequestVote(peerID, req)
 		if err != nil {
 			// Log error but don't block
@@ -958,6 +978,11 @@ func (n *Node) sendAppendRequest(peerID NodeID, req AppendRequest) {
 		return
 	}
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Printf("raft: panic in sendAppendRequest: %v\n", r)
+			}
+		}()
 		resp, err := n.transport.SendAppendEntries(peerID, req)
 		if err != nil {
 			// Log error but don't block

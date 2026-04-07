@@ -9,7 +9,7 @@
 package resolver
 
 import (
-	"math/rand"
+	"crypto/rand"
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
 )
@@ -18,15 +18,32 @@ import (
 // Dots and non-alpha characters are left untouched. The trailing dot
 // (if present) is preserved.
 func Encode0x20(name string) string {
+	// Count letters that need random case
+	letterCount := 0
+	for i := 0; i < len(name); i++ {
+		if isASCIILetter(name[i]) {
+			letterCount++
+		}
+	}
+
+	// Generate random bits for each letter using crypto/rand
+	randomBits := make([]byte, (letterCount+7)/8)
+	if _, err := rand.Read(randomBits); err != nil {
+		// Fall back to lowercase if crypto/rand fails (should never happen)
+		return name
+	}
+
 	buf := make([]byte, len(name))
+	bitIdx := 0
 	for i := 0; i < len(name); i++ {
 		c := name[i]
 		if isASCIILetter(c) {
-			if rand.Intn(2) == 0 {
+			if (randomBits[bitIdx/8] >> (bitIdx % 8)) & 1 == 0 {
 				c = toUpper(c)
 			} else {
 				c = toLower(c)
 			}
+			bitIdx++
 		}
 		buf[i] = c
 	}

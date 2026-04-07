@@ -9,7 +9,10 @@ import (
 )
 
 func TestNewCookieJar(t *testing.T) {
-	jar := NewCookieJar(1 * time.Hour)
+	jar, err := NewCookieJar(1 * time.Hour)
+	if err != nil {
+		t.Fatalf("NewCookieJar failed: %v", err)
+	}
 	if jar == nil {
 		t.Fatal("NewCookieJar returned nil")
 	}
@@ -27,7 +30,10 @@ func TestNewCookieJar(t *testing.T) {
 }
 
 func TestGenerateClientCookie(t *testing.T) {
-	jar := NewCookieJar(1 * time.Hour)
+	jar, err := NewCookieJar(1 * time.Hour)
+	if err != nil {
+		t.Fatalf("NewCookieJar failed: %v", err)
+	}
 
 	clientIP := net.ParseIP("192.0.2.1")
 	serverIP := net.ParseIP("198.51.100.1")
@@ -67,7 +73,10 @@ func TestGenerateClientCookie(t *testing.T) {
 }
 
 func TestGenerateServerCookie(t *testing.T) {
-	jar := NewCookieJar(1 * time.Hour)
+	jar, err := NewCookieJar(1 * time.Hour)
+	if err != nil {
+		t.Fatalf("NewCookieJar failed: %v", err)
+	}
 
 	clientIP := net.ParseIP("192.0.2.1")
 	var clientCookie [ClientCookieLen]byte
@@ -99,7 +108,10 @@ func TestGenerateServerCookie(t *testing.T) {
 }
 
 func TestValidateServerCookie(t *testing.T) {
-	jar := NewCookieJar(1 * time.Hour)
+	jar, err := NewCookieJar(1 * time.Hour)
+	if err != nil {
+		t.Fatalf("NewCookieJar failed: %v", err)
+	}
 	clientIP := net.ParseIP("192.0.2.1")
 	clientCookie := jar.GenerateClientCookie(clientIP, net.ParseIP("198.51.100.1"))
 
@@ -149,7 +161,10 @@ func TestValidateServerCookie(t *testing.T) {
 
 func TestValidateServerCookieExpired(t *testing.T) {
 	// Use a short rotation interval so we can create an "expired" cookie.
-	jar := NewCookieJar(1 * time.Second)
+	jar, err := NewCookieJar(1 * time.Second)
+	if err != nil {
+		t.Fatalf("NewCookieJar failed: %v", err)
+	}
 	clientIP := net.ParseIP("192.0.2.1")
 	var clientCookie [ClientCookieLen]byte
 	copy(clientCookie[:], []byte{0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x11, 0x22})
@@ -168,7 +183,10 @@ func TestValidateServerCookieExpired(t *testing.T) {
 }
 
 func TestSecretRotation(t *testing.T) {
-	jar := NewCookieJar(1 * time.Hour)
+	jar, err := NewCookieJar(1 * time.Hour)
+	if err != nil {
+		t.Fatalf("NewCookieJar failed: %v", err)
+	}
 	clientIP := net.ParseIP("192.0.2.1")
 	clientCookie := jar.GenerateClientCookie(clientIP, net.ParseIP("198.51.100.1"))
 
@@ -176,7 +194,9 @@ func TestSecretRotation(t *testing.T) {
 	sc := jar.GenerateServerCookie(clientCookie, clientIP)
 
 	// Rotate the secret.
-	jar.RotateSecret()
+	if err := jar.RotateSecret(); err != nil {
+		t.Fatalf("RotateSecret failed: %v", err)
+	}
 
 	// The old cookie must still validate via the previous secret.
 	if !jar.ValidateServerCookie(clientCookie, sc, clientIP) {
@@ -190,7 +210,9 @@ func TestSecretRotation(t *testing.T) {
 	}
 
 	// Rotate a second time: the original secret is now gone.
-	jar.RotateSecret()
+	if err := jar.RotateSecret(); err != nil {
+		t.Fatalf("RotateSecret failed: %v", err)
+	}
 
 	// The second cookie (from the first rotation) should still work.
 	if !jar.ValidateServerCookie(clientCookie, sc2, clientIP) {
@@ -315,7 +337,10 @@ func TestPackCookieOption(t *testing.T) {
 
 func TestAutoRotation(t *testing.T) {
 	// Use a very short rotation interval.
-	jar := NewCookieJar(1 * time.Millisecond)
+	jar, err := NewCookieJar(1 * time.Millisecond)
+	if err != nil {
+		t.Fatalf("NewCookieJar failed: %v", err)
+	}
 
 	// Record the initial secret.
 	jar.mu.RLock()
@@ -348,7 +373,10 @@ func TestAutoRotation(t *testing.T) {
 }
 
 func TestConcurrentAccess(t *testing.T) {
-	jar := NewCookieJar(50 * time.Millisecond)
+	jar, err := NewCookieJar(50 * time.Millisecond)
+	if err != nil {
+		t.Fatalf("NewCookieJar failed: %v", err)
+	}
 	clientIP := net.ParseIP("192.0.2.1")
 	serverIP := net.ParseIP("198.51.100.1")
 

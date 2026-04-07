@@ -1,8 +1,9 @@
 package upstream
 
 import (
+	"crypto/rand"
 	"fmt"
-	"math/rand"
+	"math/big"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -226,17 +227,19 @@ func weightedSelect(backends []*AnycastBackend) *AnycastBackend {
 	}
 
 	if totalWeight == 0 {
-		// All weights are 0, pick randomly
-		return backends[rand.Intn(len(backends))]
+		// All weights are 0, pick randomly using crypto/rand
+		n, _ := rand.Int(rand.Reader, big.NewInt(int64(len(backends))))
+		return backends[n.Int64()]
 	}
 
 	// Weighted random selection for load balancing
-	selector := rand.Intn(totalWeight)
+	selector, _ := rand.Int(rand.Reader, big.NewInt(int64(totalWeight)))
+	selectorVal := selector.Int64()
 	currentWeight := 0
 
 	for _, b := range backends {
 		currentWeight += b.Weight
-		if selector < currentWeight {
+		if selectorVal < int64(currentWeight) {
 			return b
 		}
 	}

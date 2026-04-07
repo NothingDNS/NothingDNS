@@ -2,7 +2,7 @@ package cluster
 
 import (
 	"bytes"
-	"encoding/gob"
+	"encoding/json"
 	"net"
 	"testing"
 	"time"
@@ -160,7 +160,7 @@ func TestGossipProtocol_Gossip_EncodeErrorsUnreachable(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// gossip.go: encodeMessage - gob.Encode error (line 553-555)
+// gossip.go: encodeMessage - json.Marshal error (line 553-555)
 // ---------------------------------------------------------------------------
 // This can be triggered by passing a payload that contains an unencodable type,
 // but encodeMessage receives only []byte payloads from encodePayload, which
@@ -169,14 +169,14 @@ func TestGossipProtocol_Gossip_EncodeErrorsUnreachable(t *testing.T) {
 // to somehow get invalid data into the Message, which isn't possible through
 // normal code paths since all callers pass valid []byte payloads.
 
-func TestEncodeMessage_GobEncodeError(t *testing.T) {
-	// We can trigger the gob encode error by manually creating a Message
+func TestEncodeMessage_JsonMarshalError(t *testing.T) {
+	// We can trigger the json encode error by manually creating a Message
 	// with an unencodable field. However, encodeMessage always creates a
 	// clean Message with a []byte payload, so this path is unreachable
 	// from normal callers.
 	//
 	// Let's verify the path exists by triggering it through a custom type.
-	// We'll encode a gob message with a channel type embedded.
+	// We'll encode a json message with a channel type embedded.
 
 	// First, verify that a normal encodeMessage works
 	_, err := encodeMessage(MessageTypePing, []byte("test"))
@@ -184,19 +184,19 @@ func TestEncodeMessage_GobEncodeError(t *testing.T) {
 		t.Fatalf("encodeMessage with valid payload should succeed: %v", err)
 	}
 
-	// Now try to trigger the error path via gob directly with a bad type
+	// Now try to trigger the error path via json directly with a bad type
 	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
+	enc := json.NewEncoder(&buf)
 	badData := make(chan int)
 	err = enc.Encode(badData)
 	if err == nil {
-		t.Error("gob.Encode should fail for channel type")
+		t.Error("json.Encode should fail for channel type")
 	}
 
 	// The encodeMessage function constructs a Message{Type, Timestamp, Payload}
 	// where Payload is []byte. This always encodes successfully because
 	// Message only contains encodable types (uint8, string, time.Time, []byte).
-	t.Log("encodeMessage error path (line 553-555) requires gob.Encode to fail " +
+	t.Log("encodeMessage error path (line 553-555) requires json.Marshal to fail " +
 		"on a Message struct, which only contains basic encodable types")
 }
 

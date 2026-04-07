@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 )
 
@@ -101,7 +102,8 @@ func (s *Snapshotter) Load() (*Snapshot, error) {
 		return nil, nil
 	}
 
-	f, err := os.Open(s.snapshotsDir + "/" + latest)
+	snapPath := filepath.Join(s.snapshotsDir, latest)
+	f, err := os.Open(snapPath)
 	if err != nil {
 		return nil, fmt.Errorf("open: %w", err)
 	}

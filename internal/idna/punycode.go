@@ -249,25 +249,3 @@ func adapt(delta, numPoints int, first bool) int {
 
 	return k + ((base - tmin + 1)*delta)/(delta+skew)
 }
-
-// PunycodeEncode encodes a Unicode string to punycode.
-// This is exported for use by other packages.
-func PunycodeEncode(src string) string {
-	return encodePunycode(src)
-}
-
-// PunycodeDecode decodes a punycode string to Unicode.
-// This is exported for use by other packages.
-func PunycodeDecode(src string) (string, error) {
-	if strings.Contains(src, ACEPrefix) && !strings.HasPrefix(src, ACEPrefix) {
-		// Check if it has ACE prefix in the middle
-		// This shouldn't happen in valid punycode
-		return "", ErrInvalidPunycode
-	}
-
-	decoded := decodePunycode(src)
-	if decoded == "" && src != "" {
-		return "", ErrInvalidPunycode
-	}
-	return decoded, nil
-}

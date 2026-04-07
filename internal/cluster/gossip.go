@@ -1,12 +1,11 @@
 package cluster
 
 import (
-	"bytes"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
-	"encoding/gob"
+	"encoding/json"
 	"fmt"
 	"io"
 
@@ -16,18 +15,6 @@ import (
 	"sync/atomic"
 	"time"
 )
-
-func init() {
-	// Register types for gob encoding
-	gob.Register(PingPayload{})
-	gob.Register(AckPayload{})
-	gob.Register(GossipPayload{})
-	gob.Register(NodeInfo{})
-	gob.Register(CacheInvalidatePayload{})
-	gob.Register(Message{})
-	gob.Register(NodeState(0))
-	gob.Register(NodeMeta{})
-}
 
 // MessageType represents the type of gossip message.
 type MessageType uint8
@@ -712,23 +699,12 @@ func encodeMessage(msgType MessageType, payload []byte) ([]byte, error) {
 		Payload:   payload,
 	}
 
-	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
-	if err := enc.Encode(msg); err != nil {
-		return nil, err
-	}
-
-	return buf.Bytes(), nil
+	return json.Marshal(msg)
 }
 
 // encodePayload encodes a payload structure to bytes.
-func encodePayload(payload interface{}) ([]byte, error) {
-	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
-	if err := enc.Encode(payload); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
+func encodePayload(payload any) ([]byte, error) {
+	return json.Marshal(payload)
 }
 
 // decodeMessage decodes a message envelope, decrypting if needed.
@@ -748,9 +724,7 @@ func (gp *GossipProtocol) decodeMessage(data []byte, msg *Message) error {
 		data = decrypted
 	}
 
-	buf := bytes.NewBuffer(data)
-	dec := gob.NewDecoder(buf)
-	return dec.Decode(msg)
+	return json.Unmarshal(data, msg)
 }
 
 // sendMessage encodes, encrypts, and sends a message to a UDP address.
@@ -774,14 +748,10 @@ func (gp *GossipProtocol) sendMessage(msgType MessageType, payload []byte, addr 
 
 // decodeMessageRaw decodes a message without decryption (for tests).
 func decodeMessageRaw(data []byte, msg *Message) error {
-	buf := bytes.NewBuffer(data)
-	dec := gob.NewDecoder(buf)
-	return dec.Decode(msg)
+	return json.Unmarshal(data, msg)
 }
 
 // decodePayload decodes a message payload.
-func decodePayload(data []byte, payload interface{}) error {
-	buf := bytes.NewBuffer(data)
-	dec := gob.NewDecoder(buf)
-	return dec.Decode(payload)
+func decodePayload(data []byte, payload any) error {
+	return json.Unmarshal(data, payload)
 }

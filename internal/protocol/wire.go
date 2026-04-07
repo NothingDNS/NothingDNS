@@ -221,7 +221,11 @@ var bufferPool = sync.Pool{
 
 // GetBuffer acquires a buffer from the pool.
 func GetBuffer() *Buffer {
-	return bufferPool.Get().(*Buffer)
+	if buf, ok := bufferPool.Get().(*Buffer); ok {
+		return buf
+	}
+	// Fallback if pool returns unexpected type
+	return NewBuffer(MaxUDPSize)
 }
 
 // PutBuffer returns a buffer to the pool.
@@ -253,7 +257,12 @@ var slicePool = sync.Pool{
 
 // GetSlice acquires a byte slice from the pool.
 func GetSlice() *[]byte {
-	return slicePool.Get().(*[]byte)
+	if slice, ok := slicePool.Get().(*[]byte); ok {
+		return slice
+	}
+	// Fallback if pool returns unexpected type
+	b := make([]byte, 0, MaxUDPSize)
+	return &b
 }
 
 // PutSlice returns a byte slice to the pool.

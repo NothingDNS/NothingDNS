@@ -238,8 +238,13 @@ func (lb *LoadBalancer) QueryContext(ctx context.Context, msg *protocol.Message)
 
 	select {
 	case <-ctx.Done():
-		go func() { <-done }() // drain to prevent goroutine leak
-		return nil, ctx.Err()
+		// Check if query completed anyway before returning cancellation error
+		select {
+		case r := <-done:
+			return r.resp, r.err
+		default:
+			return nil, ctx.Err()
+		}
 	case r := <-done:
 		return r.resp, r.err
 	}
@@ -473,7 +478,12 @@ func (lb *LoadBalancer) queryUDP(address string, msg *protocol.Message) (*protoc
 		lb.mu.Unlock()
 	}
 
-	buf := pool.Get().([]byte)
+	var buf []byte
+	if p, ok := pool.Get().([]byte); ok {
+		buf = p
+	} else {
+		buf = make([]byte, 4096)
+	}
 	defer pool.Put(buf)
 
 	n, err := msg.Pack(buf)
@@ -544,7 +554,12 @@ func (lb *LoadBalancer) queryTCP(address string, msg *protocol.Message) (*protoc
 		lb.mu.Unlock()
 	}
 
-	buf := pool.Get().([]byte)
+	var buf []byte
+	if p, ok := pool.Get().([]byte); ok {
+		buf = p
+	} else {
+		buf = make([]byte, 65535)
+	}
 	poolBuf := buf
 	defer pool.Put(poolBuf)
 

@@ -2,9 +2,11 @@ package api
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"runtime"
@@ -38,6 +40,7 @@ type Server struct {
 	zoneManager     *zone.Manager
 	cache           *cache.Cache
 	reloadFunc      func() error
+	configGetter    func() *config.Config // Returns full server config
 	dnsHandler      server.Handler
 	cluster         *cluster.Cluster
 	dashboardServer *dashboard.Server
@@ -96,6 +99,12 @@ func (s *Server) WithACL(acl *filter.ACLChecker) *Server {
 // WithAuth sets the auth store for the API server.
 func (s *Server) WithAuth(store *auth.Store) *Server {
 	s.authStore = store
+	return s
+}
+
+// WithConfigGetter sets the config getter for the API server.
+func (s *Server) WithConfigGetter(getter func() *config.Config) *Server {
+	s.configGetter = getter
 	return s
 }
 
@@ -198,6 +207,7 @@ func (s *Server) Start() error {
 
 	// Config management
 	mux.HandleFunc("/api/v1/config/reload", s.handleConfigReload)
+	mux.HandleFunc("/api/v1/config", s.handleConfigGet)
 
 	// DNSSEC status (always registered)
 	mux.HandleFunc("/api/v1/dnssec/status", s.handleDNSSECStatus)
@@ -280,7 +290,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		}
 
 		// Skip auth for health and readiness endpoints (public information)
-		if r.URL.Path == "/health" || r.URL.Path == "/ready" {
+		if r.URL.Path == "/health" || r.URL.Path == "/ready" || r.URL.Path == "/readyz" || r.URL.Path == "/livez" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -689,6 +699,18 @@ func (s *Server) handleZoneActions(w http.ResponseWriter, r *http.Request) {
 		} else {
 			s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		}
+	case "ptr-bulk":
+		if r.Method == http.MethodPost {
+			s.handleBulkPTR(w, r, zoneName)
+		} else {
+			s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		}
+	case "ptr6-lookup":
+		if r.Method == http.MethodGet {
+			s.handlePtr6Lookup(w, r, zoneName)
+		} else {
+			s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		}
 	default:
 		s.writeError(w, http.StatusNotFound, "Not found")
 	}
@@ -985,6 +1007,445 @@ func (s *Server) handleExportZone(w http.ResponseWriter, _ *http.Request, zoneNa
 	w.Write([]byte(content))
 }
 
+// handleBulkPTR handles bulk PTR record creation with CIDR pattern.
+func (s *Server) handleBulkPTR(w http.ResponseWriter, r *http.Request, zoneName string) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 65536))
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "Failed to read request body")
+		return
+	}
+
+	var req struct {
+		CIDR     string `json:"cidr"`
+		Pattern  string `json:"pattern"`
+		Override bool   `json:"override"`
+		AddA     bool   `json:"addA"`
+		Preview  bool   `json:"preview"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid JSON")
+		return
+	}
+
+	if req.CIDR == "" || req.Pattern == "" {
+		s.writeError(w, http.StatusBadRequest, "cidr and pattern are required")
+		return
+	}
+
+	_, ipNet, err := net.ParseCIDR(req.CIDR)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid CIDR: %v", err))
+		return
+	}
+
+	// Check that it's IPv4
+	ip4 := ipNet.IP.To4()
+	if ip4 == nil {
+		s.writeError(w, http.StatusBadRequest, "Only IPv4 CIDR is supported")
+		return
+	}
+
+	// Generate all IPs in range
+	ones, _ := ipNet.Mask.Size()
+	numIPs := 1 << (32 - ones)
+	if numIPs > 65536 {
+		s.writeError(w, http.StatusBadRequest, "CIDR too large (max /16)")
+		return
+	}
+
+	// Validate pattern has required placeholders [A], [B], [C], [D]
+	if !strings.Contains(req.Pattern, "[A]") || !strings.Contains(req.Pattern, "[B]") ||
+		!strings.Contains(req.Pattern, "[C]") || !strings.Contains(req.Pattern, "[D]") {
+		s.writeError(w, http.StatusBadRequest, "Pattern must contain [A], [B], [C], [D] placeholders")
+		return
+	}
+
+	z, ok := s.zoneManager.Get(zoneName)
+	if !ok {
+		s.writeError(w, http.StatusNotFound, fmt.Sprintf("Zone %s not found", zoneName))
+		return
+	}
+
+	// Validate zone/CIDR compatibility
+	zoneOrigin := z.Origin
+	if _, err := validateZoneCIDR(zoneOrigin, ones); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Analyze all records in one lock
+	z.RLock()
+	existingPTR := z.Records["PTR"]
+	existingA := z.Records["A"]
+	z.RUnlock()
+
+	type change struct {
+		IP        string `json:"ip"`
+		PTRName   string `json:"ptrName"`
+		AName     string `json:"aName,omitempty"`
+		Action    string `json:"action"` // add, override, skip
+		PTRExist  bool   `json:"ptrExist"`
+		AExist    bool   `json:"aExist,omitempty"`
+		OldPTR    string `json:"oldPtr,omitempty"`
+		OldA      string `json:"oldA,omitempty"`
+		RevRecord string `json:"revRecord"` // the relative PTR record name
+	}
+
+	changes := make([]change, 0, numIPs)
+	add, addA, skip, override, overrideA := 0, 0, 0, 0, 0
+
+	for i := 0; i < numIPs; i++ {
+		ip := make(net.IP, 4)
+		copy(ip, ip4)
+		n := binary.BigEndian.Uint32(ip)
+		binary.BigEndian.PutUint32(ip, n+uint32(i))
+
+		a, b, c, d := ip[0], ip[1], ip[2], ip[3]
+		ptrName := strings.ReplaceAll(strings.ReplaceAll(
+			strings.ReplaceAll(strings.ReplaceAll(req.Pattern,
+				"[A]", fmt.Sprintf("%d", a)),
+				"[B]", fmt.Sprintf("%d", b)),
+				"[C]", fmt.Sprintf("%d", c)),
+				"[D]", fmt.Sprintf("%d", d))
+
+		// Compute relative PTR record name within the zone
+		revRecord := reverseIPv4Relative(ip.String(), zoneOrigin, ones)
+
+		// Check existing PTR using relative name
+		var oldPTR string
+		ptrExist := false
+		for _, rec := range existingPTR {
+			if rec.Name == revRecord || rec.Name == revRecord+"." {
+				ptrExist = true
+				oldPTR = rec.RData
+				break
+			}
+		}
+
+		// Check existing A
+		var oldA string
+		aExist := false
+		if req.AddA {
+			for _, rec := range existingA {
+				if rec.Name == ptrName || rec.Name == ptrName+"." {
+					aExist = true
+					oldA = rec.RData
+					break
+				}
+			}
+		}
+
+		ch := change{
+			IP:        ip.String(),
+			PTRName:   ptrName,
+			Action:    "add",
+			PTRExist:  ptrExist,
+			RevRecord: revRecord,
+		}
+
+		if ptrExist && !req.Override {
+			ch.Action = "skip"
+			skip++
+		} else if ptrExist && req.Override {
+			ch.Action = "override"
+			ch.OldPTR = oldPTR
+			override++
+		} else {
+			add++
+		}
+
+		if req.AddA {
+			ch.AName = ptrName
+			ch.AExist = aExist
+			if aExist && !req.Override {
+				ch.Action = "skip"
+				skip++
+			} else if aExist && req.Override {
+				if ch.Action == "add" {
+					ch.Action = "override"
+				}
+				ch.OldA = oldA
+				overrideA++
+			} else if !aExist {
+				addA++
+			}
+		}
+
+		changes = append(changes, ch)
+	}
+
+	// If preview, return just the analysis
+	if req.Preview {
+		s.writeJSON(w, http.StatusOK, map[string]interface{}{
+			"preview":    true,
+			"total":      numIPs,
+			"willAdd":    add,
+			"willAddA":   addA,
+			"willSkip":   skip,
+			"willOverride": override + overrideA,
+			"changes":    changes,
+		})
+		return
+	}
+
+	// Actually apply changes
+	added, addedA, exists, existsA, skipped := 0, 0, 0, 0, 0
+	for _, ch := range changes {
+		if ch.Action == "skip" {
+			skipped++
+			continue
+		}
+
+		if ch.Action == "override" || ch.Action == "add" {
+			if ch.PTRExist {
+				s.zoneManager.DeleteRecord(zoneName, ch.RevRecord, "PTR")
+			}
+			rec := zone.Record{
+				Name:  ch.RevRecord,
+				Type:  "PTR",
+				Class: "IN",
+				TTL:   3600,
+				RData: ch.PTRName,
+			}
+			err := s.zoneManager.AddRecord(zoneName, rec)
+			if err == nil {
+				added++
+			} else {
+				exists++
+			}
+		}
+
+		if req.AddA && ch.AName != "" {
+			if ch.AExist {
+				s.zoneManager.DeleteRecord(zoneName, ch.AName, "A")
+			}
+			aRec := zone.Record{
+				Name:  ch.AName,
+				Type:  "A",
+				Class: "IN",
+				TTL:   3600,
+				RData: ch.IP,
+			}
+			err := s.zoneManager.AddRecord(zoneName, aRec)
+			if err == nil {
+				addedA++
+			} else {
+				existsA++
+			}
+		}
+	}
+
+	// Audit log
+	util.Infof("bulk-ptr: zone=%s cidr=%s pattern=%s override=%v addA=%v added=%d addedA=%d skipped=%d exists=%d",
+		zoneName, req.CIDR, req.Pattern, req.Override, req.AddA, added, addedA, skipped, exists)
+
+	s.writeJSON(w, http.StatusOK, map[string]int{
+		"added":    added,
+		"addedA":   addedA,
+		"exists":   exists,
+		"existsA":  existsA,
+		"skipped":  skipped,
+	})
+}
+
+// handlePtr6Lookup performs a reverse lookup for an IPv6 address.
+// This is a query-only operation - it does not create records.
+// Query: GET /api/v1/zones/{zone}/ptr6-lookup?ip=<ipv6-address>
+func (s *Server) handlePtr6Lookup(w http.ResponseWriter, r *http.Request, zoneName string) {
+	ipStr := r.URL.Query().Get("ip")
+	if ipStr == "" {
+		s.writeError(w, http.StatusBadRequest, "IP parameter is required")
+		return
+	}
+
+	// Parse IPv6 address
+	ip := net.ParseIP(ipStr)
+	if ip == nil || ip.To4() != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid IPv6 address")
+		return
+	}
+
+	// Verify zone exists and is an IPv6 reverse zone
+	z, ok := s.zoneManager.Get(zoneName)
+	if !ok {
+		s.writeError(w, http.StatusNotFound, fmt.Sprintf("Zone %s not found", zoneName))
+		return
+	}
+
+	// Check if zone is an ip6.arpa zone
+	if !strings.HasSuffix(z.Origin, "ip6.arpa.") {
+		s.writeError(w, http.StatusBadRequest, "Zone is not an IPv6 reverse zone (must end with ip6.arpa.)")
+		return
+	}
+
+	// Compute the IPv6 reverse name (nibble-based)
+	// 2001:db8::1 -> 1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa
+	ptrName := reverseIPv6(ip)
+
+	// Lock zone for reading
+	z.RLock()
+	defer z.RUnlock()
+
+	// Search for PTR record
+	for _, rec := range z.Records["PTR"] {
+		fqdn := rec.Name
+		if !strings.HasSuffix(fqdn, ".") {
+			fqdn += "."
+		}
+		target := ptrName + "."
+		if fqdn == target || rec.Name == ptrName {
+			s.writeJSON(w, http.StatusOK, map[string]interface{}{
+				"ip":       ipStr,
+				"ptr":      ptrName,
+				"ptrFQDN":  target,
+				"target":   rec.RData,
+				"ttl":      rec.TTL,
+				"found":    true,
+			})
+			return
+		}
+	}
+
+	// Not found
+	s.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"ip":     ipStr,
+		"ptr":    ptrName,
+		"ptrFQDN": ptrName + ".",
+		"found":  false,
+	})
+}
+
+// reverseIPv6 computes the ip6.arpa reverse lookup name for an IPv6 address.
+// Each nibble (4 bits) of the IPv6 address becomes a label in the reverse tree.
+func reverseIPv6(ip net.IP) string {
+	ip = ip.To16()
+	if ip == nil {
+		return ""
+	}
+
+	var parts []string
+	// Process nibbles (4-bit chunks) in reverse order
+	for i := 15; i >= 0; i-- {
+		parts = append(parts, fmt.Sprintf("%x", ip[i]&0x0F))      // low nibble
+		parts = append(parts, fmt.Sprintf("%x", (ip[i]>>4)&0x0F)) // high nibble
+	}
+	return strings.Join(parts, ".") + ".ip6.arpa"
+}
+
+// reverseIPv4 converts 1.2.3.4 to 4.3.2.1.in-addr.arpa
+func reverseIPv4(ip string) string {
+	parts := strings.Split(ip, ".")
+	if len(parts) != 4 {
+		return ip
+	}
+	return fmt.Sprintf("%s.%s.%s.%s.in-addr.arpa", parts[3], parts[2], parts[1], parts[0])
+}
+
+// reverseIPv4Relative returns the relative name for a PTR record within a zone.
+// The FQDN for IP a.b.c.d is: d.c.b.a.in-addr.arpa
+// Zone origin like "1.168.192.in-addr.arpa" means last 1 octet varies (a=/24).
+// We need to return just the varying labels in correct order: "a" for /24, "b.a" for /16, "c.b.a" for /8.
+// cidrPrefix is the CIDR being added (must be >= zone prefix).
+func reverseIPv4Relative(ip string, origin string, cidrPrefix int) string {
+	fqdn := reverseIPv4(ip)
+	// fqdn is like "4.1.168.192.in-addr.arpa" for IP 192.168.1.4
+	// labels before "in-addr.arpa" are [4, 1, 168, 192] = [d, c, b, a] for IP a.b.c.d
+	// varyingLabels = 4 - zonePrefix/8
+	// For /24 zone: varyingLabels = 4 - 3 = 1 → need [d] = "4"
+	// For /16 zone: varyingLabels = 4 - 2 = 2 → need [c, d] = "1.4"
+	// For /8 zone: varyingLabels = 4 - 1 = 3 → need [b, c, d] = "168.1.4"
+	// Parse zone prefix from origin (not from cidrPrefix)
+	originStripped := strings.TrimSuffix(origin, ".")
+	remainder := strings.TrimSuffix(originStripped, ".in-addr.arpa")
+	if remainder == originStripped {
+		return fqdn
+	}
+	labels := strings.Split(remainder, ".")
+	numFixed := len(labels)
+	if numFixed < 1 || numFixed > 4 {
+		return fqdn
+	}
+	zonePrefix := 8 * numFixed
+	varyingLabels := 4 - zonePrefix/8
+	if varyingLabels < 1 {
+		varyingLabels = 1
+	}
+	if varyingLabels > 4 {
+		varyingLabels = 4
+	}
+	// Split fqdn and extract varying labels from the end (reversed order)
+	// FQDN: d.c.b.a.in-addr.arpa -> labels [d, c, b, a, in-addr, arpa]
+	parts := strings.Split(fqdn, ".")
+	if len(parts) < 6 {
+		return fqdn
+	}
+	// We need the last varyingLabels from ipLabels, reversed back to normal order
+	// For varyingLabels=1: ipLabels[3] = d = 4
+	// For varyingLabels=2: ipLabels[2], ipLabels[3] = c, d = 1, 4 → "1.4"
+	// For varyingLabels=3: ipLabels[1], ipLabels[2], ipLabels[3] = b, c, d = 168, 1, 4 → "168.1.4"
+	start := 4 - varyingLabels
+	if start < 0 {
+		start = 0
+	}
+	// ipLabels is [d, c, b, a], we want [c, d] for varyingLabels=2 (which is parts[1], parts[2])
+	// Actually parts[0]=d, parts[1]=c, parts[2]=b, parts[3]=a
+	// For varyingLabels=2: want c,d = parts[1], parts[2]? No...
+	// Wait: parts[0]=4, parts[1]=1, parts[2]=168, parts[3]=192
+	// For /16: want "1.4" = c.d = parts[1].parts[2]? But 1.4 would be parts[1]+"."+parts[2]
+	// parts = [4, 1, 168, 192]
+	// parts[0] = 4 = d
+	// parts[1] = 1 = c
+	// parts[2] = 168 = b
+	// parts[3] = 192 = a
+	// For /16 varyingLabels=2: want b.a = 168.192? No, want c.d = 1.4 = parts[1].parts[3]? No...
+	// Let me re-think. IP is a.b.c.d = 192.168.1.4
+	// FQDN reversed: d.c.b.a.in-addr.arpa = 4.1.168.192.in-addr.arpa
+	// So parts[0]=4=d, parts[1]=1=c, parts[2]=168=b, parts[3]=192=a
+	// Zone /16 (168.192) means last 2 octets vary: c.b = 1.168? No...
+	// In reverse: d.c = 4.1 represents c.d = 1.4 (the varying part)
+	// So for varyingLabels=2, I need: parts[1].parts[0] = 1.4 (reversed order!)
+	// For varyingLabels=3: parts[2].parts[1].parts[0] = 168.1.4
+	result := make([]string, varyingLabels)
+	for i := 0; i < varyingLabels; i++ {
+		result[i] = parts[varyingLabels-1-i]
+	}
+	return strings.Join(result, ".")
+}
+
+// validateZoneCIDR checks if the zone origin is compatible with the CIDR prefix.
+// CIDR prefix must be >= zone prefix (more specific or equal to zone).
+// Returns the expected prefix implied by the zone origin, or error if incompatible.
+func validateZoneCIDR(origin string, cidrPrefix int) (int, error) {
+	// Origin must have trailing dot
+	if !strings.HasSuffix(origin, ".") {
+		return 0, fmt.Errorf("zone origin %s must have trailing dot", origin)
+	}
+	// Parse origin: should end with .in-addr.arpa
+	originStripped := strings.TrimSuffix(origin, ".")
+	if !strings.HasSuffix(originStripped, "in-addr.arpa") {
+		return 0, fmt.Errorf("zone %s is not a reverse DNS zone (.in-addr.arpa)", origin)
+	}
+	// Get labels between origin and .in-addr.arpa
+	// e.g. "1.168.192.in-addr.arpa" -> ["1", "168", "192"]
+	remainder := strings.TrimSuffix(originStripped, ".in-addr.arpa")
+	if remainder == originStripped {
+		return 0, fmt.Errorf("zone %s is not a valid reverse DNS zone", origin)
+	}
+	labels := strings.Split(remainder, ".")
+	// Number of fixed octets = number of labels in zone
+	// Zone prefix = 8 * numFixed
+	numFixed := len(labels)
+	if numFixed < 1 || numFixed > 4 {
+		return 0, fmt.Errorf("zone %s has invalid number of octets", origin)
+	}
+	zonePrefix := 8 * numFixed
+	// CIDR must be >= zone prefix (more specific or same)
+	if cidrPrefix < zonePrefix {
+		return 0, fmt.Errorf("CIDR prefix /%d is too small for zone %s (minimum /%d)", cidrPrefix, origin, zonePrefix)
+	}
+	return zonePrefix, nil
+}
+
 // handleZoneReload reloads a zone.
 func (s *Server) handleZoneReload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -1073,6 +1534,22 @@ func (s *Server) handleConfigReload(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, &MessageResponse{
 		Message: "Configuration reloaded",
 	})
+}
+
+// handleConfigGet returns the current server configuration.
+func (s *Server) handleConfigGet(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	if s.configGetter == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Config not available")
+		return
+	}
+
+	cfg := s.configGetter()
+	s.writeJSON(w, http.StatusOK, cfg)
 }
 
 // handleClusterStatus returns cluster status.

@@ -20,6 +20,10 @@ import (
 
 // ODoH (Oblivious DNS over HTTPS) implements RFC 9230.
 
+// maxBodySize is the maximum allowed size for ODoH request/response bodies.
+// This prevents OOM attacks from unbounded reads.
+const maxBodySize = 4 * 1024 * 1024 // 4MB
+
 // Errors for ODoH operations.
 var (
 	ErrInvalidKey       = errors.New("invalid HPKE key")
@@ -212,7 +216,7 @@ func (c *ObliviousClient) sendToProxy(msg *ObliviousDNSMessage) (*ObliviousDNSMe
 		return nil, fmt.Errorf("proxy returned status: %d", resp.StatusCode)
 	}
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySize))
 	if err != nil {
 		return nil, fmt.Errorf("reading response: %w", err)
 	}
@@ -263,7 +267,7 @@ func (p *ObliviousProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodySize))
 	if err != nil {
 		http.Error(w, "Bad request", http.StatusBadRequest)
 		return
@@ -322,7 +326,7 @@ func (t *ObliviousTarget) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodySize))
 	if err != nil {
 		http.Error(w, "Bad request", http.StatusBadRequest)
 		return

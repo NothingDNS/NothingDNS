@@ -1,7 +1,7 @@
 package storage
 
 import (
-	"encoding/gob"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -126,7 +126,7 @@ func (s *KVStore) load() error {
 	}
 	defer f.Close()
 
-	decoder := gob.NewDecoder(f)
+	decoder := json.NewDecoder(f)
 	return decoder.Decode(&s.root)
 }
 
@@ -139,7 +139,7 @@ func (s *KVStore) save() error {
 	}
 	tmpPath := tmpFile.Name()
 
-	encoder := gob.NewEncoder(tmpFile)
+	encoder := json.NewEncoder(tmpFile)
 	if err := encoder.Encode(s.root); err != nil {
 		tmpFile.Close()
 		os.Remove(tmpPath)

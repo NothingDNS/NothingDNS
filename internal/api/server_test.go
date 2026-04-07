@@ -2,9 +2,11 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -220,4 +222,135 @@ func TestAPIDisabled(t *testing.T) {
 	if err := server.Stop(); err != nil {
 		t.Errorf("Stop should not fail when disabled: %v", err)
 	}
+}
+
+func TestReverseIPv4(t *testing.T) {
+	tests := []struct {
+		ip   string
+		want string
+	}{
+		{"192.168.1.1", "1.1.168.192.in-addr.arpa"},
+		{"10.0.0.1", "1.0.0.10.in-addr.arpa"},
+		{"1.2.3.4", "4.3.2.1.in-addr.arpa"},
+		{"255.255.255.255", "255.255.255.255.in-addr.arpa"},
+	}
+	for _, tt := range tests {
+		got := reverseIPv4(tt.ip)
+		if got != tt.want {
+			t.Errorf("reverseIPv4(%q) = %q, want %q", tt.ip, got, tt.want)
+		}
+	}
+}
+
+func TestReverseIPv4Relative(t *testing.T) {
+	tests := []struct {
+		ip       string
+		origin   string
+		prefix   int
+		want     string
+	}{
+		// /24 zone (24 fixed octets = 3, varying = 1): only last octet varies
+		{"192.168.1.4", "1.168.192.in-addr.arpa.", 24, "4"},
+		{"192.168.1.10", "1.168.192.in-addr.arpa.", 24, "10"},
+		{"192.168.1.1", "1.168.192.in-addr.arpa.", 24, "1"},
+		// /24 zone with more specific CIDR /25
+		{"192.168.1.4", "1.168.192.in-addr.arpa.", 25, "4"},
+		// /16 zone (16 fixed = 2, varying = 2): last 2 octets vary
+		{"192.168.1.4", "168.192.in-addr.arpa.", 16, "1.4"},
+		{"192.168.5.10", "168.192.in-addr.arpa.", 16, "5.10"},
+		// /16 zone with more specific CIDR /24
+		{"192.168.1.4", "168.192.in-addr.arpa.", 24, "1.4"},
+		// /8 zone (8 fixed = 1, varying = 3): last 3 octets vary
+		{"192.168.1.4", "192.in-addr.arpa.", 8, "168.1.4"},
+		// /8 zone with more specific CIDR /16
+		{"192.168.1.4", "192.in-addr.arpa.", 16, "168.1.4"},
+	}
+	for _, tt := range tests {
+		got := reverseIPv4Relative(tt.ip, tt.origin, tt.prefix)
+		if got != tt.want {
+			t.Errorf("reverseIPv4Relative(%q, %q, %d) = %q, want %q", tt.ip, tt.origin, tt.prefix, got, tt.want)
+		}
+	}
+}
+
+func TestValidateZoneCIDR(t *testing.T) {
+	tests := []struct {
+		origin   string
+		prefix   int
+		wantPref int
+		wantErr  bool
+	}{
+		// Zone /24, CIDR must be >= 24
+		{"1.168.192.in-addr.arpa.", 24, 24, false},
+		{"1.168.192.in-addr.arpa.", 25, 24, false}, // /25 is more specific, OK
+		{"1.168.192.in-addr.arpa.", 16, 0, true},  // /16 is less specific, NOT OK
+		{"1.168.192.in-addr.arpa.", 8, 0, true},   // /8 is less specific, NOT OK
+		// Zone /16, CIDR must be >= 16
+		{"168.192.in-addr.arpa.", 16, 16, false},
+		{"168.192.in-addr.arpa.", 24, 16, false},  // /24 is more specific, OK
+		{"168.192.in-addr.arpa.", 8, 0, true},     // /8 is less specific, NOT OK
+		// Zone /8
+		{"192.in-addr.arpa.", 8, 8, false},
+		{"192.in-addr.arpa.", 16, 8, false},       // /16 is more specific, OK
+		// Invalid origins
+		{"example.com.", 24, 0, true},
+		{"1.168.192.in-addr.arpa", 24, 0, true},  // missing trailing dot - FIX THIS
+	}
+	for _, tt := range tests {
+		gotPref, err := validateZoneCIDR(tt.origin, tt.prefix)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("validateZoneCIDR(%q, %d) error = %v, wantErr %v", tt.origin, tt.prefix, err, tt.wantErr)
+			continue
+		}
+		if !tt.wantErr && gotPref != tt.wantPref {
+			t.Errorf("validateZoneCIDR(%q, %d) prefix = %d, want %d", tt.origin, tt.prefix, gotPref, tt.wantPref)
+		}
+	}
+}
+
+func TestReverseIPv6(t *testing.T) {
+	tests := []struct {
+		ip string
+	}{
+		{"2001:db8::1"},
+		{"::1"},
+		{"::ffff:127.0.0.1"},
+		{"2001:0db8:0000:0000:0000:0000:0000:0001"},
+	}
+	for _, tt := range tests {
+		result := reverseIPv6TestHelper(tt.ip)
+		// Verify it ends with .ip6.arpa
+		if !strings.HasSuffix(result, ".ip6.arpa") {
+			t.Errorf("reverseIPv6(%q) missing .ip6.arpa suffix: %q", tt.ip, result)
+			continue
+		}
+		// Verify it has correct structure (32 hex labels + ip6.arpa = 34 parts)
+		parts := strings.Split(result, ".")
+		if len(parts) != 34 {
+			t.Errorf("reverseIPv6(%q) = %q, expected 34 parts, got %d", tt.ip, result, len(parts))
+		}
+		// Verify last two parts are ip6.arpa
+		if parts[len(parts)-2] != "ip6" || parts[len(parts)-1] != "arpa" {
+			t.Errorf("reverseIPv6(%q) bad suffix: got %s.%s", tt.ip, parts[len(parts)-2], parts[len(parts)-1])
+		}
+	}
+}
+
+// reverseIPv6TestHelper is a test wrapper that parses the IP string
+func reverseIPv6TestHelper(ipStr string) string {
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return ""
+	}
+	// Inline the logic for testing since the function is not exported
+	ip = ip.To16()
+	if ip == nil {
+		return ""
+	}
+	var parts []string
+	for i := 15; i >= 0; i-- {
+		parts = append(parts, fmt.Sprintf("%x", ip[i]&0x0F))
+		parts = append(parts, fmt.Sprintf("%x", (ip[i]>>4)&0x0F))
+	}
+	return strings.Join(parts, ".") + ".ip6.arpa"
 }

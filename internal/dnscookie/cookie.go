@@ -72,15 +72,15 @@ type CookieJar struct {
 // NewCookieJar creates a new CookieJar with a random initial secret and the
 // given rotation interval. The jar automatically rotates secrets when
 // GenerateServerCookie detects the interval has elapsed.
-func NewCookieJar(rotationInterval time.Duration) *CookieJar {
+func NewCookieJar(rotationInterval time.Duration) (*CookieJar, error) {
 	jar := &CookieJar{
 		rotationInterval: rotationInterval,
 		lastRotation:     time.Now(),
 	}
 	if _, err := io.ReadFull(rand.Reader, jar.current[:]); err != nil {
-		panic("dnscookie: failed to generate initial secret: " + err.Error())
+		return nil, fmt.Errorf("dnscookie: failed to generate initial secret: %w", err)
 	}
-	return jar
+	return jar, nil
 }
 
 // GenerateClientCookie produces an 8-byte client cookie by computing
@@ -169,16 +169,17 @@ func (j *CookieJar) ValidateServerCookie(clientCookie [ClientCookieLen]byte, ser
 // RotateSecret moves the current secret to previous and generates a fresh
 // random secret as the new current. Cookies generated with the previous
 // secret remain valid during the grace period.
-func (j *CookieJar) RotateSecret() {
+func (j *CookieJar) RotateSecret() error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 
 	j.previous = j.current
 	j.hasPrevious = true
 	if _, err := io.ReadFull(rand.Reader, j.current[:]); err != nil {
-		panic("dnscookie: failed to generate rotated secret: " + err.Error())
+		return fmt.Errorf("dnscookie: failed to generate rotated secret: %w", err)
 	}
 	j.lastRotation = time.Now()
+	return nil
 }
 
 // maybeRotate checks whether the rotation interval has elapsed and
@@ -189,7 +190,10 @@ func (j *CookieJar) maybeRotate() {
 	j.mu.RUnlock()
 
 	if needsRotation {
-		j.RotateSecret()
+		// Rotation failure is logged but not fatal - old secret remains valid
+		if err := j.RotateSecret(); err != nil {
+			fmt.Printf("WARNING: %v\n", err)
+		}
 	}
 }
 

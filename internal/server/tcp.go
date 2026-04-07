@@ -326,7 +326,11 @@ func (w *tcpResponseWriter) Write(msg *protocol.Message) (int, error) {
 	// Try to get a buffer from the pool; fall back to allocation if too small
 	var buf []byte
 	if w.server != nil {
-		buf = w.server.responsePool.Get().([]byte)
+		if p, ok := w.server.responsePool.Get().([]byte); ok {
+			buf = p
+		} else {
+			buf = make([]byte, estimated)
+		}
 		if cap(buf) < estimated {
 			// Pool buffer too small — allocate fresh and don't return to pool
 			buf = make([]byte, estimated)

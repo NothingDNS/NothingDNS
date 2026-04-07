@@ -291,7 +291,11 @@ func (w *udpResponseWriter) Write(msg *protocol.Message) (int, error) {
 	// Get a buffer from the pool (zero-alloc hot path)
 	var buf []byte
 	if w.server != nil {
-		buf = w.server.responsePool.Get().([]byte)
+		if p, ok := w.server.responsePool.Get().([]byte); ok {
+			buf = p
+		} else {
+			buf = make([]byte, MaxUDPPayloadSize)
+		}
 		if cap(buf) < MaxUDPPayloadSize {
 			buf = make([]byte, MaxUDPPayloadSize)
 		} else {
