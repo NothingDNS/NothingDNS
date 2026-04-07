@@ -315,10 +315,11 @@ func (c *Cluster) Stop() error {
 		return nil
 	}
 
-	// Atomically close cache sync channel if not already closed
+	// Atomically close cache sync channel if not already closed.
+	// Must set cacheClosed BEFORE close() to prevent double-close race.
 	if !c.cacheClosed {
-		close(c.cacheSyncChan)
 		c.cacheClosed = true
+		close(c.cacheSyncChan)
 	}
 	c.started = false
 

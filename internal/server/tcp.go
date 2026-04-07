@@ -45,7 +45,7 @@ type TCPConn interface {
 type TCPServer struct {
 	addr     string
 	handler  Handler
-	listener net.Listener
+	listener atomic.Value // stores net.Listener atomically
 	workers  int
 
 	// Context and lifecycle
@@ -109,19 +109,25 @@ func (s *TCPServer) Listen() error {
 		return fmt.Errorf("listen tcp: %w", err)
 	}
 
-	s.listener = ln
+	s.listener.Store(ln) // atomic store of interface value
 	return nil
 }
 
 // ListenWithListener uses an existing listener (for testing).
 func (s *TCPServer) ListenWithListener(ln net.Listener) {
-	s.listener = ln
+	s.listener.Store(ln) // atomic store of interface value
 }
 
 // Serve starts serving DNS requests.
 // This blocks until the server is stopped.
 func (s *TCPServer) Serve() error {
-	if s.listener == nil {
+	// Load listener atomically - handle uninitialized case
+	rawListener := s.listener.Load()
+	if rawListener == nil {
+		return errors.New("server not listening")
+	}
+	listener, ok := rawListener.(net.Listener)
+	if !ok || listener == nil {
 		return errors.New("server not listening")
 	}
 
@@ -135,7 +141,7 @@ func (s *TCPServer) Serve() error {
 
 	// Accept loop
 	for {
-		conn, err := s.listener.Accept()
+		conn, err := listener.Accept()
 		if err != nil {
 			if s.ctx.Err() != nil {
 				// Shutting down
@@ -372,18 +378,26 @@ func (w *tcpResponseWriter) Write(msg *protocol.Message) (int, error) {
 func (s *TCPServer) Stop() error {
 	s.cancel()
 
-	if s.listener != nil {
-		return s.listener.Close()
+	listener, ok := s.listener.Load().(net.Listener)
+	if ok && listener != nil {
+		return listener.Close()
 	}
 	return nil
 }
 
 // Addr returns the server's listener address.
 func (s *TCPServer) Addr() net.Addr {
-	if s.listener == nil {
+	listener, ok := s.listener.Load().(net.Listener)
+	if !ok || listener == nil {
 		return nil
 	}
-	return s.listener.Addr()
+	return listener.Addr()
+}
+
+// Listener returns the underlying net.Listener for testing purposes.
+func (s *TCPServer) Listener() net.Listener {
+	listener, _ := s.listener.Load().(net.Listener)
+	return listener
 }
 
 // Stats returns server statistics.

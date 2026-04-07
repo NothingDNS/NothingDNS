@@ -36,6 +36,7 @@ type SignerConfig struct {
 	NSEC3Algorithm      uint8
 	NSEC3Iterations     uint16
 	NSEC3Salt           []byte
+	NSEC3OptOut         bool   // RFC 5155 Section 6 - opt-out for unsigned delegations
 	SignatureValidity   time.Duration
 	InceptionOffset     time.Duration
 }
@@ -522,30 +523,58 @@ func (s *Signer) generateNSEC(records []*protocol.ResourceRecord) []*protocol.Re
 }
 
 // generateNSEC3 creates NSEC3 records for the zone.
+// When NSEC3OptOut is enabled, delegation points without secure records
+// use the opt-out flag per RFC 5155 Section 6.
 func (s *Signer) generateNSEC3(records []*protocol.ResourceRecord) []*protocol.ResourceRecord {
-	// Collect unique owner names
-	uniqueNames := make(map[string]bool)
+	// Collect unique owner names and their record types
+	type nameInfo struct {
+		original   string
+		hasNS     bool
+		hasSecure bool // has records that require proof (not just NS)
+	}
+	nameInfos := make(map[string]*nameInfo)
+
 	for _, rr := range records {
-		uniqueNames[rr.Name.String()] = true
+		name := rr.Name.String()
+		if nameInfos[name] == nil {
+			nameInfos[name] = &nameInfo{original: name}
+		}
+		ni := nameInfos[name]
+
+		switch rr.Type {
+		case protocol.TypeNS:
+			ni.hasNS = true
+		case protocol.TypeNSEC3:
+			// NSEC3 doesn't count as a "secure" record type
+		default:
+			// Any other record type means this is a secure delegation
+			ni.hasSecure = true
+		}
 	}
 
 	// Calculate NSEC3 hashes for all names
 	type hashedName struct {
-		original string
-		hashed   string
-		hashBytes []byte
+		original   string
+		hashed     string
+		hashBytes  []byte
+		isOptOut   bool
 	}
 
 	var hashes []hashedName
-	for name := range uniqueNames {
+	for name, ni := range nameInfos {
+		// Determine if this name should use opt-out
+		// Opt-out applies to delegation points (has NS) that don't have secure records
+		isOptOut := s.config.NSEC3OptOut && ni.hasNS && !ni.hasSecure
+
 		hash, err := NSEC3Hash(name, s.config.NSEC3Algorithm, s.config.NSEC3Iterations, s.config.NSEC3Salt)
 		if err != nil {
 			continue
 		}
 		hashes = append(hashes, hashedName{
-			original: name,
+			original:  name,
 			hashed:   protocol.Base32Encode(hash),
 			hashBytes: hash,
+			isOptOut: isOptOut,
 		})
 	}
 
@@ -564,18 +593,32 @@ func (s *Signer) generateNSEC3(records []*protocol.ResourceRecord) []*protocol.R
 
 		// Get types for the original name
 		var types []uint16
-		for _, rr := range records {
-			if rr.Name.String() == hn.original {
-				types = append(types, rr.Type)
+
+		if hn.isOptOut {
+			// Opt-out: empty bitmap, proves no secure records in this range
+			// The opt-out flag indicates there may be unsigned delegations
+			types = nil
+		} else {
+			// Full proof: list all record types at this name
+			for _, rr := range records {
+				if rr.Name.String() == hn.original {
+					types = append(types, rr.Type)
+				}
 			}
+			types = append(types, protocol.TypeNSEC3)
+			sort.Slice(types, func(i, j int) bool { return types[i] < types[j] })
 		}
-		types = append(types, protocol.TypeNSEC3)
-		sort.Slice(types, func(i, j int) bool { return types[i] < types[j] })
+
+		// Set flags: bit 0 = opt-out
+		flags := uint8(0)
+		if hn.isOptOut {
+			flags = protocol.NSEC3FlagOptOut
+		}
 
 		// Create NSEC3 record
 		nsec3 := &protocol.RDataNSEC3{
 			HashAlgorithm: s.config.NSEC3Algorithm,
-			Flags:         0,
+			Flags:         flags,
 			Iterations:    s.config.NSEC3Iterations,
 			Salt:          s.config.NSEC3Salt,
 			HashLength:    uint8(len(nextHash)),

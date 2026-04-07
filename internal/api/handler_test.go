@@ -672,17 +672,20 @@ func TestHandleClusterStatus(t *testing.T) {
 
 		server.handleClusterStatus(rec, req)
 
-		if rec.Code != http.StatusServiceUnavailable {
-			t.Errorf("Expected status %d, got %d", http.StatusServiceUnavailable, rec.Code)
+		if rec.Code != http.StatusOK {
+			t.Errorf("Expected status %d, got %d", http.StatusOK, rec.Code)
 		}
 
-		var response map[string]interface{}
+		var response ClusterStatusResponse
 		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
 			t.Fatalf("Failed to parse response: %v", err)
 		}
 
-		if response["error"] != "Cluster not available" {
-			t.Errorf("Expected error 'Cluster not available', got %v", response["error"])
+		if response.NodeCount != 0 {
+			t.Errorf("Expected NodeCount 0, got %d", response.NodeCount)
+		}
+		if response.Healthy != false {
+			t.Errorf("Expected Healthy false, got %v", response.Healthy)
 		}
 	})
 
@@ -756,17 +759,17 @@ func TestHandleClusterNodes(t *testing.T) {
 
 		server.handleClusterNodes(rec, req)
 
-		if rec.Code != http.StatusServiceUnavailable {
-			t.Errorf("Expected status %d, got %d", http.StatusServiceUnavailable, rec.Code)
+		if rec.Code != http.StatusOK {
+			t.Errorf("Expected status %d, got %d", http.StatusOK, rec.Code)
 		}
 
-		var response map[string]interface{}
+		var response ClusterNodesResponse
 		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
 			t.Fatalf("Failed to parse response: %v", err)
 		}
 
-		if response["error"] != "Cluster not available" {
-			t.Errorf("Expected error 'Cluster not available', got %v", response["error"])
+		if len(response.Nodes) != 0 {
+			t.Errorf("Expected 0 nodes, got %d", len(response.Nodes))
 		}
 	})
 

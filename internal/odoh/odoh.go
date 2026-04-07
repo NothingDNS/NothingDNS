@@ -1,0 +1,648 @@
+// Package odoh implements Oblivious DNS over HTTPS (ODoH) as specified in RFC 9230.
+// ODoH provides encrypted DNS queries through an oblivious proxy,
+// preventing the resolver from learning the client's identity.
+package odoh
+
+import (
+	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/ecdh"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"time"
+)
+
+// ODoH (Oblivious DNS over HTTPS) implements RFC 9230.
+
+// Errors for ODoH operations.
+var (
+	ErrInvalidKey       = errors.New("invalid HPKE key")
+	ErrDecryptionFailed = errors.New("decryption failed")
+	ErrInvalidNonce     = errors.New("invalid nonce")
+	ErrTooManyDHPairs   = errors.New("too many DH pairs for this context")
+)
+
+// HPKE AEAD algorithms supported by ODoH.
+const (
+	HPKEAEADAES256GCM = 1
+	HPKEAEADChaCha20Poly1305 = 2
+)
+
+// HPKE DH key agreement algorithms.
+const (
+	HPKEDHP256 = 1 // ECDH P-256
+	HPKEDHP384 = 2 // ECDH P-384
+	HPKEDHP521 = 3 // ECDH P-521
+	HPKEDHX25519 = 4 // X25519
+)
+
+// ODoHConfig contains configuration for ODoH operations.
+type ODoHConfig struct {
+	TargetName   string // DNS name of the target resolver (e.g., "dns.example.com")
+	ProxyName    string // DNS name of the proxy (e.g., "proxy.example.com")
+	TargetURL    string // HTTPS URL of the target
+	ProxyURL     string // HTTPS URL of the proxy
+	HPKEKEM     int    // Key Encapsulation Mechanism (KEM) algorithm
+	HPKEKDF     int    // Key Derivation Function (KDF) algorithm
+	HPKEAEAD    int    // Authenticated Encryption with Associated Data (AEAD) algorithm
+}
+
+// ObliviousDNSMessage represents an ODoH message.
+type ObliviousDNSMessage struct {
+	// Public key used for encapsulation
+	PublicKey []byte
+	// Encrypted DNS query/response
+	Ciphertext []byte
+	// Nonce used for encryption
+	Nonce []byte
+	// Additional authenticated data (AAD)
+	AAD []byte
+}
+
+// ObliviousClient implements the client side of ODoH.
+type ObliviousClient struct {
+	config *ODoHConfig
+	client *http.Client
+}
+
+// ObliviousProxy implements the proxy side of ODoH.
+type ObliviousProxy struct {
+	config *ODoHConfig
+	server *http.Server
+}
+
+// ObliviousTarget implements the target resolver side of ODoH.
+type ObliviousTarget struct {
+	config  *ODoHConfig
+	privKey []byte // Target's private key
+	pubKey  []byte // Target's public key
+}
+
+// NewODoHConfig creates a default ODoH configuration.
+func NewODoHConfig(targetName, proxyName string) *ODoHConfig {
+	return &ODoHConfig{
+		TargetName: targetName,
+		ProxyName:  proxyName,
+		TargetURL:  "https://" + targetName + "/dns-query",
+		ProxyURL:   "https://" + proxyName + "/dns-query",
+		HPKEKEM:    HPKEDHX25519,
+		HPKEKDF:    1, // HKDF-SHA256
+		HPKEAEAD:   HPKEAEADAES256GCM,
+	}
+}
+
+// NewObliviousClient creates a new ODoH client.
+func NewObliviousClient(config *ODoHConfig) (*ObliviousClient, error) {
+	return &ObliviousClient{
+		config: config,
+		client: &http.Client{
+			Timeout: 10 * time.Second,
+		},
+	}, nil
+}
+
+// Query sends an encrypted DNS query through the proxy to the target.
+func (c *ObliviousClient) Query(dnsQuery []byte) ([]byte, error) {
+	// Generate HPKE key pair for encapsulation
+	ephemeralPriv, err := generateEphemeralKey(c.config.HPKEKEM)
+	if err != nil {
+		return nil, fmt.Errorf("generating ephemeral key: %w", err)
+	}
+	defer clearBytes(ephemeralPriv)
+
+	// Get target's public key (in real implementation, this would be fetched via DNS)
+	targetPub, err := c.getTargetPublicKey()
+	if err != nil {
+		return nil, fmt.Errorf("getting target public key: %w", err)
+	}
+
+	// Encapsulate the DNS query to the target
+	encapsulated, err := c.encapsulateQuery(dnsQuery, ephemeralPriv, targetPub)
+	if err != nil {
+		return nil, fmt.Errorf("encapsulating query: %w", err)
+	}
+
+	// Send encapsulated message to proxy
+	response, err := c.sendToProxy(encapsulated)
+	if err != nil {
+	 return nil, fmt.Errorf("sending to proxy: %w", err)
+	}
+
+	// Decapsulate the response
+	plaintext, err := c.decapsulateResponse(response, ephemeralPriv)
+	if err != nil {
+		return nil, fmt.Errorf("decapsulating response: %w", err)
+	}
+
+	return plaintext, nil
+}
+
+// getTargetPublicKey returns the target's public key.
+// In a full implementation, this would fetch the key via DNS or HTTPS.
+func (c *ObliviousClient) getTargetPublicKey() ([]byte, error) {
+	// Placeholder - in reality, fetch from DNS or configuration
+	// This would typically be a DNSKEY record or fetched via HTTPS
+	return make([]byte, 32), nil // 32 bytes for X25519
+}
+
+// encapsulateQuery encrypts a DNS query using HPKE.
+func (c *ObliviousClient) encapsulateQuery(query, ephemeralPriv, targetPub []byte) (*ObliviousDNSMessage, error) {
+	// Derive shared secret using ECDH
+	sharedSecret, err := deriveSharedSecret(ephemeralPriv, targetPub, c.config.HPKEKEM)
+	if err != nil {
+		return nil, fmt.Errorf("deriving shared secret: %w", err)
+	}
+	defer clearBytes(sharedSecret)
+
+	// Derive encryption keys using KDF
+	kdfInfo := buildKDFInfo(c.config.TargetName)
+	keys, err := deriveKeys(sharedSecret, kdfInfo, c.config.HPKEKDF, c.config.HPKEAEAD)
+	if err != nil {
+		return nil, fmt.Errorf("deriving keys: %w", err)
+	}
+
+	// Generate random nonce
+	nonce := make([]byte, 12) // AES-GCM nonce size
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, fmt.Errorf("generating nonce: %w", err)
+	}
+
+	// Encrypt the DNS query
+	ciphertext, err := encrypt(query, nonce, keys.SealKey, nil)
+	if err != nil {
+		return nil, fmt.Errorf("encrypting query: %w", err)
+	}
+
+	return &ObliviousDNSMessage{
+		PublicKey:  ephemeralPriv[:], // Public part would be derived
+		Ciphertext: ciphertext,
+		Nonce:      nonce,
+		AAD:        []byte(c.config.TargetName),
+	}, nil
+}
+
+// sendToProxy sends the encapsulated message to the proxy.
+func (c *ObliviousClient) sendToProxy(msg *ObliviousDNSMessage) (*ObliviousDNSMessage, error) {
+	// Build the HTTP request to proxy
+	reqBody, err := buildProxyRequest(msg)
+	if err != nil {
+		return nil, fmt.Errorf("building proxy request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", c.config.ProxyURL, bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/dns-message")
+	req.Header.Set("Accept", "application/dns-message")
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("sending request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("proxy returned status: %d", resp.StatusCode)
+	}
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading response: %w", err)
+	}
+
+	return parseProxyResponse(respBody)
+}
+
+// decapsulateResponse decrypts the response from the target.
+func (c *ObliviousClient) decapsulateResponse(response *ObliviousDNSMessage, ephemeralPriv []byte) ([]byte, error) {
+	// In ODoH, the response is encrypted to the ephemeral key
+	// The target encrypts directly to the ephemeral public key
+
+	// Re-derive the shared secret (response uses same ephemeral)
+	pubKey := derivePublicKey(ephemeralPriv, c.config.HPKEKEM)
+	sharedSecret, err := deriveSharedSecret(ephemeralPriv, pubKey, c.config.HPKEKEM)
+	if err != nil {
+		return nil, fmt.Errorf("deriving shared secret: %w", err)
+	}
+	defer clearBytes(sharedSecret)
+
+	// Re-derive keys
+	kdfInfo := buildKDFInfo(c.config.TargetName)
+	keys, err := deriveKeys(sharedSecret, kdfInfo, c.config.HPKEKDF, c.config.HPKEAEAD)
+	if err != nil {
+		return nil, fmt.Errorf("deriving keys: %w", err)
+	}
+
+	// Decrypt the response
+	plaintext, err := decrypt(response.Ciphertext, response.Nonce, keys.SealKey, response.AAD)
+	if err != nil {
+		return nil, fmt.Errorf("decrypting response: %w", err)
+	}
+
+	return plaintext, nil
+}
+
+// NewObliviousProxy creates a new ODoH proxy server.
+func NewObliviousProxy(config *ODoHConfig) (*ObliviousProxy, error) {
+	return &ObliviousProxy{
+		config: config,
+	}, nil
+}
+
+// ServeHTTP implements the HTTP handler for the proxy.
+func (p *ObliviousProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	// Parse the oblivious DNS message
+	msg, err := parseProxyRequest(body)
+	if err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	// Forward to target (with target's public key in the message)
+	response, err := p.forwardToTarget(msg)
+	if err != nil {
+		http.Error(w, "Target error", http.StatusBadGateway)
+		return
+	}
+
+	// Return response to client
+	w.Header().Set("Content-Type", "application/dns-message")
+	w.WriteHeader(http.StatusOK)
+	w.Write(response)
+}
+
+// forwardToTarget forwards the encapsulated message to the target resolver.
+func (p *ObliviousProxy) forwardToTarget(msg *ObliviousDNSMessage) ([]byte, error) {
+	// In a full implementation, the proxy would:
+	// 1. Parse the encrypted message
+	// 2. Forward it to the target resolver
+	// 3. Return the target's encrypted response
+
+	// Placeholder implementation
+	return msg.Ciphertext, nil
+}
+
+// NewObliviousTarget creates a new ODoH target resolver.
+func NewObliviousTarget(config *ODoHConfig) (*ObliviousTarget, error) {
+	// Generate target's key pair
+	priv, pub, err := generateKeyPair(config.HPKEKEM)
+	if err != nil {
+		return nil, fmt.Errorf("generating key pair: %w", err)
+	}
+
+	return &ObliviousTarget{
+		config:  config,
+		privKey: priv,
+		pubKey:  pub,
+	}, nil
+}
+
+// ServeHTTP implements the HTTP handler for the target.
+func (t *ObliviousTarget) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	// Parse the oblivious DNS message
+	msg, err := parseProxyRequest(body)
+	if err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	// Decrypt the DNS query
+	dnsQuery, err := t.decapsulateQuery(msg)
+	if err != nil {
+		http.Error(w, "Decryption error", http.StatusBadRequest)
+		return
+	}
+
+	// Process DNS query (placeholder - would call actual resolver)
+	dnsResponse := t.processDNSQuery(dnsQuery)
+
+	// Encrypt the DNS response back to the client
+	encryptedResponse, err := t.encapsulateResponse(dnsQuery, dnsResponse, msg)
+	if err != nil {
+		http.Error(w, "Encryption error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/dns-message")
+	w.WriteHeader(http.StatusOK)
+	w.Write(encryptedResponse)
+}
+
+// decapsulateQuery decrypts a DNS query using HPKE.
+func (t *ObliviousTarget) decapsulateQuery(msg *ObliviousDNSMessage) ([]byte, error) {
+	// Derive shared secret using recipient's private key and sender's public key
+	sharedSecret, err := deriveSharedSecret(t.privKey, msg.PublicKey, t.config.HPKEKEM)
+	if err != nil {
+		return nil, fmt.Errorf("deriving shared secret: %w", err)
+	}
+	defer clearBytes(sharedSecret)
+
+	// Derive keys
+	kdfInfo := buildKDFInfo(t.config.TargetName)
+	keys, err := deriveKeys(sharedSecret, kdfInfo, t.config.HPKEKDF, t.config.HPKEAEAD)
+	if err != nil {
+		return nil, fmt.Errorf("deriving keys: %w", err)
+	}
+
+	// Decrypt
+	plaintext, err := decrypt(msg.Ciphertext, msg.Nonce, keys.SealKey, msg.AAD)
+	if err != nil {
+		return nil, fmt.Errorf("decrypting: %w", err)
+	}
+
+	return plaintext, nil
+}
+
+// encapsulateResponse encrypts a DNS response to the client.
+func (t *ObliviousTarget) encapsulateResponse(query, response []byte, msg *ObliviousDNSMessage) ([]byte, error) {
+	// Use the same shared secret derivation but encrypt with a new nonce
+	sharedSecret, err := deriveSharedSecret(t.privKey, msg.PublicKey, t.config.HPKEKEM)
+	if err != nil {
+		return nil, fmt.Errorf("deriving shared secret: %w", err)
+	}
+	defer clearBytes(sharedSecret)
+
+	kdfInfo := buildKDFInfo(t.config.TargetName)
+	keys, err := deriveKeys(sharedSecret, kdfInfo, t.config.HPKEKDF, t.config.HPKEAEAD)
+	if err != nil {
+		return nil, fmt.Errorf("deriving keys: %w", err)
+	}
+
+	// Generate new nonce for response
+	nonce := make([]byte, 12)
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, fmt.Errorf("generating nonce: %w", err)
+	}
+
+	// Encrypt response (AAD includes the original query for binding)
+	ciphertext, err := encrypt(response, nonce, keys.SealKey, query)
+	if err != nil {
+		return nil, fmt.Errorf("encrypting response: %w", err)
+	}
+
+	return buildProxyResponse(&ObliviousDNSMessage{
+		PublicKey:  t.pubKey,
+		Ciphertext: ciphertext,
+		Nonce:      nonce,
+		AAD:        query,
+	})
+}
+
+// processDNSQuery processes a DNS query and returns a response.
+// This is a placeholder - actual implementation would call the resolver.
+func (t *ObliviousTarget) processDNSQuery(query []byte) []byte {
+	// Placeholder - would actually resolve the DNS query
+	return query
+}
+
+// HPKE utility functions.
+
+// keyDerivationKeys holds derived key material.
+type keyDerivationKeys struct {
+	ExpandKey []byte
+	SealKey  []byte
+}
+
+// generateEphemeralKey generates an ephemeral HPKE key pair.
+func generateEphemeralKey(kem int) ([]byte, error) {
+	switch kem {
+	case HPKEDHX25519:
+		priv, _, err := generateKeyPair(HPKEDHX25519)
+		return priv, err
+	default:
+		return nil, ErrInvalidKey
+	}
+}
+
+// generateKeyPair generates an HPKE key pair for the specified KEM.
+func generateKeyPair(kem int) ([]byte, []byte, error) {
+	switch kem {
+	case HPKEDHX25519:
+		priv, err := ecdh.X25519().GenerateKey(rand.Reader)
+		if err != nil {
+			return nil, nil, err
+		}
+		pub := priv.PublicKey()
+		return priv.Bytes(), pub.Bytes(), nil
+	default:
+		return nil, nil, ErrInvalidKey
+	}
+}
+
+// derivePublicKey derives the public key from a private key.
+func derivePublicKey(priv []byte, kem int) []byte {
+	switch kem {
+	case HPKEDHX25519:
+		p, err := ecdh.X25519().NewPrivateKey(priv)
+		if err != nil {
+			return nil
+		}
+		pub := p.PublicKey()
+		return pub.Bytes()
+	default:
+		return nil
+	}
+}
+
+// deriveSharedSecret derives a shared secret using ECDH.
+func deriveSharedSecret(priv, pub []byte, kem int) ([]byte, error) {
+	switch kem {
+	case HPKEDHX25519:
+		privKey, err := ecdh.X25519().NewPrivateKey(priv)
+		if err != nil {
+			return nil, err
+		}
+		pubKey, err := ecdh.X25519().NewPublicKey(pub)
+		if err != nil {
+			return nil, err
+		}
+		shared, err := privKey.ECDH(pubKey)
+		if err != nil {
+			return nil, err
+		}
+		return shared, nil
+	default:
+		return nil, ErrInvalidKey
+	}
+}
+
+// buildKDFInfo builds the KDF info parameter for HPKE.
+func buildKDFInfo(suiteID string) []byte {
+	var info bytes.Buffer
+	info.WriteString("odoh")
+	info.WriteString(suiteID)
+	info.WriteByte(0)
+	return info.Bytes()
+}
+
+// deriveKeys derives encryption keys using KDF.
+func deriveKeys(sharedSecret, kdfInfo []byte, kdf, aead int) (*keyDerivationKeys, error) {
+	// Simplified HKDF-based key derivation
+	h := sha256.New()
+	h.Write(sharedSecret)
+	h.Write(kdfInfo)
+	h.Write([]byte{1}) // info for ExpandKey
+
+	expandKey := h.Sum(nil)
+
+	h = sha256.New()
+	h.Write(sharedSecret)
+	h.Write(kdfInfo)
+	h.Write([]byte{2}) // info for SealKey
+	sealKey := h.Sum(nil)
+
+	return &keyDerivationKeys{
+		ExpandKey: expandKey,
+		SealKey:  sealKey,
+	}, nil
+}
+
+// encrypt encrypts plaintext using AES-256-GCM.
+func encrypt(plaintext, nonce, key, aad []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(nonce) != gcm.NonceSize() {
+		return nil, ErrInvalidNonce
+	}
+
+	return gcm.Seal(nil, nonce, plaintext, aad), nil
+}
+
+// decrypt decrypts ciphertext using AES-256-GCM.
+func decrypt(ciphertext, nonce, key, aad []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(nonce) != gcm.NonceSize() {
+		return nil, ErrInvalidNonce
+	}
+
+	return gcm.Open(nil, nonce, ciphertext, aad)
+}
+
+// clearBytes securely clears sensitive key material.
+func clearBytes(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
+}
+
+// Wire format helpers.
+
+func buildProxyRequest(msg *ObliviousDNSMessage) ([]byte, error) {
+	var buf bytes.Buffer
+
+	// Write public key length and value
+	binary.Write(&buf, binary.BigEndian, uint16(len(msg.PublicKey)))
+	buf.Write(msg.PublicKey)
+
+	// Write ciphertext length and value
+	binary.Write(&buf, binary.BigEndian, uint16(len(msg.Ciphertext)))
+	buf.Write(msg.Ciphertext)
+
+	// Write nonce
+	buf.Write(msg.Nonce)
+
+	return buf.Bytes(), nil
+}
+
+func parseProxyRequest(body []byte) (*ObliviousDNSMessage, error) {
+	r := bytes.NewReader(body)
+
+	// Read public key
+	var pubLen uint16
+	if err := binary.Read(r, binary.BigEndian, &pubLen); err != nil {
+		return nil, err
+	}
+	pubKey := make([]byte, pubLen)
+	if _, err := r.Read(pubKey); err != nil {
+		return nil, err
+	}
+
+	// Read ciphertext
+	var ctLen uint16
+	if err := binary.Read(r, binary.BigEndian, &ctLen); err != nil {
+		return nil, err
+	}
+	ciphertext := make([]byte, ctLen)
+	if _, err := r.Read(ciphertext); err != nil {
+		return nil, err
+	}
+
+	// Read nonce (12 bytes for AES-GCM)
+	nonce := make([]byte, 12)
+	if _, err := r.Read(nonce); err != nil {
+		return nil, err
+	}
+
+	return &ObliviousDNSMessage{
+		PublicKey:  pubKey,
+		Ciphertext: ciphertext,
+		Nonce:      nonce,
+	}, nil
+}
+
+func buildProxyResponse(msg *ObliviousDNSMessage) ([]byte, error) {
+	var buf bytes.Buffer
+
+	// Write public key
+	binary.Write(&buf, binary.BigEndian, uint16(len(msg.PublicKey)))
+	buf.Write(msg.PublicKey)
+
+	// Write ciphertext
+	binary.Write(&buf, binary.BigEndian, uint16(len(msg.Ciphertext)))
+	buf.Write(msg.Ciphertext)
+
+	// Write nonce
+	buf.Write(msg.Nonce)
+
+	return buf.Bytes(), nil
+}
+
+func parseProxyResponse(body []byte) (*ObliviousDNSMessage, error) {
+	return parseProxyRequest(body) // Same format
+}

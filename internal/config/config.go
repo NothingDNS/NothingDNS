@@ -73,6 +73,24 @@ type Config struct {
 	// Shutdown timeout duration (default: 30s). Maximum time to wait for in-flight
 	// queries to complete before force-terminating the server.
 	ShutdownTimeout string `yaml:"shutdown_timeout"`
+
+	// IDNA configuration (RFC 5891 - Internationalized Domain Names)
+	IDNA IDNAConfig `yaml:"idna"`
+
+	// ODoH configuration (RFC 9230 - Oblivious DNS over HTTPS)
+	ODoH ODoHConfig `yaml:"odoh"`
+
+	// mDNS configuration (RFC 6762 - Multicast DNS)
+	mDNS mDNSConfig `yaml:"mdns"`
+
+	// Catalog Zone configuration (RFC 9432)
+	Catalog CatalogConfig `yaml:"catalog"`
+
+	// DSO configuration (RFC 1034 - DNS Stateful Operations)
+	DSO DSOConfig `yaml:"dso"`
+
+	// YANG configuration (RFC 9094 - YANG Models for DNS)
+	YANG YANGConfig `yaml:"yang"`
 }
 
 // ViewConfig holds configuration for a single split-horizon view.
@@ -91,6 +109,7 @@ type ViewConfig struct {
 type BlocklistConfig struct {
 	Enabled bool     `yaml:"enabled"`
 	Files   []string `yaml:"files"`
+	URLs    []string `yaml:"urls"` // URLs to download blocklists from (e.g., adguard, malware domains)
 }
 
 // RPZConfig holds Response Policy Zone configuration.
@@ -137,6 +156,114 @@ type DNS64Config struct {
 	Prefix      string   `yaml:"prefix"`
 	PrefixLen   int      `yaml:"prefix_len"`
 	ExcludeNets []string `yaml:"exclude_nets"`
+}
+
+// IDNAConfig holds IDNA (RFC 5891) configuration for internationalized domain names.
+type IDNAConfig struct {
+	// Enable IDNA validation
+	Enabled bool `yaml:"enabled"`
+
+	// Use STD3 ASCII rules (RFC 5891)
+	UseSTD3Rules bool `yaml:"use_std3_rules"`
+
+	// Allow unassigned code points
+	AllowUnassigned bool `yaml:"allow_unassigned"`
+
+	// Check bidirectional rules
+	CheckBidi bool `yaml:"check_bidi"`
+
+	// Check joiner restrictions
+	CheckJoiner bool `yaml:"check_joiner"`
+}
+
+// ODoHConfig holds ODoH (RFC 9230 - Oblivious DNS over HTTPS) configuration.
+type ODoHConfig struct {
+	// Enable ODoH server
+	Enabled bool `yaml:"enabled"`
+
+	// Listen address for ODoH proxy
+	Bind string `yaml:"bind"`
+
+	// Target resolver URL (where queries are forwarded)
+	TargetURL string `yaml:"target_url"`
+
+	// Proxy URL (public URL where ODoH is hosted)
+	ProxyURL string `yaml:"proxy_url"`
+
+	// HPKE key encapsulation method (1=P-256, 2=P-384, 3=P-521, 4=X25519)
+	KEM int `yaml:"kem"`
+
+	// HPKE key derivation function (1=HKDF-SHA256, 2=HKDF-SHA384, 3=HKDF-SHA512)
+	KDF int `yaml:"kdf"`
+
+	// HPKE authenticated encryption (1=AES-256-GCM, 2=ChaCha20-Poly1305)
+	AEAD int `yaml:"aead"`
+}
+
+// mDNSConfig holds mDNS (RFC 6762 - Multicast DNS) configuration.
+type mDNSConfig struct {
+	// Enable mDNS responder
+	Enabled bool `yaml:"enabled"`
+
+	// Listen address (default: 224.0.0.251:5353)
+	MulticastIP string `yaml:"multicast_ip"`
+
+	// Port (default: 5353)
+	Port int `yaml:"port"`
+
+	// Enable mDNS browser (service discovery)
+	Browser bool `yaml:"browser"`
+
+	// Host name for this responder
+	HostName string `yaml:"hostname"`
+}
+
+// CatalogConfig holds Catalog Zone (RFC 9432) configuration.
+type CatalogConfig struct {
+	// Enable Catalog Zones
+	Enabled bool `yaml:"enabled"`
+
+	// Catalog zone name (default: "catalog.inbound.")
+	CatalogZone string `yaml:"catalog_zone"`
+
+	// Producer class (default: "CLDNSET")
+	ProducerClass string `yaml:"producer_class"`
+
+	// Consumer class (default: "CLDNSET")
+	ConsumerClass string `yaml:"consumer_class"`
+}
+
+// DSOConfig holds DSO (DNS Stateful Operations, RFC 1034) configuration.
+type DSOConfig struct {
+	// Enable DSO support
+	Enabled bool `yaml:"enabled"`
+
+	// Session timeout (duration string, e.g., "10m")
+	SessionTimeout string `yaml:"session_timeout"`
+
+	// Maximum sessions
+	MaxSessions int `yaml:"max_sessions"`
+
+	// Heartbeat interval (duration string, e.g., "1m")
+	HeartbeatInterval string `yaml:"heartbeat_interval"`
+}
+
+// YANGConfig holds YANG (RFC 9094) configuration for DNS data models.
+type YANGConfig struct {
+	// Enable YANG models
+	Enabled bool `yaml:"enabled"`
+
+	// Enable CLI RPC commands
+	EnableCLI bool `yaml:"enable_cli"`
+
+	// Enable NETCONF (RFC 8040) interface
+	EnableNETCONF bool `yaml:"enable_netconf"`
+
+	// NETCONF bind address
+	NETCONFBind string `yaml:"netconf_bind"`
+
+	// YANG models to enable (dns-zone, dns-query, etc.)
+	Models []string `yaml:"models"`
 }
 
 // SlaveZoneConfig represents configuration for a slave zone.
@@ -285,6 +412,10 @@ type HTTPConfig struct {
 	// DoWS (DNS over WebSocket) settings
 	DoWSEnabled bool   `yaml:"dows_enabled"` // Enable DoWS endpoint
 	DoWSPath    string `yaml:"dows_path"`    // DoWS endpoint path (default: /dns-ws)
+
+	// ODoH (Oblivious DNS over HTTPS, RFC 9230) settings
+	ODoHEnabled bool   `yaml:"odoh_enabled"` // Enable ODoH endpoint
+	ODoHPath    string `yaml:"odoh_path"`    // ODoH endpoint path (default: /odoh)
 }
 
 // AuthUserConfig defines a user for authentication.
@@ -600,6 +731,45 @@ func DefaultConfig() *Config {
 		Cookie: CookieConfig{
 			Enabled:        true,
 			SecretRotation: "1h",
+		},
+		IDNA: IDNAConfig{
+			Enabled:         false,
+			UseSTD3Rules:   true,
+			AllowUnassigned: false,
+			CheckBidi:      true,
+			CheckJoiner:    true,
+		},
+		ODoH: ODoHConfig{
+			Enabled: false,
+			Bind:    ":8080",
+			KEM:     4,  // X25519
+			KDF:     1,  // HKDF-SHA256
+			AEAD:    1,  // AES-256-GCM
+		},
+		mDNS: mDNSConfig{
+			Enabled:   false,
+			MulticastIP: "224.0.0.251",
+			Port:     5353,
+			Browser:  false,
+		},
+		Catalog: CatalogConfig{
+			Enabled:       false,
+			CatalogZone:   "catalog.inbound.",
+			ProducerClass: "CLDNSET",
+			ConsumerClass: "CLDNSET",
+		},
+		DSO: DSOConfig{
+			Enabled:          false,
+			SessionTimeout:   "10m",
+			MaxSessions:      10000,
+			HeartbeatInterval: "1m",
+		},
+		YANG: YANGConfig{
+			Enabled:    false,
+			EnableCLI:  true,
+			EnableNETCONF: false,
+			NETCONFBind: ":8300",
+			Models:    []string{"dns-zone", "dns-query"},
 		},
 		Cluster: ClusterConfig{
 			Enabled:    false,

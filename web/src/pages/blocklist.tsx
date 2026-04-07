@@ -71,7 +71,7 @@ export function BlocklistPage() {
         </div>
       </div>
 
-      <div className="grid gap-4 grid-cols-1 md:grid-cols-3">
+      <div className="grid gap-4 grid-cols-1 md:grid-cols-4">
         <Card><CardContent className="p-6">
           <div className="text-2xl font-bold">{status?.total_rules?.toLocaleString() ?? '-'}</div>
           <p className="text-xs text-muted-foreground mt-1">Blocked Domains</p>
@@ -79,6 +79,10 @@ export function BlocklistPage() {
         <Card><CardContent className="p-6">
           <div className="text-2xl font-bold">{status?.files_count ?? '-'}</div>
           <p className="text-xs text-muted-foreground mt-1">Blocklist Files</p>
+        </CardContent></Card>
+        <Card><CardContent className="p-6">
+          <div className="text-2xl font-bold">{status?.urls_count ?? '-'}</div>
+          <p className="text-xs text-muted-foreground mt-1">Blocklist URLs</p>
         </CardContent></Card>
         <Card><CardContent className="p-6 flex items-center gap-3">
           <Shield className="h-8 w-8 text-primary" />

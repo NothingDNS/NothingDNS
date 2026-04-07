@@ -171,3 +171,84 @@ func TestACLChecker_IsAllowed_NoNetworkRestriction(t *testing.T) {
 		t.Error("AXFR from any IP should be denied")
 	}
 }
+
+func TestACLChecker_UpdateRules(t *testing.T) {
+	ac, err := NewACLChecker([]config.ACLRule{
+		{Name: "initial", Networks: []string{"10.0.0.0/8"}, Action: "allow"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Initial rule should work
+	allowed, _ := ac.IsAllowed(net.ParseIP("10.0.0.1"), protocol.TypeA)
+	if !allowed {
+		t.Error("initial rule should allow 10.x")
+	}
+
+	// Update rules - new deny rule
+	err = ac.UpdateRules([]config.ACLRule{
+		{Name: "deny-10", Networks: []string{"10.0.0.0/8"}, Action: "deny"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// New rule should block
+	allowed, _ = ac.IsAllowed(net.ParseIP("10.0.0.1"), protocol.TypeA)
+	if allowed {
+		t.Error("updated rule should deny 10.x")
+	}
+
+	// Clear rules - should allow all
+	err = ac.UpdateRules(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	allowed, _ = ac.IsAllowed(net.ParseIP("10.0.0.1"), protocol.TypeA)
+	if !allowed {
+		t.Error("empty rules should allow all")
+	}
+}
+
+func TestACLChecker_UpdateRules_InvalidCIDR(t *testing.T) {
+	ac, _ := NewACLChecker(nil)
+
+	err := ac.UpdateRules([]config.ACLRule{
+		{Name: "bad", Networks: []string{"invalid"}, Action: "allow"},
+	})
+	if err == nil {
+		t.Error("expected error for invalid CIDR")
+	}
+}
+
+func TestACLChecker_GetRules(t *testing.T) {
+	ac, err := NewACLChecker([]config.ACLRule{
+		{Name: "allow-local", Networks: []string{"127.0.0.0/8", "::1/128"}, Action: "allow"},
+		{Name: "deny-bad", Networks: []string{"192.168.1.0/24"}, Action: "deny"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rules := ac.GetRules()
+	if len(rules) != 2 {
+		t.Fatalf("expected 2 rules, got %d", len(rules))
+	}
+
+	if rules[0].Name != "allow-local" {
+		t.Errorf("first rule name = %q, want %q", rules[0].Name, "allow-local")
+	}
+	if len(rules[0].Networks) != 2 {
+		t.Errorf("first rule networks count = %d, want 2", len(rules[0].Networks))
+	}
+}
+
+func TestACLChecker_GetRules_Empty(t *testing.T) {
+	ac, _ := NewACLChecker(nil)
+
+	rules := ac.GetRules()
+	if len(rules) != 0 {
+		t.Errorf("expected 0 rules, got %d", len(rules))
+	}
+}

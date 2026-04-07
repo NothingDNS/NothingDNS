@@ -1,0 +1,56 @@
+# NothingDNS Test Configuration
+server:
+  bind:
+    - 0.0.0.0
+    - "::"
+  port: 5354
+  udp_workers: 4
+  tcp_workers: 2
+
+  tls:
+    enabled: false
+
+  http:
+    enabled: true
+    bind: ":8081"
+    auth_token: "testtoken123"
+
+upstream:
+  servers:
+    - 8.8.8.8:53
+    - 1.1.1.1:53
+  strategy: random
+  health_check: 30s
+  failover_timeout: 5s
+
+cache:
+  enabled: true
+  size: 10000
+  default_ttl: 300
+  max_ttl: 86400
+  min_ttl: 5
+  negative_ttl: 60
+
+logging:
+  level: info
+  format: text
+  output: stdout
+  query_log: false
+
+blocklist:
+  enabled: false
+  files: []
+  urls: []
+
+zones:
+  - ./zones/example.com.zone
+  - ./zones/test.local.zone
+
+acl:
+  - name: "allow-all"
+    action: allow
+    networks:
+      - 0.0.0.0/0
+      - "::/0"
+
+memory_limit_mb: 0

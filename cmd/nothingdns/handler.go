@@ -21,6 +21,7 @@ import (
 	"github.com/nothingdns/nothingdns/internal/dnssec"
 	"github.com/nothingdns/nothingdns/internal/filter"
 	"github.com/nothingdns/nothingdns/internal/geodns"
+	"github.com/nothingdns/nothingdns/internal/idna"
 	"github.com/nothingdns/nothingdns/internal/metrics"
 	"github.com/nothingdns/nothingdns/internal/protocol"
 	"github.com/nothingdns/nothingdns/internal/resolver"
@@ -64,6 +65,7 @@ type integratedHandler struct {
 	nsecCache     *cache.NSECCache // RFC 8198 aggressive NSEC caching
 	dns64Synth    *dns64.Synthesizer
 	cookieJar     *dnscookie.CookieJar
+	idnaEnabled   bool // RFC 5891 IDNA validation enabled
 
 	notifyOnce sync.Once
 	updateOnce sync.Once
@@ -123,6 +125,16 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 	qnameAudit = qname
 
 	h.logger.Debugf("Query: %s %s", qname, typeToString(qtype))
+
+	// RFC 5891: Validate IDNA (internationalized domain names)
+	if h.idnaEnabled {
+		// Check if the domain name is valid IDNA
+		if _, err := idna.ToASCII(qname); err != nil {
+			h.logger.Debugf("IDNA validation failed for %s: %v", qname, err)
+			sendErrorWithEDE(w, r, protocol.RcodeFormatError, protocol.EDEProhibited, "invalid IDNA")
+			return
+		}
+	}
 
 	// Record query metric
 	if h.metrics != nil {
@@ -219,13 +231,13 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 		return
 	}
 
-	// Check blocklist
+	// Check blocklist — return EDE with Filtered code per RFC 8914
 	if h.blocklist != nil && h.blocklist.IsBlocked(qname) {
 		h.logger.Infof("Blocked query for %s", qname)
 		if h.metrics != nil {
 			h.metrics.RecordBlocklistBlock()
 		}
-		sendError(w, r, protocol.RcodeNameError)
+		sendErrorWithEDE(w, r, protocol.RcodeNameError, protocol.EDEFiltered, "blocked by blocklist")
 		return
 	}
 
@@ -456,8 +468,18 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 		return
 	}
 
-	// Forward to upstream
+	// Forward to upstream only if configured (authoritative-only mode skips this)
 	if h.upstream != nil || h.loadBalancer != nil {
+		// Authoritative-only mode: if no resolver and no zone match, return NXDOMAIN
+		if h.resolver == nil && !matchedZone {
+			h.logger.Debugf("Authoritative-only mode: %s not in any zone, returning NXDOMAIN", qname)
+			if h.metrics != nil {
+				h.metrics.RecordResponse(protocol.RcodeNameError)
+			}
+			sendError(w, r, protocol.RcodeNameError)
+			return
+		}
+
 		h.logger.Debugf("Forwarding query for %s to upstream", qname)
 		if h.metrics != nil {
 			if len(h.config.Upstream.Servers) > 0 {
@@ -666,6 +688,41 @@ func sendError(w server.ResponseWriter, query *protocol.Message, rcode uint8) {
 			Flags: protocol.NewResponseFlags(rcode),
 		},
 		Questions: query.Questions,
+	}
+	if _, err := w.Write(resp); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to write error response: %v\n", err)
+	}
+}
+
+// sendErrorWithEDE sends an error response with Extended DNS Error (RFC 8914).
+// infoCode is the EDE info code (0-65535), extraText is optional context.
+func sendErrorWithEDE(w server.ResponseWriter, query *protocol.Message, rcode uint8, infoCode uint16, extraText string) {
+	resp := &protocol.Message{
+		Header: protocol.Header{
+			ID:    query.Header.ID,
+			Flags: protocol.NewResponseFlags(rcode),
+		},
+		Questions: query.Questions,
+	}
+	// Add EDNS0 OPT record with EDE if client sent EDNS0
+	if query.GetOPT() != nil {
+		// Get UDP payload size from client's OPT record
+		udpPayload := uint16(4096)
+		if opt := query.GetOPT(); opt != nil {
+			if opt.Class > 0 {
+				udpPayload = opt.Class
+			}
+		}
+		// Create EDE option
+		ede := protocol.NewEDNS0ExtendedError(infoCode, extraText)
+		optRR := &protocol.ResourceRecord{
+			Type:  protocol.TypeOPT,
+			Class: udpPayload,
+			Data: &protocol.RDataOPT{
+				Options: []protocol.EDNS0Option{ede.ToEDNS0Option()},
+			},
+		}
+		resp.AddAdditional(optRR)
 	}
 	if _, err := w.Write(resp); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to write error response: %v\n", err)

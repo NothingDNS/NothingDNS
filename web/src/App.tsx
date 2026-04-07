@@ -14,6 +14,10 @@ import { BlocklistPage } from '@/pages/blocklist';
 import { UpstreamsPage } from '@/pages/upstreams';
 import { UsersPage } from '@/pages/users';
 import { HistoricalChartsPage } from '@/pages/historical-charts';
+import { DNSSECPage } from '@/pages/dnssec';
+import { ClusterPage } from '@/pages/cluster';
+import { RPZPage } from '@/pages/rpz';
+import { ACLPage } from '@/pages/acl';
 import { useState, useEffect } from 'react';
 
 function getToken(): string | null {
@@ -54,6 +58,10 @@ function AppContent() {
               <Route path="/upstreams" element={<UpstreamsPage />} />
               <Route path="/users" element={<UsersPage />} />
               <Route path="/charts" element={<HistoricalChartsPage />} />
+              <Route path="/dnssec" element={<DNSSECPage />} />
+              <Route path="/cluster" element={<ClusterPage />} />
+              <Route path="/rpz" element={<RPZPage />} />
+              <Route path="/acl" element={<ACLPage />} />
             </Routes>
           </div>
         </main>

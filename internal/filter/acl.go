@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 
 	"github.com/nothingdns/nothingdns/internal/config"
 	"github.com/nothingdns/nothingdns/internal/protocol"
@@ -20,6 +21,7 @@ type compiledRule struct {
 
 // ACLChecker evaluates ACL rules against client IPs and query types.
 type ACLChecker struct {
+	mu    sync.RWMutex
 	rules []compiledRule
 }
 
@@ -70,7 +72,14 @@ func NewACLChecker(rules []config.ACLRule) (*ACLChecker, error) {
 // Returns (allowed bool, redirectTarget string).
 // If no rule matches, the default is allow.
 func (a *ACLChecker) IsAllowed(clientIP net.IP, queryType uint16) (bool, string) {
-	if a == nil || len(a.rules) == 0 {
+	if a == nil {
+		return true, ""
+	}
+
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	if len(a.rules) == 0 {
 		return true, ""
 	}
 
@@ -96,6 +105,80 @@ func (a *ACLChecker) IsAllowed(clientIP net.IP, queryType uint16) (bool, string)
 
 	// Default: allow if no rule matched
 	return true, ""
+}
+
+// UpdateRules replaces the current ACL rules with new rules.
+func (a *ACLChecker) UpdateRules(rules []config.ACLRule) error {
+	compiled := make([]compiledRule, 0, len(rules))
+	for _, r := range rules {
+		cr := compiledRule{
+			Name:     r.Name,
+			Action:   strings.ToLower(r.Action),
+			Redirect: r.Redirect,
+		}
+
+		// Parse networks
+		for _, cidr := range r.Networks {
+			_, ipNet, err := net.ParseCIDR(cidr)
+			if err != nil {
+				return fmt.Errorf("ACL rule %q: invalid CIDR %q: %w", r.Name, cidr, err)
+			}
+			cr.Networks = append(cr.Networks, ipNet)
+		}
+
+		// Parse types
+		if len(r.Types) > 0 {
+			cr.Types = make(map[uint16]bool, len(r.Types))
+			for _, t := range r.Types {
+				upper := strings.ToUpper(t)
+				if qtype, ok := protocol.StringToType[upper]; ok {
+					cr.Types[qtype] = true
+				} else {
+					return fmt.Errorf("ACL rule %q: unknown query type %q", r.Name, t)
+				}
+			}
+		}
+
+		compiled = append(compiled, cr)
+	}
+
+	a.mu.Lock()
+	a.rules = compiled
+	a.mu.Unlock()
+
+	return nil
+}
+
+// GetRules returns the current ACL rules in config format.
+func (a *ACLChecker) GetRules() []config.ACLRule {
+	if a == nil {
+		return nil
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	rules := make([]config.ACLRule, 0, len(a.rules))
+	for _, r := range a.rules {
+		rule := config.ACLRule{
+			Name:     r.Name,
+			Action:   r.Action,
+			Networks: make([]string, 0, len(r.Networks)),
+		}
+		if r.Redirect != "" {
+			rule.Redirect = r.Redirect
+		}
+		for _, n := range r.Networks {
+			rule.Networks = append(rule.Networks, n.String())
+		}
+		if len(r.Types) > 0 {
+			rule.Types = make([]string, 0, len(r.Types))
+			for t := range r.Types {
+				rule.Types = append(rule.Types, protocol.TypeString(t))
+			}
+		}
+		rules = append(rules, rule)
+	}
+	return rules
 }
 
 // normalizeIP ensures consistent IP representation for matching.

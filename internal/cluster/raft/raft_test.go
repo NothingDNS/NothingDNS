@@ -263,14 +263,40 @@ func TestNodePeers(t *testing.T) {
 		t.Fatalf("expected 3 peers, got %d", len(node.peers))
 	}
 
-	node.AddPeer("node5", "127.0.0.1:9005")
-	if len(node.peers) != 4 {
-		t.Errorf("expected 4 peers after AddPeer, got %d", len(node.peers))
+	// AddPeer with joint consensus - creates joint config but doesn't update peers until commit
+	err := node.AddPeer("node5", "127.0.0.1:9005")
+	if err != nil {
+		t.Fatalf("AddPeer failed: %v", err)
+	}
+	// With joint consensus, peers map still shows old config until joint is committed
+	if len(node.peers) != 3 {
+		t.Errorf("expected 3 peers before joint commit, got %d", len(node.peers))
+	}
+	// But joint config is created
+	if node.jointConfig == nil {
+		t.Error("expected joint config to be created")
 	}
 
-	node.RemovePeer("node2")
+	// Simulate joint commit and advance
+	node.commitIndex = node.jointConfigIdx
+	node.advanceJointConfig()
+	if len(node.peers) != 4 {
+		t.Errorf("expected 4 peers after joint commit, got %d", len(node.peers))
+	}
+
+	// Test RemovePeer with joint consensus
+	err = node.RemovePeer("node2")
+	if err != nil {
+		t.Fatalf("RemovePeer failed: %v", err)
+	}
+	if len(node.peers) != 4 {
+		t.Errorf("expected 4 peers before joint commit, got %d", len(node.peers))
+	}
+
+	node.commitIndex = node.jointConfigIdx
+	node.advanceJointConfig()
 	if len(node.peers) != 3 {
-		t.Errorf("expected 3 peers after RemovePeer, got %d", len(node.peers))
+		t.Errorf("expected 3 peers after remove joint commit, got %d", len(node.peers))
 	}
 }
 

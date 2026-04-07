@@ -116,6 +116,14 @@ type Config struct {
 	HealthCheck time.Duration
 }
 
+// HealthCheckDuration returns the health check interval from the config.
+func (c *Config) HealthCheckDuration() time.Duration {
+	if c.HealthCheck == 0 {
+		return 30 * time.Second
+	}
+	return c.HealthCheck
+}
+
 // DefaultConfig returns the default upstream configuration.
 func DefaultConfig() Config {
 	return Config{
@@ -600,4 +608,76 @@ func (c *Client) IsHealthy() bool {
 // Servers returns the list of upstream servers.
 func (c *Client) Servers() []*Server {
 	return c.servers
+}
+
+// AddServer adds a new upstream server dynamically.
+func (c *Client) AddServer(addr string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Check if server already exists
+	for _, s := range c.servers {
+		if s.Address == addr {
+			return fmt.Errorf("server %s already exists", addr)
+		}
+	}
+
+	server := &Server{
+		Address:     addr,
+		Network:     "udp",
+		Timeout:     c.timeout,
+		healthy:     true,
+		HealthCheck: 30 * time.Second,
+	}
+	c.servers = append(c.servers, server)
+
+	// Initialize buffer pools
+	c.udpPool[addr] = &sync.Pool{
+		New: func() interface{} {
+			return make([]byte, 4096)
+		},
+	}
+	c.tcpPool[addr] = &sync.Pool{
+		New: func() interface{} {
+			return make([]byte, 65535)
+		},
+	}
+
+	// Initialize TCP connection pool
+	c.tcpConnPools[addr] = newTCPConnPool(addr, 4, 64, 30*time.Second, c.timeout)
+
+	return nil
+}
+
+// RemoveServer removes an upstream server dynamically.
+func (c *Client) RemoveServer(addr string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Find and remove server
+	found := false
+	newServers := make([]*Server, 0, len(c.servers))
+	for _, s := range c.servers {
+		if s.Address == addr {
+			found = true
+			continue
+		}
+		newServers = append(newServers, s)
+	}
+
+	if !found {
+		return fmt.Errorf("server %s not found", addr)
+	}
+
+	c.servers = newServers
+
+	// Clean up pools (don't close them, just remove references)
+	delete(c.udpPool, addr)
+	delete(c.tcpPool, addr)
+	if pool, ok := c.tcpConnPools[addr]; ok {
+		pool.closeAll()
+		delete(c.tcpConnPools, addr)
+	}
+
+	return nil
 }

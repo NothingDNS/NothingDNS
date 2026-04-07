@@ -3,6 +3,7 @@ package protocol
 import (
 	"fmt"
 	"net"
+	"strings"
 )
 
 // EDNS0Header contains the fixed fields from the OPT pseudo-record RData.
@@ -279,6 +280,57 @@ func (e *EDNS0ClientSubnet) ToEDNS0Option() EDNS0Option {
 }
 
 // ============================================================================
+// Name Server Identifier (NSID) Support - RFC 5001
+// ============================================================================
+
+// EDNS0NSID represents the NSID option (RFC 5001).
+// NSID allows a DNS server to identify itself in responses.
+type EDNS0NSID struct {
+	// NSID is the server's identifier as a sequence of octets.
+	// This is typically a human-readable string identifying the server.
+	NSID []byte
+}
+
+// NewEDNS0NSID creates a new NSID option with the given identifier.
+func NewEDNS0NSID(identifier string) *EDNS0NSID {
+	return &EDNS0NSID{
+		NSID: []byte(identifier),
+	}
+}
+
+// NewEDNS0NSIDFromBytes creates a new NSID option from raw bytes.
+func NewEDNS0NSIDFromBytes(nsid []byte) *EDNS0NSID {
+	return &EDNS0NSID{
+		NSID: append([]byte(nil), nsid...),
+	}
+}
+
+// Pack serializes the NSID option to wire format.
+func (e *EDNS0NSID) Pack() []byte {
+	return e.NSID
+}
+
+// UnpackEDNS0NSID deserializes an NSID option from wire format data.
+func UnpackEDNS0NSID(data []byte) (*EDNS0NSID, error) {
+	return &EDNS0NSID{
+		NSID: append([]byte(nil), data...),
+	}, nil
+}
+
+// ToEDNS0Option converts the NSID to an EDNS0Option.
+func (e *EDNS0NSID) ToEDNS0Option() EDNS0Option {
+	return EDNS0Option{
+		Code: OptionCodeNSID,
+		Data: e.Pack(),
+	}
+}
+
+// String returns a human-readable representation of the NSID.
+func (e *EDNS0NSID) String() string {
+	return string(e.NSID)
+}
+
+// ============================================================================
 // Extended DNS Error (EDE) Support - RFC 8914
 // ============================================================================
 
@@ -422,6 +474,136 @@ func AddExtendedError(msg *Message, infoCode uint16, extraText string) {
 		edeOption := ede.ToEDNS0Option()
 		optData.AddOption(edeOption.Code, edeOption.Data)
 	}
+}
+
+// ============================================================================
+// CHAIN Queries Support - RFC 7901
+// ============================================================================
+
+// EDNS0Chain represents a CHAIN option (RFC 7901).
+// CHAIN allows a resolver to specify the chain of DNS servers that should
+// be consulted in sequence when following referrals.
+type EDNS0Chain struct {
+	// ChainNS contains the list of nameservers in the chain
+	ChainNS []string
+}
+
+// NewEDNS0Chain creates a new CHAIN option with the given chain.
+func NewEDNS0Chain(chainNS []string) *EDNS0Chain {
+	return &EDNS0Chain{
+		ChainNS: append([]string(nil), chainNS...),
+	}
+}
+
+// Pack serializes the CHAIN option to wire format.
+func (e *EDNS0Chain) Pack() []byte {
+	// Each name in the chain is stored as a sequence of labels
+	// Format: [len1][labels1][len2][labels2]...[0] (null terminator)
+	// Each name is in wire format (lowercase, no compression)
+
+	var result []byte
+
+	for i, ns := range e.ChainNS {
+		// Add NS name in wire format
+		wireName := CanonicalWireName(ns)
+		result = append(result, wireName...)
+		if i < len(e.ChainNS)-1 {
+			// Add a null separator between names
+			result = append(result, 0)
+		}
+	}
+
+	// The CHAIN option is terminated by a null label
+	result = append(result, 0)
+
+	return result
+}
+
+// UnpackEDNS0Chain deserializes a CHAIN option from wire format data.
+func UnpackEDNS0Chain(data []byte) (*EDNS0Chain, error) {
+	if len(data) == 0 {
+		return nil, fmt.Errorf("truncated CHAIN option")
+	}
+
+	chain := &EDNS0Chain{
+		ChainNS: make([]string, 0),
+	}
+
+	offset := 0
+	currentName := make([]byte, 0)
+
+	for offset < len(data) {
+		length := int(data[offset])
+
+		if length == 0 {
+			// Null label - end of current name
+			if len(currentName) > 0 {
+				// Parse the wire-format name back to string
+				name := wireNameToString(currentName)
+				chain.ChainNS = append(chain.ChainNS, name)
+				currentName = currentName[:0]
+			}
+			offset++
+			// Check if this is the final terminator
+			if offset >= len(data) || (offset == len(data)-1 && data[offset] == 0) {
+				break
+			}
+			continue
+		}
+
+		// Read the label
+		if offset+1+length > len(data) {
+			return nil, fmt.Errorf("truncated CHAIN option")
+		}
+		currentName = append(currentName, data[offset:offset+1+length]...)
+		offset += 1 + length
+	}
+
+	return chain, nil
+}
+
+// wireNameToString converts wire format name back to presentation format.
+func wireNameToString(wire []byte) string {
+	if len(wire) == 0 {
+		return ""
+	}
+
+	var labels []string
+	offset := 0
+
+	for offset < len(wire) {
+		length := int(wire[offset])
+		if length == 0 {
+			break
+		}
+		offset++
+		if offset+length > len(wire) {
+			break
+		}
+		label := string(wire[offset : offset+length])
+		labels = append(labels, label)
+		offset += length
+	}
+
+	if len(labels) == 0 {
+		return "."
+	}
+
+	result := strings.Join(labels, ".") + "."
+	return result
+}
+
+// ToEDNS0Option converts the CHAIN option to an EDNS0Option.
+func (e *EDNS0Chain) ToEDNS0Option() EDNS0Option {
+	return EDNS0Option{
+		Code: OptionCodeChain,
+		Data: e.Pack(),
+	}
+}
+
+// String returns a human-readable representation of the CHAIN option.
+func (e *EDNS0Chain) String() string {
+	return fmt.Sprintf("CHAIN{%v}", e.ChainNS)
 }
 
 // ============================================================================

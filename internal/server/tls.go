@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -36,6 +37,171 @@ const (
 	// DefaultTLSPort is the default port for DNS over TLS.
 	DefaultTLSPort = 853
 )
+
+// TLS Profile types per RFC 8310.
+type TLSProfile int
+
+const (
+	// TLSProfileOpportunistic allows fallback to plaintext.
+	TLSProfileOpportunistic TLSProfile = iota
+	// TLSProfileStrict requires valid certificate, no fallback.
+	TLSProfileStrict
+	// TLSProfilePrivacy prefers privacy, similar to strict but with privacy hints.
+	TLSProfilePrivacy
+)
+
+func (p TLSProfile) String() string {
+	switch p {
+	case TLSProfileStrict:
+		return "strict"
+	case TLSProfilePrivacy:
+		return "privacy"
+	default:
+		return "opportunistic"
+	}
+}
+
+// TLSProfileConfig contains RFC 8310 profile-specific configuration.
+type TLSProfileConfig struct {
+	// Profile is the TLS usage profile.
+	Profile TLSProfile
+
+	// VerifyCertificate if true, verifies the certificate chain.
+	VerifyCertificate bool
+
+	// VerifyHostname if true, verifies the hostname matches certificate CN/SAN.
+	VerifyHostname bool
+
+	// MinimumTLSVersion is the minimum acceptable TLS version.
+	MinimumTLSVersion uint16
+
+	// Pointer to hostname for verification
+	Hostname string
+
+	// TrustedCACertPool is the CA cert pool for certificate validation.
+	TrustedCACertPool *x509.CertPool
+
+	// InsecureSkipVerify skips certificate verification (for testing only).
+	InsecureSkipVerify bool
+}
+
+// DefaultTLSProfileConfig returns the default profile configuration.
+func DefaultTLSProfileConfig() *TLSProfileConfig {
+	return &TLSProfileConfig{
+		Profile:           TLSProfileOpportunistic,
+		VerifyCertificate: true,
+		VerifyHostname:    true,
+		MinimumTLSVersion: tls.VersionTLS13,
+	}
+}
+
+// StrictTLSProfileConfig returns configuration for strict mode per RFC 8310.
+func StrictTLSProfileConfig(hostname string, caPool *x509.CertPool) *TLSProfileConfig {
+	return &TLSProfileConfig{
+		Profile:           TLSProfileStrict,
+		VerifyCertificate: true,
+		VerifyHostname:    true,
+		MinimumTLSVersion: tls.VersionTLS13,
+		Hostname:          hostname,
+		TrustedCACertPool: caPool,
+	}
+}
+
+// PrivacyTLSProfileConfig returns configuration for privacy mode per RFC 8310.
+func PrivacyTLSProfileConfig(hostname string, caPool *x509.CertPool) *TLSProfileConfig {
+	return &TLSProfileConfig{
+		Profile:           TLSProfilePrivacy,
+		VerifyCertificate: true,
+		VerifyHostname:    true,
+		MinimumTLSVersion: tls.VersionTLS13,
+		Hostname:          hostname,
+		TrustedCACertPool: caPool,
+	}
+}
+
+// BuildTLSConfigForProfile builds a tls.Config from a profile configuration.
+func BuildTLSConfigForProfile(profile *TLSProfileConfig, certFile, keyFile string) (*tls.Config, error) {
+	config := &tls.Config{
+		MinVersion: profile.MinimumTLSVersion,
+		MaxVersion: tls.VersionTLS13,
+		ServerName: profile.Hostname,
+	}
+
+	// Set cipher suites per RFC 7525
+	config.CurvePreferences = []tls.CurveID{
+		tls.X25519,
+		tls.CurveP256,
+		tls.CurveP384,
+	}
+
+	config.CipherSuites = []uint16{
+		tls.TLS_AES_256_GCM_SHA384,
+		tls.TLS_AES_128_GCM_SHA256,
+		tls.TLS_CHACHA20_POLY1305_SHA256,
+		tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+		tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+		tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+		tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+		tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
+		tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+	}
+
+	if certFile != "" && keyFile != "" {
+		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+		if err != nil {
+			return nil, fmt.Errorf("loading certificate: %w", err)
+		}
+		config.Certificates = []tls.Certificate{cert}
+	}
+
+	if profile.TrustedCACertPool != nil {
+		config.ClientCAs = profile.TrustedCACertPool
+		config.ClientAuth = tls.RequireAndVerifyClientCert
+	}
+
+	config.InsecureSkipVerify = profile.InsecureSkipVerify
+
+	return config, nil
+}
+
+// ValidateTLSProfile validates a TLS profile configuration.
+func ValidateTLSProfile(profile *TLSProfileConfig) error {
+	if profile == nil {
+		return errors.New("nil TLS profile config")
+	}
+
+	if profile.Profile == TLSProfileStrict || profile.Profile == TLSProfilePrivacy {
+		if profile.Hostname == "" {
+			return errors.New("strict/privacy profile requires hostname")
+		}
+	}
+
+	if profile.MinimumTLSVersion < tls.VersionTLS12 {
+		return errors.New("minimum TLS version must be at least 1.2")
+	}
+
+	return nil
+}
+
+// GetNextProtos returns the ALPN protocols for the profile.
+func (p TLSProfile) GetNextProtos() []string {
+	switch p {
+	case TLSProfileStrict, TLSProfilePrivacy:
+		return []string{"dot"}
+	default:
+		return []string{"dot", "dns"}
+	}
+}
+
+// ShouldFallback returns true if the profile allows plaintext fallback.
+func (p TLSProfile) ShouldFallback() bool {
+	return p == TLSProfileOpportunistic
+}
+
+// RequiresTLS returns true if TLS is required for this profile.
+func (p TLSProfile) RequiresTLS() bool {
+	return p != TLSProfileOpportunistic
+}
 
 // TLSServer handles DNS over TLS queries.
 type TLSServer struct {

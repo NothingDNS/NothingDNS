@@ -1,5 +1,5 @@
 import { NavLink, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Globe, Settings, Info, ChevronLeft, ChevronRight, Wifi, WifiOff, Sun, Moon, Monitor, ScrollText, TrendingUp, Shield, Wifi as WifiIcon, Users, BarChart3 } from 'lucide-react';
+import { LayoutDashboard, Globe, Settings, Info, ChevronLeft, ChevronRight, Wifi, WifiOff, Sun, Moon, Monitor, ScrollText, TrendingUp, Shield, Wifi as WifiIcon, Users, BarChart3, Key, Network, ShieldCheck } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useTheme } from '@/hooks/useTheme';
 import { useState } from 'react';
@@ -7,9 +7,13 @@ import { useState } from 'react';
 const nav = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/zones', icon: Globe, label: 'Zones' },
+  { to: '/dnssec', icon: Key, label: 'DNSSEC' },
+  { to: '/cluster', icon: Network, label: 'Cluster' },
   { to: '/query-log', icon: ScrollText, label: 'Query Log' },
   { to: '/top-domains', icon: TrendingUp, label: 'Top Domains' },
   { to: '/blocklist', icon: Shield, label: 'Blocklist' },
+  { to: '/rpz', icon: ShieldCheck, label: 'RPZ' },
+  { to: '/acl', icon: Shield, label: 'ACL' },
   { to: '/upstreams', icon: WifiIcon, label: 'Upstreams' },
   { to: '/charts', icon: BarChart3, label: 'Charts' },
   { to: '/users', icon: Users, label: 'Users' },

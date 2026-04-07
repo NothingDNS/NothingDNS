@@ -100,15 +100,6 @@ export interface TopDomainsResponse {
   limit: number;
 }
 
-export interface MetricsHistoryResponse {
-  timestamps: number[];
-  queries: number[];
-  cache_hits: number[];
-  cache_misses: number[];
-  latency_ms: number[];
-  count: number;
-}
-
 export interface DNSSECStatus {
   enabled: boolean;
   require_dnssec: boolean;
@@ -118,6 +109,7 @@ export interface BlocklistStatus {
   enabled: boolean;
   total_rules: number;
   files_count: number;
+  urls_count: number;
 }
 
 export interface UpstreamServer {

@@ -53,7 +53,9 @@ func TestTCPServerServeAcceptErrorContinue(t *testing.T) {
 
 	// Close the underlying listener to trigger an Accept error.
 	// Since the server's context isn't cancelled, it increments errors and continues.
-	server.listener.Close()
+	if l := server.Listener(); l != nil {
+		l.Close()
+	}
 
 	// Give time for the error to be processed
 	time.Sleep(30 * time.Millisecond)

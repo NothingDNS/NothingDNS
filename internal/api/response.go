@@ -163,6 +163,7 @@ type BlocklistResponse struct {
 	Enabled     bool   `json:"enabled"`
 	TotalRules  int    `json:"total_rules"`
 	FilesCount  int    `json:"files_count"`
+	URLsCount   int    `json:"urls_count"`
 }
 
 // BlocklistAddRequest is the request body for POST /api/v1/blocklists.
@@ -175,14 +176,20 @@ type BlocklistAddRequest struct {
 type UpstreamStatus struct {
 	Address   string `json:"address"`
 	Healthy   bool   `json:"healthy"`
-	Queries   uint64 `json:"queries,omitempty"`
-	Failed    uint64 `json:"failed,omitempty"`
-	Failovers uint64 `json:"failovers,omitempty"`
+	Queries   uint64 `json:"queries"`
+	Failed    uint64 `json:"failed"`
+	Failovers uint64 `json:"failovers"`
 }
 
 // UpstreamsResponse is returned by GET /api/v1/upstreams.
 type UpstreamsResponse struct {
 	Upstreams []UpstreamStatus `json:"upstreams"`
+}
+
+// UpstreamUpdateRequest is used to add/remove upstream servers.
+type UpstreamUpdateRequest struct {
+	Action string `json:"action"` // "add" or "remove"
+	Server string `json:"server"` // server address (host:port)
 }
 
 // ACLRuleResponse represents a single ACL rule.

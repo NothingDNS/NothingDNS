@@ -163,35 +163,58 @@ const (
 	OptionCodeExtendedError = 15 // Extended DNS Error (RFC 8914)
 )
 
-// Extended DNS Error (EDE) Info Codes per RFC 8914.
+// Extended DNS Error (EDE) Info Codes per RFC 8914 and RFC 9567.
 const (
-	EDEOtherError             = 0  // Other Error
-	EDEUnsupportedDNSKEYAlgo  = 1  // Unsupported DNSKEY Algorithm
-	EDEUnsupportedDSDigest    = 2  // Unsupported DS Digest Type
-	EDEStaleAnswer            = 3  // Stale Answer
-	EDEForgedAnswer           = 4  // Forged Answer
-	EDEDNSSECIndeterminate    = 5  // DNSSEC Indeterminate
-	EDEDNSSECBogus            = 6  // DNSSEC Bogus
-	EDENSECMissing            = 7  // Signature Expired
-	EDECachedError            = 8  // Cached Error
-	EDENotReady               = 9  // Not Ready
-	EDEBlocked                = 10 // Blocked
-	EDECensored               = 11 // Censored
-	EDEFiltered               = 12 // Filtered
-	EDEProhibited             = 13 // Prohibited
-	EDEStaleNXDOMAIN          = 14 // Stale NXDOMAIN Answer
-	EDENotAuthoritative       = 15 // Not Authoritative
-	EDENotSupported           = 16 // Not Supported
-	EDENoReachableAuthority   = 17 // No Reachable Authority
-	EDENetworkError           = 18 // Network Error
-	EDEInvalidData            = 19 // Invalid Data
-	EDESignatureExpiredBefore = 20 // Signature Expired Before Valid Period
+	EDEOtherError              = 0  // Other Error
+	EDEUnsupportedDNSKEYAlgo   = 1  // Unsupported DNSKEY Algorithm
+	EDEUnsupportedDSDigest     = 2  // Unsupported DS Digest Type
+	EDEStaleAnswer             = 3  // Stale Answer
+	EDEForgedAnswer            = 4  // Forged Answer
+	EDEDNSSECIndeterminate     = 5  // DNSSEC Indeterminate
+	EDEDNSSECBogus             = 6  // DNSSEC Bogus
+	EDENSECMissing             = 7  // Signature Expired
+	EDECachedError             = 8  // Cached Error
+	EDENotReady                = 9  // Not Ready
+	EDEBlocked                 = 10 // Blocked
+	EDECensored                = 11 // Censored
+	EDEFiltered                = 12 // Filtered
+	EDEProhibited              = 13 // Prohibited
+	EDEStaleNXDOMAIN           = 14 // Stale NXDOMAIN Answer
+	EDENotAuthoritative        = 15 // Not Authoritative
+	EDENotSupported            = 16 // Not Supported
+	EDENoReachableAuthority    = 17 // No Reachable Authority
+	EDENetworkError            = 18 // Network Error
+	EDEInvalidData             = 19 // Invalid Data
+	EDESignatureExpiredBefore  = 20 // Signature Expired Before Valid Period
 	EDESignatureNotYetValid   = 21 // Signature Not Yet Valid
-	EDETooEarly               = 22 // DNSKEY Missing
-	EDEUnsupportedNSEC3Iter   = 23 // Unsupported NSEC3 Iterations Value
-	EDENoNSECRecords          = 24 // Unable to Conform to Policy
-	EDENoZoneKeyBitSet        = 25 // Synthesized
-	EDENSECMissingCoverage    = 26 // NSEC Missing Coverage
+	EDETooEarly                = 22 // DNSKEY Missing
+	EDEUnsupportedNSEC3Iter    = 23 // Unsupported NSEC3 Iterations Value
+	EDENoNSECRecords           = 24 // Unable to Conform to Policy
+	EDENoZoneKeyBitSet         = 25 // Synthesized
+	EDENSECMissingCoverage     = 26 // NSEC Missing Coverage
+
+	// RFC 9567 Extended Error Codes
+	EDEDNSSECHigherBit       = 27 // DNSSEC Higher Bit Set
+	EDENoMatchingZone        = 28 // No Matching Zone
+	EDENSECInvalidAlgorithm = 29 // NSEC Invalid Algorithm
+	EDENSECInvalidOptIn     = 30 // NSEC Invalid Opt-In
+	EDENSECInvalidBitmap    = 31 // NSEC Invalid Bit Map
+	EDENSECInvalidHash     = 32 // NSEC Invalid Hash
+	EDENSECInvalidNSEC3    = 33 // NSEC Invalid NSEC3
+	EDENSECInvalidSalt     = 34 // NSEC Invalid Salt
+	EDENSECInvalidIterations = 35 // NSEC Invalid Iterations
+	EDENSECMissingDS       = 36 // Missing DS
+	EDENSECMissingDNSKEY   = 37 // Missing DNSKEY
+	EDERecursiveLoop       = 38 // Recursive Loop
+	EDENoResponse          = 39 // No Response
+	EDEBadEDNSVersion      = 40 // Bad EDNS Version
+	EDEMissingSignature    = 41 // Missing Signature
+	EDESignatureNotValid   = 42 // Signature Not Valid
+	EDNSECMissingRRSIGs    = 43 // Missing RRSIGs
+	EDNSECInvalidRRSIGs   = 44 // Invalid RRSIGs
+	EDNSECInvalidNSEC3Param = 45 // Invalid NSEC3 Parameters
+	EDENoMatchingRRSIG     = 46 // No Matching RRSIG
+	EDETrustAnchorTained   = 47 // Trust Anchor Tainted
 )
 
 // Header flag bits.

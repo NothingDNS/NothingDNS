@@ -383,7 +383,7 @@ func TestTCPListenWithListener(t *testing.T) {
 
 	server.ListenWithListener(ln)
 
-	if server.listener == nil {
+	if server.Listener() == nil {
 		t.Error("Listener should be set")
 	}
 }

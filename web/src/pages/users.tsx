@@ -40,7 +40,7 @@ export function UsersPage() {
 
   const handleDelete = async (username: string) => {
     try {
-      await api('DELETE', `/api/v1/auth/users/${encodeURIComponent(username)}`);
+      await api('DELETE', `/api/v1/auth/users?username=${encodeURIComponent(username)}`);
       fetchUsers();
     } catch (e) {
       console.error('Failed to delete user:', e);

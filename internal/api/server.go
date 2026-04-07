@@ -23,6 +23,7 @@ import (
 	"github.com/nothingdns/nothingdns/internal/dnssec"
 	"github.com/nothingdns/nothingdns/internal/filter"
 	"github.com/nothingdns/nothingdns/internal/metrics"
+	"github.com/nothingdns/nothingdns/internal/odoh"
 	"github.com/nothingdns/nothingdns/internal/rpz"
 	"github.com/nothingdns/nothingdns/internal/server"
 	"github.com/nothingdns/nothingdns/internal/upstream"
@@ -48,6 +49,7 @@ type Server struct {
 	metrics         *metrics.MetricsCollector
 	validator       *dnssec.Validator
 	rpzEngine       *rpz.Engine
+	odohProxy       *odoh.ObliviousProxy // ODoH proxy (RFC 9230)
 
 	// Goroutine leak detection baseline
 	goroutineBaseline int64
@@ -115,6 +117,12 @@ func (s *Server) WithRPZ(e *rpz.Engine) *Server {
 	return s
 }
 
+// WithODoH sets the ODoH proxy for the API server (RFC 9230).
+func (s *Server) WithODoH(proxy *odoh.ObliviousProxy) *Server {
+	s.odohProxy = proxy
+	return s
+}
+
 // Start starts the API server.
 func (s *Server) Start() error {
 	if !s.config.Enabled {
@@ -138,17 +146,20 @@ func (s *Server) Start() error {
 		mux.Handle(s.config.DoWSPath, wsHandler)
 	}
 
+	// ODoH endpoint (RFC 9230 - Oblivious DNS over HTTPS) - no auth required
+	if s.config.ODoHEnabled && s.odohProxy != nil {
+		mux.Handle(s.config.ODoHPath, s.odohProxy)
+	}
+
 	// Health and status
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/readyz", s.handleReadiness)
 	mux.HandleFunc("/livez", s.handleLiveness)
 	mux.HandleFunc("/api/v1/status", s.handleStatus)
 
-	// Cluster management
-	if s.cluster != nil {
-		mux.HandleFunc("/api/v1/cluster/status", s.handleClusterStatus)
-		mux.HandleFunc("/api/v1/cluster/nodes", s.handleClusterNodes)
-	}
+	// Cluster management (always registered, returns proper JSON when disabled)
+	mux.HandleFunc("/api/v1/cluster/status", s.handleClusterStatus)
+	mux.HandleFunc("/api/v1/cluster/nodes", s.handleClusterNodes)
 
 	// Zone management
 	mux.HandleFunc("/api/v1/zones", s.handleZones)
@@ -159,28 +170,20 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/v1/cache/stats", s.handleCacheStats)
 	mux.HandleFunc("/api/v1/cache/flush", s.handleCacheFlush)
 
-	// Blocklist management
-	if s.blocklist != nil {
-		mux.HandleFunc("/api/v1/blocklists", s.handleBlocklists)
-		mux.HandleFunc("/api/v1/blocklists/", s.handleBlocklistActions)
-	}
+	// Blocklist management (always registered)
+	mux.HandleFunc("/api/v1/blocklists", s.handleBlocklists)
+	mux.HandleFunc("/api/v1/blocklists/", s.handleBlocklistActions)
 
-	// Upstream management
-	if s.upstreamClient != nil || s.upstreamLB != nil {
-		mux.HandleFunc("/api/v1/upstreams", s.handleUpstreams)
-	}
+	// Upstream management (always registered)
+	mux.HandleFunc("/api/v1/upstreams", s.handleUpstreams)
 
-	// ACL management
-	if s.aclChecker != nil {
-		mux.HandleFunc("/api/v1/acl", s.handleACL)
-	}
+	// ACL management (always registered)
+	mux.HandleFunc("/api/v1/acl", s.handleACL)
 
-	// RPZ management
-	if s.rpzEngine != nil {
-		mux.HandleFunc("/api/v1/rpz", s.handleRPZ)
-		mux.HandleFunc("/api/v1/rpz/rules", s.handleRPZRules)
-		mux.HandleFunc("/api/v1/rpz/", s.handleRPZActions)
-	}
+	// RPZ management (always registered)
+	mux.HandleFunc("/api/v1/rpz", s.handleRPZ)
+	mux.HandleFunc("/api/v1/rpz/rules", s.handleRPZRules)
+	mux.HandleFunc("/api/v1/rpz/", s.handleRPZActions)
 
 	// Server config (read-only)
 	mux.HandleFunc("/api/v1/server/config", s.handleServerConfig)
@@ -196,10 +199,8 @@ func (s *Server) Start() error {
 	// Config management
 	mux.HandleFunc("/api/v1/config/reload", s.handleConfigReload)
 
-	// DNSSEC status
-	if s.validator != nil {
-		mux.HandleFunc("/api/v1/dnssec/status", s.handleDNSSECStatus)
-	}
+	// DNSSEC status (always registered)
+	mux.HandleFunc("/api/v1/dnssec/status", s.handleDNSSECStatus)
 
 	// Dashboard UI
 	mux.HandleFunc("/api/dashboard/stats", s.handleDashboardStats)
@@ -540,6 +541,13 @@ func (s *Server) handleMetricsHistory(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDNSSECStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	if s.validator == nil {
+		s.writeJSON(w, http.StatusOK, &dnssec.DNSSECStatus{
+			Enabled: false,
+		})
 		return
 	}
 
@@ -1075,7 +1083,18 @@ func (s *Server) handleClusterStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.cluster == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "Cluster not available")
+		s.writeJSON(w, http.StatusOK, &ClusterStatusResponse{
+			NodeID:     "",
+			NodeCount:  0,
+			AliveCount: 0,
+			Healthy:    false,
+			Gossip: GossipInfo{
+				MessagesSent:     0,
+				MessagesReceived: 0,
+				PingSent:         0,
+				PingReceived:     0,
+			},
+		})
 		return
 	}
 
@@ -1102,7 +1121,7 @@ func (s *Server) handleClusterNodes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.cluster == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "Cluster not available")
+		s.writeJSON(w, http.StatusOK, &ClusterNodesResponse{Nodes: []NodeDetail{}})
 		return
 	}
 
@@ -1133,7 +1152,12 @@ func (s *Server) handleBlocklists(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.blocklist == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "Blocklist not available")
+		s.writeJSON(w, http.StatusOK, &BlocklistResponse{
+			Enabled:     false,
+			TotalRules: 0,
+			FilesCount: 0,
+			URLsCount:  0,
+		})
 		return
 	}
 
@@ -1144,6 +1168,7 @@ func (s *Server) handleBlocklists(w http.ResponseWriter, r *http.Request) {
 			Enabled:     stats.Enabled,
 			TotalRules: stats.TotalBlocks,
 			FilesCount: stats.Files,
+			URLsCount:  stats.URLs,
 		})
 	case http.MethodPost:
 		var req BlocklistAddRequest
@@ -1158,8 +1183,11 @@ func (s *Server) handleBlocklists(w http.ResponseWriter, r *http.Request) {
 			}
 			s.writeJSON(w, http.StatusCreated, &MessageResponse{Message: "Blocklist file added"})
 		} else if req.URL != "" {
-			// URL addition would require downloading — not implemented
-			s.writeError(w, http.StatusNotImplemented, "URL-based blocklist not implemented; use file path instead")
+			if err := s.blocklist.AddURL(req.URL); err != nil {
+				s.writeError(w, http.StatusBadRequest, fmt.Sprintf("Failed to load blocklist from URL: %v", err))
+				return
+			}
+			s.writeJSON(w, http.StatusCreated, &MessageResponse{Message: "Blocklist URL added: " + req.URL})
 		} else {
 			s.writeError(w, http.StatusBadRequest, "file or url is required")
 		}
@@ -1228,19 +1256,58 @@ func (s *Server) handleUpstreams(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		if s.upstreamClient != nil {
+			queries, failed, _ := s.upstreamClient.Stats()
 			upstreams = append(upstreams, UpstreamStatus{
 				Address: "direct-upstream",
 				Healthy: s.upstreamClient.IsHealthy(),
+				Queries: queries,
+				Failed:  failed,
 			})
 		}
 		s.writeJSON(w, http.StatusOK, &UpstreamsResponse{Upstreams: upstreams})
 	case http.MethodPut:
-		// Update upstream configuration
-		s.writeError(w, http.StatusNotImplemented, "Dynamic upstream update not implemented")
+		// Update upstream configuration (add/remove servers)
+		var req UpstreamUpdateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.writeError(w, http.StatusBadRequest, "Invalid request body")
+			return
+		}
+
+		if s.upstreamClient == nil {
+			s.writeError(w, http.StatusServiceUnavailable, "Upstream client not configured")
+			return
+		}
+
+		switch req.Action {
+		case "add":
+			if req.Server == "" {
+				s.writeError(w, http.StatusBadRequest, "Server address required")
+				return
+			}
+			if err := s.upstreamClient.AddServer(req.Server); err != nil {
+				s.writeError(w, http.StatusConflict, err.Error())
+				return
+			}
+			s.writeJSON(w, http.StatusOK, &MessageResponse{Message: "Server added: " + req.Server})
+
+		case "remove":
+			if req.Server == "" {
+				s.writeError(w, http.StatusBadRequest, "Server address required")
+				return
+			}
+			if err := s.upstreamClient.RemoveServer(req.Server); err != nil {
+				s.writeError(w, http.StatusNotFound, err.Error())
+				return
+			}
+			s.writeJSON(w, http.StatusOK, &MessageResponse{Message: "Server removed: " + req.Server})
+
+		default:
+			s.writeError(w, http.StatusBadRequest, "Invalid action: must be 'add' or 'remove'")
+		}
 	}
 }
 
-// handleACL returns ACL rules.
+// handleACL returns ACL rules or updates them.
 func (s *Server) handleACL(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodPut {
 		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
@@ -1248,17 +1315,55 @@ func (s *Server) handleACL(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.aclChecker == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "ACL not available")
+		s.writeJSON(w, http.StatusOK, &ACLResponse{Rules: []ACLRuleResponse{}})
 		return
 	}
 
 	switch r.Method {
 	case http.MethodGet:
-		s.writeJSON(w, http.StatusOK, &ACLResponse{
-			Rules: []ACLRuleResponse{}, // Populated via ACL getter if available
-		})
+		rules := s.aclChecker.GetRules()
+		aclRules := make([]ACLRuleResponse, 0, len(rules))
+		for _, rule := range rules {
+			aclRules = append(aclRules, ACLRuleResponse{
+				Name:     rule.Name,
+				Networks: rule.Networks,
+				Action:   rule.Action,
+				Types:    rule.Types,
+			})
+		}
+		s.writeJSON(w, http.StatusOK, &ACLResponse{Rules: aclRules})
 	case http.MethodPut:
-		s.writeError(w, http.StatusNotImplemented, "Dynamic ACL update not implemented")
+		var req struct {
+			Rules []struct {
+				Name     string   `json:"name"`
+				Networks []string `json:"networks"`
+				Action   string   `json:"action"`
+				Types    []string `json:"types,omitempty"`
+				Redirect string   `json:"redirect,omitempty"`
+			} `json:"rules"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.writeError(w, http.StatusBadRequest, "Invalid request body")
+			return
+		}
+
+		// Convert to config rules
+		configRules := make([]config.ACLRule, 0, len(req.Rules))
+		for _, rule := range req.Rules {
+			configRules = append(configRules, config.ACLRule{
+				Name:     rule.Name,
+				Networks: rule.Networks,
+				Action:   rule.Action,
+				Types:    rule.Types,
+				Redirect: rule.Redirect,
+			})
+		}
+
+		if err := s.aclChecker.UpdateRules(configRules); err != nil {
+			s.writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		s.writeJSON(w, http.StatusOK, &MessageResponse{Message: "ACL rules updated"})
 	}
 }
 
@@ -1270,7 +1375,16 @@ func (s *Server) handleRPZ(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.rpzEngine == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "RPZ not available")
+		s.writeJSON(w, http.StatusOK, &RPZStatsResponse{
+			Enabled:       false,
+			TotalRules:    0,
+			QNAMERules:    0,
+			ClientIPRules: 0,
+			RespIPRules:   0,
+			FilesCount:    0,
+			TotalMatches:  0,
+			TotalLookups:  0,
+		})
 		return
 	}
 
@@ -1300,7 +1414,7 @@ func (s *Server) handleRPZRules(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.rpzEngine == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "RPZ not available")
+		s.writeJSON(w, http.StatusOK, &RPZRulesResponse{Rules: []RPZRuleResponse{}})
 		return
 	}
 

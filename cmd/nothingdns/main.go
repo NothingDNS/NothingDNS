@@ -30,6 +30,7 @@ import (
 	"github.com/nothingdns/nothingdns/internal/geodns"
 	"github.com/nothingdns/nothingdns/internal/memory"
 	"github.com/nothingdns/nothingdns/internal/metrics"
+	"github.com/nothingdns/nothingdns/internal/odoh"
 	"github.com/nothingdns/nothingdns/internal/quic"
 	"github.com/nothingdns/nothingdns/internal/resolver"
 	"github.com/nothingdns/nothingdns/internal/rpz"
@@ -221,12 +222,13 @@ func run() error {
 	bl := blocklist.New(blocklist.Config{
 		Enabled: cfg.Blocklist.Enabled,
 		Files:   cfg.Blocklist.Files,
+		URLs:    cfg.Blocklist.URLs,
 	})
 	if err := bl.Load(); err != nil {
 		logger.Warnf("Failed to load blocklist: %v", err)
 	} else if cfg.Blocklist.Enabled {
 		stats := bl.Stats()
-		logger.Infof("Blocklist loaded with %d entries from %d files", stats.TotalBlocks, stats.Files)
+		logger.Infof("Blocklist loaded with %d entries from %d files and %d URLs", stats.TotalBlocks, stats.Files, stats.URLs)
 	}
 
 	// Initialize RPZ engine
@@ -566,6 +568,13 @@ func run() error {
 		logger.Infof("Split-horizon enabled with %d views", len(cfg.Views))
 	}
 
+	// Initialize IDNA validator if enabled (RFC 5891)
+	idnaEnabled := cfg.IDNA.Enabled
+	if idnaEnabled {
+		logger.Infof("IDNA validation enabled (STD3=%v, Bidi=%v, Joiner=%v)",
+			cfg.IDNA.UseSTD3Rules, cfg.IDNA.CheckBidi, cfg.IDNA.CheckJoiner)
+	}
+
 	// Create DNS handler (needed for API server DoH support)
 	handler := &integratedHandler{
 		config:        cfg,
@@ -582,6 +591,7 @@ func run() error {
 		metrics:       metricsCollector,
 		validator:     validator,
 		zoneSigners:   zoneSigners,
+		idnaEnabled:   idnaEnabled,
 		cluster:       clusterMgr,
 		axfrServer:    axfrServer,
 		ixfrServer:    ixfrServer,
@@ -726,12 +736,38 @@ func run() error {
 		WithMetrics(metricsCollector).
 		WithDNSSEC(validator).
 		WithRPZ(rpzEngine)
+
+	// Initialize ODoH proxy (RFC 9230) if enabled
+	var odohProxy *odoh.ObliviousProxy
+	if cfg.Server.HTTP.ODoHEnabled {
+		odohConfig := &odoh.ODoHConfig{
+			TargetName: cfg.ODoH.TargetURL,
+			ProxyName:  cfg.ODoH.ProxyURL,
+			TargetURL:  cfg.ODoH.TargetURL,
+			ProxyURL:   cfg.ODoH.ProxyURL,
+			HPKEKEM:    cfg.ODoH.KEM,
+			HPKEKDF:    cfg.ODoH.KDF,
+			HPKEAEAD:   cfg.ODoH.AEAD,
+		}
+		odohProxy, err = odoh.NewObliviousProxy(odohConfig)
+		if err != nil {
+			logger.Warnf("Failed to create ODoH proxy: %v", err)
+		} else {
+			logger.Infof("ODoH proxy configured (target: %s)", cfg.ODoH.TargetURL)
+		}
+	}
+
+	apiServer = apiServer.WithODoH(odohProxy)
+
 	if err := apiServer.Start(); err != nil {
 		logger.Warnf("Failed to start API server: %v", err)
 	} else if cfg.Server.HTTP.Enabled {
 		logger.Infof("API server listening on %s", cfg.Server.HTTP.Bind)
 		if cfg.Server.HTTP.DoHEnabled {
 			logger.Infof("DoH endpoint enabled at %s", cfg.Server.HTTP.DoHPath)
+		}
+		if cfg.Server.HTTP.ODoHEnabled && odohProxy != nil {
+			logger.Infof("ODoH endpoint enabled at %s", cfg.Server.HTTP.ODoHPath)
 		}
 	}
 

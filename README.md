@@ -18,10 +18,12 @@ A zero-dependency DNS server written in pure Go. NothingDNS is designed to be li
 - **UDP & TCP** - Support for both UDP and TCP DNS queries with SO_REUSEPORT
 - **Caching** - Thread-safe LRU cache with TTL support, prefetching, and negative caching (RFC 2308)
 - **Upstream Forwarding** - Multiple upstream servers with health checking, failover, and TCP connection pooling
+- **Dynamic Upstreams** - Add/remove upstream servers at runtime via API
 - **Iterative Resolver** - Full recursive resolution with CNAME chasing and delegation following
 - **QNAME Minimization** - RFC 7816 privacy protection during iterative resolution
 - **DNS64/NAT64** - IPv6 transition mechanism synthesizing AAAA from A records (RFC 6147)
 - **SVCB/HTTPS Records** - Service Binding and HTTPS record types (RFC 9460)
+- **IDNA** - Internationalized Domain Names validation (RFC 5891)
 
 ### Security
 - **DNSSEC** - DNS Security Extensions validation and zone signing (RFC 4033/4034/4035)
@@ -31,7 +33,8 @@ A zero-dependency DNS server written in pure Go. NothingDNS is designed to be li
 - **DNS over TLS (DoT)** - RFC 7858 compliant DoT support
 - **DNS Cookies** - RFC 7873 anti-spoofing with HMAC-SHA256 client/server cookies
 - **DNS over QUIC (DoQ)** - QUIC-based encrypted DNS transport
-- **Blocklist Support** - Block domains using hosts file format
+- **Oblivious DNS over HTTPS (ODoH)** - RFC 9230 privacy-preserving DNS proxy
+- **Blocklist Support** - Block domains using hosts file format or URL-based lists
 - **Response Policy Zones (RPZ)** - Policy-based DNS filtering with NXDOMAIN, NODATA, redirect, and DROP actions
 - **Response Rate Limiting (RRL)** - Per-client token bucket rate limiting
 - **ACL** - Access control lists for client filtering
@@ -39,6 +42,7 @@ A zero-dependency DNS server written in pure Go. NothingDNS is designed to be li
 
 ### Authoritative
 - **Authoritative Zones** - Zone file support for hosting your own DNS records
+- **Authoritative-Only Mode** - Return NXDOMAIN for non-zone queries instead of forwarding
 - **Slave Zones** - AXFR/IXFR zone transfer from master servers
 - **Zone Transfer** - AXFR support for serving zones to secondary servers
 - **$GENERATE Directive** - BIND-compatible record generation for bulk entries

@@ -20,8 +20,20 @@ server:
     enabled: true
     bind: ":8080"
     auth_token: ""  # Set for API authentication
+    # Multi-user auth (username/password/role)
+    # users:
+    #   - username: admin
+    #     password: "secure_password"
+    #     role: admin  # admin, operator, viewer
+    # JWT auth secret (auto-generated if empty)
+    # auth_secret: "your-256-bit-secret"
     doh_enabled: false
     doh_path: /dns-query
+    dows_enabled: false
+    dows_path: /dns-ws
+    # ODoH (Oblivious DNS over HTTPS, RFC 9230)
+    odoh_enabled: false
+    odoh_path: /odoh
 
 resolution:
   recursive: false
@@ -99,6 +111,10 @@ blocklist:
   enabled: false
   files: []
     # - /etc/nothingdns/blocklists/ad-blocklist.txt
+  urls: []
+    # URL-based blocklists (downloaded automatically)
+    # - https://adguard.github.io/AdGuardSDNSFilter/Filters/filter.txt
+    # - https://blocklistproject.github.io/Lists/malware.txt
 
 zones: []
   # - /etc/nothingdns/zones/example.com.zone
@@ -154,5 +170,27 @@ geodns:
   enabled: false
   # database: /etc/nothingdns/GeoLite2-Country.mmdb
 
+# IDNA - Internationalized Domain Names (RFC 5891)
+idna:
+  enabled: false
+  # use_std3_rules: false  # Use STD3 ASCII rules
+  # allow_unassigned: false  # Allow unassigned code points
+
+# ODoH - Oblivious DNS over HTTPS (RFC 9230)
+odoh:
+  enabled: false
+  bind: ":8080"
+  target_url: "https://resolver.example.com/dns-query"
+  proxy_url: "https://odoh.example.com/odoh"
+  # HPKE key encapsulation method (1=P-256, 2=P-384, 3=P-521, 4=X25519)
+  # kem: 4
+  # HPKE key derivation function (0=HKDF-SHA256, 1=HKDF-SHA512)
+  # kdf: 0
+  # HPKE AEAD (1=AES-128-GCM, 2=AES-256-GCM, 3=ChaCha20-Poly1305)
+  # aead: 3
+
 # Memory limit in MB (0 = unlimited)
 memory_limit_mb: 0
+
+# Shutdown timeout (default: 30s). Maximum time to wait for in-flight queries.
+# shutdown_timeout: 30s

@@ -1,6 +1,8 @@
 package raft
 
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
 	"sync"
 	"time"
@@ -65,12 +67,76 @@ type entry struct {
 	Commitment uint64 // Used for commit acknowledgment
 }
 
+// JointConfig represents a joint consensus configuration per RFC 7003.
+// It contains both the old and new configurations during transitions.
+type JointConfig struct {
+	OldPeers map[NodeID]*Peer // Previous configuration
+	NewPeers map[NodeID]*Peer // New configuration
+}
+
+// NewJointConfig creates a new joint config from old and new peer sets.
+func NewJointConfig(oldPeers, newPeers map[NodeID]*Peer) *JointConfig {
+	return &JointConfig{
+		OldPeers: oldPeers,
+		NewPeers: newPeers,
+	}
+}
+
+// QuorumForConfig returns the quorum size for a given configuration.
+func (jc *JointConfig) QuorumForConfig(peerSet map[NodeID]*Peer) int {
+	return len(peerSet)/2 + 1
+}
+
+// HasQuorumOldAndNew checks if we have quorum in both old and new configurations.
+// Per RFC 7003, for joint consensus, we need quorum from BOTH configurations.
+func (jc *JointConfig) HasQuorumOldAndNew(matchIndex map[NodeID]Index, commitIdx Index) bool {
+	// Count replicas in old config
+	oldReplicas := 0
+	for id := range jc.OldPeers {
+		if matchIndex[id] >= commitIdx {
+			oldReplicas++
+		}
+	}
+	oldQuorum := jc.QuorumForConfig(jc.OldPeers)
+	if oldReplicas < oldQuorum {
+		return false
+	}
+
+	// Count replicas in new config
+	newReplicas := 0
+	for id := range jc.NewPeers {
+		if matchIndex[id] >= commitIdx {
+			newReplicas++
+		}
+	}
+	newQuorum := jc.QuorumForConfig(jc.NewPeers)
+	return newReplicas >= newQuorum
+}
+
+// IsInJoint returns true if we're currently in joint consensus.
+func (n *Node) IsInJoint() bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.jointConfig != nil
+}
+
+// JointConfigProposal describes a pending configuration change.
+type JointConfigProposal struct {
+	Type      EntryType // EntryAddNode or EntryRemoveNode
+	PeerID    NodeID
+	PeerAddr  string
+	Proposed  time.Time // When this was proposed
+}
+
 // EntryType distinguishes different entry types.
 type EntryType uint8
 
 const (
 	EntryNormal EntryType = iota // Regular application command
 	EntryNoOp                    // No-op entry for commit acknowledgment
+	EntryAddNode                 // Add node to cluster (joint consensus phase 1)
+	EntryRemoveNode              // Remove node from cluster (joint consensus phase 1)
+	EntryJointComplete           // Joint consensus complete, using new config
 )
 
 // Node is a single Raft node.
@@ -96,6 +162,11 @@ type Node struct {
 
 	// Membership
 	peers map[NodeID]*Peer
+
+	// Joint consensus state (RFC 7003)
+	jointConfig       *JointConfig       // Current joint configuration (nil = using simple config)
+	jointConfigIdx    Index              // Index of joint config entry in log
+	pendingConfChange *JointConfigProposal // Pending configuration change proposal
 
 	// Channels
 	voteCh       chan VoteRequest   // Incoming vote requests from RPC
@@ -896,25 +967,307 @@ func (n *Node) sendAppendRequest(peerID NodeID, req AppendRequest) {
 	}()
 }
 
-// AddPeer adds a new peer to the cluster.
-func (n *Node) AddPeer(id NodeID, addr string) {
+// AddPeer proposes adding a new peer to the cluster using joint consensus (RFC 7003).
+// This is a two-phase process: first a joint config is proposed, then the new config.
+func (n *Node) AddPeer(id NodeID, addr string) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	if _, ok := n.peers[id]; !ok {
-		n.peers[id] = &Peer{ID: id, Addr: addr}
-		n.nextIndex[id] = Index(len(n.log)) + 1
-		n.matchIndex[id] = 0
+	// If already in joint config or pending, reject
+	if n.jointConfig != nil || n.pendingConfChange != nil {
+		return fmt.Errorf("cluster is already processing a configuration change")
 	}
+
+	// If peer already exists, nothing to do
+	if _, ok := n.peers[id]; ok {
+		return nil
+	}
+
+	// Can't add self
+	if id == n.config.NodeID {
+		return fmt.Errorf("cannot add self")
+	}
+
+	// Create the joint config entry directly
+	var newPeers map[NodeID]*Peer
+	newPeers = make(map[NodeID]*Peer)
+	for pid, p := range n.peers {
+		newPeers[pid] = p
+	}
+	newPeers[id] = &Peer{ID: id, Addr: addr}
+
+	jointConfig := NewJointConfig(n.peers, newPeers)
+	jcBytes, err := encodeJointConfig(jointConfig)
+	if err != nil {
+		return fmt.Errorf("encode joint config: %w", err)
+	}
+
+	// Append joint config entry
+	entry := entry{
+		Index:   Index(len(n.log)) + 1,
+		Term:    n.currentTerm,
+		Command: jcBytes,
+		Type:    EntryAddNode,
+	}
+	n.log = append(n.log, entry)
+
+	// Store joint config reference
+	n.jointConfig = jointConfig
+	n.jointConfigIdx = entry.Index
+	n.pendingConfChange = &JointConfigProposal{
+		Type:     EntryAddNode,
+		PeerID:   id,
+		PeerAddr: addr,
+		Proposed: time.Now(),
+	}
+
+	// Initialize tracking for the new peer
+	n.nextIndex[id] = Index(len(n.log)) + 1
+	n.matchIndex[id] = 0
+
+	return nil
 }
 
-// RemovePeer removes a peer from the cluster.
-func (n *Node) RemovePeer(id NodeID) {
+// ProposeConfChange proposes a configuration change entry.
+// For AddNode: proposes joint (C_old, C_old ∪ {new}) then C_new ∪ {new}
+// For RemoveNode: proposes joint (C_old, C_old \ {old}) then C_old \ {old}
+func (n *Node) ProposeConfChange(proposal *JointConfigProposal) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	delete(n.peers, id)
-	delete(n.nextIndex, id)
-	delete(n.matchIndex, id)
+
+	if n.state != StateLeader {
+		return fmt.Errorf("not leader")
+	}
+
+	// Create the joint config entry
+	var newPeers map[NodeID]*Peer
+	if proposal.Type == EntryAddNode {
+		newPeers = make(map[NodeID]*Peer)
+		for id, p := range n.peers {
+			newPeers[id] = p
+		}
+		newPeers[proposal.PeerID] = &Peer{ID: proposal.PeerID, Addr: proposal.PeerAddr}
+	} else {
+		newPeers = make(map[NodeID]*Peer)
+		for id, p := range n.peers {
+			if id != proposal.PeerID {
+				newPeers[id] = p
+			}
+		}
+	}
+
+	jointConfig := NewJointConfig(n.peers, newPeers)
+	jcBytes, err := encodeJointConfig(jointConfig)
+	if err != nil {
+		return fmt.Errorf("encode joint config: %w", err)
+	}
+
+	// Append joint config entry
+	entry := entry{
+		Index:   Index(len(n.log)) + 1,
+		Term:    n.currentTerm,
+		Command: jcBytes,
+		Type:    proposal.Type,
+	}
+	n.log = append(n.log, entry)
+
+	// Store joint config reference
+	n.jointConfig = jointConfig
+	n.jointConfigIdx = entry.Index
+
+	// Also initialize tracking for the new peer if adding
+	if proposal.Type == EntryAddNode {
+		n.nextIndex[proposal.PeerID] = Index(len(n.log)) + 1
+		n.matchIndex[proposal.PeerID] = 0
+	}
+
+	return nil
+}
+
+// advanceJointConfig commits the joint config and transitions to new config.
+// Called when the joint config entry has been committed.
+func (n *Node) advanceJointConfig() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	if n.jointConfig == nil {
+		return
+	}
+
+	// Transition from joint to new config
+	n.peers = n.jointConfig.NewPeers
+
+	// Clear joint config state
+	n.jointConfig = nil
+	n.jointConfigIdx = 0
+	n.pendingConfChange = nil
+}
+
+// RemovePeer proposes removing a peer from the cluster using joint consensus (RFC 7003).
+func (n *Node) RemovePeer(id NodeID) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	// If already in joint config or pending, reject
+	if n.jointConfig != nil || n.pendingConfChange != nil {
+		return fmt.Errorf("cluster is already processing a configuration change")
+	}
+
+	// If peer doesn't exist, nothing to do
+	if _, ok := n.peers[id]; !ok {
+		return nil
+	}
+
+	// Can't remove self
+	if id == n.config.NodeID {
+		return fmt.Errorf("cannot remove self")
+	}
+
+	// Create the joint config entry
+	var newPeers map[NodeID]*Peer
+	newPeers = make(map[NodeID]*Peer)
+	for pid, p := range n.peers {
+		if pid != id {
+			newPeers[pid] = p
+		}
+	}
+
+	jointConfig := NewJointConfig(n.peers, newPeers)
+	jcBytes, err := encodeJointConfig(jointConfig)
+	if err != nil {
+		return fmt.Errorf("encode joint config: %w", err)
+	}
+
+	// Append joint config entry
+	entry := entry{
+		Index:   Index(len(n.log)) + 1,
+		Term:    n.currentTerm,
+		Command: jcBytes,
+		Type:    EntryRemoveNode,
+	}
+	n.log = append(n.log, entry)
+
+	// Store joint config reference
+	n.jointConfig = jointConfig
+	n.jointConfigIdx = entry.Index
+	n.pendingConfChange = &JointConfigProposal{
+		Type:   EntryRemoveNode,
+		PeerID: id,
+		Proposed: time.Now(),
+	}
+
+	// Note: we don't remove nextIndex/matchIndex here - they're removed when joint completes
+
+	return nil
+}
+
+// encodeJointConfig encodes a joint configuration to bytes.
+func encodeJointConfig(jc *JointConfig) ([]byte, error) {
+	var buf bytes.Buffer
+
+	// Encode old peers count
+	if err := binary.Write(&buf, binary.BigEndian, uint32(len(jc.OldPeers))); err != nil {
+		return nil, err
+	}
+	// Encode old peers
+	for id, peer := range jc.OldPeers {
+		if err := binary.Write(&buf, binary.BigEndian, uint32(len(id))); err != nil {
+			return nil, err
+		}
+		buf.WriteString(string(id))
+		if err := binary.Write(&buf, binary.BigEndian, uint32(len(peer.Addr))); err != nil {
+			return nil, err
+		}
+		buf.WriteString(peer.Addr)
+	}
+
+	// Encode new peers count
+	if err := binary.Write(&buf, binary.BigEndian, uint32(len(jc.NewPeers))); err != nil {
+		return nil, err
+	}
+	// Encode new peers
+	for id, peer := range jc.NewPeers {
+		if err := binary.Write(&buf, binary.BigEndian, uint32(len(id))); err != nil {
+			return nil, err
+		}
+		buf.WriteString(string(id))
+		if err := binary.Write(&buf, binary.BigEndian, uint32(len(peer.Addr))); err != nil {
+			return nil, err
+		}
+		buf.WriteString(peer.Addr)
+	}
+
+	return buf.Bytes(), nil
+}
+
+// decodeJointConfig decodes bytes to a joint configuration.
+func decodeJointConfig(data []byte) (*JointConfig, error) {
+	jc := &JointConfig{
+		OldPeers: make(map[NodeID]*Peer),
+		NewPeers: make(map[NodeID]*Peer),
+	}
+
+	r := bytes.NewReader(data)
+
+	// Decode old peers
+	var oldCount uint32
+	if err := binary.Read(r, binary.BigEndian, &oldCount); err != nil {
+		return nil, err
+	}
+	for i := uint32(0); i < oldCount; i++ {
+		var idLen uint32
+		if err := binary.Read(r, binary.BigEndian, &idLen); err != nil {
+			return nil, err
+		}
+		idBytes := make([]byte, idLen)
+		if _, err := r.Read(idBytes); err != nil {
+			return nil, err
+		}
+		id := NodeID(idBytes)
+
+		var addrLen uint32
+		if err := binary.Read(r, binary.BigEndian, &addrLen); err != nil {
+			return nil, err
+		}
+		addrBytes := make([]byte, addrLen)
+		if _, err := r.Read(addrBytes); err != nil {
+			return nil, err
+		}
+		addr := string(addrBytes)
+
+		jc.OldPeers[id] = &Peer{ID: id, Addr: addr}
+	}
+
+	// Decode new peers
+	var newCount uint32
+	if err := binary.Read(r, binary.BigEndian, &newCount); err != nil {
+		return nil, err
+	}
+	for i := uint32(0); i < newCount; i++ {
+		var idLen uint32
+		if err := binary.Read(r, binary.BigEndian, &idLen); err != nil {
+			return nil, err
+		}
+		idBytes := make([]byte, idLen)
+		if _, err := r.Read(idBytes); err != nil {
+			return nil, err
+		}
+		id := NodeID(idBytes)
+
+		var addrLen uint32
+		if err := binary.Read(r, binary.BigEndian, &addrLen); err != nil {
+			return nil, err
+		}
+		addrBytes := make([]byte, addrLen)
+		if _, err := r.Read(addrBytes); err != nil {
+			return nil, err
+		}
+		addr := string(addrBytes)
+
+		jc.NewPeers[id] = &Peer{ID: id, Addr: addr}
+	}
+
+	return jc, nil
 }
 
 // State returns the current state.

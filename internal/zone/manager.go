@@ -93,6 +93,15 @@ func (m *Manager) List() map[string]*Zone {
 	return result
 }
 
+// ListShared returns the internal zones map for read-only access.
+// Caller must NOT modify the returned map.
+// This enables single-source-of-truth zone access without map copying.
+func (m *Manager) ListShared() map[string]*Zone {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.zones
+}
+
 // Reload reloads a zone from its file.
 func (m *Manager) Reload(name string) error {
 	m.mu.RLock()
