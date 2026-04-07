@@ -133,6 +133,11 @@ func (m *SecurityManager) Stop() {
 	}
 }
 
+// Result returns the security manager results.
+func (m *SecurityManager) Result() *SecurityManagerResult {
+	return &m.result
+}
+
 // Reload reloads blocklist and RPZ.
 func (m *SecurityManager) Reload() {
 	if m.result.Blocklist != nil {

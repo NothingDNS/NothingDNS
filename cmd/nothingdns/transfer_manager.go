@@ -117,3 +117,8 @@ func (m *TransferManager) Stop() {
 		m.result.DDNSHandler.Close()
 	}
 }
+
+// Result returns the transfer manager results.
+func (m *TransferManager) Result() *TransferManagerResult {
+	return &m.result
+}

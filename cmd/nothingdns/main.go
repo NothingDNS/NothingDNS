@@ -18,26 +18,17 @@ import (
 	"github.com/nothingdns/nothingdns/internal/api"
 	"github.com/nothingdns/nothingdns/internal/audit"
 	"github.com/nothingdns/nothingdns/internal/auth"
-	"github.com/nothingdns/nothingdns/internal/blocklist"
 	"github.com/nothingdns/nothingdns/internal/cache"
-	"github.com/nothingdns/nothingdns/internal/cluster"
 	"github.com/nothingdns/nothingdns/internal/config"
 	"github.com/nothingdns/nothingdns/internal/dashboard"
-	"github.com/nothingdns/nothingdns/internal/dns64"
 	"github.com/nothingdns/nothingdns/internal/dnscookie"
 	"github.com/nothingdns/nothingdns/internal/dnssec"
 	"github.com/nothingdns/nothingdns/internal/filter"
-	"github.com/nothingdns/nothingdns/internal/geodns"
-	"github.com/nothingdns/nothingdns/internal/memory"
 	"github.com/nothingdns/nothingdns/internal/metrics"
 	"github.com/nothingdns/nothingdns/internal/odoh"
 	"github.com/nothingdns/nothingdns/internal/quic"
 	"github.com/nothingdns/nothingdns/internal/resolver"
-	"github.com/nothingdns/nothingdns/internal/rpz"
 	"github.com/nothingdns/nothingdns/internal/server"
-	"github.com/nothingdns/nothingdns/internal/storage"
-	"github.com/nothingdns/nothingdns/internal/transfer"
-	"github.com/nothingdns/nothingdns/internal/upstream"
 	"github.com/nothingdns/nothingdns/internal/util"
 	"github.com/nothingdns/nothingdns/internal/zone"
 )
@@ -95,204 +86,43 @@ func run() error {
 	logger := util.NewLogger(level, format, output)
 	logger.Infof("Starting %s v%s", Name, util.Version)
 
-	// Initialize cache
-	cacheConfig := cache.Config{
-		Capacity:          cfg.Cache.Size,
-		MinTTL:            time.Duration(cfg.Cache.MinTTL) * time.Second,
-		MaxTTL:            time.Duration(cfg.Cache.MaxTTL) * time.Second,
-		DefaultTTL:        time.Duration(cfg.Cache.DefaultTTL) * time.Second,
-		NegativeTTL:       time.Duration(cfg.Cache.NegativeTTL) * time.Second,
-		PrefetchEnabled:   cfg.Cache.Prefetch,
-		PrefetchThreshold: time.Duration(cfg.Cache.PrefetchThreshold) * time.Second,
-		ServeStale:        cfg.Cache.ServeStale,
-		StaleGrace:        time.Duration(cfg.Cache.StaleGraceSecs) * time.Second,
+	// Initialize cache manager
+	cacheManager, err := NewCacheManager(cfg, logger)
+	if err != nil {
+		return fmt.Errorf("creating cache manager: %w", err)
 	}
-	dnsCache := cache.New(cacheConfig)
-	logger.Infof("Cache initialized with capacity %d", cfg.Cache.Size)
+	dnsCache := cacheManager.Cache
 
-	// Initialize memory monitor if limit is configured
-	var memMonitor *memory.Monitor
-	if cfg.MemoryLimitMB > 0 {
-		memCfg := memory.DefaultConfig()
-		memCfg.LimitBytes = uint64(cfg.MemoryLimitMB) * 1024 * 1024
-		memMonitor = memory.NewMonitor(memCfg, memory.NewCacheEvictor(dnsCache))
-		memMonitor.Start()
-		logger.Infof("Memory monitor started: limit=%dMB", cfg.MemoryLimitMB)
+	// Initialize upstream manager
+	upstreamManager, err := NewUpstreamManager(cfg, logger)
+	if err != nil {
+		return fmt.Errorf("creating upstream manager: %w", err)
 	}
+	client := upstreamManager.Client
+	loadBalancer := upstreamManager.LoadBalancer
 
-	// Initialize upstream client (with optional load balancer for anycast)
-	var client *upstream.Client
-	var loadBalancer *upstream.LoadBalancer
-	if len(cfg.Upstream.Servers) > 0 || len(cfg.Upstream.AnycastGroups) > 0 {
-		// Check if anycast groups are configured
-		if len(cfg.Upstream.AnycastGroups) > 0 {
-			// Use advanced load balancer with anycast support
-			lbConfig := upstream.LoadBalancerConfig{
-				Servers:         cfg.Upstream.Servers,
-				Strategy:        cfg.Upstream.Strategy,
-				HealthCheck:     parseDurationOrDefault(cfg.Upstream.HealthCheck, 30*time.Second),
-				FailoverTimeout: parseDurationOrDefault(cfg.Upstream.FailoverTimeout, 5*time.Second),
-				Region:          cfg.Upstream.Topology.Region,
-				Zone:            cfg.Upstream.Topology.Zone,
-				Weight:          cfg.Upstream.Topology.Weight,
-			}
-
-			// Convert anycast group configs
-			for _, groupConfig := range cfg.Upstream.AnycastGroups {
-				group := upstream.AnycastGroupConfig{
-					AnycastIP:   groupConfig.AnycastIP,
-					HealthCheck: groupConfig.HealthCheck,
-				}
-				for _, backendConfig := range groupConfig.Backends {
-					group.Backends = append(group.Backends, upstream.AnycastBackendConfig{
-						PhysicalIP: backendConfig.PhysicalIP,
-						Port:       backendConfig.Port,
-						Region:     backendConfig.Region,
-						Zone:       backendConfig.Zone,
-						Weight:     backendConfig.Weight,
-					})
-				}
-				lbConfig.AnycastGroups = append(lbConfig.AnycastGroups, group)
-			}
-
-			var err error
-			loadBalancer, err = upstream.NewLoadBalancer(lbConfig)
-			if err != nil {
-				logger.Warnf("Failed to initialize load balancer: %v", err)
-			} else {
-				totalBackends := 0
-				for _, group := range loadBalancer.GetAnycastGroups() {
-					total, _ := group.Stats()
-					totalBackends += total
-				}
-				logger.Infof("Load balancer initialized with %d anycast groups (%d total backends)",
-					len(lbConfig.AnycastGroups), totalBackends)
-				if len(cfg.Upstream.Servers) > 0 {
-					logger.Infof("Load balancer also has %d standalone servers", len(cfg.Upstream.Servers))
-				}
-			}
-		} else {
-			// Use standard upstream client
-			upstreamConfig := upstream.Config{
-				Servers:     cfg.Upstream.Servers,
-				Strategy:    cfg.Upstream.Strategy,
-				Timeout:     parseDurationOrDefault(cfg.Resolution.Timeout, 5*time.Second),
-				HealthCheck: parseDurationOrDefault(cfg.Upstream.HealthCheck, 30*time.Second),
-			}
-			client, err = upstream.NewClient(upstreamConfig)
-			if err != nil {
-				logger.Warnf("Failed to initialize upstream client: %v", err)
-			} else {
-				logger.Infof("Upstream client initialized with %d servers", len(cfg.Upstream.Servers))
-			}
-		}
+	// Initialize zone manager
+	zoneManager, err := NewZoneManager(cfg, logger)
+	if err != nil {
+		return fmt.Errorf("creating zone manager: %w", err)
 	}
+	zones := zoneManager.Zones()
+	zoneFiles := zoneManager.ZoneFiles()
+	zoneSigners := zoneManager.Signers()
+	zoneManagerInstance := zoneManager.Manager()
+	kvPersistence := zoneManager.KVPersistence()
 
-	// Load zone files
-	zones := make(map[string]*zone.Zone)
-	zoneFiles := make(map[string]string) // origin -> file path mapping
-	for _, zoneFile := range cfg.Zones {
-		z, err := loadZoneFile(zoneFile)
-		if err != nil {
-			logger.Warnf("Failed to load zone file %s: %v", zoneFile, err)
-			continue
-		}
-		zones[z.Origin] = z
-		zoneFiles[z.Origin] = zoneFile
-		logger.Infof("Loaded zone %s with %d records", z.Origin, len(z.Records))
+	// Initialize security manager
+	securityManager, err := NewSecurityManager(cfg, logger)
+	if err != nil {
+		return fmt.Errorf("creating security manager: %w", err)
 	}
-
-	// Initialize zone signers if DNSSEC signing is enabled
-	zoneSigners := make(map[string]*dnssec.Signer)
-	if cfg.DNSSEC.Enabled && cfg.DNSSEC.Signing.Enabled {
-		for origin, z := range zones {
-			signer, err := loadZoneSigner(z, cfg.DNSSEC.Signing)
-			if err != nil {
-				logger.Warnf("Failed to load zone signer for %s: %v", origin, err)
-				continue
-			}
-			if signer != nil {
-				zoneSigners[origin] = signer
-				logger.Infof("Zone signer loaded for %s (%d keys)", origin, len(signer.GetKeys()))
-			}
-		}
-	}
-
-	// Initialize blocklist
-	bl := blocklist.New(blocklist.Config{
-		Enabled: cfg.Blocklist.Enabled,
-		Files:   cfg.Blocklist.Files,
-		URLs:    cfg.Blocklist.URLs,
-	})
-	if err := bl.Load(); err != nil {
-		logger.Warnf("Failed to load blocklist: %v", err)
-	} else if cfg.Blocklist.Enabled {
-		stats := bl.Stats()
-		logger.Infof("Blocklist loaded with %d entries from %d files and %d URLs", stats.TotalBlocks, stats.Files, stats.URLs)
-	}
-
-	// Initialize RPZ engine
-	var rpzEngine *rpz.Engine
-	if cfg.RPZ.Enabled {
-		rpzFiles := make([]string, 0, len(cfg.RPZ.Files)+len(cfg.RPZ.Zones))
-		rpzFiles = append(rpzFiles, cfg.RPZ.Files...)
-		policies := make(map[string]int)
-		for _, pz := range cfg.RPZ.Zones {
-			rpzFiles = append(rpzFiles, pz.File)
-			policies[pz.File] = pz.Priority
-		}
-		rpzEngine = rpz.NewEngine(rpz.Config{
-			Enabled:  true,
-			Files:    rpzFiles,
-			Policies: policies,
-		})
-		if err := rpzEngine.Load(); err != nil {
-			logger.Warnf("Failed to load RPZ zones: %v", err)
-		} else {
-			stats := rpzEngine.Stats()
-			logger.Infof("RPZ engine loaded with %d rules from %d files", stats.TotalRules, stats.Files)
-		}
-	}
-
-	// Initialize GeoDNS engine
-	var geoEngine *geodns.Engine
-	if cfg.GeoDNS.Enabled {
-		geoEngine = geodns.NewEngine(geodns.Config{Enabled: true})
-		if cfg.GeoDNS.MMDBFile != "" {
-			if err := geoEngine.LoadMMDB(cfg.GeoDNS.MMDBFile); err != nil {
-				logger.Warnf("Failed to load MMDB: %v", err)
-			} else {
-				logger.Infof("GeoDNS MMDB loaded from %s", cfg.GeoDNS.MMDBFile)
-			}
-		}
-		for _, rule := range cfg.GeoDNS.Rules {
-			geoEngine.SetRule(rule.Domain, rule.Type, &geodns.GeoRecord{
-				Records: rule.Records,
-				Default: rule.Default,
-				Type:    rule.Type,
-			})
-		}
-		if len(cfg.GeoDNS.Rules) > 0 {
-			stats := geoEngine.Stats()
-			logger.Infof("GeoDNS engine loaded with %d rules", stats.Rules)
-		}
-	}
-
-	// Initialize DNS64 synthesizer (RFC 6147)
-	var dns64Synth *dns64.Synthesizer
-	if cfg.DNS64.Enabled {
-		dns64Synth, err = dns64.NewSynthesizer(cfg.DNS64.Prefix, cfg.DNS64.PrefixLen)
-		if err != nil {
-			logger.Warnf("Failed to initialize DNS64: %v", err)
-		} else {
-			for _, cidr := range cfg.DNS64.ExcludeNets {
-				if err := dns64Synth.AddExcludeNet(cidr); err != nil {
-					logger.Warnf("DNS64: invalid exclude network %q: %v", cidr, err)
-				}
-			}
-			logger.Infof("DNS64 enabled with prefix %s/%d", cfg.DNS64.Prefix, cfg.DNS64.PrefixLen)
-		}
-	}
+	bl := securityManager.Result().Blocklist
+	rpzEngine := securityManager.Result().RPZEngine
+	geoEngine := securityManager.Result().GeoEngine
+	dns64Synth := securityManager.Result().DNS64Synth
+	aclChecker := securityManager.Result().ACLChecher
+	rateLimiter := securityManager.Result().RateLimiter
 
 	// Initialize metrics collector
 	metricsCollector := metrics.New(metrics.Config{
@@ -306,193 +136,36 @@ func run() error {
 		logger.Infof("Metrics server listening on %s%s", cfg.Metrics.Bind, cfg.Metrics.Path)
 	}
 
-	// Initialize DNSSEC validator if enabled
-	var validator *dnssec.Validator
-	if cfg.DNSSEC.Enabled && (client != nil || loadBalancer != nil) {
-		trustAnchors := dnssec.NewTrustAnchorStoreWithBuiltIn()
-
-		// Load custom trust anchors if specified
-		if cfg.DNSSEC.TrustAnchor != "" {
-			if err := trustAnchors.LoadFromFile(cfg.DNSSEC.TrustAnchor); err != nil {
-				logger.Warnf("Failed to load trust anchor file: %v", err)
-			} else {
-				logger.Infof("Loaded trust anchors from %s", cfg.DNSSEC.TrustAnchor)
-			}
-		}
-
-		// Create resolver adapter - prefer loadBalancer if available
-		var resolverAdapter dnssec.Resolver
-		if loadBalancer != nil {
-			resolverAdapter = &dnssecResolverAdapter{upstream: loadBalancer}
-		} else {
-			resolverAdapter = &dnssecResolverAdapter{upstream: client}
-		}
-
-		validator = dnssec.NewValidator(dnssec.ValidatorConfig{
-			Enabled:    cfg.DNSSEC.Enabled,
-			IgnoreTime: cfg.DNSSEC.IgnoreTime,
-		}, trustAnchors, resolverAdapter)
-
-		logger.Info("DNSSEC validation enabled")
+	// Initialize DNSSEC manager
+	dnssecManager, err := NewDNSSECManager(cfg, upstreamManager.Resolver(), logger)
+	if err != nil {
+		return fmt.Errorf("creating DNSSEC manager: %w", err)
 	}
+	validator := dnssecManager.Validator
 
 	// Stop channel for graceful goroutine shutdown
 	stopCh := make(chan struct{})
 
-	// Initialize cluster manager if enabled
-	var clusterMgr *cluster.Cluster
-	if cfg.Cluster.Enabled {
-		clusterConfig := cluster.Config{
-			Enabled:       cfg.Cluster.Enabled,
-			NodeID:        cfg.Cluster.NodeID,
-			BindAddr:      cfg.Cluster.BindAddr,
-			GossipPort:     cfg.Cluster.GossipPort,
-			Region:        cfg.Cluster.Region,
-			Zone:          cfg.Cluster.Zone,
-			Weight:        cfg.Cluster.Weight,
-			SeedNodes:     cfg.Cluster.SeedNodes,
-			CacheSync:     cfg.Cluster.CacheSync,
-			HTTPAddr:      cfg.Server.HTTP.Bind,
-			EncryptionKey: cfg.Cluster.EncryptionKey,
-		}
-
-		clusterMgr, err = cluster.New(clusterConfig, logger, dnsCache)
-		if err != nil {
-			logger.Warnf("Failed to initialize cluster: %v", err)
-		} else {
-			if err := clusterMgr.Start(); err != nil {
-				logger.Warnf("Failed to start cluster: %v", err)
-				clusterMgr = nil
-			} else {
-				logger.Infof("Cluster initialized with node ID %s", clusterMgr.GetNodeID())
-				logger.Infof("Cluster has %d nodes", clusterMgr.GetNodeCount())
-
-				// Set up cache invalidation callback for cluster sync
-				if cfg.Cluster.CacheSync {
-					dnsCache.SetInvalidateFunc(func(key string) {
-						if err := clusterMgr.InvalidateCache([]string{key}); err != nil {
-							logger.Debugf("Failed to broadcast cache invalidation: %v", err)
-						}
-					})
-					logger.Info("Cache synchronization enabled across cluster")
-				}
-
-				// Start cluster metrics updater
-				go func() {
-					ticker := time.NewTicker(30 * time.Second)
-					defer ticker.Stop()
-					for {
-						select {
-						case <-ticker.C:
-							if clusterMgr != nil && metricsCollector != nil {
-								stats := clusterMgr.Stats()
-								metricsCollector.SetClusterMetrics(
-									stats.NodeCount,
-									stats.AliveCount,
-									stats.IsHealthy,
-									stats.GossipStats.MessagesSent,
-									stats.GossipStats.MessagesReceived,
-								)
-							}
-						case <-stopCh:
-							return
-						}
-					}
-				}()
-			}
-		}
-	}
-
-	// Initialize zone manager (use already-loaded zones to avoid duplicate parsing)
-	zoneManager := zone.NewManager()
-	if cfg.ZoneDir != "" {
-		zoneManager.SetZoneDir(cfg.ZoneDir)
-		logger.Infof("Zone file persistence enabled: %s", cfg.ZoneDir)
-	}
-	for origin, z := range zones {
-		zoneManager.LoadZone(z, zoneFiles[origin])
-	}
-
-	// Initialize KV store and KVPersistence for persistent zone storage (UNWIRED-001+002)
-	var kvPersistence *zone.KVPersistence
-	kvDataDir := cfg.ZoneDir
-	if kvDataDir == "" {
-		kvDataDir = "."
-	}
-	kvStore, err := storage.OpenKVStore(kvDataDir)
+	// Initialize cluster manager
+	clusterManager, err := NewClusterManager(cfg, logger, dnsCache, metricsCollector)
 	if err != nil {
-		logger.Warnf("Failed to initialize KV store: %v", err)
-	} else {
-		kvPersistence = zone.NewKVPersistence(zoneManager, kvStore)
-		kvPersistence.Enable()
-		logger.Infof("KV store and KVPersistence initialized at %s", kvDataDir)
+		return fmt.Errorf("creating cluster manager: %w", err)
+	}
+	clusterMgr := clusterManager.Cluster
+
+	// Set up cache invalidation callback for cluster sync
+	if cfg.Cluster.Enabled && cfg.Cluster.CacheSync {
+		cacheManager.SetInvalidateFunc(func(key string) {
+			if err := clusterMgr.InvalidateCache([]string{key}); err != nil {
+				logger.Debugf("Failed to broadcast cache invalidation: %v", err)
+			}
+		})
 	}
 
-	// Initialize AXFR server for zone transfers
-	// Note: zonesMu is set later after handler is created
-	axfrServer := transfer.NewAXFRServer(zones)
-	logger.Infof("AXFR server initialized with %d zones", len(zones))
-
-	// Initialize IXFR server for incremental zone transfers
-	ixfrServer := transfer.NewIXFRServer(axfrServer)
-	logger.Infof("IXFR server initialized for incremental transfers")
-
-	// Wire KV journal store for persistent IXFR journals
-	journalDataDir := cfg.ZoneDir
-	if journalDataDir == "" {
-		journalDataDir = "."
-	}
-	journalStore := transfer.NewKVJournalStore(journalDataDir)
-	ixfrServer.SetJournalStore(journalStore)
-	logger.Infof("IXFR journal store initialized at %s", journalDataDir)
-
-	// Initialize NOTIFY handler for slave servers
-	notifyHandler := transfer.NewNOTIFYSlaveHandler(zones)
-	logger.Infof("NOTIFY handler initialized for %d zones", len(zones))
-
-	// Initialize Dynamic DNS handler
-	ddnsHandler := transfer.NewDynamicDNSHandler(zones)
-	logger.Infof("Dynamic DNS handler initialized for %d zones", len(zones))
-
-	// Initialize Slave Manager for automatic zone transfers
-	keyStore := transfer.NewKeyStore()
-	slaveManager := transfer.NewSlaveManager(keyStore)
-	logger.Info("Slave manager initialized for automatic zone transfers")
-
-	// Configure slave zones from config if available
-	for _, slaveConfig := range cfg.SlaveZones {
-		// Convert config.SlaveZoneConfig to transfer.SlaveZoneConfig
-		transferConfig := transfer.SlaveZoneConfig{
-			ZoneName:      slaveConfig.ZoneName,
-			Masters:       slaveConfig.Masters,
-			TransferType:  slaveConfig.TransferType,
-			TSIGKeyName:   slaveConfig.TSIGKeyName,
-			TSIGSecret:    slaveConfig.TSIGSecret,
-			Timeout:       parseDurationOrDefault(slaveConfig.Timeout, 30*time.Second),
-			RetryInterval: parseDurationOrDefault(slaveConfig.RetryInterval, 5*time.Minute),
-			MaxRetries:    slaveConfig.MaxRetries,
-		}
-
-		if err := slaveManager.AddSlaveZone(transferConfig); err != nil {
-			logger.Warnf("Failed to add slave zone %s: %v", slaveConfig.ZoneName, err)
-		} else {
-			logger.Infof("Added slave zone %s (masters: %v)", slaveConfig.ZoneName, slaveConfig.Masters)
-		}
-	}
-
-	// Start the slave manager
-	slaveManager.Start()
-	logger.Info("Slave manager started")
-
-	// Initialize ACL checker
-	var aclChecker *filter.ACLChecker
-	if len(cfg.ACL) > 0 {
-		var err error
-		aclChecker, err = filter.NewACLChecker(cfg.ACL)
-		if err != nil {
-			return fmt.Errorf("initializing ACL: %w", err)
-		}
-		logger.Infof("ACL loaded with %d rules", len(cfg.ACL))
+	// Initialize transfer manager
+	transferManager, err := NewTransferManager(cfg, zones, nil, logger)
+	if err != nil {
+		return fmt.Errorf("creating transfer manager: %w", err)
 	}
 
 	// Initialize auth store
@@ -510,13 +183,6 @@ func run() error {
 		TokenExpiry: auth.Duration{Duration: 24 * time.Hour},
 	})
 	logger.Infof("Auth store initialized with %d users", len(cfg.Server.HTTP.Users))
-
-	// Initialize rate limiter
-	var rateLimiter *filter.RateLimiter
-	if cfg.RRL.Enabled {
-		rateLimiter = filter.NewRateLimiter(cfg.RRL)
-		logger.Infof("RRL enabled: %d qps/client, burst %d", cfg.RRL.Rate, cfg.RRL.Burst)
-	}
 
 	// Initialize audit logger
 	auditLogger, err := audit.NewAuditLogger(cfg.Logging.QueryLog, cfg.Logging.QueryLogFile)
@@ -587,7 +253,7 @@ func run() error {
 		upstream:      client,
 		loadBalancer:  loadBalancer,
 		zones:         zones,
-		zoneManager:   zoneManager,
+		zoneManager:   zoneManagerInstance,
 		kvPersistence: kvPersistence,
 		blocklist:     bl,
 		rpzEngine:     rpzEngine,
@@ -597,11 +263,11 @@ func run() error {
 		zoneSigners:   zoneSigners,
 		idnaEnabled:   idnaEnabled,
 		cluster:       clusterMgr,
-		axfrServer:    axfrServer,
-		ixfrServer:    ixfrServer,
-		notifyHandler: notifyHandler,
-		ddnsHandler:   ddnsHandler,
-		slaveManager:  slaveManager,
+		axfrServer:    transferManager.Result().AXFRServer,
+		ixfrServer:    transferManager.Result().IXFRServer,
+		notifyHandler: transferManager.Result().NotifyHandler,
+		ddnsHandler:   transferManager.Result().DDNSHandler,
+		slaveManager:  transferManager.Result().SlaveManager,
 		aclChecker:    aclChecker,
 		rateLimiter:   rateLimiter,
 		splitHorizon:  splitHorizon,
@@ -656,12 +322,11 @@ func run() error {
 
 	// Share the zones mutex between handler, AXFR server, and DDNS handler
 	// to prevent data races on the shared zones map
-	axfrServer.SetZonesMu(&handler.zonesMu)
-	ddnsHandler.SetZonesMu(&handler.zonesMu)
+	transferManager.SetZonesMu(&handler.zonesMu)
 
 	// Initialize API server
 	dashboardServer := dashboard.NewServer()
-	apiServer := api.NewServer(cfg.Server.HTTP, zoneManager, dnsCache, func() error {
+	apiServer := api.NewServer(cfg.Server.HTTP, zoneManagerInstance, dnsCache, func() error {
 		logger.Info("Reloading configuration via API...")
 		now := time.Now().UTC().Format(time.RFC3339)
 		if auditLogger != nil {
@@ -682,7 +347,7 @@ func run() error {
 			zones[z.Origin] = z
 			handler.zonesMu.Unlock()
 			zoneFiles[z.Origin] = zoneFile
-			zoneManager.LoadZone(z, zoneFile)
+			zoneManagerInstance.LoadZone(z, zoneFile)
 			logger.Infof("Reloaded zone %s", z.Origin)
 			reloadedZones++
 			// Persist reloaded zone to KV store
@@ -947,15 +612,8 @@ func run() error {
 					doqServer.Stop()
 				}
 
-				// Close upstream client
-				if client != nil {
-					client.Close()
-				}
-
-				// Close load balancer
-				if loadBalancer != nil {
-					loadBalancer.Close()
-				}
+				// Close upstream client and load balancer
+				upstreamManager.Stop()
 
 				// Stop metrics server
 				if metricsCollector != nil {
@@ -968,34 +626,16 @@ func run() error {
 				}
 
 				// Stop cluster manager
-				if clusterMgr != nil {
-					clusterMgr.Stop()
-				}
+				clusterManager.Stop()
 
-				// Stop slave manager
-				if slaveManager != nil {
-					slaveManager.Stop()
-				}
+				// Stop transfer manager (slave manager, notify handler, DDNS handler)
+				transferManager.Stop()
 
-				// Close notify handler so processNotifyEvents goroutine can exit
-				if notifyHandler != nil {
-					notifyHandler.Close()
-				}
+				// Stop security manager (rate limiter)
+				securityManager.Stop()
 
-				// Close DDNS handler so processUpdateEvents goroutine can exit
-				if ddnsHandler != nil {
-					ddnsHandler.Close()
-				}
-
-				// Stop rate limiter
-				if rateLimiter != nil {
-					rateLimiter.Stop()
-				}
-
-				// Stop memory monitor
-				if memMonitor != nil {
-					memMonitor.Stop()
-				}
+				// Stop cache manager (memory monitor)
+				cacheManager.Stop()
 
 				// Close audit logger
 				if auditLogger != nil {
@@ -1043,7 +683,7 @@ func run() error {
 				zones[z.Origin] = z
 				handler.zonesMu.Unlock()
 				zoneFiles[z.Origin] = zoneFile
-				zoneManager.LoadZone(z, zoneFile)
+				zoneManagerInstance.LoadZone(z, zoneFile)
 				logger.Infof("Reloaded zone %s", z.Origin)
 				reloadedZones++
 				// Persist reloaded zone to KV store
