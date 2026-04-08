@@ -78,3 +78,8 @@ __debug_bin
 Thumbs.db
 .DS_Store
 *.icloud
+
+# Package lock files
+pnpm-lock.yaml
+package-lock.json
+yarn.lock
