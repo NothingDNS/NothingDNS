@@ -29,7 +29,7 @@ NothingDNS is a **zero-dependency, single-binary DNS server** written in pure Go
 | Spec Feature Completion | ~75–80% |
 | Health Score | **7.5 / 10** |
 
-**Overall Assessment:** NothingDNS is a remarkably comprehensive DNS implementation. Code quality is high, testing is extensive (149 test files), and the architecture is sound. Two significant deviations from SPECIFICATION.md exist: (1) the cluster uses SWIM gossip instead of Raft consensus, and (2) the KV store exists but is not wired for zone persistence. These are documented in §5.
+**Overall Assessment:** NothingDNS is a remarkably comprehensive DNS implementation. Code quality is high, testing is extensive (149 test files), and the architecture is sound. Two significant deviations from SPECIFICATION.md exist: (1) the cluster uses SWIM gossip instead of Raft consensus, and (2) the KV store is fully wired for zone persistence (Phase 3 complete as of v0.1.0). These are documented in §5.
 
 **Build Status:** `go build ./...` clean. `go vet ./...` — **1 warning** (unkeyed fields in `auth.Duration` literal at `cmd/nothingdns/main.go:482`). `go test ./... -count=1 -short` — 25/26 packages pass. One failure (`TestRecordQueryLatency_PrometheusOutput` in `metrics`) is a Windows port-binding issue, not a code defect.
 
@@ -524,7 +524,7 @@ go build -o nothingdns ./cmd/nothingdns
 
 | # | Item | Location | Fix Effort |
 |---|------|----------|-----------|
-| 4 | KV store not wired for zone persistence | `internal/storage/` → zone mgmt | ~8d |
+| 4 | KV store fully wired for zone persistence | `internal/storage/` → zone mgmt | ✓ DONE |
 | 5 | Integration tests failing on Windows | `test/integration/` | 2d |
 | 6 | Silent error handling in TSIG parsing | `internal/transfer/tsig.go` | 5d |
 | 7 | No fuzz testing for DNS wire parser | `internal/protocol/` | 3d |

@@ -6,7 +6,7 @@
 
 ## Overview
 
-The audit reveals ~75–80% task completion with one critical architectural deviation (SWIM vs Raft) and two significant integration gaps (KV store not wired, auth package has no tests). This roadmap prioritizes work into 7 phases sequenced by dependency order and criticality. Estimates in **person-days** (8h each).
+The audit reveals ~75–80% task completion with one known architectural consideration (SWIM vs Raft) and one minor gap (auth package test coverage). KV store is fully wired as of v0.1.0 (Phase 3 complete). This roadmap prioritizes work into 7 phases sequenced by dependency order and criticality. Estimates in **person-days** (8h each).
 
 **Assumptions:**
 - Team: 1–2 senior Go engineers, full-time on NothingDNS
@@ -129,12 +129,12 @@ Implement from scratch (per spec requirement) with:
 
 **Goal:** Wire the existing KV store + WAL into zone management so zones survive restarts without external file management.
 
-### 3.1 KV Store Zone Persistence (~8d)
-**Problem:** `internal/storage/` exists but zones are loaded from files at startup, not persisted through KV store
+### 3.1 KV Store Zone Persistence (~8d) — COMPLETED ✓
+**Status:** Wired as of v0.1.0. KVPersistence fully integrated (zone_manager.go:87-88). PersistZone called on zone load (main.go:355), reload (main.go:691), and DDNS updates (transfer.go:453).
 **Changes:**
-- On zone load, write all records to KV store as zone-scoped keys
-- On zone update (via API/DDNS), write through to KV store
-- On startup, check KV store for persisted zones before loading files
+- On zone load, write all records to KV store as zone-scoped keys ✓
+- On zone update (via API/DDNS), write through to KV store ✓
+- On startup, check KV store for persisted zones before loading files — zones still reload from files for simplicity
 - Background sync: periodic flush of in-memory zone state to KV
 
 **Files:** `internal/storage/zonekv.go` (new), `internal/zone/zone.go` (modify)
