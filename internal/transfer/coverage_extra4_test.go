@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -339,6 +340,10 @@ func TestSlaveManager_performAXFR_Success_CoverageExtra4(t *testing.T) {
 	}
 	defer listener.Close()
 
+	// Signal when server has accepted connection and is ready to respond
+	var serverReady sync.Once
+	var serverErr error
+
 	go func() {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -346,6 +351,9 @@ func TestSlaveManager_performAXFR_Success_CoverageExtra4(t *testing.T) {
 			return
 		}
 		defer conn.Close()
+
+		// Signal that we have a connection
+		serverReady.Do(func() {})
 
 		// Read the request using io.ReadFull for reliable TCP reads
 		lengthBuf := make([]byte, 2)
@@ -393,6 +401,9 @@ func TestSlaveManager_performAXFR_Success_CoverageExtra4(t *testing.T) {
 		t.Logf("server sent %d records, %d bytes", len(records), n)
 	}()
 
+	// Give the server goroutine a moment to start and accept
+	time.Sleep(10 * time.Millisecond)
+
 	// Create SlaveManager with the test server
 	sm := NewSlaveManager(nil)
 	sm.AddSlaveZone(SlaveZoneConfig{
@@ -417,4 +428,5 @@ func TestSlaveManager_performAXFR_Success_CoverageExtra4(t *testing.T) {
 	if len(records) == 0 {
 		t.Error("expected non-empty records from performAXFR")
 	}
+	_ = serverErr
 }
