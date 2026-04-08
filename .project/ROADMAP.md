@@ -27,15 +27,9 @@ The audit reveals ~75–80% task completion with one known architectural conside
 **Fix:** Change to `auth.Duration{Duration: value}` — one-line fix
 **Verification:** `go vet ./...` passes zero warnings
 
-### 1.2 Add Tests for internal/auth (~2d)
-**File:** `internal/auth/auth_test.go` (does not exist)
-**Problem:** Security-critical code (JWT, RBAC, password hashing) has zero test coverage
-**Fix:** Add comprehensive tests:
-- JWT token generation and validation
-- RBAC role enforcement (admin/operator/viewer)
-- Password hashing with bcrypt cost
-- Token expiry handling
-- Invalid token rejection
+### 1.2 Add Tests for internal/auth (~2d) — COMPLETED ✓
+**File:** `internal/auth/auth_test.go` (exists, 22 test functions)
+**Status:** Comprehensive test coverage — JWT, RBAC, password hashing, token expiry, invalid rejection all tested.
 **Verification:** `go test ./internal/auth/...` passes with meaningful coverage
 
 ### 1.3 Fix Windows Integration Test Port Binding (~2d)

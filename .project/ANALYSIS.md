@@ -252,7 +252,7 @@ cmd/nothingdns/main.go:482:16: auth.Duration struct literal uses unkeyed fields
 - IXFR journal: Phase 4.6 completeness fix
 
 **Remaining concerns:**
-- `internal/auth` has zero test files — security-critical code without tests
+- `internal/auth` has `auth_test.go` with 22 test functions — password hashing, token generation/validation, revocation covered
 - TSIG parse errors silently discarded in some transfer paths
 - SWIM vs Raft deviation (architectural, not a bug)
 
@@ -314,7 +314,7 @@ cmd/nothingdns/main.go:482:16: auth.Duration struct literal uses unkeyed fields
 - **Benchmarks:** 43 benchmarks across packages for performance regression detection
 
 **Concerns:**
-- `internal/auth` has zero test files — security-critical code without tests
+- `internal/auth` has `auth_test.go` with 22 test functions — password hashing, token generation/validation, revocation covered
 - No fuzz testing for DNS message parser (high-value for wire protocol)
 - `coverage_extra*_test.go` files inflate apparent coverage without testing real scenarios
 
