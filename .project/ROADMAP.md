@@ -21,7 +21,7 @@ The audit reveals ~75–80% task completion with one known architectural conside
 
 **Goal:** Achieve a clean `go vet ./...` and resolve blocking code quality issues before anything else.
 
-### 1.1 Fix go vet Unkeyed Fields Warning (~0.5d)
+### 1.1 Fix go vet Unkeyed Fields Warning (~0.5d) — COMPLETED ✓
 **File:** `cmd/nothingdns/main.go:482`
 **Problem:** `auth.Duration{Duration: value}` should use keyed fields
 **Fix:** Change to `auth.Duration{Duration: value}` — one-line fix
@@ -32,7 +32,7 @@ The audit reveals ~75–80% task completion with one known architectural conside
 **Status:** Comprehensive test coverage — JWT, RBAC, password hashing, token expiry, invalid rejection all tested.
 **Verification:** `go test ./internal/auth/...` passes with meaningful coverage
 
-### 1.3 Fix Windows Integration Test Port Binding (~2d)
+### 1.3 Fix Windows Integration Test Port Binding (~2d) — COMPLETED ✓
 **Problem:** `TestRecordQueryLatency_PrometheusOutput` (metrics) and integration tests fail on Windows with `bind: An attempt was made to access a socket in a way forbidden by its access permissions`
 **Diagnosis:** Likely UDP port not released between tests or test isolation issue on Windows
 **Fix:** Use port `:0` for dynamic allocation, ensure `defer close()` on listeners, add Windows-specific test isolation
