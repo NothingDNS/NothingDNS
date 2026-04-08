@@ -1,6 +1,8 @@
 package raft
 
 import (
+	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -327,4 +329,493 @@ func TestLeadershipCh(t *testing.T) {
 	if ch == nil {
 		t.Error("LeadershipCh returned nil channel")
 	}
+}
+
+// WAL tests
+
+func TestWALNew(t *testing.T) {
+	tmpDir := t.TempDir()
+	wal, err := NewWAL(tmpDir)
+	if err != nil {
+		t.Fatalf("NewWAL failed: %v", err)
+	}
+	if wal == nil {
+		t.Fatal("NewWAL returned nil")
+	}
+	wal.Close()
+}
+
+func TestWALWriteAndRead(t *testing.T) {
+	tmpDir := t.TempDir()
+	wal, err := NewWAL(tmpDir)
+	if err != nil {
+		t.Fatalf("NewWAL failed: %v", err)
+	}
+	defer wal.Close()
+
+	entries := []entry{
+		{Index: 1, Term: 1, Command: []byte("cmd1"), Type: EntryNormal},
+		{Index: 2, Term: 1, Command: []byte("cmd2"), Type: EntryNormal},
+		{Index: 3, Term: 2, Command: []byte("cmd3"), Type: EntryNormal},
+	}
+
+	for _, e := range entries {
+		if err := wal.Write(e); err != nil {
+			t.Fatalf("WAL.Write failed: %v", err)
+		}
+	}
+
+	readEntries, err := wal.ReadAll()
+	if err != nil {
+		t.Fatalf("WAL.ReadAll failed: %v", err)
+	}
+
+	if len(readEntries) != len(entries) {
+		t.Errorf("expected %d entries, got %d", len(entries), len(readEntries))
+	}
+
+	for i, e := range entries {
+		if readEntries[i].Index != e.Index {
+			t.Errorf("entry[%d].Index = %d, want %d", i, readEntries[i].Index, e.Index)
+		}
+		if readEntries[i].Term != e.Term {
+			t.Errorf("entry[%d].Term = %d, want %d", i, readEntries[i].Term, e.Term)
+		}
+		if string(readEntries[i].Command) != string(e.Command) {
+			t.Errorf("entry[%d].Command = %q, want %q", i, readEntries[i].Command, e.Command)
+		}
+		if readEntries[i].Type != e.Type {
+			t.Errorf("entry[%d].Type = %d, want %d", i, readEntries[i].Type, e.Type)
+		}
+	}
+}
+
+func TestWALSync(t *testing.T) {
+	tmpDir := t.TempDir()
+	wal, err := NewWAL(tmpDir)
+	if err != nil {
+		t.Fatalf("NewWAL failed: %v", err)
+	}
+	defer wal.Close()
+
+	if err := wal.Sync(); err != nil {
+		t.Errorf("WAL.Sync failed: %v", err)
+	}
+}
+
+func TestWALEmpty(t *testing.T) {
+	tmpDir := t.TempDir()
+	wal, err := NewWAL(tmpDir)
+	if err != nil {
+		t.Fatalf("NewWAL failed: %v", err)
+	}
+	defer wal.Close()
+
+	entries, err := wal.ReadAll()
+	if err != nil {
+		t.Fatalf("WAL.ReadAll failed: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected 0 entries, got %d", len(entries))
+	}
+}
+
+func TestWALCreatesDir(t *testing.T) {
+	// NewWAL creates the directory if it doesn't exist
+	tmpDir := t.TempDir()
+	nonExistent := tmpDir + "/does/not/exist/deeply"
+	wal, err := NewWAL(nonExistent)
+	if err != nil {
+		t.Fatalf("NewWAL should create dirs: %v", err)
+	}
+	if wal == nil {
+		t.Fatal("NewWAL returned nil")
+	}
+	wal.Close()
+}
+
+// Snapshotter tests
+
+func TestNewSnapshotter(t *testing.T) {
+	tmpDir := t.TempDir()
+	snap, err := NewSnapshotter(tmpDir)
+	if err != nil {
+		t.Fatalf("NewSnapshotter failed: %v", err)
+	}
+	if snap == nil {
+		t.Fatal("NewSnapshotter returned nil")
+	}
+}
+
+func TestSnapshotterLoadEmpty(t *testing.T) {
+	tmpDir := t.TempDir()
+	snapter, err := NewSnapshotter(tmpDir)
+	if err != nil {
+		t.Fatalf("NewSnapshotter failed: %v", err)
+	}
+
+	loaded, err := snapter.Load()
+	if err != nil {
+		t.Fatalf("Snapshotter.Load failed: %v", err)
+	}
+	if loaded != nil {
+		t.Error("expected nil for empty directory")
+	}
+}
+
+func TestSnapshotFilename(t *testing.T) {
+	filename := snapFilename(42)
+	if filename != "snapshot-42" {
+		t.Errorf("snapFilename(42) = %q, want \"snapshot-42\"", filename)
+	}
+}
+
+// ZoneStateMachine tests
+
+func TestZoneStateMachineNew(t *testing.T) {
+	zsm := NewZoneStateMachine()
+	if zsm == nil {
+		t.Fatal("NewZoneStateMachine returned nil")
+	}
+	if zsm.zones == nil {
+		t.Error("expected zones to be initialized")
+	}
+}
+
+func TestZoneStateMachineAddRecord(t *testing.T) {
+	zsm := NewZoneStateMachine()
+
+	cmd := ZoneCommand{
+		Type:   "add_record",
+		Zone:   "example.com.",
+		Name:   "www.example.com.",
+		RRType: 1, // A record
+		TTL:    300,
+		RData:  []string{"192.168.1.1"},
+	}
+
+	entry := entry{Command: mustMarshalJSON(cmd)}
+	if err := zsm.Apply(entry); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+
+	zones := zsm.GetZones()
+	if len(zones) != 1 {
+		t.Errorf("expected 1 zone, got %d", len(zones))
+	}
+
+	records := zsm.GetRecords("example.com.")
+	if len(records) != 1 {
+		t.Errorf("expected 1 record, got %d", len(records))
+	}
+}
+
+func TestZoneStateMachineDelRecord(t *testing.T) {
+	zsm := NewZoneStateMachine()
+
+	// Add a record first
+	addCmd := ZoneCommand{
+		Type:   "add_record",
+		Zone:   "example.com.",
+		Name:   "www.example.com.",
+		RRType: 1,
+		TTL:    300,
+		RData:  []string{"192.168.1.1"},
+	}
+	zsm.Apply(entry{Command: mustMarshalJSON(addCmd)})
+
+	// Delete it
+	delCmd := ZoneCommand{
+		Type:   "del_record",
+		Zone:   "example.com.",
+		Name:   "www.example.com.",
+		RRType: 1,
+	}
+	zsm.Apply(entry{Command: mustMarshalJSON(delCmd)})
+
+	records := zsm.GetRecords("example.com.")
+	if len(records) != 0 {
+		t.Errorf("expected 0 records after delete, got %d", len(records))
+	}
+}
+
+func TestZoneStateMachineUpdateRecord(t *testing.T) {
+	zsm := NewZoneStateMachine()
+
+	// Add initial record
+	addCmd := ZoneCommand{
+		Type:   "add_record",
+		Zone:   "example.com.",
+		Name:   "www.example.com.",
+		RRType: 1,
+		TTL:    300,
+		RData:  []string{"192.168.1.1"},
+	}
+	zsm.Apply(entry{Command: mustMarshalJSON(addCmd)})
+
+	// Update with new IP
+	updateCmd := ZoneCommand{
+		Type:   "update_record",
+		Zone:   "example.com.",
+		Name:   "www.example.com.",
+		RRType: 1,
+		TTL:    600,
+		RData:  []string{"192.168.1.2"},
+	}
+	zsm.Apply(entry{Command: mustMarshalJSON(updateCmd)})
+
+	records := zsm.GetRecords("example.com.")
+	if len(records) != 1 {
+		t.Errorf("expected 1 record, got %d", len(records))
+	}
+}
+
+func TestZoneStateMachineDeleteZone(t *testing.T) {
+	zsm := NewZoneStateMachine()
+
+	// Add a record
+	addCmd := ZoneCommand{
+		Type:   "add_record",
+		Zone:   "example.com.",
+		Name:   "www.example.com.",
+		RRType: 1,
+		TTL:    300,
+		RData:  []string{"192.168.1.1"},
+	}
+	zsm.Apply(entry{Command: mustMarshalJSON(addCmd)})
+
+	// Delete zone
+	delCmd := ZoneCommand{
+		Type: "delete_zone",
+		Zone: "example.com.",
+	}
+	zsm.Apply(entry{Command: mustMarshalJSON(delCmd)})
+
+	zones := zsm.GetZones()
+	if len(zones) != 0 {
+		t.Errorf("expected 0 zones after delete, got %d", len(zones))
+	}
+}
+
+func TestZoneStateMachineSnapshotRestore(t *testing.T) {
+	zsm := NewZoneStateMachine()
+
+	// Add some data
+	addCmd := ZoneCommand{
+		Type:   "add_record",
+		Zone:   "example.com.",
+		Name:   "www.example.com.",
+		RRType: 1,
+		TTL:    300,
+		RData:  []string{"192.168.1.1"},
+	}
+	zsm.Apply(entry{Command: mustMarshalJSON(addCmd)})
+
+	// Take snapshot
+	snap, err := zsm.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot failed: %v", err)
+	}
+
+	// Create new SM and restore
+	zsm2 := NewZoneStateMachine()
+	if err := zsm2.Restore(snap); err != nil {
+		t.Fatalf("Restore failed: %v", err)
+	}
+
+	zones := zsm2.GetZones()
+	if len(zones) != 1 {
+		t.Errorf("expected 1 zone after restore, got %d", len(zones))
+	}
+}
+
+func TestZoneStateMachineOnUpdate(t *testing.T) {
+	zsm := NewZoneStateMachine()
+
+	var updatedZone string
+	var updatedCmd ZoneCommand
+	zsm.OnUpdate(func(zone string, cmd ZoneCommand) {
+		updatedZone = zone
+		updatedCmd = cmd
+	})
+
+	addCmd := ZoneCommand{
+		Type:   "add_record",
+		Zone:   "example.com.",
+		Name:   "www.example.com.",
+		RRType: 1,
+		TTL:    300,
+		RData:  []string{"192.168.1.1"},
+	}
+	zsm.Apply(entry{Command: mustMarshalJSON(addCmd)})
+
+	if updatedZone != "example.com." {
+		t.Errorf("updatedZone = %q, want \"example.com.\"", updatedZone)
+	}
+	if updatedCmd.Type != "add_record" {
+		t.Errorf("updatedCmd.Type = %q, want \"add_record\"", updatedCmd.Type)
+	}
+}
+
+func TestZoneStateMachineNoOp(t *testing.T) {
+	zsm := NewZoneStateMachine()
+	err := zsm.Apply(entry{Type: EntryNoOp})
+	if err != nil {
+		t.Errorf("Apply EntryNoOp failed: %v", err)
+	}
+}
+
+func TestZoneStateMachineEmptyCommand(t *testing.T) {
+	zsm := NewZoneStateMachine()
+	err := zsm.Apply(entry{Command: nil})
+	if err != nil {
+		t.Errorf("Apply nil command failed: %v", err)
+	}
+}
+
+func TestZoneStateMachineUnknownCommand(t *testing.T) {
+	zsm := NewZoneStateMachine()
+	cmd := ZoneCommand{
+		Type: "unknown_command",
+		Zone: "example.com.",
+	}
+	err := zsm.Apply(entry{Command: mustMarshalJSON(cmd)})
+	if err == nil {
+		t.Error("expected error for unknown command")
+	}
+}
+
+func TestZoneStateMachineDelNonexistentZone(t *testing.T) {
+	zsm := NewZoneStateMachine()
+	cmd := ZoneCommand{
+		Type: "del_record",
+		Zone: "nonexistent.com.",
+		Name: "www.nonexistent.com.",
+		RRType: 1,
+	}
+	err := zsm.Apply(entry{Command: mustMarshalJSON(cmd)})
+	if err != nil {
+		t.Errorf("del on nonexistent zone failed: %v", err)
+	}
+}
+
+// Transport tests
+
+func TestTCPTransportNew(t *testing.T) {
+	tp := NewTCPTransport()
+	if tp == nil {
+		t.Fatal("NewTCPTransport returned nil")
+	}
+	if tp.conns == nil {
+		t.Error("expected conns to be initialized")
+	}
+	if tp.peerAddrs == nil {
+		t.Error("expected peerAddrs to be initialized")
+	}
+}
+
+func TestTCPTransportSetPeerAddr(t *testing.T) {
+	tp := NewTCPTransport()
+	tp.SetPeerAddr("node1", "192.168.1.1:9230")
+
+	tp.mu.RLock()
+	addr, ok := tp.peerAddrs["node1"]
+	tp.mu.RUnlock()
+
+	if !ok {
+		t.Error("expected peer address to be set")
+	}
+	if addr != "192.168.1.1:9230" {
+		t.Errorf("addr = %q, want %q", addr, "192.168.1.1:9230")
+	}
+}
+
+func TestTCPTransportGetConnUnknownPeer(t *testing.T) {
+	tp := NewTCPTransport()
+	_, err := tp.getConn("unknown_peer")
+	if err == nil {
+		t.Error("expected error for unknown peer")
+	}
+}
+
+func TestRecordKey(t *testing.T) {
+	key := recordKey("www.example.com.", 1)
+	if key != "www.example.com.:1" {
+		t.Errorf("recordKey = %q, want \"www.example.com.:1\"", key)
+	}
+}
+
+// Stats tests
+
+func TestStats(t *testing.T) {
+	stats := &Stats{}
+	stats.BytesSent.Add(100)
+	stats.BytesReceived.Add(200)
+	stats.MessagesSent.Add(50)
+
+	if stats.BytesSent.Load() != 100 {
+		t.Errorf("BytesSent = %d, want 100", stats.BytesSent.Load())
+	}
+	if stats.BytesReceived.Load() != 200 {
+		t.Errorf("BytesReceived = %d, want 200", stats.BytesReceived.Load())
+	}
+	if stats.MessagesSent.Load() != 50 {
+		t.Errorf("MessagesSent = %d, want 50", stats.MessagesSent.Load())
+	}
+}
+
+// Integration test with all components
+
+func TestZoneStateMachineIntegration(t *testing.T) {
+	zsm := NewZoneStateMachine()
+
+	// Add multiple zones with multiple records
+	zones := []string{"example.com.", "test.com.", "foo.com."}
+	for _, zone := range zones {
+		for i := 0; i < 3; i++ {
+			cmd := ZoneCommand{
+				Type:   "add_record",
+				Zone:   zone,
+				Name:   fmt.Sprintf("record%d.%s", i, zone),
+				RRType: 1,
+				TTL:    300,
+				RData:  []string{fmt.Sprintf("10.0.0.%d", i)},
+			}
+			if err := zsm.Apply(entry{Command: mustMarshalJSON(cmd)}); err != nil {
+				t.Fatalf("Apply failed: %v", err)
+			}
+		}
+	}
+
+	// Verify all zones present
+	actualZones := zsm.GetZones()
+	if len(actualZones) != len(zones) {
+		t.Errorf("expected %d zones, got %d", len(zones), len(actualZones))
+	}
+
+	// Snapshot and restore
+	snap, err := zsm.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot failed: %v", err)
+	}
+
+	zsm2 := NewZoneStateMachine()
+	if err := zsm2.Restore(snap); err != nil {
+		t.Fatalf("Restore failed: %v", err)
+	}
+
+	restoredZones := zsm2.GetZones()
+	if len(restoredZones) != len(zones) {
+		t.Errorf("expected %d zones after restore, got %d", len(zones), len(restoredZones))
+	}
+}
+
+// Helper
+
+func mustMarshalJSON(v interface{}) []byte {
+	data, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return data
 }

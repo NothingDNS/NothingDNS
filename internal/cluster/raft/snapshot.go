@@ -66,9 +66,6 @@ func (s *Snapshotter) Save(snap *Snapshot) error {
 		return fmt.Errorf("rename: %w", err)
 	}
 
-	// Purge old snapshots
-	s.purgeOldSnapshots()
-
 	return nil
 }
 
