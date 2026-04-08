@@ -554,3 +554,43 @@ func TestParseSOAFromRDataWithInvalidData(t *testing.T) {
 		t.Fatal("parseSOAFromRData should not return nil even for empty input")
 	}
 }
+
+// ============================================================================
+// parseTTLValue (KVPersistence)
+// ============================================================================
+
+func TestParseTTLValue(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected uint32
+		wantErr  bool
+	}{
+		{"3600", 3600, false},
+		{"7200", 7200, false},
+		{"1h", 3600, false},
+		{"30m", 1800, false},
+		{"1d", 86400, false},
+		{"1w", 604800, false},
+		{"2H", 7200, false},
+		{"30S", 30, false},
+		{"1M", 60, false},
+		{"", 0, true},
+		{"invalid", 0, true},
+		{"3600S", 3600, false}, // raw seconds with S suffix = 3600
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got, err := parseTTLValue(tt.input)
+			if tt.wantErr && err == nil {
+				t.Error("expected error but got none")
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+			if !tt.wantErr && got != tt.expected {
+				t.Errorf("parseTTLValue(%q) = %d, want %d", tt.input, got, tt.expected)
+			}
+		})
+	}
+}

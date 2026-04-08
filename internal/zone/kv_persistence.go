@@ -284,15 +284,46 @@ func parseUint32(s string) (uint32, error) {
 	return uint32(v), nil
 }
 
-// parseTTLValue parses a TTL value (can be number or duration string).
+// parseTTLValue parses a TTL value (number or duration string like "1h", "30m", "1d").
 func parseTTLValue(s string) (uint32, error) {
-	// Try direct number first
-	if v, err := parseUint32(s); err == nil {
-		return v, nil
+	s = strings.ToUpper(strings.TrimSpace(s))
+	if s == "" {
+		return 0, fmt.Errorf("empty TTL value")
 	}
-	// TODO: Handle duration strings like "1h", "30m" if needed
-	// For now, just return 0 for non-numeric
-	return 0, fmt.Errorf("invalid TTL value: %s", s)
+
+	// Handle duration suffixes (S/M/H/D/W), matching zone.parseTTL
+	multiplier := uint32(1)
+	if len(s) > 0 {
+		switch s[len(s)-1] {
+		case 'S':
+			s = s[:len(s)-1]
+		case 'M':
+			multiplier = 60
+			s = s[:len(s)-1]
+		case 'H':
+			multiplier = 3600
+			s = s[:len(s)-1]
+		case 'D':
+			multiplier = 86400
+			s = s[:len(s)-1]
+		case 'W':
+			multiplier = 604800
+			s = s[:len(s)-1]
+		}
+	}
+
+	val, err := parseUint32(s)
+	if err != nil {
+		return 0, fmt.Errorf("invalid TTL value: %s", s)
+	}
+
+	// Check overflow: val * multiplier could exceed uint32 max
+	maxVal := uint64(1<<32 - 1)
+	if val > 0 && multiplier > 0 && uint64(val) > maxVal/uint64(multiplier) {
+		return 0, fmt.Errorf("TTL overflow: %d * %d exceeds uint32 max", val, multiplier)
+	}
+
+	return val * multiplier, nil
 }
 
 // Manager returns the underlying zone manager.
