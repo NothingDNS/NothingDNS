@@ -49,3 +49,16 @@ Violation of any rule is a blocking issue.
 - `sync.Pool` buffers: copy before passing to `defer pool.Put()`, the reference may be reclaimed
 - Upstream TCP messages must check `len(packed) > 65535` before sending
 - UDP truncation must be record-boundary-aware (remove answers from the end, not byte-level cut)
+
+### RTK Commands
+
+This project uses [RTK](https://github.com/nothingdns/rtk) for token-optimized command output. RTK prefixes commands automatically:
+- `rtk go build ./...` — compact build output
+- `rtk go test ./...` — failures only (90%+ token savings)
+- `rtk go vet ./...` — grouped violations
+- `rtk git status` — compact status
+- `rtk gh pr view <num>` — compact PR view
+
+### Web Dashboard
+
+The React 19 SPA dashboard is in `web/src/` and compiled assets served from `internal/dashboard/static/dist/`. WebSocket endpoint `/ws` streams live queries. API handlers in `internal/api/` serve both REST endpoints and the SPA.
