@@ -1034,3 +1034,102 @@ func (m *BlockingMockWebSocketConn) Close() error {
 	m.closed = true
 	return nil
 }
+
+// DashboardStats method tests
+
+func TestGetRecentQueries_Empty(t *testing.T) {
+	ds := &DashboardStats{
+		RecentQueries: nil,
+	}
+	queries, total := ds.GetRecentQueries(0, 10)
+	if queries != nil {
+		t.Error("Expected nil for empty queries")
+	}
+	if total != 0 {
+		t.Errorf("Total = %d, want 0", total)
+	}
+}
+
+func TestGetRecentQueries_WithData(t *testing.T) {
+	ds := &DashboardStats{
+		RecentQueries: []*QueryEvent{
+			{Domain: "a.com", QueryType: "A"},
+			{Domain: "b.com", QueryType: "A"},
+			{Domain: "c.com", QueryType: "A"},
+		},
+	}
+	queries, total := ds.GetRecentQueries(0, 2)
+	if len(queries) != 2 {
+		t.Errorf("Queries len = %d, want 2", len(queries))
+	}
+	if total != 3 {
+		t.Errorf("Total = %d, want 3", total)
+	}
+}
+
+func TestGetRecentQueries_OffsetBeyond(t *testing.T) {
+	ds := &DashboardStats{
+		RecentQueries: []*QueryEvent{
+			{Domain: "a.com", QueryType: "A"},
+		},
+	}
+	queries, total := ds.GetRecentQueries(10, 5)
+	if queries != nil {
+		t.Error("Expected nil for offset beyond data")
+	}
+	if total != 0 {
+		// When offset >= total, returns 0 per implementation
+		t.Errorf("Total = %d, want 0", total)
+	}
+}
+
+func TestGetTopDomains_Empty(t *testing.T) {
+	ds := &DashboardStats{
+		RecentQueries: nil,
+	}
+	result := ds.GetTopDomains(10)
+	if result != nil {
+		t.Error("Expected nil for empty queries")
+	}
+}
+
+func TestGetTopDomains_WithData(t *testing.T) {
+	ds := &DashboardStats{
+		RecentQueries: []*QueryEvent{
+			{Domain: "a.com", QueryType: "A"},
+			{Domain: "a.com", QueryType: "A"},
+			{Domain: "b.com", QueryType: "A"},
+			{Domain: "c.com", QueryType: "A"},
+			{Domain: "c.com", QueryType: "A"},
+			{Domain: "c.com", QueryType: "A"},
+		},
+	}
+	result := ds.GetTopDomains(3)
+
+	// Should return top 3 domains sorted by count
+	if len(result) != 3 {
+		t.Errorf("Result len = %d, want 3", len(result))
+	}
+	// c.com has 3 queries, should be first
+	if result[0].Domain != "c.com" {
+		t.Errorf("Top domain = %q, want c.com", result[0].Domain)
+	}
+	if result[0].Count != 3 {
+		t.Errorf("Top count = %d, want 3", result[0].Count)
+	}
+}
+
+func TestGetTopDomains_LimitLessThanData(t *testing.T) {
+	ds := &DashboardStats{
+		RecentQueries: []*QueryEvent{
+			{Domain: "a.com", QueryType: "A"},
+			{Domain: "b.com", QueryType: "A"},
+			{Domain: "c.com", QueryType: "A"},
+		},
+	}
+	result := ds.GetTopDomains(1)
+
+	if len(result) != 1 {
+		t.Errorf("Result len = %d, want 1", len(result))
+	}
+}

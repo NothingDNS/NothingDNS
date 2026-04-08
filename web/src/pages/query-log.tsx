@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -10,17 +10,44 @@ const PAGE_SIZE = 50;
 
 export function QueryLogPage() {
   const [data, setData] = useState<QueryLogResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(true);
   const [offset, setOffset] = useState(0);
   const [filter, setFilter] = useState('');
+  const loadTriggerRef = useRef({ offset, shouldLoad: true });
 
+  const fetchData = useCallback(async (currentOffset: number) => {
+    const result = await api<QueryLogResponse>('GET', `/api/v1/queries?offset=${currentOffset}&limit=${PAGE_SIZE}`);
+    return result;
+  }, []);
+
+  // Track offset changes and trigger load via ref
   useEffect(() => {
-    setLoading(true);
-    api<QueryLogResponse>('GET', `/api/v1/queries?offset=${offset}&limit=${PAGE_SIZE}`)
-      .then(setData)
-      .catch(console.error)
-      .finally(() => setLoading(false));
+    loadTriggerRef.current = { offset, shouldLoad: true };
   }, [offset]);
+
+  // Handle loading data when trigger changes
+  useEffect(() => {
+    if (!loadTriggerRef.current.shouldLoad) return;
+
+    loadTriggerRef.current.shouldLoad = false;
+    const currentOffset = loadTriggerRef.current.offset;
+
+    // Use requestAnimationFrame to defer state update
+    const rafId = requestAnimationFrame(() => {
+      setIsLoading(true);
+    });
+
+    fetchData(currentOffset)
+      .then(result => {
+        setData(result);
+        setIsLoading(false);
+      })
+      .catch(() => {
+        setIsLoading(false);
+      });
+
+    return () => cancelAnimationFrame(rafId);
+  }, [fetchData, offset]);
 
   const total = data?.total ?? 0;
   const queries = data?.queries ?? [];
@@ -47,7 +74,7 @@ export function QueryLogPage() {
 
       <Card>
         <CardContent className="p-0">
-          {loading ? (
+          {isLoading ? (
             <div className="p-6 space-y-3">{Array.from({ length: 10 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}</div>
           ) : filtered.length === 0 ? (
             <div className="text-center py-12 text-muted-foreground"><p>No queries found</p></div>

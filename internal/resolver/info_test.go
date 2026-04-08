@@ -436,3 +436,180 @@ func TestDNSConfigRemoveExpired(t *testing.T) {
 		t.Errorf("DNSSL after RemoveExpired = %d, want 0", len(cfg.DNSSL))
 	}
 }
+
+// parseExtendedRESPInfo tests
+
+func TestParseExtendedRESPInfo(t *testing.T) {
+	// Build valid extended info wire format
+	info := ExtendedResolverInfo("test-resolver", "2.0", true, false, 10000, []string{"8.8.8.8:53", "1.1.1.1:53"})
+	wire, err := info.ToWire(ResponderOptionCodeExtendedInfo, 300)
+	if err != nil {
+		t.Fatalf("ToWire failed: %v", err)
+	}
+
+	// Parse should work
+	parsed, err := parseExtendedRESPInfo(wire.Data)
+	if err != nil {
+		t.Fatalf("parseExtendedRESPInfo failed: %v", err)
+	}
+	if parsed == nil {
+		t.Fatal("parseExtendedRESPInfo returned nil")
+	}
+	if parsed.ID != "test-resolver" {
+		t.Errorf("ID = %q, want test-resolver", parsed.ID)
+	}
+	if parsed.Version != "2.0" {
+		t.Errorf("Version = %q, want 2.0", parsed.Version)
+	}
+	if !parsed.DNSSecValidation {
+		t.Error("DNSSecValidation should be true")
+	}
+	if parsed.FilteringEnabled {
+		t.Error("FilteringEnabled should be false")
+	}
+	if parsed.CacheSize != 10000 {
+		t.Errorf("CacheSize = %d, want 10000", parsed.CacheSize)
+	}
+}
+
+func TestParseExtendedRESPInfoTruncated(t *testing.T) {
+	tests := []struct {
+		name string
+		data []byte
+	}{
+		{"too short for header", []byte{1}},
+		{"truncated ID len", []byte{10, 1, 2, 3}},
+		{"truncated version", []byte{4, 't', 'e', 's', 't', 10, 1, 2, 3}},
+		{"truncated DNSSEC flag", []byte{4, 't', 'e', 's', 't', 2, 'v', 1}},
+		{"truncated filtering flag", []byte{4, 't', 'e', 's', 't', 2, 'v', 1, 1}},
+		{"truncated cache size", []byte{4, 't', 'e', 's', 't', 2, 'v', 1, 1, 0}},
+		{"truncated upstream count", []byte{4, 't', 'e', 's', 't', 2, 'v', 1, 1, 0, 0, 0}},
+	}
+
+	for _, tc := range tests {
+		_, err := parseExtendedRESPInfo(tc.data)
+		if err == nil {
+			t.Errorf("parseExtendedRESPInfo(%q) should fail", tc.name)
+		}
+	}
+}
+
+// RDNSS TLV tests
+
+func TestRDNSSToTLV(t *testing.T) {
+	servers := []net.IP{net.ParseIP("2001:db8::1"), net.ParseIP("2001:db8::2")}
+	opt := NewRDNSSOption(time.Minute, servers)
+	tlv := opt.ToTLV()
+
+	if tlv.Type != 31 {
+		t.Errorf("Type = %d, want 31", tlv.Type)
+	}
+	// Length = (1+4+(16*2))/8 = 38/8 = 4 (8-byte units, excludes type+length bytes)
+	if tlv.Length != 4 {
+		t.Errorf("Length = %d, want 4", tlv.Length)
+	}
+	if len(tlv.Addresses) != 2 {
+		t.Errorf("Addresses len = %d, want 2", len(tlv.Addresses))
+	}
+}
+
+func TestParseRDNSSOption(t *testing.T) {
+	servers := []net.IP{net.ParseIP("2001:db8::1")}
+	opt := NewRDNSSOption(time.Minute, servers)
+	tlv := opt.ToTLV()
+
+	parsed, err := ParseRDNSSOption(tlv)
+	if err != nil {
+		t.Fatalf("ParseRDNSSOption failed: %v", err)
+	}
+	if parsed == nil {
+		t.Fatal("ParseRDNSSOption returned nil")
+	}
+	if parsed.Lifetime != 60 {
+		t.Errorf("Lifetime = %d, want 60", parsed.Lifetime)
+	}
+}
+
+func TestParseRDNSSOptionInvalidType(t *testing.T) {
+	tlv := &RDNSSOptionTLV{
+		Type:      30, // Invalid
+		Length:    3,
+		Lifetime:  300,
+		Addresses: []net.IP{net.ParseIP("2001:db8::1")},
+	}
+	_, err := ParseRDNSSOption(tlv)
+	if err == nil {
+		t.Error("ParseRDNSSOption with invalid type should fail")
+	}
+}
+
+func TestParseRDNSSOptionInvalidLength(t *testing.T) {
+	tlv := &RDNSSOptionTLV{
+		Type:      31,
+		Length:    10, // Invalid - doesn't match
+		Lifetime:  300,
+		Addresses: []net.IP{net.ParseIP("2001:db8::1")},
+	}
+	_, err := ParseRDNSSOption(tlv)
+	if err == nil {
+		t.Error("ParseRDNSSOption with invalid length should fail")
+	}
+}
+
+// DNSSL TLV tests
+
+func TestDNSSLToTLV(t *testing.T) {
+	domains := []string{"example.com", "test.com"}
+	opt := NewDNSSLOption(time.Minute, domains)
+	tlv := opt.ToTLV()
+
+	if tlv.Type != 32 {
+		t.Errorf("Type = %d, want 32", tlv.Type)
+	}
+	if tlv.Length == 0 {
+		t.Error("Length should not be 0")
+	}
+	if len(tlv.SearchDomains) != 2 {
+		t.Errorf("SearchDomains len = %d, want 2", len(tlv.SearchDomains))
+	}
+}
+
+func TestParseDNSSLOption(t *testing.T) {
+	domains := []string{"example.com"}
+	opt := NewDNSSLOption(time.Minute, domains)
+	tlv := opt.ToTLV()
+
+	parsed, err := ParseDNSSLOption(tlv)
+	if err != nil {
+		t.Fatalf("ParseDNSSLOption failed: %v", err)
+	}
+	if parsed == nil {
+		t.Fatal("ParseDNSSLOption returned nil")
+	}
+	if parsed.Lifetime != 60 {
+		t.Errorf("Lifetime = %d, want 60", parsed.Lifetime)
+	}
+}
+
+func TestParseDNSSLOptionInvalidType(t *testing.T) {
+	tlv := &DNSSLTLV{
+		Type:          31, // Invalid
+		Length:        2,
+		Lifetime:      300,
+		SearchDomains: []string{"example.com"},
+	}
+	_, err := ParseDNSSLOption(tlv)
+	if err == nil {
+		t.Error("ParseDNSSLOption with invalid type should fail")
+	}
+}
+
+func TestEncodeDNSSLLabel(t *testing.T) {
+	// Each label is encoded as length byte + label bytes
+	if n := encodeDNSSLLabel("example"); n != 8 { // 1 + 7
+		t.Errorf("encodeDNSSLLabel(example) = %d, want 8", n)
+	}
+	if n := encodeDNSSLLabel(""); n != 1 {
+		t.Errorf("encodeDNSSLLabel(\"\") = %d, want 1", n)
+	}
+}

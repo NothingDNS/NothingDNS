@@ -1,7 +1,7 @@
 import { NavLink, useLocation } from 'react-router-dom';
 import { LayoutDashboard, Globe, Settings, Info, ChevronLeft, ChevronRight, Wifi, WifiOff, Sun, Moon, Monitor, ScrollText, TrendingUp, Shield, Wifi as WifiIcon, Users, BarChart3, Key, Network, ShieldCheck } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useTheme } from '@/hooks/useTheme';
+import { useTheme } from '@/hooks/useThemeHook';
 import { useState } from 'react';
 
 const nav = [

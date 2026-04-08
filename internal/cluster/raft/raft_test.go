@@ -819,3 +819,79 @@ func mustMarshalJSON(v interface{}) []byte {
 	}
 	return data
 }
+
+// JointConfig tests
+
+func TestQuorumForConfig(t *testing.T) {
+	peers := map[NodeID]*Peer{
+		"node1": {},
+		"node2": {},
+		"node3": {},
+	}
+	jc := &JointConfig{OldPeers: peers}
+
+	// 3 peers -> quorum is 2
+	if q := jc.QuorumForConfig(peers); q != 2 {
+		t.Errorf("QuorumForConfig = %d, want 2", q)
+	}
+
+	// 5 peers -> quorum is 3
+	peers5 := map[NodeID]*Peer{
+		"node1": {},
+		"node2": {},
+		"node3": {},
+		"node4": {},
+		"node5": {},
+	}
+	if q := jc.QuorumForConfig(peers5); q != 3 {
+		t.Errorf("QuorumForConfig(5) = %d, want 3", q)
+	}
+}
+
+func TestHasQuorumOldAndNew(t *testing.T) {
+	oldPeers := map[NodeID]*Peer{
+		"node1": {},
+		"node2": {},
+		"node3": {},
+	}
+	newPeers := map[NodeID]*Peer{
+		"node4": {},
+		"node5": {},
+	}
+	jc := &JointConfig{OldPeers: oldPeers, NewPeers: newPeers}
+
+	matchIndex := map[NodeID]Index{
+		"node1": 10,
+		"node2": 10,
+		"node3": 10, // all old peers have matched
+		"node4": 10,
+		"node5": 10, // all new peers have matched
+	}
+
+	// With commitIdx 10, all 3 old peers matched (need quorum 2) and 2 new peers matched (need quorum 3... wait, 5 peers = quorum 3)
+	if !jc.HasQuorumOldAndNew(matchIndex, 10) {
+		t.Error("HasQuorumOldAndNew should return true when both configs have quorum")
+	}
+
+	// Only 1 new peer matched - no quorum for new config
+	matchIndexPartial := map[NodeID]Index{
+		"node1": 10,
+		"node2": 10,
+		"node3": 10,
+		"node4": 10,
+		"node5": 0, // not matched
+	}
+	if jc.HasQuorumOldAndNew(matchIndexPartial, 10) {
+		t.Error("HasQuorumOldAndNew should return false when new config lacks quorum")
+	}
+}
+
+func TestIsInJoint(t *testing.T) {
+	config := DefaultConfig()
+	transport := &mockTransport{}
+	node := NewNode(config, []NodeID{"node2"}, transport)
+
+	if node.IsInJoint() {
+		t.Error("IsInJoint should be false initially")
+	}
+}

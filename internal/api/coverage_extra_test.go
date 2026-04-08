@@ -1,14 +1,17 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/nothingdns/nothingdns/internal/auth"
 	"github.com/nothingdns/nothingdns/internal/cache"
 	"github.com/nothingdns/nothingdns/internal/cluster"
 	"github.com/nothingdns/nothingdns/internal/config"
@@ -256,5 +259,489 @@ func TestHandleZoneReload_DeleteMethodNotAllowed(t *testing.T) {
 
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("expected status %d, got %d", http.StatusMethodNotAllowed, rec.Code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// handleServerConfig
+// ---------------------------------------------------------------------------
+
+func TestHandleServerConfig(t *testing.T) {
+	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
+	srv := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/server/config", nil)
+	rec := httptest.NewRecorder()
+	srv.handleServerConfig(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	if resp["version"] == nil {
+		t.Error("expected version in response")
+	}
+}
+
+func TestHandleServerConfig_MethodNotAllowed(t *testing.T) {
+	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
+	srv := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
+		req := httptest.NewRequest(method, "/api/v1/server/config", nil)
+		rec := httptest.NewRecorder()
+		srv.handleServerConfig(rec, req)
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Errorf("expected 405 for %s, got %d", method, rec.Code)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// handleDashboardStats
+// ---------------------------------------------------------------------------
+
+func TestHandleDashboardStats(t *testing.T) {
+	cacheCfg := cache.Config{Capacity: 500, MinTTL: 60, MaxTTL: 3600, DefaultTTL: 300}
+	c := cache.New(cacheCfg)
+
+	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
+	srv := NewServer(cfg, nil, c, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/dashboard/stats", nil)
+	rec := httptest.NewRecorder()
+	srv.handleDashboardStats(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	if resp["queriesTotal"] == nil {
+		t.Error("expected queriesTotal in response")
+	}
+}
+
+func TestHandleDashboardStats_NoCache(t *testing.T) {
+	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
+	srv := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/dashboard/stats", nil)
+	rec := httptest.NewRecorder()
+	srv.handleDashboardStats(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// handleDNSSECStatus
+// ---------------------------------------------------------------------------
+
+func TestHandleDNSSECStatus_Disabled(t *testing.T) {
+	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
+	srv := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/dnssec/status", nil)
+	rec := httptest.NewRecorder()
+	srv.handleDNSSECStatus(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	if resp["enabled"] != false {
+		t.Errorf("expected enabled=false, got %v", resp["enabled"])
+	}
+}
+
+func TestHandleDNSSECStatus_MethodNotAllowed(t *testing.T) {
+	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
+	srv := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
+		req := httptest.NewRequest(method, "/api/v1/dnssec/status", nil)
+		rec := httptest.NewRecorder()
+		srv.handleDNSSECStatus(rec, req)
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Errorf("expected 405 for %s, got %d", method, rec.Code)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// handleReadiness
+// ---------------------------------------------------------------------------
+
+func TestHandleReadiness_NoUpstream(t *testing.T) {
+	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
+	srv := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	rec := httptest.NewRecorder()
+	srv.handleReadiness(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	if resp["status"] != "ready" {
+		t.Errorf("expected status=ready, got %v", resp["status"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// handleLiveness
+// ---------------------------------------------------------------------------
+
+func TestHandleLiveness(t *testing.T) {
+	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
+	srv := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/livez", nil)
+	rec := httptest.NewRecorder()
+	srv.handleLiveness(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	if resp["status"] != "alive" {
+		t.Errorf("expected status=alive, got %v", resp["status"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// handleRoles
+// ---------------------------------------------------------------------------
+
+func TestHandleRoles(t *testing.T) {
+	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
+	srv := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/roles", nil)
+	rec := httptest.NewRecorder()
+	srv.handleRoles(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	roles, ok := resp["roles"].([]interface{})
+	if !ok {
+		t.Fatal("expected roles array")
+	}
+	if len(roles) < 3 {
+		t.Errorf("expected at least 3 roles, got %d", len(roles))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// WithUser and GetUser
+// ---------------------------------------------------------------------------
+
+func TestWithUserAndGetUser(t *testing.T) {
+	ctx := context.Background()
+
+	// GetUser should return nil when no user in context
+	if GetUser(ctx) != nil {
+		t.Error("expected nil user from empty context")
+	}
+
+	// Create a mock user
+	user := &auth.User{Username: "testuser", Role: auth.RoleAdmin}
+
+	// WithUser should add user to context
+	ctx = WithUser(ctx, user)
+
+	// GetUser should retrieve it
+	retrieved := GetUser(ctx)
+	if retrieved == nil {
+		t.Fatal("expected non-nil user from context")
+	}
+	if retrieved.Username != "testuser" {
+		t.Errorf("expected username 'testuser', got %s", retrieved.Username)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// handleListZones with zone manager
+// ---------------------------------------------------------------------------
+
+func TestHandleListZones_WithZones(t *testing.T) {
+	zm := zone.NewManager()
+	testZone := &zone.Zone{
+		Origin:    "test.com.",
+		DefaultTTL: 3600,
+		Records:   map[string][]zone.Record{},
+	}
+	testZone.SOA = &zone.SOARecord{Serial: 12345}
+	zm.LoadZone(testZone, "")
+
+	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
+	srv := NewServer(cfg, zm, nil, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil)
+	rec := httptest.NewRecorder()
+	srv.handleZones(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	zones := resp["zones"].([]interface{})
+	if len(zones) != 1 {
+		t.Errorf("expected 1 zone, got %d", len(zones))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// handleGetZone
+// ---------------------------------------------------------------------------
+
+func TestHandleGetZone(t *testing.T) {
+	zm := zone.NewManager()
+	testZone := &zone.Zone{
+		Origin:    "example.com.",
+		DefaultTTL: 3600,
+		Records:   map[string][]zone.Record{},
+	}
+	testZone.SOA = &zone.SOARecord{
+		Serial:  2024010101,
+		Refresh: 3600,
+		Retry:   600,
+		Expire:  604800,
+		Minimum: 86400,
+		MName:   "ns1.example.com.",
+		RName:   "admin.example.com.",
+	}
+	testZone.NS = []zone.NSRecord{{NSDName: "ns1.example.com."}, {NSDName: "ns2.example.com."}}
+	zm.LoadZone(testZone, "")
+
+	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
+	srv := NewServer(cfg, zm, nil, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/zones/example.com.", nil)
+	rec := httptest.NewRecorder()
+	srv.handleZoneActions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	if resp["serial"] != float64(2024010101) {
+		t.Errorf("expected serial 2024010101, got %v", resp["serial"])
+	}
+}
+
+func TestHandleGetZone_NotFound(t *testing.T) {
+	zm := zone.NewManager()
+	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
+	srv := NewServer(cfg, zm, nil, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/zones/nonexistent.com.", nil)
+	rec := httptest.NewRecorder()
+	srv.handleZoneActions(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected status 404, got %d", rec.Code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// handleDeleteZone
+// ---------------------------------------------------------------------------
+
+func TestHandleDeleteZone(t *testing.T) {
+	zm := zone.NewManager()
+	testZone := &zone.Zone{
+		Origin: "delete.me.",
+		Records: map[string][]zone.Record{},
+	}
+	testZone.SOA = &zone.SOARecord{}
+	zm.LoadZone(testZone, "")
+
+	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
+	srv := NewServer(cfg, zm, nil, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/zones/delete.me.", nil)
+	rec := httptest.NewRecorder()
+	srv.handleZoneActions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+
+	// Verify zone was deleted
+	if _, ok := zm.Get("delete.me."); ok {
+		t.Error("zone should have been deleted")
+	}
+}
+
+func TestHandleDeleteZone_NotFound(t *testing.T) {
+	zm := zone.NewManager()
+	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
+	srv := NewServer(cfg, zm, nil, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/zones/nonexistent.com.", nil)
+	rec := httptest.NewRecorder()
+	srv.handleZoneActions(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected status 404, got %d", rec.Code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// handleExportZone
+// ---------------------------------------------------------------------------
+
+func TestHandleExportZone(t *testing.T) {
+	zm := zone.NewManager()
+	testZone := &zone.Zone{
+		Origin:    "export.com.",
+		DefaultTTL: 3600,
+		Records:   map[string][]zone.Record{},
+	}
+	testZone.SOA = &zone.SOARecord{Serial: 1}
+	testZone.NS = []zone.NSRecord{{NSDName: "ns1.export.com."}}
+	zm.LoadZone(testZone, "")
+
+	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
+	srv := NewServer(cfg, zm, nil, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/zones/export.com./export", nil)
+	rec := httptest.NewRecorder()
+	srv.handleZoneActions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+
+	if !strings.Contains(rec.Body.String(), "export.com.") {
+		t.Error("expected zone content in response")
+	}
+}
+
+func TestHandleExportZone_NotFound(t *testing.T) {
+	zm := zone.NewManager()
+	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
+	srv := NewServer(cfg, zm, nil, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/zones/nonexistent.com./export", nil)
+	rec := httptest.NewRecorder()
+	srv.handleZoneActions(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected status 404, got %d", rec.Code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// handleConfigGet
+// ---------------------------------------------------------------------------
+
+func TestHandleConfigGet(t *testing.T) {
+	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
+	getter := func() *config.Config {
+		return &config.Config{}
+	}
+	srv := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+	srv.WithConfigGetter(getter)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/config", nil)
+	rec := httptest.NewRecorder()
+	srv.handleConfigGet(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+}
+
+func TestHandleConfigGet_NoGetter(t *testing.T) {
+	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
+	srv := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/config", nil)
+	rec := httptest.NewRecorder()
+	srv.handleConfigGet(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected status 503, got %d", rec.Code)
+	}
+}
+
+func TestHandleConfigGet_MethodNotAllowed(t *testing.T) {
+	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
+	srv := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/config", nil)
+	rec := httptest.NewRecorder()
+	srv.handleConfigGet(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected status 405, got %d", rec.Code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// handleZoneActions method routing
+// ---------------------------------------------------------------------------
+
+func TestHandleZoneActions_SubpathNotFound(t *testing.T) {
+	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
+	zm := zone.NewManager()
+	testZone := &zone.Zone{Origin: "test.com.", Records: map[string][]zone.Record{}}
+	testZone.SOA = &zone.SOARecord{}
+	zm.LoadZone(testZone, "")
+
+	srv := NewServer(cfg, zm, nil, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/zones/test.com./invalid-subpath", nil)
+	rec := httptest.NewRecorder()
+	srv.handleZoneActions(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected status 404, got %d", rec.Code)
 	}
 }

@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, type ReactNode, type HTMLAttributes } from 'react';
 import { cn } from '@/lib/utils';
 import { X } from 'lucide-react';
 
@@ -23,6 +23,6 @@ export function Dialog({ open, onClose, children, className }: { open: boolean; 
   );
 }
 
-export function DialogTitle({ className, children, ...p }: React.HTMLAttributes<HTMLHeadingElement>) {
+export function DialogTitle({ className, children, ...p }: HTMLAttributes<HTMLHeadingElement>) {
   return <h2 className={cn('text-lg font-semibold leading-none tracking-tight', className)} {...p}>{children}</h2>;
 }

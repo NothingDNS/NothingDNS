@@ -1,4 +1,4 @@
-import { createContext, useContext } from 'react';
+import { createContext, useContext, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 
 interface TabsContextValue {
@@ -14,7 +14,7 @@ function useTabsContext() {
   return ctx;
 }
 
-export function Tabs({ value, onValueChange, className, children }: { value: string; onValueChange: (v: string) => void; className?: string; children: React.ReactNode }) {
+export function Tabs({ value, onValueChange, className, children }: { value: string; onValueChange: (v: string) => void; className?: string; children: ReactNode }) {
   return (
     <TabsContext.Provider value={{ value, onValueChange }}>
       <div className={cn('w-full', className)}>{children}</div>
@@ -22,7 +22,7 @@ export function Tabs({ value, onValueChange, className, children }: { value: str
   );
 }
 
-export function TabsList({ className, children }: { className?: string; children: React.ReactNode }) {
+export function TabsList({ className, children }: { className?: string; children: ReactNode }) {
   return (
     <div className={cn('inline-flex h-10 items-center justify-center rounded-md bg-muted p-1 text-muted-foreground', className)}>
       {children}
@@ -30,7 +30,7 @@ export function TabsList({ className, children }: { className?: string; children
   );
 }
 
-export function TabsTrigger({ value, className, children }: { value: string; className?: string; children: React.ReactNode }) {
+export function TabsTrigger({ value, className, children }: { value: string; className?: string; children: ReactNode }) {
   const { value: selectedValue, onValueChange } = useTabsContext();
   const isSelected = selectedValue === value;
   return (
@@ -47,7 +47,7 @@ export function TabsTrigger({ value, className, children }: { value: string; cla
   );
 }
 
-export function TabsContent({ value, className, children }: { value: string; className?: string; children: React.ReactNode }) {
+export function TabsContent({ value, className, children }: { value: string; className?: string; children: ReactNode }) {
   const { value: selectedValue } = useTabsContext();
   if (selectedValue !== value) return null;
   return <div className={cn('mt-2 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2', className)}>{children}</div>;

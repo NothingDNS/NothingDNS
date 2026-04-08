@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -142,7 +142,7 @@ interface ServerConfig {
 
 type TabId = 'general' | 'dns' | 'upstream' | 'cache' | 'security' | 'logging' | 'cluster' | 'advanced';
 
-const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
+const TABS: { id: TabId; label: string; icon: ReactNode }[] = [
   { id: 'general', label: 'General', icon: <Server className="h-4 w-4" /> },
   { id: 'dns', label: 'DNS', icon: <Globe className="h-4 w-4" /> },
   { id: 'upstream', label: 'Upstream', icon: <Network className="h-4 w-4" /> },
@@ -260,7 +260,7 @@ export function SettingsPage() {
 }
 
 // Section header helper
-function SectionHeader({ title, description, icon }: { title: string; description?: string; icon: React.ReactNode }) {
+function SectionHeader({ title, description, icon }: { title: string; description?: string; icon: ReactNode }) {
   return (
     <CardHeader className="pb-3">
       <div className="flex items-center gap-2">

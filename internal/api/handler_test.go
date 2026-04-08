@@ -14,6 +14,7 @@ import (
 	"github.com/nothingdns/nothingdns/internal/cache"
 	"github.com/nothingdns/nothingdns/internal/cluster"
 	"github.com/nothingdns/nothingdns/internal/config"
+	"github.com/nothingdns/nothingdns/internal/rpz"
 	"github.com/nothingdns/nothingdns/internal/zone"
 )
 
@@ -1604,5 +1605,72 @@ func TestConcurrentRequests(t *testing.T) {
 	// Wait for all requests to complete
 	for i := 0; i < numRequests; i++ {
 		<-done
+	}
+}
+
+// RPZ conversion function tests
+
+func TestActionToString(t *testing.T) {
+	tests := []struct {
+		action rpz.PolicyAction
+		want   string
+	}{
+		{rpz.ActionNXDOMAIN, "NXDOMAIN"},
+		{rpz.ActionNODATA, "NODATA"},
+		{rpz.ActionCNAME, "CNAME"},
+		{rpz.ActionOverride, "Override"},
+		{rpz.ActionDrop, "Drop"},
+		{rpz.ActionPassThrough, "PassThrough"},
+		{rpz.ActionTCPOnly, "TCPOnly"},
+		{rpz.PolicyAction(99), "Unknown"},
+	}
+	for _, tt := range tests {
+		got := actionToString(tt.action)
+		if got != tt.want {
+			t.Errorf("actionToString(%v) = %q, want %q", tt.action, got, tt.want)
+		}
+	}
+}
+
+func TestTriggerToString(t *testing.T) {
+	tests := []struct {
+		trigger rpz.TriggerType
+		want    string
+	}{
+		{rpz.TriggerQNAME, "QNAME"},
+		{rpz.TriggerResponseIP, "ResponseIP"},
+		{rpz.TriggerClientIP, "ClientIP"},
+		{rpz.TriggerNSDNAME, "NSDNAME"},
+		{rpz.TriggerNSIP, "NSIP"},
+		{rpz.TriggerType(99), "Unknown"},
+	}
+	for _, tt := range tests {
+		got := triggerToString(tt.trigger)
+		if got != tt.want {
+			t.Errorf("triggerToString(%v) = %q, want %q", tt.trigger, got, tt.want)
+		}
+	}
+}
+
+func TestParseAction(t *testing.T) {
+	tests := []struct {
+		input string
+		want  rpz.PolicyAction
+	}{
+		{"NXDOMAIN", rpz.ActionNXDOMAIN},
+		{"nxdomain", rpz.ActionNXDOMAIN},
+		{"NODATA", rpz.ActionNODATA},
+		{"CNAME", rpz.ActionCNAME},
+		{"OVERRIDE", rpz.ActionOverride},
+		{"DROP", rpz.ActionDrop},
+		{"PASSTHROUGH", rpz.ActionPassThrough},
+		{"TCPONLY", rpz.ActionTCPOnly},
+		{"UNKNOWN", rpz.ActionNXDOMAIN}, // default
+	}
+	for _, tt := range tests {
+		got := parseAction(tt.input)
+		if got != tt.want {
+			t.Errorf("parseAction(%q) = %v, want %v", tt.input, got, tt.want)
+		}
 	}
 }

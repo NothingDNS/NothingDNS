@@ -5,7 +5,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { api, type DashboardStats, type QueryEvent } from '@/lib/api';
 import { useWebSocket } from '@/hooks/useWebSocket';
-import { Activity, Database, Shield, Clock, RefreshCw } from 'lucide-react';
+import { Activity, Database, Shield, Clock, RefreshCw, Globe, Zap, Server, TrendingUp, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export function DashboardPage() {

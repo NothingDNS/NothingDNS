@@ -1,11 +1,20 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useEffect, useState, type ReactNode } from 'react';
 
 type Theme = 'light' | 'dark' | 'system';
 
-const Ctx = createContext<{ theme: Theme; resolved: 'light' | 'dark'; setTheme: (t: Theme) => void }>({
-  theme: 'system', resolved: 'dark', setTheme: () => {},
+interface ThemeContextValue {
+  theme: Theme;
+  resolved: 'light' | 'dark';
+  setTheme: (t: Theme) => void;
+}
+
+const ThemeContext = createContext<ThemeContextValue>({
+  theme: 'system',
+  resolved: 'dark',
+  setTheme: () => {},
 });
 
+// ThemeProvider is the only export from this file (for fast refresh)
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeRaw] = useState<Theme>(() => (localStorage.getItem('ndns-theme') as Theme) || 'system');
   const [resolved, setResolved] = useState<'light' | 'dark'>('dark');
@@ -26,7 +35,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [theme]);
 
   const setTheme = (t: Theme) => { setThemeRaw(t); localStorage.setItem('ndns-theme', t); };
-  return <Ctx.Provider value={{ theme, resolved, setTheme }}>{children}</Ctx.Provider>;
+  return <ThemeContext.Provider value={{ theme, resolved, setTheme }}>{children}</ThemeContext.Provider>;
 }
 
-export const useTheme = () => useContext(Ctx);
+// Expose context for custom hooks
+export { ThemeContext };

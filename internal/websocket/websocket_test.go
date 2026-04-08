@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ============================================================================
@@ -500,5 +501,21 @@ func TestConn_Close(t *testing.T) {
 	c := newConn([]byte{})
 	if err := c.Close(); err != nil {
 		t.Errorf("unexpected close error: %v", err)
+	}
+}
+
+// ============================================================================
+// SetReadDeadline
+// ============================================================================
+
+func TestSetReadDeadline_NoNetConn(t *testing.T) {
+	// bufferConn does not implement net.Conn, so SetReadDeadline should fail
+	c := newConn([]byte{})
+	err := c.SetReadDeadline(time.Now().Add(time.Second))
+	if err == nil {
+		t.Error("expected error when underlying conn does not support net.Conn")
+	}
+	if err != nil && err.Error() != "websocket: underlying connection does not support deadlines" {
+		t.Errorf("unexpected error: %v", err)
 	}
 }

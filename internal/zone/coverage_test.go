@@ -478,3 +478,67 @@ func TestManagerLoadAndRemoveIntegration(t *testing.T) {
 		t.Error("a.com. should be removed")
 	}
 }
+
+// ============================================================================
+// Manager.SetLogger and ListShared
+// ============================================================================
+
+func TestSetLogger(t *testing.T) {
+	m := NewManager()
+	if m.logger != nil {
+		t.Error("Default logger should be nil")
+	}
+
+	// SetLogger should not panic
+	m.SetLogger(nil)
+}
+
+func TestListShared(t *testing.T) {
+	m := NewManager()
+	if m.ListShared() == nil {
+		t.Error("ListShared should return non-nil map")
+	}
+
+	// Load a zone and check ListShared
+	tmpDir := t.TempDir()
+	zoneFile := filepath.Join(tmpDir, "test.zone")
+	content := `$ORIGIN example.com.
+$TTL 3600
+@ IN SOA ns1 hostmaster 1 3600 900 604800 86400
+@ IN NS ns1
+`
+	if err := os.WriteFile(zoneFile, []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to create temp zone file: %v", err)
+	}
+
+	m.Load("example.com.", zoneFile)
+	zones := m.ListShared()
+	if len(zones) != 1 {
+		t.Errorf("ListShared len = %d, want 1", len(zones))
+	}
+	if _, ok := zones["example.com."]; !ok {
+		t.Error("example.com. should be in ListShared")
+	}
+}
+
+// ============================================================================
+// KVPersistence parseSOAFromRData
+// ============================================================================
+
+func TestParseSOAFromRData(t *testing.T) {
+	// parseSOAFromRData is a stub that just returns an empty SOARecord
+	soa := parseSOAFromRData("ns1 hostmaster 1 3600 900 604800 86400")
+	if soa == nil {
+		t.Fatal("parseSOAFromRData should not return nil")
+	}
+	// The function is a stub - it just returns empty SOARecord
+	// Full parsing would be done by the zone parser
+}
+
+func TestParseSOAFromRDataWithInvalidData(t *testing.T) {
+	// Should not panic
+	soa := parseSOAFromRData("")
+	if soa == nil {
+		t.Fatal("parseSOAFromRData should not return nil even for empty input")
+	}
+}

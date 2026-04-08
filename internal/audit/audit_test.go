@@ -207,3 +207,230 @@ func TestFormatAuditLine(t *testing.T) {
 		t.Error("expected upstream in line")
 	}
 }
+
+func TestLogAXFR(t *testing.T) {
+	al, _ := NewAuditLogger(true, "")
+	defer al.Close()
+
+	var buf bytes.Buffer
+	al.output = &buf
+
+	al.LogAXFR(AXFRAuditEntry{
+		Timestamp:   "2026-04-02T12:00:00Z",
+		ClientIP:    "10.0.0.1",
+		Zone:        "example.com.",
+		Action:      "completed",
+		RecordCount: 100,
+		Latency:     50 * time.Millisecond,
+	})
+
+	line := buf.String()
+	if !strings.Contains(line, "zone=example.com.") {
+		t.Error("expected zone in line")
+	}
+	if !strings.Contains(line, "action=completed") {
+		t.Error("expected action in line")
+	}
+	if !strings.Contains(line, "records=100") {
+		t.Error("expected record count in line")
+	}
+}
+
+func TestLogIXFR(t *testing.T) {
+	al, _ := NewAuditLogger(true, "")
+	defer al.Close()
+
+	var buf bytes.Buffer
+	al.output = &buf
+
+	al.LogIXFR(IXFRAuditEntry{
+		Timestamp:   "2026-04-02T12:00:00Z",
+		ClientIP:    "10.0.0.2",
+		Zone:        "test.com.",
+		Action:      "request",
+		RecordCount: 5,
+		Latency:     10 * time.Millisecond,
+	})
+
+	line := buf.String()
+	if !strings.Contains(line, "zone=test.com.") {
+		t.Error("expected zone in line")
+	}
+}
+
+func TestLogNOTIFY(t *testing.T) {
+	al, _ := NewAuditLogger(true, "")
+	defer al.Close()
+
+	var buf bytes.Buffer
+	al.output = &buf
+
+	al.LogNOTIFY(NOTIFYAuditEntry{
+		Timestamp: "2026-04-02T12:00:00Z",
+		ClientIP:  "192.168.1.1",
+		Zone:      "example.com.",
+		Action:    "received",
+	})
+
+	line := buf.String()
+	if !strings.Contains(line, "zone=example.com.") {
+		t.Error("expected zone in line")
+	}
+	if !strings.Contains(line, "action=received") {
+		t.Error("expected action in line")
+	}
+}
+
+func TestLogUpdate(t *testing.T) {
+	al, _ := NewAuditLogger(true, "")
+	defer al.Close()
+
+	var buf bytes.Buffer
+	al.output = &buf
+
+	al.LogUpdate(UpdateAuditEntry{
+		Timestamp: "2026-04-02T12:00:00Z",
+		ClientIP:  "10.0.0.3",
+		Zone:      "dyn.example.com.",
+		Action:    "completed",
+		Rcode:     "0",
+		Added:     2,
+		Deleted:   1,
+	})
+
+	line := buf.String()
+	if !strings.Contains(line, "zone=dyn.example.com.") {
+		t.Error("expected zone in line")
+	}
+	if !strings.Contains(line, "added=2") {
+		t.Error("expected added count in line")
+	}
+	if !strings.Contains(line, "deleted=1") {
+		t.Error("expected deleted count in line")
+	}
+}
+
+func TestLogReload(t *testing.T) {
+	al, _ := NewAuditLogger(true, "")
+	defer al.Close()
+
+	var buf bytes.Buffer
+	al.output = &buf
+
+	al.LogReload(ReloadAuditEntry{
+		Timestamp: "2026-04-02T12:00:00Z",
+		Action:    "start",
+		Zones:     5,
+		Error:     "",
+	})
+
+	line := buf.String()
+	if !strings.Contains(line, "zones=5") {
+		t.Error("expected zones count in line")
+	}
+}
+
+func TestLogReload_WithError(t *testing.T) {
+	al, _ := NewAuditLogger(true, "")
+	defer al.Close()
+
+	var buf bytes.Buffer
+	al.output = &buf
+
+	al.LogReload(ReloadAuditEntry{
+		Timestamp: "2026-04-02T12:00:00Z",
+		Action:    "failed",
+		Zones:     3,
+		Error:     "parse error at line 10",
+	})
+
+	line := buf.String()
+	if !strings.Contains(line, "error=parse error at line 10") {
+		t.Error("expected error in line")
+	}
+}
+
+func TestFormatAXFRAuditLine(t *testing.T) {
+	line := formatAXFRAuditLine(AXFRAuditEntry{
+		Timestamp:   "2026-04-02T12:00:00Z",
+		ClientIP:    "10.0.0.1",
+		Zone:        "example.com.",
+		Action:      "completed",
+		RecordCount: 100,
+		Latency:     50 * time.Millisecond,
+	})
+
+	if !strings.Contains(line, "zone=example.com.") {
+		t.Error("expected zone in line")
+	}
+}
+
+func TestFormatIXFRAuditLine(t *testing.T) {
+	line := formatIXFRAuditLine(IXFRAuditEntry{
+		Timestamp:   "2026-04-02T12:00:00Z",
+		ClientIP:    "10.0.0.1",
+		Zone:        "example.com.",
+		Action:      "request",
+		RecordCount: 5,
+		Latency:     10 * time.Millisecond,
+	})
+
+	if !strings.Contains(line, "zone=example.com.") {
+		t.Error("expected zone in line")
+	}
+}
+
+func TestFormatNOTIFYAuditLine(t *testing.T) {
+	line := formatNOTIFYAuditLine(NOTIFYAuditEntry{
+		Timestamp: "2026-04-02T12:00:00Z",
+		ClientIP:  "192.168.1.1",
+		Zone:      "example.com.",
+		Action:    "received",
+	})
+
+	if !strings.Contains(line, "zone=example.com.") {
+		t.Error("expected zone in line")
+	}
+}
+
+func TestFormatUpdateAuditLine(t *testing.T) {
+	line := formatUpdateAuditLine(UpdateAuditEntry{
+		Timestamp: "2026-04-02T12:00:00Z",
+		ClientIP:  "10.0.0.3",
+		Zone:      "dyn.example.com.",
+		Action:    "completed",
+		Rcode:     "0",
+		Added:     2,
+		Deleted:   1,
+	})
+
+	if !strings.Contains(line, "zone=dyn.example.com.") {
+		t.Error("expected zone in line")
+	}
+}
+
+func TestFormatReloadAuditLine(t *testing.T) {
+	line := formatReloadAuditLine(ReloadAuditEntry{
+		Timestamp: "2026-04-02T12:00:00Z",
+		Action:    "start",
+		Zones:     5,
+		Error:     "",
+	})
+
+	if !strings.Contains(line, "zones=5") {
+		t.Error("expected zones in line")
+	}
+}
+
+func TestFormatReloadAuditLine_WithError(t *testing.T) {
+	line := formatReloadAuditLine(ReloadAuditEntry{
+		Timestamp: "2026-04-02T12:00:00Z",
+		Action:    "failed",
+		Zones:     3,
+		Error:     "zone not found",
+	})
+
+	if !strings.Contains(line, "error=zone not found") {
+		t.Error("expected error in line")
+	}
+}

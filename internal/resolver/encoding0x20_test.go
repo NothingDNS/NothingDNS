@@ -1,6 +1,7 @@
 package resolver
 
 import (
+	"github.com/nothingdns/nothingdns/internal/protocol"
 	"strings"
 	"testing"
 )
@@ -82,5 +83,28 @@ func TestVerify0x20_Mismatch(t *testing.T) {
 		if Verify0x20(tc.query, tc.response) {
 			t.Errorf("Verify0x20(%q, %q) should be false", tc.query, tc.response)
 		}
+	}
+}
+
+func TestVerify0x20Response(t *testing.T) {
+	name := protocol.NewName([]string{"www", "example", "com"}, true)
+
+	// Response with matching question name
+	resp := &protocol.Message{
+		Questions: []*protocol.Question{
+			{Name: name, QType: protocol.TypeA, QClass: protocol.ClassIN},
+		},
+	}
+	// Name.String() returns "www.example.com."
+	if !verify0x20Response("www.example.com.", resp) {
+		t.Error("verify0x20Response should return true for matching name")
+	}
+
+	// Response with no questions
+	emptyResp := &protocol.Message{
+		Questions: []*protocol.Question{},
+	}
+	if verify0x20Response("www.example.com.", emptyResp) {
+		t.Error("verify0x20Response should return false for empty questions")
 	}
 }

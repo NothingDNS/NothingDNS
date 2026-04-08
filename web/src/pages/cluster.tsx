@@ -41,7 +41,7 @@ export function ClusterPage() {
     return () => clearInterval(interval);
   }, []);
 
-  const handleRemoveNode = async (_id: string) => {
+  const handleRemoveNode = async () => {
     alert('Node removal requires configuration change and server restart. Use the Reload Config action after editing your configuration file.');
   };
 
@@ -162,7 +162,7 @@ export function ClusterPage() {
                   node={node}
                   selected={selectedNode === node.id}
                   onSelect={() => setSelectedNode(selectedNode === node.id ? null : node.id)}
-                  onRemove={() => handleRemoveNode(node.id)}
+                  onRemove={() => handleRemoveNode()}
                 />
               ))}
             </div>

@@ -434,6 +434,8 @@ func TestValidateBidi(t *testing.T) {
 		{"hello", nil},                      // LTR
 		{"123abc", nil},                     // LTR with numbers
 		{"a", nil},                          // Single LTR
+		// ErrInvalidBid: RTL string ending with number (Arabic numeral at end)
+		{"مرحبا١٢٣", ErrInvalidBid},        // RTL with Arabic-Indic digits at end (U+0660-0669)
 	}
 
 	for _, tt := range tests {
@@ -456,6 +458,9 @@ func TestValidateContext(t *testing.T) {
 		// ZWJ in valid context would need specific emoji sequences
 		// Arabic-Indic digit preceded by ASCII digit triggers O rule
 		{"test١٢٣", nil}, // Full string has ASCII then Arabic-Indic - no error
+		// ErrContextO: Arabic-Indic digit preceded by ASCII digit
+		{"١٢٣test", nil}, // Arabic-Indic first, then ASCII - no error
+		{"test1٢٣", ErrContextO}, // ASCII digit followed by Arabic-Indic - triggers O rule
 	}
 
 	for _, tt := range tests {
