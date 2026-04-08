@@ -8,6 +8,7 @@ package zone
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/nothingdns/nothingdns/internal/storage"
@@ -216,13 +217,82 @@ func (k *KVPersistence) storedRecordsToZone(meta storage.ZoneMeta, records map[s
 
 // parseSOAFromRData parses SOA record fields from RData string.
 // Format: "mname rname serial refresh retry expire minimum"
+// Example: "ns1.example.com. hostmaster.example.com. 2024010101 3600 900 604800 86400"
 func parseSOAFromRData(rdata string) *SOARecord {
-	// SOA RData is space-separated fields
-	// This is a simplified parser - zone parsing handles this in the parser
-	var soa SOARecord
-	// For now, just store the raw RData - proper parsing would need the parser
-	// The SOA record type should be used for full parsing
-	return &soa
+	fields := parseRDataFields(rdata)
+	if len(fields) < 7 {
+		return &SOARecord{} // Return empty on parse failure
+	}
+
+	serial, _ := parseUint32(fields[2])
+	refresh, _ := parseTTLValue(fields[3])
+	retry, _ := parseTTLValue(fields[4])
+	expire, _ := parseTTLValue(fields[5])
+	minimum, _ := parseTTLValue(fields[6])
+
+	return &SOARecord{
+		MName:   fields[0],
+		RName:   fields[1],
+		Serial:  serial,
+		Refresh: refresh,
+		Retry:   retry,
+		Expire:  expire,
+		Minimum: minimum,
+	}
+}
+
+// parseRDataFields splits SOA RData string into fields.
+// Handles space-separated fields (SOA RData format).
+func parseRDataFields(rdata string) []string {
+	var fields []string
+	var current strings.Builder
+	inQuotes := false
+
+	for _, r := range rdata {
+		switch r {
+		case '"':
+			inQuotes = !inQuotes
+		case ' ', '\t':
+			if !inQuotes {
+				if current.Len() > 0 {
+					fields = append(fields, current.String())
+					current.Reset()
+				}
+				continue
+			}
+		}
+		current.WriteRune(r)
+	}
+	if current.Len() > 0 {
+		fields = append(fields, current.String())
+	}
+	return fields
+}
+
+// parseUint32 parses a string to uint32.
+func parseUint32(s string) (uint32, error) {
+	var v uint64
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return 0, fmt.Errorf("invalid number")
+		}
+		v = v*10 + uint64(c-'0')
+		if v > 1<<32-1 {
+			return 0, fmt.Errorf("overflow")
+		}
+	}
+	return uint32(v), nil
+}
+
+// parseTTLValue parses a TTL value (can be number or duration string).
+func parseTTLValue(s string) (uint32, error) {
+	// Try direct number first
+	if v, err := parseUint32(s); err == nil {
+		return v, nil
+	}
+	// TODO: Handle duration strings like "1h", "30m" if needed
+	// For now, just return 0 for non-numeric
+	return 0, fmt.Errorf("invalid TTL value: %s", s)
 }
 
 // Manager returns the underlying zone manager.

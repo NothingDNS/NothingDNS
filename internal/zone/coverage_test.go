@@ -526,13 +526,25 @@ $TTL 3600
 // ============================================================================
 
 func TestParseSOAFromRData(t *testing.T) {
-	// parseSOAFromRData is a stub that just returns an empty SOARecord
 	soa := parseSOAFromRData("ns1 hostmaster 1 3600 900 604800 86400")
 	if soa == nil {
 		t.Fatal("parseSOAFromRData should not return nil")
 	}
-	// The function is a stub - it just returns empty SOARecord
-	// Full parsing would be done by the zone parser
+	if soa.Serial != 1 {
+		t.Errorf("Serial = %d, want 1", soa.Serial)
+	}
+	if soa.Refresh != 3600 {
+		t.Errorf("Refresh = %d, want 3600", soa.Refresh)
+	}
+	if soa.Retry != 900 {
+		t.Errorf("Retry = %d, want 900", soa.Retry)
+	}
+	if soa.Expire != 604800 {
+		t.Errorf("Expire = %d, want 604800", soa.Expire)
+	}
+	if soa.Minimum != 86400 {
+		t.Errorf("Minimum = %d, want 86400", soa.Minimum)
+	}
 }
 
 func TestParseSOAFromRDataWithInvalidData(t *testing.T) {
