@@ -244,30 +244,34 @@ func (s *Server) handleZones(w http.ResponseWriter, r *http.Request) {
 // handleWebSocket handles WebSocket connections
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Validate authentication token before accepting WebSocket connection
-	if s.authStore != nil {
-		token := r.Header.Get("Authorization")
-		token = strings.TrimPrefix(token, "Bearer ")
-		if token == "" {
-			// Try query parameter fallback
-			token = r.URL.Query().Get("token")
-		}
-		if token == "" {
-			if c, err := r.Cookie("ndns_token"); err == nil {
-				token = c.Value
-			}
-		}
+	// SECURITY: auth is required - if authStore is nil, deny the request (fail closed)
+	if s.authStore == nil {
+		http.Error(w, "authentication required: auth store not configured", http.StatusUnauthorized)
+		return
+	}
 
-		if token == "" {
-			http.Error(w, "authentication required", http.StatusUnauthorized)
-			return
+	token := r.Header.Get("Authorization")
+	token = strings.TrimPrefix(token, "Bearer ")
+	if token == "" {
+		// Try query parameter fallback
+		token = r.URL.Query().Get("token")
+	}
+	if token == "" {
+		if c, err := r.Cookie("ndns_token"); err == nil {
+			token = c.Value
 		}
+	}
 
-		// Validate token
-		if _, err := s.authStore.ValidateToken(token); err != nil {
-			util.Warnf("dashboard: websocket auth failed: %v", err)
-			http.Error(w, "invalid token", http.StatusUnauthorized)
-			return
-		}
+	if token == "" {
+		http.Error(w, "authentication required", http.StatusUnauthorized)
+		return
+	}
+
+	// Validate token
+	if _, err := s.authStore.ValidateToken(token); err != nil {
+		util.Warnf("dashboard: websocket auth failed: %v", err)
+		http.Error(w, "invalid token", http.StatusUnauthorized)
+		return
 	}
 
 	conn, err := websocket.Handshake(w, r, s.allowedOrigins...)

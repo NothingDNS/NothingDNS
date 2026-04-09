@@ -192,6 +192,31 @@ func (l *loginRateLimiter) recordSuccess(ip, username string) {
 	delete(l.userAttempts, username)
 }
 
+// cleanup removes stale lockout entries to prevent memory growth.
+// Called periodically by the API server's cleanup goroutine.
+func (l *loginRateLimiter) cleanup() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	now := time.Now()
+
+	// Clean up expired IP attempts
+	for ip, attempt := range l.ipAttempts {
+		// Remove if lockout expired and no active delay
+		if now.After(attempt.lockedUntil) && now.After(attempt.lastTry.Add(loginMaxDelay)) {
+			delete(l.ipAttempts, ip)
+		}
+	}
+
+	// Clean up expired user attempts
+	for username, attempt := range l.userAttempts {
+		// Remove if lockout expired
+		if now.After(attempt.lockedUntil) {
+			delete(l.userAttempts, username)
+		}
+	}
+}
+
 // apiRateLimiter implements a sliding window rate limiter for API endpoints.
 type apiRateLimiter struct {
 	mu          sync.Mutex
@@ -534,6 +559,7 @@ func (s *Server) rateLimitCleanupLoop() {
 			return
 		case <-ticker.C:
 			s.apiRateLimiter.cleanup()
+			s.loginLimiter.cleanup()
 		}
 	}
 }

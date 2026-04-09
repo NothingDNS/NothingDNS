@@ -75,13 +75,13 @@ func DefaultConfig() *Config {
 func NewStore(cfg *Config) *Store {
 	var secret []byte
 	if cfg.Secret == "" {
-		// Generate a random secret and log it for first-run / dev environments.
-		// This is cryptographically weak (secret is not persisted) but prevents
-		// token forgery until a proper auth_secret is configured.
+		// Generate a random secret for this run. This is cryptographically weak
+		// (secret is not persisted) but prevents token forgery until a proper
+		// auth_secret is configured. Tokens will be invalidated on server restart.
 		generated := generateSecret(32)
 		secret = []byte(generated)
-		util.Warnf("AUTH: No auth_secret configured. Generated temporary secret for this run: %s. " +
-			"Set auth_secret in config for production deployments.", generated)
+		util.Warnf("AUTH: No auth_secret configured. Generated temporary secret for this run. " +
+			"Set auth_secret in config for production deployments to ensure token persistence across restarts.")
 	} else {
 		secret = []byte(cfg.Secret)
 	}

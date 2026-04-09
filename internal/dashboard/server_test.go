@@ -753,7 +753,7 @@ func TestServeHTTP_AllRoutes(t *testing.T) {
 		{"/api/dashboard/stats", http.StatusOK},
 		{"/api/dashboard/queries", http.StatusOK},
 		{"/api/dashboard/zones", http.StatusOK},
-		{"/ws", http.StatusBadRequest},
+		{"/ws", http.StatusUnauthorized}, // Auth required - returns 401 when no auth store configured
 		{"/unknown", http.StatusNotFound},
 	}
 
