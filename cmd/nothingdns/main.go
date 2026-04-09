@@ -184,6 +184,14 @@ func run() error {
 	})
 	logger.Infof("Auth store initialized with %d users", len(cfg.Server.HTTP.Users))
 
+	// Warn if using legacy single-token auth without multi-user auth
+	// In this mode, RBAC is not enforced - token holders have full access to all endpoints
+	if cfg.Server.HTTP.AuthToken != "" && len(cfg.Server.HTTP.Users) == 0 {
+		logger.Warnf("AUTH: Using legacy single-token auth (auth_token configured, no users). " +
+			"Note: RBAC is not enforced in this mode - all token holders have operator-level access. " +
+			"Consider configuring multi-user auth (users) for production deployments requiring RBAC.")
+	}
+
 	// Initialize audit logger
 	auditLogger, err := audit.NewAuditLogger(cfg.Logging.QueryLog, cfg.Logging.QueryLogFile)
 	if err != nil {

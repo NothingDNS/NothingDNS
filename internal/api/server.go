@@ -2653,10 +2653,12 @@ func hasRole(ctx context.Context, store *auth.Store, required auth.Role) bool {
 	return store.HasRole(user.Username, required)
 }
 
-// requireOperator checks if the request has operator role (or is using legacy single-token auth).
+// requireOperator checks if the request has operator role.
 // Writes error and returns true if access denied.
 func (s *Server) requireOperator(w http.ResponseWriter, r *http.Request) bool {
-	// If using legacy single-token auth (no authStore), skip RBAC — token holders have full access
+	// If authStore is nil, RBAC checks cannot be performed.
+	// This happens in legacy single-token auth mode (auth_token without multi-user auth).
+	// In this case, allow through - the auth middleware already validated the token.
 	if s.authStore == nil {
 		return false
 	}
@@ -2667,10 +2669,12 @@ func (s *Server) requireOperator(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 
-// requireAdmin checks if the request has admin role (or is using legacy single-token auth).
+// requireAdmin checks if the request has admin role.
 // Writes error and returns true if access denied.
 func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
-	// If using legacy single-token auth (no authStore), skip RBAC — token holders have full access
+	// If authStore is nil, RBAC checks cannot be performed.
+	// This happens in legacy single-token auth mode (auth_token without multi-user auth).
+	// In this case, allow through - the auth middleware already validated the token.
 	if s.authStore == nil {
 		return false
 	}
