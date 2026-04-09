@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"os"
 	"sync"
+
+	"github.com/nothingdns/nothingdns/internal/util"
 	"time"
 )
 
@@ -98,8 +100,8 @@ func NewStore(cfg *Config) *Store {
 			UpdatedAt: time.Now().UTC().Format(time.RFC3339),
 		}
 		// Log the generated password - operator must change this
-		fmt.Printf("WARNING: No users configured. Default admin password generated: %s\n", defaultPassword)
-		fmt.Printf("WARNING: Change this password immediately via the dashboard or API.\n")
+		util.Warnf("No users configured. Default admin password generated: %s", defaultPassword)
+		util.Warnf("Change this password immediately via the dashboard or API.")
 	}
 
 	return s

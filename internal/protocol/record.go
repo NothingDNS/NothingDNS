@@ -113,6 +113,9 @@ func (rr *ResourceRecord) Pack(buf []byte, offset int, compression map[string]in
 	offset += 2 // Reserve space for RDLENGTH
 
 	// Pack RData
+	if rr.Data == nil {
+		return 0, fmt.Errorf("packing rdata: nil RData for record %s type %d", rr.Name, rr.Type)
+	}
 	rdataLen, err := rr.Data.Pack(buf, offset)
 	if err != nil {
 		return 0, fmt.Errorf("packing rdata: %w", err)

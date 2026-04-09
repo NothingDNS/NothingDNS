@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -241,6 +242,7 @@ func (s *Server) Start() error {
 		Handler:      s.corsMiddleware(s.authMiddleware(mux)),
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 
 	go func() {
@@ -322,7 +324,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		// Validate token
 		if token != "" {
 			// First try old-style shared token
-			if s.config.AuthToken != "" && (token == s.config.AuthToken) {
+			if s.config.AuthToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(s.config.AuthToken)) == 1 {
 				next.ServeHTTP(w, r)
 				return
 			}

@@ -4,6 +4,7 @@ import (
 	"crypto/sha1" // #nosec G505 - Required for legacy DS digest support
 	"crypto/sha256"
 	"crypto/sha512"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/xml"
 	"fmt"
@@ -330,7 +331,7 @@ func splitLabels(name string) []string {
 	return labels
 }
 
-// bytesEqual compares two byte slices for equality.
+// bytesEqual compares two byte slices for equality using constant-time comparison.
 func bytesEqual(a, b []byte) bool {
 	// Handle nil cases: nil != empty slice
 	if (a == nil) != (b == nil) {
@@ -339,12 +340,8 @@ func bytesEqual(a, b []byte) bool {
 	if len(a) != len(b) {
 		return false
 	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
+	// Use constant-time comparison to prevent timing attacks
+	return subtle.ConstantTimeCompare(a, b) == 1
 }
 
 // BuiltInRootAnchors contains the IANA root trust anchors.
