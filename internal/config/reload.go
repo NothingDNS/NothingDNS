@@ -7,6 +7,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+
+	"github.com/nothingdns/nothingdns/internal/util"
 )
 
 // ReloadHandler manages configuration hot-reload via SIGHUP
@@ -76,7 +78,7 @@ func (h *ReloadHandler) Start() {
 		defer h.wg.Done()
 		defer func() {
 			if r := recover(); r != nil {
-				fmt.Printf("panic in reload handler: %v\n", r)
+				util.Errorf("panic in reload handler: %v", r)
 			}
 		}()
 		for range h.reloadSig {
