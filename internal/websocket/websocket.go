@@ -28,10 +28,21 @@ func IsWebSocketRequest(r *http.Request) bool {
 
 // Handshake performs the WebSocket upgrade handshake. On success the response
 // writer has been hijacked and the caller can use ReadMessage/WriteMessage.
-func Handshake(w http.ResponseWriter, r *http.Request) (*Conn, error) {
+// If allowedOrigins is non-empty, the Origin header is validated against the list.
+// An empty allowedOrigins list skips origin validation.
+func Handshake(w http.ResponseWriter, r *http.Request, allowedOrigins ...string) (*Conn, error) {
 	if !IsWebSocketRequest(r) {
 		http.Error(w, "not a websocket request", http.StatusBadRequest)
 		return nil, ErrNotWebSocket
+	}
+
+	// Validate Origin if allowedOrigins is specified
+	if len(allowedOrigins) > 0 {
+		origin := r.Header.Get("Origin")
+		if origin != "" && !isOriginAllowed(origin, allowedOrigins) {
+			http.Error(w, "origin not allowed", http.StatusForbidden)
+			return nil, errors.New("websocket: origin not allowed")
+		}
 	}
 
 	key := r.Header.Get("Sec-WebSocket-Key")
@@ -81,6 +92,17 @@ func Handshake(w http.ResponseWriter, r *http.Request) (*Conn, error) {
 	return &Conn{conn: conn}, nil
 }
 
+// isOriginAllowed checks if the origin matches the allowed list.
+// Wildcard "*" is not allowed — it must be an explicit origin match.
+func isOriginAllowed(origin string, allowedOrigins []string) bool {
+	for _, o := range allowedOrigins {
+		if o == origin {
+			return true
+		}
+	}
+	return false
+}
+
 // Conn represents a WebSocket connection.
 type Conn struct {
 	conn io.ReadWriteCloser
@@ -96,6 +118,15 @@ func (c *Conn) Close() error {
 func (c *Conn) SetReadDeadline(t time.Time) error {
 	if nc, ok := c.conn.(net.Conn); ok {
 		return nc.SetReadDeadline(t)
+	}
+	return errors.New("websocket: underlying connection does not support deadlines")
+}
+
+// SetWriteDeadline sets the write deadline on the underlying connection.
+// Returns an error if the underlying connection does not support deadlines.
+func (c *Conn) SetWriteDeadline(t time.Time) error {
+	if nc, ok := c.conn.(net.Conn); ok {
+		return nc.SetWriteDeadline(t)
 	}
 	return errors.New("websocket: underlying connection does not support deadlines")
 }
@@ -180,7 +211,7 @@ func (c *Conn) readFrame() (opcode byte, payload []byte, err error) {
 		payloadLen = int(binary.BigEndian.Uint64(ext))
 	}
 
-	if payloadLen > 1<<20 { // 1MB max frame
+	if payloadLen > 16*1024 { // 16KB max frame (DNS messages are typically < 4KB)
 		return 0, nil, errors.New("websocket: frame too large")
 	}
 

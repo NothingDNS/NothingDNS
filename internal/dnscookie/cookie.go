@@ -20,6 +20,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"github.com/nothingdns/nothingdns/internal/util"
 )
 
 // Cookie size constraints per RFC 7873.
@@ -192,7 +194,7 @@ func (j *CookieJar) maybeRotate() {
 	if needsRotation {
 		// Rotation failure is logged but not fatal - old secret remains valid
 		if err := j.RotateSecret(); err != nil {
-			fmt.Printf("WARNING: %v\n", err)
+			util.Warnf("dnscookie: secret rotation failed: %v", err)
 		}
 	}
 }

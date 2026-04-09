@@ -77,10 +77,14 @@ type TSIGRecord struct {
 	OtherData  []byte    // Additional error info
 }
 
-// KeyStore manages TSIG keys
+// KeyStore manages TSIG keys with support for key rotation.
+// During rotation, both the old and new keys are valid, allowing
+// seamless transitions without downtime.
 type KeyStore struct {
-	keys map[string]*TSIGKey // keyed by key name
-	mu   sync.RWMutex
+	keys       map[string]*TSIGKey // keyed by key name
+	previous   *TSIGKey            // previous key for rotation grace period
+	rotatedAt  time.Time           // when the last rotation occurred
+	mu         sync.RWMutex
 }
 
 // NewKeyStore creates a new TSIG key store
@@ -110,6 +114,61 @@ func (ks *KeyStore) RemoveKey(name string) {
 	ks.mu.Lock()
 	delete(ks.keys, strings.ToLower(name))
 	ks.mu.Unlock()
+}
+
+// HasKeys returns true if the store has at least one key configured
+func (ks *KeyStore) HasKeys() bool {
+	ks.mu.RLock()
+	defer ks.mu.RUnlock()
+	return len(ks.keys) > 0
+}
+
+// RotateKey replaces the current key with a new one, keeping the old key
+// as the previous key for a grace period. This allows seamless key rotation
+// where both keys are valid during the transition.
+// After grace period, call ClearPreviousKey() to remove the old key.
+func (ks *KeyStore) RotateKey(newKey *TSIGKey) {
+	ks.mu.Lock()
+	defer ks.mu.Unlock()
+
+	// Save current key as previous
+	oldKey, exists := ks.keys[strings.ToLower(newKey.Name)]
+	if exists {
+		ks.previous = oldKey
+		ks.rotatedAt = time.Now()
+	}
+
+	// Add new key
+	ks.keys[strings.ToLower(newKey.Name)] = newKey
+}
+
+// GetPreviousKey returns the previous key (if within grace period)
+func (ks *KeyStore) GetPreviousKey(name string) *TSIGKey {
+	ks.mu.RLock()
+	defer ks.mu.RUnlock()
+
+	if ks.previous == nil {
+		return nil
+	}
+	// Only return previous key if it's the same name (same key being rotated)
+	if ks.previous.Name == name {
+		return ks.previous
+	}
+	return nil
+}
+
+// ClearPreviousKey removes the previous key after rotation grace period
+func (ks *KeyStore) ClearPreviousKey() {
+	ks.mu.Lock()
+	defer ks.mu.Unlock()
+	ks.previous = nil
+}
+
+// ReplaceKey atomically replaces a key by name
+func (ks *KeyStore) ReplaceKey(name string, newKey *TSIGKey) {
+	ks.mu.Lock()
+	defer ks.mu.Unlock()
+	ks.keys[strings.ToLower(name)] = newKey
 }
 
 // ParseTSIGKey parses a TSIG key from base64 secret
@@ -316,7 +375,32 @@ func SignMessage(msg *protocol.Message, key *TSIGKey, fudge uint16) (*protocol.R
 }
 
 // VerifyMessage verifies a TSIG-signed message
+// VerifyMessage verifies a TSIG-signed message using the current key.
+// For key rotation scenarios, use VerifyMessageWithPrevious.
 func VerifyMessage(msg *protocol.Message, key *TSIGKey, previousMAC []byte) error {
+	return verifyWithKey(msg, key, previousMAC)
+}
+
+// VerifyMessageWithPrevious tries the current key first, then the previous key
+// if the current key fails. This supports seamless key rotation.
+func VerifyMessageWithPrevious(msg *protocol.Message, key *TSIGKey, previousKey *TSIGKey, previousMAC []byte) error {
+	// Try current key first
+	if err := verifyWithKey(msg, key, previousMAC); err == nil {
+		return nil
+	}
+
+	// If previous key exists, try that too (key rotation scenario)
+	if previousKey != nil {
+		if err := verifyWithKey(msg, previousKey, previousMAC); err == nil {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("TSIG verification failed with current and previous keys")
+}
+
+// verifyWithKey performs the actual TSIG verification with a given key
+func verifyWithKey(msg *protocol.Message, key *TSIGKey, previousMAC []byte) error {
 	// Find TSIG record in additional section
 	tsigRR, err := findTSIGRecord(msg)
 	if err != nil {

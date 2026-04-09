@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -54,9 +55,207 @@ type Server struct {
 	validator       *dnssec.Validator
 	rpzEngine       *rpz.Engine
 	odohProxy       *odoh.ObliviousProxy // ODoH proxy (RFC 9230)
+	loginLimiter    *loginRateLimiter
+	apiRateLimiter  *apiRateLimiter
 
 	// Goroutine leak detection baseline
 	goroutineBaseline int64
+}
+
+// loginRateLimiter tracks failed login attempts per IP and applies progressive delays.
+type loginRateLimiter struct {
+	mu       sync.Mutex
+	attempts map[string]*loginAttempt
+}
+
+// loginAttempt tracks failed attempts for a single IP.
+type loginAttempt struct {
+	count     int
+	lastTry   time.Time
+	lockedUntil time.Time
+}
+
+// LoginRateLimit constants
+const (
+	loginMaxAttempts   = 5             // Maximum attempts before lockout
+	loginLockoutPeriod = 5 * time.Minute // How long to lock out after max attempts
+	loginMaxDelay      = 30 * time.Second // Maximum delay between attempts
+)
+
+// checkRateLimit checks if the given IP is rate-limited.
+// Returns true if the request should be rejected, and the delay to apply.
+func (l *loginRateLimiter) checkRateLimit(ip string) (bool, time.Duration) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	now := time.Now()
+	attempt, exists := l.attempts[ip]
+
+	if !exists {
+		return false, 0
+	}
+
+	// Check if currently locked out
+	if now.Before(attempt.lockedUntil) {
+		return true, time.Until(attempt.lockedUntil)
+	}
+
+	// Check if delay period is active (progressive delay)
+	if now.Before(attempt.lastTry.Add(loginMaxDelay)) {
+		delay := time.Until(attempt.lastTry.Add(loginMaxDelay))
+		if delay > 0 {
+			return true, delay
+		}
+	}
+
+	return false, 0
+}
+
+// recordFailedAttempt records a failed login attempt for the given IP.
+func (l *loginRateLimiter) recordFailedAttempt(ip string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	now := time.Now()
+	attempt, exists := l.attempts[ip]
+
+	if !exists {
+		l.attempts[ip] = &loginAttempt{
+			count:   1,
+			lastTry: now,
+		}
+		return
+	}
+
+	// Reset lockout if expired
+	if now.After(attempt.lockedUntil) {
+		attempt.count = 0
+		attempt.lockedUntil = time.Time{}
+	}
+
+	attempt.count++
+	attempt.lastTry = now
+
+	// Apply lockout if max attempts reached
+	if attempt.count >= loginMaxAttempts {
+		attempt.lockedUntil = now.Add(loginLockoutPeriod)
+	}
+}
+
+// recordSuccess removes the IP from rate limiting on successful login.
+func (l *loginRateLimiter) recordSuccess(ip string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.attempts, ip)
+}
+
+// apiRateLimiter implements a sliding window rate limiter for API endpoints.
+type apiRateLimiter struct {
+	mu          sync.Mutex
+	requests    map[string][]time.Time // IP -> timestamps of recent requests
+	maxReqs    int                    // Maximum requests per window
+	windowSecs int                    // Window size in seconds
+}
+
+// apiRateLimit constants for authenticated endpoints
+const (
+	apiRateLimitMaxRequests = 100        // Max requests per window
+	apiRateLimitWindowSecs = 60          // Window size in seconds
+)
+
+// checkRateLimit checks if the IP is within rate limits.
+// Returns true if the request should be rejected.
+func (r *apiRateLimiter) checkRateLimit(ip string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	now := time.Now()
+	windowStart := now.Add(-time.Duration(r.windowSecs) * time.Second)
+
+	// Get or create request list for this IP
+	reqs, exists := r.requests[ip]
+	if !exists {
+		reqs = []time.Time{}
+	}
+
+	// Filter to only requests within the window
+	validReqs := make([]time.Time, 0, len(reqs))
+	for _, t := range reqs {
+		if t.After(windowStart) {
+			validReqs = append(validReqs, t)
+		}
+	}
+
+	// Check if limit exceeded
+	if len(validReqs) >= r.maxReqs {
+		r.requests[ip] = validReqs
+		return true
+	}
+
+	// Add current request
+	validReqs = append(validReqs, now)
+	r.requests[ip] = validReqs
+	return false
+}
+
+// getResetTime returns when the rate limit will reset for an IP
+func (r *apiRateLimiter) getResetTime(ip string) time.Duration {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	reqs, exists := r.requests[ip]
+	if !exists || len(reqs) == 0 {
+		return 0
+	}
+
+	// Find oldest request in window
+	now := time.Now()
+	windowStart := now.Add(-time.Duration(r.windowSecs) * time.Second)
+	var oldest time.Time
+	for _, t := range reqs {
+		if t.After(windowStart) {
+			if oldest.IsZero() || t.Before(oldest) {
+				oldest = t
+			}
+		}
+	}
+
+	if oldest.IsZero() {
+		return 0
+	}
+	return oldest.Add(time.Duration(r.windowSecs) * time.Second).Sub(now)
+}
+
+// cleanup removes stale entries to prevent memory growth
+func (r *apiRateLimiter) cleanup() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	now := time.Now()
+	windowStart := now.Add(-time.Duration(r.windowSecs) * time.Second)
+
+	for ip, reqs := range r.requests {
+		validReqs := make([]time.Time, 0, len(reqs))
+		for _, t := range reqs {
+			if t.After(windowStart) {
+				validReqs = append(validReqs, t)
+			}
+		}
+		if len(validReqs) == 0 {
+			delete(r.requests, ip)
+		} else {
+			r.requests[ip] = validReqs
+		}
+	}
+}
+
+// newAPIRateLimiter creates a new API rate limiter
+func newAPIRateLimiter() *apiRateLimiter {
+	return &apiRateLimiter{
+		requests:    make(map[string][]time.Time),
+		maxReqs:     apiRateLimitMaxRequests,
+		windowSecs:  apiRateLimitWindowSecs,
+	}
 }
 
 // WithDashboard sets the dashboard server for real-time stats.
@@ -75,6 +274,10 @@ func NewServer(cfg config.HTTPConfig, zm *zone.Manager, c *cache.Cache, reload f
 		dnsHandler:      dnsHandler,
 		cluster:         cl,
 		dashboardServer: ds,
+		loginLimiter: &loginRateLimiter{
+			attempts: make(map[string]*loginAttempt),
+		},
+		apiRateLimiter: newAPIRateLimiter(),
 	}
 }
 
@@ -152,7 +355,7 @@ func (s *Server) Start() error {
 
 	// DoWS endpoint (DNS over WebSocket) - no auth required
 	if s.config.DoWSEnabled && s.dnsHandler != nil {
-		wsHandler := doh.NewWSHandler(s.dnsHandler)
+		wsHandler := doh.NewWSHandler(s.dnsHandler, s.config.AllowedOrigins)
 		mux.Handle(s.config.DoWSPath, wsHandler)
 	}
 
@@ -269,17 +472,55 @@ func (s *Server) Stop() error {
 // corsMiddleware adds CORS headers.
 func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := r.Header.Get("Origin")
+
+		// If allowed_origins is empty, allow all (backward compatible default)
+		// If allowed_origins contains "*", allow all origins
+		// Otherwise validate against the explicit list
+		allowedOrigins := s.config.AllowedOrigins
+		allowOrigin := ""
+		if len(allowedOrigins) == 0 {
+			// Default: allow all when no explicit origins configured
+			// (backward compatible - sets * for browsers, origin for programmatic clients)
+			allowOrigin = "*"
+		} else if len(allowedOrigins) == 1 && allowedOrigins[0] == "*" {
+			// Reject wildcard - insecure when credentials are involved.
+			// No CORS header = browser blocks credentialed cross-origin requests.
+			allowOrigin = ""
+		} else if origin != "" && isOriginAllowed(origin, allowedOrigins) {
+			allowOrigin = origin
+		}
+
+		if allowOrigin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", allowOrigin)
+			w.Header().Set("Vary", "Origin")
+		}
+
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
 		if r.Method == "OPTIONS" {
+			if allowOrigin == "" && origin != "" && len(allowedOrigins) > 0 {
+				// Origin was present but not allowed — reject preflight
+				http.Error(w, "origin not allowed", http.StatusForbidden)
+				return
+			}
 			w.WriteHeader(http.StatusOK)
 			return
 		}
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isOriginAllowed checks if the given origin is in the allowed list.
+func isOriginAllowed(origin string, allowed []string) bool {
+	for _, o := range allowed {
+		if o == origin {
+			return true
+		}
+	}
+	return false
 }
 
 // authMiddleware adds authentication.
@@ -309,11 +550,6 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		token := r.Header.Get("Authorization")
 		token = strings.TrimPrefix(token, "Bearer ")
 
-		// Fallback: query parameter
-		if token == "" {
-			token = r.URL.Query().Get("token")
-		}
-
 		// Fallback: cookie
 		if token == "" {
 			if c, err := r.Cookie("ndns_token"); err == nil {
@@ -324,7 +560,16 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		// Validate token
 		if token != "" {
 			// First try old-style shared token
-			if s.config.AuthToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(s.config.AuthToken)) == 1 {
+			// SECURITY: Check length first to prevent timing attack via ConstantTimeCompare
+			if s.config.AuthToken != "" && len(token) == len(s.config.AuthToken) && subtle.ConstantTimeCompare([]byte(token), []byte(s.config.AuthToken)) == 1 {
+				// Check API rate limit for authenticated requests
+				ip := getClientIP(r)
+				if s.apiRateLimiter.checkRateLimit(ip) {
+					resetTime := s.apiRateLimiter.getResetTime(ip)
+					w.Header().Set("Retry-After", strconv.Itoa(int(resetTime.Seconds())+1))
+					http.Error(w, `{"error":"rate limit exceeded"}`, http.StatusTooManyRequests)
+					return
+				}
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -332,6 +577,14 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			// Try JWT-style token from auth store
 			if s.authStore != nil {
 				if user, err := s.authStore.ValidateToken(token); err == nil {
+					// Check API rate limit for authenticated requests
+					ip := getClientIP(r)
+					if s.apiRateLimiter.checkRateLimit(ip) {
+						resetTime := s.apiRateLimiter.getResetTime(ip)
+						w.Header().Set("Retry-After", strconv.Itoa(int(resetTime.Seconds())+1))
+						http.Error(w, `{"error":"rate limit exceeded"}`, http.StatusTooManyRequests)
+						return
+					}
 					// Set user info in request context
 					ctx := WithUser(r.Context(), user)
 					next.ServeHTTP(w, r.WithContext(ctx))
@@ -763,6 +1016,9 @@ func (s *Server) handleGetZone(w http.ResponseWriter, _ *http.Request, name stri
 
 // handleCreateZone creates a new zone.
 func (s *Server) handleCreateZone(w http.ResponseWriter, r *http.Request) {
+	if s.requireOperator(w, r) {
+		return
+	}
 	if s.zoneManager == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Zone manager not available")
 		return
@@ -830,7 +1086,10 @@ func (s *Server) handleCreateZone(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleDeleteZone deletes a zone.
-func (s *Server) handleDeleteZone(w http.ResponseWriter, _ *http.Request, name string) {
+func (s *Server) handleDeleteZone(w http.ResponseWriter, r *http.Request, name string) {
+	if s.requireOperator(w, r) {
+		return
+	}
 	if err := s.zoneManager.DeleteZone(name); err != nil {
 		s.writeError(w, http.StatusNotFound, err.Error())
 		return
@@ -868,6 +1127,9 @@ func (s *Server) handleGetRecords(w http.ResponseWriter, r *http.Request, zoneNa
 
 // handleAddRecord adds a record to a zone.
 func (s *Server) handleAddRecord(w http.ResponseWriter, r *http.Request, zoneName string) {
+	if s.requireOperator(w, r) {
+		return
+	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 65536))
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "Failed to read request body")
@@ -923,6 +1185,9 @@ func (s *Server) handleAddRecord(w http.ResponseWriter, r *http.Request, zoneNam
 
 // handleUpdateRecord updates a record in a zone.
 func (s *Server) handleUpdateRecord(w http.ResponseWriter, r *http.Request, zoneName string) {
+	if s.requireOperator(w, r) {
+		return
+	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 65536))
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "Failed to read request body")
@@ -966,6 +1231,9 @@ func (s *Server) handleUpdateRecord(w http.ResponseWriter, r *http.Request, zone
 
 // handleDeleteRecord deletes a record from a zone.
 func (s *Server) handleDeleteRecord(w http.ResponseWriter, r *http.Request, zoneName string) {
+	if s.requireOperator(w, r) {
+		return
+	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 65536))
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "Failed to read request body")
@@ -1454,6 +1722,9 @@ func (s *Server) handleZoneReload(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
+	if s.requireOperator(w, r) {
+		return
+	}
 
 	zoneName := r.URL.Query().Get("zone")
 	if zoneName == "" {
@@ -1504,6 +1775,9 @@ func (s *Server) handleCacheFlush(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
+	if s.requireOperator(w, r) {
+		return
+	}
 
 	if s.cache == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Cache not available")
@@ -1520,6 +1794,9 @@ func (s *Server) handleCacheFlush(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleConfigReload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	if s.requireOperator(w, r) {
 		return
 	}
 
@@ -1650,6 +1927,9 @@ func (s *Server) handleBlocklists(w http.ResponseWriter, r *http.Request) {
 			URLsCount:  stats.URLs,
 		})
 	case http.MethodPost:
+		if s.requireOperator(w, r) {
+			return
+		}
 		var req BlocklistAddRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			s.writeError(w, http.StatusBadRequest, "Invalid request body")
@@ -1688,6 +1968,9 @@ func (s *Server) handleBlocklistActions(w http.ResponseWriter, r *http.Request) 
 			s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 			return
 		}
+		if s.requireOperator(w, r) {
+			return
+		}
 		stats := s.blocklist.Stats()
 		s.blocklist.SetEnabled(!stats.Enabled)
 		s.writeJSON(w, http.StatusOK, &MessageResponse{
@@ -1698,6 +1981,9 @@ func (s *Server) handleBlocklistActions(w http.ResponseWriter, r *http.Request) 
 
 	// Delete by file path: /api/v1/blocklists/{filepath}
 	if r.Method == http.MethodDelete {
+		if s.requireOperator(w, r) {
+			return
+		}
 		// URL-decode the path to handle encoded slashes
 		decodedPath, err := url.QueryUnescape(path)
 		if err != nil {
@@ -1745,6 +2031,9 @@ func (s *Server) handleUpstreams(w http.ResponseWriter, r *http.Request) {
 		}
 		s.writeJSON(w, http.StatusOK, &UpstreamsResponse{Upstreams: upstreams})
 	case http.MethodPut:
+		if s.requireOperator(w, r) {
+			return
+		}
 		// Update upstream configuration (add/remove servers)
 		var req UpstreamUpdateRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1812,6 +2101,9 @@ func (s *Server) handleACL(w http.ResponseWriter, r *http.Request) {
 		}
 		s.writeJSON(w, http.StatusOK, &ACLResponse{Rules: aclRules})
 	case http.MethodPut:
+		if s.requireOperator(w, r) {
+			return
+		}
 		var req struct {
 			Rules []struct {
 				Name     string   `json:"name"`
@@ -1913,6 +2205,9 @@ func (s *Server) handleRPZRules(w http.ResponseWriter, r *http.Request) {
 		}
 		s.writeJSON(w, http.StatusOK, &RPZRulesResponse{Rules: resp})
 	case http.MethodPost:
+		if s.requireOperator(w, r) {
+			return
+		}
 		var req RPZAddRuleRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			s.writeError(w, http.StatusBadRequest, "Invalid request body")
@@ -1926,6 +2221,9 @@ func (s *Server) handleRPZRules(w http.ResponseWriter, r *http.Request) {
 		s.rpzEngine.AddQNAMERule(req.Pattern, action, req.OverrideData)
 		s.writeJSON(w, http.StatusCreated, &MessageResponse{Message: "Rule added"})
 	case http.MethodDelete:
+		if s.requireOperator(w, r) {
+			return
+		}
 		// DELETE /api/v1/rpz/rules?pattern=domain.com
 		pattern := r.URL.Query().Get("pattern")
 		if pattern == "" {
@@ -1948,6 +2246,9 @@ func (s *Server) handleRPZActions(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(path, "toggle") {
 		if r.Method != http.MethodPost {
 			s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+			return
+		}
+		if s.requireOperator(w, r) {
 			return
 		}
 		// Toggle enabled state
@@ -2067,6 +2368,14 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check rate limit
+	ip := getClientIP(r)
+	if rejected, delay := s.loginLimiter.checkRateLimit(ip); rejected {
+		w.Header().Set("Retry-After", strconv.Itoa(int(delay.Seconds())))
+		s.writeError(w, http.StatusTooManyRequests, "Too many requests, try again later")
+		return
+	}
+
 	var req LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "Invalid request body")
@@ -2076,15 +2385,20 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// Validate user
 	user, err := s.authStore.GetUser(req.Username)
 	if err != nil {
+		s.loginLimiter.recordFailedAttempt(ip)
 		s.writeError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
 	}
 
 	// Verify password
 	if !auth.VerifyPassword(req.Password, user.Hash) {
+		s.loginLimiter.recordFailedAttempt(ip)
 		s.writeError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
 	}
+
+	// Successful login - clear rate limit state
+	s.loginLimiter.recordSuccess(ip)
 
 	// Generate token
 	token, err := s.authStore.GenerateToken(req.Username, 24*time.Hour)
@@ -2235,6 +2549,64 @@ func hasRole(ctx context.Context, store *auth.Store, required auth.Role) bool {
 		return false
 	}
 	return store.HasRole(user.Username, required)
+}
+
+// requireOperator checks if the request has operator role (or is using legacy single-token auth).
+// Writes error and returns true if access denied.
+func (s *Server) requireOperator(w http.ResponseWriter, r *http.Request) bool {
+	// If using legacy single-token auth (no authStore), skip RBAC — token holders have full access
+	if s.authStore == nil {
+		return false
+	}
+	if !hasRole(r.Context(), s.authStore, auth.RoleOperator) {
+		s.writeError(w, http.StatusForbidden, "Operator role required")
+		return true
+	}
+	return false
+}
+
+// requireAdmin checks if the request has admin role (or is using legacy single-token auth).
+// Writes error and returns true if access denied.
+func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
+	// If using legacy single-token auth (no authStore), skip RBAC — token holders have full access
+	if s.authStore == nil {
+		return false
+	}
+	if !hasRole(r.Context(), s.authStore, auth.RoleAdmin) {
+		s.writeError(w, http.StatusForbidden, "Admin role required")
+		return true
+	}
+	return false
+}
+
+// getClientIP extracts the client IP from the request, checking X-Forwarded-For first.
+func getClientIP(r *http.Request) string {
+	// Check X-Forwarded-For header (for proxies/load balancers)
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		// Take the first IP in the chain
+		if idx := strings.Index(xff, ","); idx != -1 {
+			xff = strings.TrimSpace(xff[:idx])
+		}
+		xff = strings.TrimSpace(xff)
+		if net.ParseIP(xff) != nil {
+			return xff
+		}
+	}
+
+	// Check X-Real-IP header
+	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		xri = strings.TrimSpace(xri)
+		if net.ParseIP(xri) != nil {
+			return xri
+		}
+	}
+
+	// Fall back to RemoteAddr
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return ip
 }
 
 // writeJSON writes a JSON response.

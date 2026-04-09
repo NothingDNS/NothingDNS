@@ -172,7 +172,8 @@ func TestReadFrame_MediumPayload(t *testing.T) {
 }
 
 func TestReadFrame_LargePayload(t *testing.T) {
-	payload := make([]byte, 70000)
+	// Test that a payload within the 16KB limit can be read
+	payload := make([]byte, 15*1024) // 15KB — under the 16KB limit
 	for i := range payload {
 		payload[i] = byte(i % 256)
 	}
@@ -192,10 +193,10 @@ func TestReadFrame_LargePayload(t *testing.T) {
 }
 
 func TestReadFrame_TooLarge(t *testing.T) {
-	// Build a frame claiming > 1MB payload
+	// Build a frame claiming > 16KB payload
 	buf := []byte{0x81, 0x7F} // FIN + text, 127 = 64-bit length
 	lenBytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(lenBytes, 1<<20+1) // 1MB + 1
+	binary.BigEndian.PutUint64(lenBytes, 16*1024+1) // 16KB + 1
 	buf = append(buf, lenBytes...)
 
 	c := newConn(buf)

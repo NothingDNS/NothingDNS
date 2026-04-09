@@ -105,6 +105,8 @@ func (m *slowMockConn) WriteMessage(messageType int, data []byte) error {
 	return nil
 }
 
+func (m *slowMockConn) SetWriteDeadline(time.Time) error { return nil }
+
 func (m *slowMockConn) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

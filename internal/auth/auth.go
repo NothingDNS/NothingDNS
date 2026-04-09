@@ -72,10 +72,23 @@ func DefaultConfig() *Config {
 
 // NewStore creates a new auth store.
 func NewStore(cfg *Config) *Store {
+	var secret []byte
+	if cfg.Secret == "" {
+		// Generate a random secret and log it for first-run / dev environments.
+		// This is cryptographically weak (secret is not persisted) but prevents
+		// token forgery until a proper auth_secret is configured.
+		generated := generateSecret(32)
+		secret = []byte(generated)
+		util.Warnf("AUTH: No auth_secret configured. Generated temporary secret for this run: %s. " +
+			"Set auth_secret in config for production deployments.", generated)
+	} else {
+		secret = []byte(cfg.Secret)
+	}
+
 	s := &Store{
 		users:  make(map[string]*User),
 		tokens: make(map[string]*Token),
-		secret: []byte(cfg.Secret),
+		secret: secret,
 	}
 
 	// Load initial users
@@ -89,8 +102,8 @@ func NewStore(cfg *Config) *Store {
 	if len(s.users) == 0 {
 		defaultPassword, err := generateSecurePassword(24)
 		if err != nil {
-			// Fallback - this should never happen with crypto/rand
-			defaultPassword = "admin"
+			// crypto/rand failure is extremely rare but would indicate system-level issues
+			panic("auth: crypto/rand unavailable for password generation: " + err.Error())
 		}
 		s.users["admin"] = &User{
 			Username:  "admin",
@@ -99,9 +112,8 @@ func NewStore(cfg *Config) *Store {
 			CreatedAt: time.Now().UTC().Format(time.RFC3339),
 			UpdatedAt: time.Now().UTC().Format(time.RFC3339),
 		}
-		// Log the generated password - operator must change this
-		util.Warnf("No users configured. Default admin password generated: %s", defaultPassword)
-		util.Warnf("Change this password immediately via the dashboard or API.")
+		// Warn that default admin was created — password must be set via first login or config
+		util.Warnf("No users configured. Default admin account created. Set password via dashboard or API before use.")
 	}
 
 	return s
@@ -142,15 +154,22 @@ func HashPassword(password string, salt []byte) []byte {
 // generateSecurePassword generates a cryptographically secure random password.
 func generateSecurePassword(length int) (string, error) {
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*"
-	charsetLen := len(charset)
+	charsetLen := len(charset) // 70
 
 	bytes := make([]byte, length)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", err
-	}
-
 	for i := range bytes {
-		bytes[i] = charset[int(bytes[i])%charsetLen]
+		for {
+			var b [1]byte
+			if _, err := rand.Read(b[:]); err != nil {
+				return "", err
+			}
+			// Rejection sampling: only use bytes < (256/charsetLen)*charsetLen
+			// to avoid modulo bias. charsetLen=70, 256/70=3, 3*70=210
+			if int(b[0]) < 210 {
+				bytes[i] = charset[int(b[0])%charsetLen]
+				break
+			}
+		}
 	}
 
 	return string(bytes), nil

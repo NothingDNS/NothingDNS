@@ -16,6 +16,10 @@ import (
 // to prevent infinite recursion from circular includes.
 const maxIncludeDepth = 10
 
+// maxGenerateRecords is the maximum number of records $GENERATE can produce
+// to prevent memory exhaustion from maliciously large ranges.
+const maxGenerateRecords = 65536
+
 // RecordChange represents a single record addition or deletion
 // Used for IXFR (Incremental Zone Transfer) journaling
 type RecordChange struct {
@@ -432,6 +436,15 @@ func (p *parser) handleGenerate(args []string) error {
 	start, stop, step, err := parseGenerateRange(args[0])
 	if err != nil {
 		return fmt.Errorf("$GENERATE range: %w", err)
+	}
+
+	// Check iteration count against limit to prevent memory exhaustion
+	// count = number of records = ((stop - start) / step) + 1
+	if step > 0 {
+		count := (stop-start)/step + 1
+		if count < 0 || count > maxGenerateRecords {
+			return fmt.Errorf("$GENERATE range too large: %d records (max %d)", count, maxGenerateRecords)
+		}
 	}
 
 	// Remaining args form a record template: lhs [ttl] [class] type rhs

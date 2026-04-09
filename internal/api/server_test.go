@@ -193,15 +193,15 @@ func TestAPIAuth(t *testing.T) {
 		t.Errorf("Expected status 200 with auth, got %d", resp.StatusCode)
 	}
 
-	// Test with query param
+	// Test with query param (should be rejected - security fix)
 	resp, err = http.Get("http://127.0.0.1:18083/api/v1/status?token=test-token-123")
 	if err != nil {
 		t.Fatalf("Failed to request: %v", err)
 	}
 	resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("Expected status 200 with token param, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("Expected status 401 for token-in-query, got %d", resp.StatusCode)
 	}
 
 	server.Stop()

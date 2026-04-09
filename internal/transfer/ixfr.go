@@ -139,8 +139,11 @@ func (s *IXFRServer) HandleIXFR(req *protocol.Message, clientIP net.IP) ([]*prot
 		return nil, fmt.Errorf("zone has no SOA record")
 	}
 
-	// Verify TSIG if present (delegate to AXFR server)
-	if s.axfrServer.keyStore != nil && hasTSIG(req) {
+	// Verify TSIG — if keyStore has keys, TSIG is required
+	if s.axfrServer.keyStore != nil && s.axfrServer.keyStore.HasKeys() {
+		if !hasTSIG(req) {
+			return nil, fmt.Errorf("TSIG authentication required for IXFR")
+		}
 		keyName, err := getTSIGKeyName(req)
 		if err != nil {
 			return nil, fmt.Errorf("getting TSIG key name: %w", err)
@@ -154,6 +157,9 @@ func (s *IXFRServer) HandleIXFR(req *protocol.Message, clientIP net.IP) ([]*prot
 		if err := VerifyMessage(req, key, nil); err != nil {
 			return nil, fmt.Errorf("TSIG verification failed: %w", err)
 		}
+	} else if hasTSIG(req) {
+		// TSIG was provided but we have no keys to verify it — reject
+		return nil, fmt.Errorf("TSIG key not found")
 	}
 
 	// Extract client serial from Authority section (SOA record)

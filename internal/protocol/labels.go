@@ -17,7 +17,8 @@ const (
 	// MaxNameLength is the maximum length of a domain name (255 bytes).
 	MaxNameLength = 255
 	// MaxPointerDepth is the maximum number of pointer indirections to follow.
-	MaxPointerDepth = 10
+	// RFC 1035 allows 2-byte pointers, depth limit prevents compression attacks.
+	MaxPointerDepth = 5
 )
 
 // Common label errors.
@@ -414,7 +415,7 @@ func WireNameLength(buf []byte, offset int) (int, error) {
 
 		// Safety check
 		ptrDepth++
-		if ptrDepth > MaxNameLength {
+		if ptrDepth > MaxPointerDepth {
 			return 0, ErrPointerLoop
 		}
 	}

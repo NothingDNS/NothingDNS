@@ -893,7 +893,7 @@ func TestAuthMiddleware(t *testing.T) {
 		}
 	})
 
-	t.Run("auth with token in query parameter", func(t *testing.T) {
+	t.Run("auth with token in query parameter is rejected", func(t *testing.T) {
 		cfg := config.HTTPConfig{
 			Enabled:   true,
 			Bind:      "127.0.0.1:0",
@@ -912,11 +912,11 @@ func TestAuthMiddleware(t *testing.T) {
 
 		server.authMiddleware(testHandler).ServeHTTP(rec, req)
 
-		if !handlerCalled {
-			t.Error("Expected handler to be called with valid token in query")
+		if handlerCalled {
+			t.Error("Expected handler NOT to be called with token in query (security fix)")
 		}
-		if rec.Code != http.StatusOK {
-			t.Errorf("Expected status %d, got %d", http.StatusOK, rec.Code)
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("Expected status %d for token-in-query, got %d", http.StatusUnauthorized, rec.Code)
 		}
 	})
 

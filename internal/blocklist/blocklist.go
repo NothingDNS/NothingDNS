@@ -4,7 +4,9 @@ package blocklist
 import (
 	"bufio"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -77,8 +79,108 @@ func (bl *Blocklist) Load() error {
 	return nil
 }
 
+// validateBlocklistURL checks that a blocklist URL is safe to fetch.
+// It blocks private/reserved IPs, cloud metadata endpoints, and non-HTTPS schemes.
+func validateBlocklistURL(rawURL string) error {
+	u, err := parseURL(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+
+	// Only allow HTTPS
+	if u.Scheme != "https" {
+		return fmt.Errorf("only HTTPS URLs are allowed, got scheme %q", u.Scheme)
+	}
+
+	host := u.Host
+
+	// Block known cloud metadata and internal hostnames
+	host = strings.ToLower(host)
+	switch host {
+	case "169.254.169.254", "metadata.google.internal", "metadata.azure.com",
+		"metadata.googleusercontent.com":
+		return fmt.Errorf("cloud metadata host not allowed: %s", host)
+	}
+
+	// Resolve hostname and check for private/reserved IPs
+	ip := net.ParseIP(host)
+	if ip == nil {
+		// Not an IP — resolve hostname
+		addrs, err := net.LookupHost(host)
+		if err != nil {
+			return fmt.Errorf("cannot resolve host %q: %w", host, err)
+		}
+		for _, addr := range addrs {
+			if ip = net.ParseIP(addr); ip != nil && isPrivateOrReservedIP(ip) {
+				return fmt.Errorf("private/reserved IP not allowed: %s", addr)
+			}
+		}
+	} else if isPrivateOrReservedIP(ip) {
+		return fmt.Errorf("private/reserved IP not allowed: %s", ip)
+	}
+
+	return nil
+}
+
+// isPrivateOrReservedIP returns true if the IP is in a private, reserved, or link-local range.
+func isPrivateOrReservedIP(ip net.IP) bool {
+	// RFC 1918 private addresses
+	if ip4 := ip.To4(); ip4 != nil {
+		// 10.0.0.0/8
+		if ip4[0] == 10 {
+			return true
+		}
+		// 172.16.0.0/12
+		if ip4[0] == 172 && ip4[1] >= 16 && ip4[1] <= 31 {
+			return true
+		}
+		// 192.168.0.0/16
+		if ip4[0] == 192 && ip4[1] == 168 {
+			return true
+		}
+		// 127.0.0.0/8
+		if ip4[0] == 127 {
+			return true
+		}
+		// 169.254.0.0/16 (link-local)
+		if ip4[0] == 169 && ip4[1] == 254 {
+			return true
+		}
+		return false
+	}
+	// IPv6
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+		return true
+	}
+	// RFC 4193 unique local (fc00::/7)
+	if ip[0]&0xfe == 0xfc {
+		return true
+	}
+	return false
+}
+
+// parseURL parses a URL and returns scheme/host using stdlib net/url.
+func parseURL(rawURL string) (*urlInfo, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	if u.Scheme == "" || u.Host == "" {
+		return nil, fmt.Errorf("URL must have scheme and host")
+	}
+	return &urlInfo{Scheme: u.Scheme, Host: u.Hostname()}, nil
+}
+
+type urlInfo struct {
+	Scheme string
+	Host   string
+}
+
 // loadURL downloads and parses a blocklist from a URL.
 func (bl *Blocklist) loadURL(url string) error {
+	if err := validateBlocklistURL(url); err != nil {
+		return fmt.Errorf("invalid blocklist URL: %w", err)
+	}
 	resp, err := bl.httpClient.Get(url)
 	if err != nil {
 		return fmt.Errorf("fetching %s: %w", url, err)
@@ -143,6 +245,10 @@ func (bl *Blocklist) loadURL(url string) error {
 
 // loadFile loads a single blocklist file.
 func (bl *Blocklist) loadFile(path string) error {
+	// SECURITY: Check for path traversal sequences
+	if strings.Contains(path, "..") {
+		return fmt.Errorf("blocklist path traversal attempt blocked: %s", path)
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return err

@@ -124,7 +124,7 @@ func (s *AXFRServer) IsAllowed(clientIP net.IP) bool {
 // Returns the AXFR response records and the TSIG key used to verify the request (if any).
 // Callers should use the returned key to sign response messages per RFC 2845.
 func (s *AXFRServer) HandleAXFR(req *protocol.Message, clientIP net.IP) ([]*protocol.ResourceRecord, *TSIGKey, error) {
-	// Check if client is allowed
+	// Check if client is allowed by IP
 	if !s.IsAllowed(clientIP) {
 		return nil, nil, fmt.Errorf("client %s not authorized for AXFR", clientIP)
 	}
@@ -149,9 +149,12 @@ func (s *AXFRServer) HandleAXFR(req *protocol.Message, clientIP net.IP) ([]*prot
 		return nil, nil, fmt.Errorf("zone %s not found", zoneName)
 	}
 
-	// Verify TSIG if present
+	// Verify TSIG — if keyStore has keys, TSIG is required
 	var tsigKey *TSIGKey
-	if s.keyStore != nil && hasTSIG(req) {
+	if s.keyStore != nil && s.keyStore.HasKeys() {
+		if !hasTSIG(req) {
+			return nil, nil, fmt.Errorf("TSIG authentication required for AXFR")
+		}
 		keyName, err := getTSIGKeyName(req)
 		if err != nil {
 			return nil, nil, fmt.Errorf("getting TSIG key name: %w", err)
@@ -166,6 +169,9 @@ func (s *AXFRServer) HandleAXFR(req *protocol.Message, clientIP net.IP) ([]*prot
 			return nil, nil, fmt.Errorf("TSIG verification failed: %w", err)
 		}
 		tsigKey = key
+	} else if hasTSIG(req) {
+		// TSIG was provided but we have no keys to verify it — reject
+		return nil, nil, fmt.Errorf("TSIG key not found")
 	}
 
 	// Generate AXFR response

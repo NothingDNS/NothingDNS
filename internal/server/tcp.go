@@ -32,6 +32,9 @@ const (
 	// TCPMaxConnections is the maximum number of concurrent TCP connections.
 	TCPMaxConnections = 1000
 
+	// TCPMaxConnectionsPerIP is the maximum number of concurrent TCP connections per source IP.
+	TCPMaxConnectionsPerIP = 10
+
 	// TCPMaxPipelineQueries is the maximum number of concurrent in-flight queries per TCP connection.
 	TCPMaxPipelineQueries = 16
 )
@@ -54,7 +57,9 @@ type TCPServer struct {
 	wg     sync.WaitGroup
 
 	// Connection limiting
-	connSem chan struct{}
+	connSem     chan struct{}
+	ipConnCount map[string]int
+	ipConnMu    sync.Mutex
 
 	// Buffer pool for zero-alloc response path
 	responsePool sync.Pool
@@ -91,6 +96,7 @@ func NewTCPServerWithWorkers(addr string, handler Handler, workers int) *TCPServ
 		ctx:     ctx,
 		cancel:  cancel,
 		connSem: make(chan struct{}, TCPMaxConnections),
+		ipConnCount: make(map[string]int),
 		responsePool: sync.Pool{
 			New: func() interface{} {
 				// Pre-allocate a commonly-used size; larger responses allocate fresh
@@ -153,7 +159,7 @@ func (s *TCPServer) Serve() error {
 			continue
 		}
 
-		// Check connection limit
+		// Check global connection limit
 		select {
 		case s.connSem <- struct{}{}:
 			atomic.AddUint64(&s.connectionsAccepted, 1)
@@ -164,10 +170,26 @@ func (s *TCPServer) Serve() error {
 			continue
 		}
 
+		// Check per-IP connection limit
+		ip := getIP(conn.RemoteAddr())
+		s.ipConnMu.Lock()
+		if s.ipConnCount[ip] >= TCPMaxConnectionsPerIP {
+			s.ipConnMu.Unlock()
+			conn.Close()
+			<-s.connSem
+			atomic.AddUint64(&s.errors, 1)
+			continue
+		}
+		s.ipConnCount[ip]++
+		s.ipConnMu.Unlock()
+
 		// Send to worker, respecting shutdown
 		select {
 		case connChan <- conn:
 		case <-s.ctx.Done():
+			s.ipConnMu.Lock()
+			s.ipConnCount[ip]--
+			s.ipConnMu.Unlock()
 			conn.Close()
 			<-s.connSem
 		}
@@ -179,7 +201,11 @@ func (s *TCPServer) worker(connChan <-chan net.Conn) {
 	defer s.wg.Done()
 
 	for conn := range connChan {
+		ip := getIP(conn.RemoteAddr())
 		s.handleConnection(conn)
+		s.ipConnMu.Lock()
+		s.ipConnCount[ip]--
+		s.ipConnMu.Unlock()
 		<-s.connSem // Release slot
 	}
 }
@@ -424,4 +450,16 @@ type TCPServerStats struct {
 	MessagesSent        uint64
 	Errors              uint64
 	Workers             int
+}
+
+// getIP extracts the IP address string from a net.Addr.
+func getIP(addr net.Addr) string {
+	if addr == nil {
+		return ""
+	}
+	ip, _, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		return addr.String()
+	}
+	return ip
 }

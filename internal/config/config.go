@@ -416,6 +416,10 @@ type HTTPConfig struct {
 	// ODoH (Oblivious DNS over HTTPS, RFC 9230) settings
 	ODoHEnabled bool   `yaml:"odoh_enabled"` // Enable ODoH endpoint
 	ODoHPath    string `yaml:"odoh_path"`    // ODoH endpoint path (default: /odoh)
+
+	// Allowed origins for CORS (empty means only same-origin requests allowed)
+	// Use "*" to allow all origins (not recommended for production)
+	AllowedOrigins []string `yaml:"allowed_origins"`
 }
 
 // AuthUserConfig defines a user for authentication.
@@ -709,7 +713,7 @@ func DefaultConfig() *Config {
 			Path:    "/metrics",
 		},
 		DNSSEC: DNSSECConfig{
-			Enabled:     false,
+			Enabled:     true, // Enable DNSSEC validation by default using built-in IANA root anchors
 			TrustAnchor: "",
 			IgnoreTime:  false,
 		},

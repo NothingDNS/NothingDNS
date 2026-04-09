@@ -326,6 +326,7 @@ func run() error {
 
 	// Initialize API server
 	dashboardServer := dashboard.NewServer()
+	dashboardServer.SetAllowedOrigins(cfg.Server.HTTP.AllowedOrigins)
 	apiServer := api.NewServer(cfg.Server.HTTP, zoneManagerInstance, dnsCache, func() error {
 		logger.Info("Reloading configuration via API...")
 		now := time.Now().UTC().Format(time.RFC3339)

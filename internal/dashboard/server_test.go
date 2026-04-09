@@ -347,6 +347,8 @@ func (m *MockWebSocketConn) WriteMessage(messageType int, data []byte) error {
 	return nil
 }
 
+func (m *MockWebSocketConn) SetWriteDeadline(time.Time) error { return nil }
+
 func (m *MockWebSocketConn) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -511,6 +513,8 @@ func (m *ErrorMockWebSocketConn) WriteMessage(messageType int, data []byte) erro
 	m.messages = append(m.messages, data)
 	return nil
 }
+
+func (m *ErrorMockWebSocketConn) SetWriteDeadline(time.Time) error { return nil }
 
 func (m *ErrorMockWebSocketConn) Close() error {
 	m.mu.Lock()
@@ -1031,6 +1035,8 @@ func (m *BlockingMockWebSocketConn) WriteMessage(messageType int, data []byte) e
 	m.messages = append(m.messages, data)
 	return nil
 }
+
+func (m *BlockingMockWebSocketConn) SetWriteDeadline(time.Time) error { return nil }
 
 func (m *BlockingMockWebSocketConn) Close() error {
 	m.mu.Lock()

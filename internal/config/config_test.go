@@ -57,8 +57,8 @@ func TestDefaultConfig(t *testing.T) {
 	}
 
 	// DNSSEC defaults
-	if cfg.DNSSEC.Enabled {
-		t.Error("expected DNSSEC to be disabled by default")
+	if !cfg.DNSSEC.Enabled {
+		t.Error("expected DNSSEC to be enabled by default")
 	}
 }
 

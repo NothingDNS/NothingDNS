@@ -15,7 +15,7 @@ import (
 const (
 	// wsReadTimeout is the maximum time to wait for a WebSocket message
 	// before closing the connection.
-	wsReadTimeout = 5 * time.Minute
+	wsReadTimeout = 30 * time.Second
 
 	// wsBinaryMessage is the WebSocket binary frame opcode.
 	wsBinaryMessage = 2
@@ -26,13 +26,15 @@ const (
 
 // WSHandler handles DNS over WebSocket requests.
 type WSHandler struct {
-	dnsHandler server.Handler
+	dnsHandler      server.Handler
+	allowedOrigins  []string
 }
 
 // NewWSHandler creates a new DNS-over-WebSocket handler.
-func NewWSHandler(dnsHandler server.Handler) *WSHandler {
+func NewWSHandler(dnsHandler server.Handler, allowedOrigins []string) *WSHandler {
 	return &WSHandler{
-		dnsHandler: &server.ServeDNSWithRecovery{Handler: dnsHandler},
+		dnsHandler:     &server.ServeDNSWithRecovery{Handler: dnsHandler},
+		allowedOrigins: allowedOrigins,
 	}
 }
 
@@ -40,7 +42,7 @@ func NewWSHandler(dnsHandler server.Handler) *WSHandler {
 // It upgrades the HTTP connection to a WebSocket and processes DNS queries
 // as binary frames in a loop until the client disconnects or a timeout occurs.
 func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	conn, err := websocket.Handshake(w, r)
+	conn, err := websocket.Handshake(w, r, h.allowedOrigins...)
 	if err != nil {
 		// Handshake already wrote an HTTP error response.
 		return
@@ -109,6 +111,11 @@ func (rw *wsResponseWriter) Write(msg *protocol.Message) (int, error) {
 	n, err := msg.Pack(buf)
 	if err != nil {
 		return 0, fmt.Errorf("dows: failed to pack response: %w", err)
+	}
+
+	// Set write deadline to prevent blocking indefinitely on slow clients
+	if err := rw.conn.SetWriteDeadline(time.Now().Add(wsReadTimeout)); err != nil {
+		return 0, fmt.Errorf("dows: failed to set write deadline: %w", err)
 	}
 
 	if err := rw.conn.WriteMessage(wsBinaryMessage, buf[:n]); err != nil {

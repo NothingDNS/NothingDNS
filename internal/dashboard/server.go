@@ -13,13 +13,17 @@ import (
 
 // Server implements the web dashboard server
 type Server struct {
-	mu            sync.RWMutex
-	clients       map[*Client]struct{}
-	broadcastChan chan *QueryEvent
-	stats         *DashboardStats
-	enabled       bool
-	wg            sync.WaitGroup
+	mu             sync.RWMutex
+	clients        map[*Client]struct{}
+	broadcastChan  chan *QueryEvent
+	stats          *DashboardStats
+	enabled        bool
+	wg             sync.WaitGroup
+	allowedOrigins []string // Allowed CORS origins for WebSocket
 }
+
+// MaxWebSocketClients is the maximum number of concurrent WebSocket connections.
+const MaxWebSocketClients = 1000
 
 // Client represents a connected WebSocket client
 type Client struct {
@@ -33,6 +37,7 @@ type Client struct {
 type WebSocketConn interface {
 	ReadMessage() (messageType int, p []byte, err error)
 	WriteMessage(messageType int, data []byte) error
+	SetWriteDeadline(t time.Time) error
 	Close() error
 }
 
@@ -153,6 +158,13 @@ func NewServer() *Server {
 	return s
 }
 
+// SetAllowedOrigins sets the allowed CORS origins for WebSocket connections.
+func (s *Server) SetAllowedOrigins(origins []string) {
+	s.mu.Lock()
+	s.allowedOrigins = origins
+	s.mu.Unlock()
+}
+
 // ServeHTTP handles HTTP requests
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
@@ -220,7 +232,7 @@ func (s *Server) handleZones(w http.ResponseWriter, r *http.Request) {
 
 // handleWebSocket handles WebSocket connections
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	conn, err := websocket.Handshake(w, r)
+	conn, err := websocket.Handshake(w, r, s.allowedOrigins...)
 	if err != nil {
 		util.Warnf("dashboard: websocket handshake failed: %v", err)
 		return
@@ -284,10 +296,14 @@ type UpdateStatsRequest struct {
 	UpstreamLatency time.Duration `json:"upstreamLatency"`
 }
 
-// AddClient adds a WebSocket client
+// AddClient adds a WebSocket client if the connection limit hasn't been reached.
 func (s *Server) AddClient(client *Client) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if len(s.clients) >= MaxWebSocketClients {
+		util.Warnf("dashboard: WebSocket connection limit reached (%d)", MaxWebSocketClients)
+		return
+	}
 	s.clients[client] = struct{}{}
 	s.stats.mu.Lock()
 	s.stats.ActiveClients = len(s.clients)
@@ -342,6 +358,10 @@ func (s *Server) ClientLoop(client *Client) {
 		for {
 			select {
 			case data := <-client.send:
+				// Set write deadline to prevent blocking on slow clients
+				if err := client.conn.SetWriteDeadline(time.Now().Add(time.Minute)); err != nil {
+					return
+				}
 				if err := client.conn.WriteMessage(1, data); err != nil {
 					return
 				}
