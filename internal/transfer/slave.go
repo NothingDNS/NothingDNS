@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
+	"github.com/nothingdns/nothingdns/internal/util"
 	"github.com/nothingdns/nothingdns/internal/zone"
 )
 
@@ -195,7 +196,7 @@ func (sm *SlaveManager) AddSlaveZone(config SlaveZoneConfig) error {
 		defer sm.wg.Done()
 		defer func() {
 			if r := recover(); r != nil {
-				fmt.Printf("panic in performZoneTransfer for %s: %v\n", zoneName, r)
+				util.Errorf("panic in performZoneTransfer for %s: %v", zoneName, r)
 			}
 		}()
 		sm.performZoneTransfer(zoneName)
@@ -265,7 +266,7 @@ func (sm *SlaveManager) notifyListener() {
 	defer sm.wg.Done()
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Printf("panic in notifyListener: %v\n", r)
+			util.Errorf("panic in notifyListener: %v", r)
 		}
 	}()
 
@@ -308,7 +309,7 @@ func (sm *SlaveManager) handleNotify(req *NOTIFYRequest) {
 		defer sm.wg.Done()
 		defer func() {
 			if r := recover(); r != nil {
-				fmt.Printf("panic in zone transfer for %s: %v\n", zoneName, r)
+				util.Errorf("panic in zone transfer for %s: %v", zoneName, r)
 			}
 		}()
 		sm.performZoneTransfer(zoneName)
@@ -352,7 +353,7 @@ func (sm *SlaveManager) performZoneTransfer(zoneName string) {
 			defer sm.wg.Done()
 			defer func() {
 				if r := recover(); r != nil {
-					fmt.Printf("panic in scheduleRetry for %s: %v\n", zoneName, r)
+					util.Errorf("panic in scheduleRetry for %s: %v", zoneName, r)
 				}
 			}()
 			sm.scheduleRetry(zoneName)
@@ -367,7 +368,7 @@ func (sm *SlaveManager) performZoneTransfer(zoneName string) {
 			defer sm.wg.Done()
 			defer func() {
 				if r := recover(); r != nil {
-					fmt.Printf("panic in applyTransferredZone retry for %s: %v\n", zoneName, r)
+					util.Errorf("panic in applyTransferredZone retry for %s: %v", zoneName, r)
 				}
 			}()
 			sm.scheduleRetry(zoneName)
