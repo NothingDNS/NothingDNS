@@ -361,8 +361,9 @@ func TestClientLoop_ReadError(t *testing.T) {
 	mockConn := &ErrorMockWebSocketConn{}
 	mockConn.readErr.Store(true)
 	client := &Client{
-		conn: mockConn,
-		send: make(chan []byte, 10),
+		conn:   mockConn,
+		send:   make(chan []byte, 10),
+		closed: make(chan struct{}),
 	}
 
 	server.AddClient(client)
@@ -402,8 +403,9 @@ func TestClientLoop_WriteError(t *testing.T) {
 	mockConn := &ErrorMockWebSocketConn{}
 	mockConn.writeErr.Store(true)
 	client := &Client{
-		conn: mockConn,
-		send: make(chan []byte, 10),
+		conn:   mockConn,
+		send:   make(chan []byte, 10),
+		closed: make(chan struct{}),
 	}
 
 	server.AddClient(client)
@@ -442,8 +444,9 @@ func TestClientLoop_SuccessfulWrite(t *testing.T) {
 
 	mockConn := &MockWebSocketConn{}
 	client := &Client{
-		conn: mockConn,
-		send: make(chan []byte, 10),
+		conn:   mockConn,
+		send:   make(chan []byte, 10),
+		closed: make(chan struct{}),
 	}
 
 	server.AddClient(client)
@@ -982,8 +985,9 @@ func TestClientLoop_ClosedSendChannel(t *testing.T) {
 		readChan: make(chan struct{}),
 	}
 	client := &Client{
-		conn: mockConn,
-		send: make(chan []byte, 10),
+		conn:   mockConn,
+		send:   make(chan []byte, 10),
+		closed: make(chan struct{}),
 	}
 
 	server.AddClient(client)
