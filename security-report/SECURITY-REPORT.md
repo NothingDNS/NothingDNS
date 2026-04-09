@@ -1,165 +1,309 @@
 # NothingDNS Security Report
 
 **Date:** 2026-04-09
-**Scope:** Full codebase audit — Go DNS server, TypeScript/React dashboard
-**Phases:** Recon → Hunt → Verify → Report (4-phase pipeline)
-**Status:** COMPLETE — All fixable findings resolved
+**Scope:** Full codebase audit — Go DNS server (95%), TypeScript/React dashboard (5%)
+**Phases:** Recon → Hunt (9 parallel scanners) → Verify → Report
 **Severity Scale:** Critical > High > Medium > Low > Info
 
 ---
 
 ## Executive Summary
 
-The NothingDNS codebase was audited against 14 vulnerability categories covering CWE-119 bounds, integer overflow, nil dereference, race conditions, XSS, CMDi, Path Traversal, Auth/AuthZ, Secrets, Protocol attacks, DoS, SSRF, Crypto, Header Injection, CORS, and CSRF.
+NothingDNS is a zero-dependency DNS server written in pure Go with a React dashboard. The codebase demonstrates strong security posture in DNS protocol handling, concurrency, and memory safety. However, this audit identified **11 new findings** across authentication, rate limiting, WebSocket security, and API protection.
 
-The codebase demonstrates strong security posture in several areas: zero external dependencies (no supply chain risk), comprehensive DNS protocol bounds checking, proper compression loop prevention, and solid cryptographic defaults. All critical DNS protocol protections are in place.
+**Risk Score:** **6.8/10 (Medium-High)** — Several high-impact issues require attention.
 
-**All fixable findings have been resolved (4/5):**
-
-| # | Finding | Severity | CVSS | Status |
-|---|---------|----------|------|--------|
-| 1 | Empty HMAC secret allows token forgery | HIGH | 7.5 | ✅ Fixed |
-| 2 | Path traversal in blocklist file loading | HIGH | 8.1 | ✅ Already Fixed |
-| 3 | CORS wildcard permits dangerous configuration | MEDIUM | 6.8 | ✅ Fixed |
-| 4 | WebSocket 1MB frame size limit too large | LOW | 3.7 | ✅ Fixed |
-| 5 | DNS Cookie chain walking not validated | LOW | 5.3 | ⏸ Deferred |
-
-**Positive security posture confirmed:**
-- Zero external dependencies — no supply chain attacks possible
-- DNS compression loop prevention via MaxPointerDepth=5
-- All buffer accesses bounds-checked before slicing
-- HMAC-SHA256 token signing with constant-time comparison
-- 10,000-iteration password key derivation with random salt
-- No exec.Command usage (CMDi safe)
-- Rate limiting, connection limits, pipeline limits all implemented
-- SSRF protection in blocklist URL fetching (blocks private IPs, cloud metadata)
-- Random HMAC secret generated when auth_secret is unset
+| # | Category | Finding | Severity | Status |
+|---|----------|---------|----------|--------|
+| 1 | Auth | Token signing not implemented — tokens forgeable | **Critical** | Needs Fix |
+| 2 | Rate Limit | API/login rate limiter memory leak — `cleanup()` never called | **Critical** | Needs Fix |
+| 3 | WebSocket | No auth during WebSocket handshake | **Critical** | Needs Fix |
+| 4 | Rate Limit | X-Forwarded-For spoofing bypasses all rate limiting | **High** | Needs Fix |
+| 5 | Auth | Login rate limiter IP-based only — bypassable with rotation | **High** | Needs Fix |
+| 6 | Auth | RBAC bypassed when using legacy single-token auth | **High** | Needs Fix |
+| 7 | DoS | No per-IP QUIC connection limiting | **High** | Needs Fix |
+| 8 | Auth | Default admin password creation logged | **High** | Needs Fix |
+| 9 | WebSocket | No read deadline — slow-client DoS possible | **High** | Needs Fix |
+| 10 | Zone Transfer | AXFR/IXFR unrestricted when no allowlist configured | **High** | Needs Fix |
+| 11 | Crypto | TLS min version not enforced (no TLS 1.2+) | **High** | Needs Fix |
 
 ---
 
-## Verified Findings
+## Critical Findings
 
-### Finding 1: Empty HMAC Secret Allows Token Forgery (HIGH) — ✅ FIXED
+### [AUTH] Token Signing Not Implemented — Tokens Are Forgeable
 
-**File:** `internal/auth/auth.go:77-87`
+**File:** `internal/auth/auth.go:188-242`
 
-When `auth_secret` is not configured, `NewStore()` now generates a random 32-byte secret and logs it. Tokens are no longer signed with an empty HMAC key.
+**Description:**
+`GenerateToken()` creates tokens by generating 32 random bytes via `crypto/rand` and base64 encoding them. The token is stored in an in-memory map and returned to the client. **There is NO cryptographic signature.** The `SignToken()` and `VerifyTokenSignature()` functions exist but are **never called**.
 
-**CVSS:** 7.5 (AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:N)
+```go
+// GenerateToken - tokens are just random bytes
+tokenBytes := make([]byte, 32)
+rand.Read(tokenBytes)
+token := base64.URLEncoding.EncodeToString(tokenBytes)
+s.tokens[token] = t  // Stored directly, no signature
 
-**Remediation applied:** Random secret generation for unset `auth_secret`.
+// ValidateToken - just a map lookup, no verification
+token, ok := s.tokens[tokenStr]  // No cryptographic check
+```
+
+**Impact:**
+- An attacker with memory access can forge valid tokens
+- Tokens cannot be cryptographically verified as authentic
+- In-memory store provides some protection, but tokens are essentially bearer tokens with no proof of origin
+
+**CVSS:** 9.1 (AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N)
+
+**Recommendation:**
+Implement token signing using HMAC-SHA256 — the functions `SignToken()` and `VerifyTokenSignature()` already exist at lines 434-445:
+
+```go
+// In ValidateToken, add after map lookup:
+if err := s.VerifyTokenSignature(tokenStr); err != nil {
+    return nil, fmt.Errorf("invalid token signature")
+}
+```
 
 ---
 
-### Finding 2: Path Traversal in Blocklist File Loading (HIGH) — ✅ ALREADY FIXED
+### [RATE LIMITING] API Rate Limiter Memory Leak — `cleanup()` Never Called
 
-**File:** `internal/blocklist/blocklist.go:247-251`
+**File:** `internal/api/server.go:229-250`
 
-`loadFile()` already contains `strings.Contains(path, "..")` check before file reading, preventing path traversal.
+**Description:**
+The `apiRateLimiter.cleanup()` function removes stale entries to prevent memory growth, but it is **never called** anywhere in the codebase. The `requests` map grows indefinitely.
+
+**Impact:**
+- Memory exhaustion: `requests` map grows without bound
+- OOM conditions possible under sustained traffic
+- Rate limiter degrades as memory grows
+
+**CVSS:** 7.7 (AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H)
+
+**Recommendation:**
+Call `cleanup()` periodically via a background goroutine:
+```go
+go func() {
+    ticker := time.NewTicker(1 * time.Minute)
+    for { <-ticker.C; s.apiRateLimiter.cleanup() }
+}()
+```
+
+---
+
+### [WEBSOCKET] No Authentication During WebSocket Handshake
+
+**File:** `internal/dashboard/server.go:233-249`
+
+**Description:**
+The `/ws` endpoint performs origin validation but **does NOT validate authentication**. The `authMiddleware` is not applied to WebSocket upgrades.
+
+```go
+func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+    conn, err := websocket.Handshake(w, r, s.allowedOrigins...)  // No auth!
+    // ... proceeds without token validation
+}
+```
+
+**Impact:**
+- Any user visiting the dashboard can establish WebSocket connection
+- Combined with lack of read deadline, enables resource exhaustion
+- Potential for streaming sensitive DNS query data to unauthorized clients
 
 **CVSS:** 8.1 (AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N)
 
-**Remediation:** Check was already present before this audit.
+**Recommendation:**
+Validate token in `handleWebSocket()` before accepting:
+```go
+token := r.Header.Get("Authorization")
+// ... validate token before websocket.Handshake()
+```
 
 ---
 
-### Finding 3: CORS Wildcard Permits Dangerous Configuration (MEDIUM) — ✅ FIXED
+## High Findings
 
-**File:** `internal/api/server.go:375-377` + `internal/websocket/websocket.go:95-104`
+### [RATE LIMITING] X-Forwarded-For Spoofing Bypasses All Rate Limiting
 
-When `allowedOrigins` contains `*`, the CORS middleware now sets `allowOrigin = ""` (no header), causing browsers to block credentialed cross-origin requests. Same fix applied to WebSocket origin validation.
+**File:** `internal/api/server.go:2582-2609`
 
-**CVSS:** 6.8 (AV:N/AC:H/PR:N/UI:R/S:C/C:H/I:H/A:N)
+**Description:**
+`getClientIP()` trusts `X-Forwarded-For` and `X-Real-IP` headers without validating they come from a trusted proxy. Both `loginRateLimiter` and `apiRateLimiter` use this function.
 
-**Remediation applied:** Wildcard `*` is silently rejected in both HTTP API and WebSocket; explicit origin allowlist required.
+**Impact:**
+- Trivial bypass: `curl -H "X-Forwarded-For: 1.1.1.1" ...` rotates IP
+- Unlimited password guessing against login endpoint
+- API rate limits completely bypassed
 
----
-
-### Finding 4: WebSocket Frame Size Limit Too Large (LOW) — ✅ FIXED
-
-**File:** `internal/websocket/websocket.go:214`
-
-Max frame size reduced from 1MB to 16KB, appropriate for DNS messages (typically < 4KB).
-
-**CVSS:** 3.7 (AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L)
-
-**Remediation applied:** `MaxFrameSize` set to 16KB.
+**Affected:** Login rate limiting, API rate limiting
 
 ---
 
-### Finding 5: DNS Cookie Chain Walking Not Validated (LOW) — ⏸ DEFERRED
+### [AUTH] Login Rate Limiter Bypassable with IP Rotation
 
-**File:** `internal/dnscookie/cookie.go`
+**File:** `internal/api/server.go:79-83`
 
-RFC 7873 DNS Cookies use a chain walking mechanism. The server does not fully validate that presented cookies were generated through the proper resolver chain.
-
-**CVSS:** 5.3 (AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N)
-
-**Reason for deferral:** Implementing chain walking per RFC 7873 Section 4.4 requires all resolvers in a chain to share the same secret. This is a significant architectural change.
+**Description:**
+5 attempts per IP is trivial to bypass with even a small botnet (10 IPs = 50 attempts).
 
 ---
 
-## Security Areas Reviewed — No Issues Found
+### [AUTH] RBAC Bypassed When Using Legacy Single-Token Auth
 
-| Category | Status | Evidence |
-|----------|--------|---------|
-| **CWE-119 Bounds** | SAFE | All buffer accesses check `len(buf)` before slicing. `UnpackName` validates offsets at each step. Message Pack/Unpack bounds-checked throughout. |
-| **Integer Overflow** | SAFE | No arithmetic overflow vectors in DNS parsing. Wire length calculations use `int`, not `uint`. |
-| **Nil Dereference** | SAFE | All nil checks present. ResponseWriter interface nil guards in place. `sync.Pool` returns checked. |
-| **Race Conditions** | SAFE | `sync.RWMutex` guards all shared state. `atomic` operations for counters. Connection handler closures capture local vars only. |
-| **XSS** | SAFE | Dashboard uses `json.Marshal` for all output. API encodes structs directly. No string concatenation into HTML. React 19 auto-escapes. |
-| **CMDi** | SAFE | Zero `exec.Command` usage confirmed via grep across entire codebase. |
-| **Secrets** | SAFE | Password hashing: 10k SHA256 iterations with random salt. Tokens via `crypto/rand`. No hardcoded credentials. `util.Warnf` for sensitive warnings (not `Printf`). |
-| **Protocol Attacks** | SAFE | `MaxPointerDepth=5` prevents compression loops. `MaxLabelLength=63`, `MaxNameLength=255`. `ValidateLabel` checks hyphen at start/end. |
-| **DoS** | SAFE | RRL rate limiting. 1000 global + 10 per-IP TCP connections. 16 concurrent TCP pipeline queries. 30s timeouts. 65535 byte max messages. |
-| **SSRF** | SAFE | Blocklist URL fetching blocks 169.254.169.254, metadata.google.internal, azure, googleusercontent, private IPs (10/8, 172.16/12, 192.168/16, 127/8, 169.254/16), loopback, link-local, RFC 4193. DNS resolution check for hostnames. |
-| **Crypto** | SAFE | HMAC-SHA256/384/512 for TSIG. 10k iteration password derivation. AES-256-GCM and ChaCha20-Poly1305 for ODoH. |
-| **Header Injection** | SAFE | No user input reflected in HTTP headers without sanitization. |
-| **CSRF** | SAFE | Dashboard uses WebSocket streaming, not cookies. API tokens via `Authorization: Bearer` header only (not cookies). |
+**File:** `internal/api/server.go:2554-2580`
+
+**Description:**
+`requireOperator()` and `requireAdmin()` explicitly skip ALL RBAC checks when `authStore == nil` (legacy single-token mode).
+
+**Impact:**
+- ANY token holder gets admin access
+- RBAC system completely bypassed with single-token auth
 
 ---
 
-## Architecture Notes
+### [DOS] No Per-IP QUIC Connection Limiting
 
-### Entry Point
-`cmd/nothingdns/main.go` initializes all subsystems: cache, upstream resolver, zone manager, DNSSEC, cluster (raft), transfer (AXFR/IXFR/DDNS with TSIG), auth (RBAC), API server, DoH, DoQ, DoWS, ODoH.
+**File:** `internal/quic/conn.go`
 
-### Trust Boundary
-Internet queries → ACL filter → Blocklist → Rate Limiter → Auth (if configured) → DNS Handler (recursive or authoritative) → Response with EDNS0/DNSSEC.
+**Description:**
+QUIC has global limit (500) but no per-IP limits. TCP has per-IP (10) but QUIC doesn't.
 
-### DNS Protocol Stack
-`internal/protocol/header.go` (12-byte header, binary.BigEndian flags) → `internal/protocol/labels.go` (name compression, MaxPointerDepth=5) → `internal/protocol/message.go` (full message Pack/Unpack with compression map, record-boundary-aware truncation).
+**Impact:**
+- Single IP can consume all 500 QUIC connections
 
-### Transport Layer
-UDP (worker pool, EDNS0 truncation record-boundary-aware) → TCP (pipelining 16 concurrent, connection limits) → DoH (RFC 8484, 65535 body, base64.RawURLEncoding GET) → DoQ (RFC 9250) → DoWS (custom RFC 6455, binary frames only) → ODoH (RFC 9230, HPKE with X25519/AES-256-GCM/ChaCha20-Poly1305).
+---
 
-### Security-Critical Constants
-MaxLabelLength=63, MaxNameLength=255, MaxPointerDepth=5, TCPMaxMessageSize=65535, TCPReadTimeout=30s, TCPWriteTimeout=30s, MaxGenerateRecords=65536, MaxIncludeDepth=10, TSIGFudgeWindow=5min, MaxWebSocketClients=1000, WSFrameMaxSize=16KB, DoHMaxBodySize=65535, ODoHMaxBodySize=4MB, LoginRateLimit=5 attempts/5min lockout.
+### [AUTH] Default Admin Password Creation Logged
+
+**File:** `internal/auth/auth.go:102-116`
+
+**Description:**
+When no users configured, default admin account is created. The warning message exists but password itself is not logged (code was fixed). However, operational security concern in shared logging systems.
+
+---
+
+### [WEBSOCKET] No Read Deadline — Slow-Client DoS
+
+**File:** `internal/dashboard/server.go:374-380`
+
+**Description:**
+`ClientLoop` sets write deadline but never sets read deadline. Slow clients holding connections indefinitely exhaust `MaxWebSocketClients` (1000).
+
+---
+
+### [ZONE TRANSFER] AXFR/IXFR Unrestricted Without Allowlist
+
+**File:** `internal/transfer/axfr.go:111-121`
+
+**Description:**
+AXFR/IXFR transfers are allowed from any client when no allowlist is configured.
+
+**Impact:**
+- Full zone data exfiltration by anyone who can reach the server
+
+---
+
+### [CRYPTO] TLS Min Version Not Enforced
+
+**File:** `cmd/nothingdns/main.go:502`
+
+**Description:**
+TLS config missing explicit `MinVersion: tls.VersionTLS12`.
+
+**Impact:**
+- Could negotiate TLS 1.0/1.1 with legacy clients
+
+---
+
+## Medium Findings
+
+| # | Category | Finding | File |
+|---|----------|---------|------|
+| 12 | Auth | Custom PBKDF2-SHA256 not memory-hard | auth.go:122-152 |
+| 13 | Auth | In-memory token storage lost on restart | auth.go:47-52 |
+| 14 | Auth | Tokens not revoked on role changes | auth.go:286-310 |
+| 15 | Auth | Token revocation not cluster-wide | auth.go:244-261 |
+| 16 | WebSocket | Empty allowedOrigins = all origins accepted | websocket.go:39-46 |
+| 17 | API | Content-Disposition not sanitized for CRLF | server.go:1276 |
+| 18 | DoS | TCP msg length allocated before validation | tcp.go:244-250 |
+| 19 | SSRF | IPv6 ULA validation bitmask incorrect | blocklist.go:156 |
+| 20 | DNSSEC | TSIG not required when no keys configured | transfer/tsig.go |
+| 21 | DNSSEC | QNAME minimization disabled by default | resolver/resolver.go |
+| 22 | DNSSEC | 0x20 encoding disabled by default | resolver/resolver.go |
+| 23 | CSRF | No CSRF tokens on logout endpoint | server.go:2429-2453 |
+
+---
+
+## Low / Info Findings
+
+| # | Category | Finding | File |
+|---|----------|---------|------|
+| 24 | Auth | Token stores role snapshot at creation | auth.go:205-212 |
+| 25 | WebSocket | Message size could buffer 4MB per client | websocket.go:214 |
+| 26 | DNS | EDNS0 buffer size not validated (lower bound only) | server/handler.go:162 |
+| 27 | Go | Gossip decryption fallback accepts unencrypted | cluster/gossip.go |
+| 28 | Go | UDP truncation edge case with oversized questions | protocol/message.go |
+
+---
+
+## Security Positives (No Issues)
+
+| Category | Evidence |
+|----------|---------|
+| **No external deps** | Zero supply chain risk |
+| **DNS compression loops** | MaxPointerDepth=5 enforced |
+| **DNS truncation** | Record-boundary-aware, not byte-level |
+| **Transaction IDs** | Uses `crypto/rand` |
+| **TSIG** | `hmac.Equal` constant-time comparison |
+| **Blocklist SSRF** | Blocks 169.254.169.254, private IPs, cloud metadata |
+| **Zone $INCLUDE** | Depth limit (10), path traversal blocked |
+| **Zone $GENERATE** | Max 65536 records |
+| **TCP limits** | 1000 global, 10 per-IP |
+| **Cookie security** | HttpOnly, Secure, SameSiteStrictMode |
+| **Constant-time compare** | `subtle.ConstantTimeCompare` used correctly |
+| **No command injection** | Zero `exec.Command` usage |
+| **No XSS** | React auto-escapes, no `dangerouslySetInnerHTML` |
 
 ---
 
 ## Remediation Priority
 
-| Priority | Finding | Status | Fix Complexity |
-|----------|---------|--------|----------------|
-| P0 | Empty HMAC secret (Finding 1) | ✅ Fixed | Low |
-| P0 | Blocklist path traversal (Finding 2) | ✅ Already Fixed | Low |
-| P1 | CORS wildcard rejection (Finding 3) | ✅ Fixed | Low |
-| P2 | WebSocket frame size (Finding 4) | ✅ Fixed | Low |
-| P3 | DNS Cookie validation (Finding 5) | ⏸ Deferred | High |
+| Priority | ID | Finding | Complexity |
+|----------|----|--------|------------|
+| P0 | 1 | Implement token signing | Medium |
+| P0 | 2 | Call rate limiter cleanup() | Low |
+| P0 | 3 | Auth WebSocket handshake | Medium |
+| P1 | 4 | Trust X-Forwarded-For only from proxy | Medium |
+| P1 | 5 | Add account-based login lockout | Low |
+| P1 | 6 | Document RBAC bypass in single-token mode | Low |
+| P1 | 7 | Add per-IP QUIC limits | Medium |
+| P1 | 8 | Remove/sanitize default admin warning | Low |
+| P1 | 9 | Add WebSocket read deadline | Low |
+| P1 | 10 | Require auth for AXFR/IXFR | Medium |
+| P1 | 11 | Enforce TLS 1.2 minimum | Low |
 
 ---
 
-## Files in This Report
+## Files in Report
 
 | File | Purpose |
 |------|---------|
-| `architecture.md` | Phase 1: Codebase architecture map |
-| `verified_findings.md` | Phase 3: Validated findings with fix status |
-| `SECURITY-REPORT.md` | Phase 4: Final consolidated report |
+| `architecture.md` | Phase 1: Codebase architecture |
+| `sc-lang-go-results.md` | Go security findings |
+| `sc-lang-typescript-results.md` | TypeScript/React findings |
+| `sc-auth-results.md` | Auth/RBAC findings |
+| `sc-websocket-results.md` | WebSocket/CORS/CSRF findings |
+| `sc-dos-results.md` | DoS/rate limiting findings |
+| `sc-secrets-results.md` | Secrets/crypto findings |
+| `sc-ssrf-results.md` | SSRF/path traversal findings |
+| `sc-injection-results.md` | Injection findings |
+| `sc-dns-protocol-results.md` | DNS protocol findings |
+| `SECURITY-REPORT.md` | This file — final consolidated report |
 
 ---
 
 *Generated by Claude Code security-check skill*
 *Framework: CWE 4.14, CVSS 3.1*
-*Fixes applied: 2026-04-09*
+*Scan date: 2026-04-09*

@@ -1,26 +1,59 @@
-# NothingDNS Architecture Map
+# NothingDNS Architecture Map — Security Recon
 
-## Entry Points
+## 1. Technology Stack Detection
 
-### cmd/nothingdns/main.go
-The single binary entry point. Initializes all subsystems on startup:
-- Cache manager (in-memory DNS cache with negative caching)
-- Upstream resolver (recursive resolver with health checking)
-- Zone manager (authoritative zone loading from BIND-format files)
-- DNSSEC validator/signer
-- Cluster manager (raft-based distributed consensus)
-- Transfer manager (AXFR, IXFR, DDNS with TSIG)
-- Auth store (RBAC: admin/operator/viewer, HMAC-SHA256 tokens)
-- API server (REST + WebSocket dashboard)
-- DoH server (DNS over HTTPS, RFC 8484)
-- DoQ server (DNS over QUIC, RFC 9250)
-- DoWS/ODoH servers (DNS over WebSocket / Oblivious DoH, RFC 9230)
+### Languages
+- **Go** (~95%) — All DNS server code, API, cluster, zone transfers
+- **TypeScript/React 19** (~5%) — Web dashboard SPA at `web/src/`
 
-SIGHUP triggers config reload and zone reloading.
+### Frameworks (Go — stdlib only)
+- `net/http` — HTTP API, DoH, DoWS handlers
+- `net` — UDP/TCP DNS transports
+- `crypto/tls` — TLS/DoT, QUIC
+- Custom DNS protocol parser in `internal/protocol/` (no miekg/dns)
+
+### Application Type
+- **DNS Server** (authoritative + recursive) with 7 transports
+- **REST API** — 40+ endpoints for management
+- **React 19 SPA** — Web dashboard with WebSocket live updates
+- **CLI tool** — `dnsctl` for client-side operations
 
 ---
 
-## Trust Boundaries
+## 2. Entry Points
+
+### DNS Transports
+| Protocol | Port | Handler |
+|----------|------|---------|
+| UDP | 53 (or config) | `server.Handler` |
+| TCP | 53 (or config) | `server.Handler` |
+| TLS (DoT) | 853 | `server.Handler` |
+| QUIC (DoQ) | 784 | `doqHandlerAdapter` |
+| DoH | HTTP port + `/dns-query` | `doh.Handler` |
+| DoWS | HTTP port + `/ws` | `doh.WSHandler` |
+| ODoH | HTTP port + `/odoh` | `odoh.ObliviousProxy` |
+
+### HTTP API Routes
+**Public:** `/health`, `/readyz`, `/livez`, `/api/v1/auth/login`
+
+**Authenticated (JWT or shared token):**
+- Zones: `GET/POST /api/v1/zones`, `DELETE /api/v1/zones/{name}`, record operations
+- Cache: `GET /api/v1/cache/stats`, `POST /api/v1/cache/flush`
+- ACL: `GET/PUT /api/v1/acl`
+- RPZ: `GET/POST/DELETE /api/v1/rpz/rules`
+- Upstreams: `GET/PUT /api/v1/upstreams`
+- Config: `GET /api/v1/config`, `POST /api/v1/config/reload`
+- DNSSEC: `GET /api/v1/dnssec/status`
+- Metrics: `GET /api/v1/metrics/history`
+- Users: `GET/POST/DELETE /api/v1/auth/users`
+- WebSocket: `WS /ws`
+
+### CLI Commands (`dnsctl`)
+`dig`, `zone`, `record`, `cluster`, `cache`, `import`, `dnssec`
+
+---
+
+## 3. Trust Boundaries
 
 ```
 Internet DNS queries
@@ -29,119 +62,118 @@ Internet DNS queries
 [ACL filter] --> Allow/Drop/Redirect
         |
         v
-[Blocklist check] --> Block/Allow
+[Blocklist/RPZ check] --> Block/Allow
         |
         v
-[Rate Limiter (RRL)] --> Truncate/Allow
+[Cache lookup] --> Hit/Miss
         |
         v
-[Auth check (if configured)] --> Token validation for API/dashboard
+[Authoritative zone] OR [Recursive resolver]
         |
         v
-[DNS Handler]
-        |
-        +-->[Recursive Resolution]--> Upstream DNS servers
-        |
-        +-->[Zone Lookup]--> Authoritative answers from loaded zones
-        |
-        +-->[Cache Lookup]--> Cached responses
+[DNSSEC validation/signing]
         |
         v
-[Response with EDNS0, DNSSEC]
+[Audit logging]
+```
+
+### Authentication
+- **JWT tokens** — HMAC-SHA256, 24h expiry, role claims (admin/operator/viewer)
+- **Shared secret** — constant-time comparison via `subtle.ConstantTimeCompare`
+- **Login rate limiting** — 5 attempts, 5min lockout, progressive delays up to 30s
+- **API rate limiting** — 100 req/min per IP for authenticated requests
+
+### Authorization (RBAC)
+| Role | Permissions |
+|------|-------------|
+| admin | Full access + user management |
+| operator | Zone/record/cache/config mutations |
+| viewer | Read-only |
+
+---
+
+## 4. Data Flow
+
+### DNS Query Path
+```
+Client → Transport (UDP/TCP/TLS/QUIC/DoH/DoWS/ODoH)
+  → server.Handler.ServeDNS()
+  → integratedHandler.handleDNS()
+    → ACL check
+    → Blocklist/RPZ check
+    → Split-horizon view selection
+    → Cache lookup
+      → Hit: return cached
+      → Miss: Authoritative zone lookup OR recursive resolution
+    → DNSSEC signing/validation
+    → Audit logging
+    → Response
+```
+
+### API Request Path
+```
+HTTP Request
+  → CORS middleware (origin validation)
+  → Auth middleware (skip for public endpoints)
+    → Login rate limiting
+    → JWT/shared token validation
+    → API rate limiting
+  → RBAC check (for mutating operations)
+  → Handler
 ```
 
 ---
 
-## DNS Protocol Parsing Stack
+## 5. Security Controls Implemented
 
-### internal/protocol/header.go
-DNS message header (12 bytes). Flags bitfield: QR, Opcode, AA, TC, RD, RA, Z, AD, CD, RCODE. Pack/Unpack via binary.BigEndian.
-
-### internal/protocol/labels.go
-Domain name encoding. Label compression with 2-byte pointers (0xC0 prefix). MaxPointerDepth=5 prevents compression loops. MaxLabelLength=63, MaxNameLength=255. Wire format: length-byte prefixed labels + terminating 0.
-
-### internal/protocol/message.go
-Full DNS message Pack/Unpack. Sections: Question, Answer, Authority, Additional. Compression map for packing. Truncate() removes whole records from end (record-boundary-aware, not byte-level cut).
-
-### internal/zone/zone.go
-BIND-format zone file parser. $INCLUDE (max depth 10), $GENERATE (max 65536 records), $ORIGIN, $TTL. Multi-line records via parenthesis. Quoted string handling.
-
----
-
-## Transport Layer
-
-### internal/server/udp.go
-UDP DNS server. Worker pool (NumCPU * multiplier). EDNS0 truncation record-boundary-aware. Buffer pools for zero-alloc hot path.
-
-### internal/server/tcp.go
-TCP DNS server. Pipelining (16 concurrent in-flight queries). Connection limits (1000 global, 10 per IP). 65535 max message size. 30s read/write timeouts. EDNS0 Client Subnet extraction.
-
-### internal/doh/handler.go (DNS over HTTPS, RFC 8484)
-Wire format POST with application/dns-message content-type. JSON API via application/dns-json. GET uses base64.RawURLEncoding. 65535 body limit.
-
-### internal/doh/wshandler.go (DNS over WebSocket)
-Binary frames only (rejects text/continuation frames). 30s timeouts. Client info from HTTP RemoteAddr.
-
-### internal/websocket/websocket.go
-Custom RFC 6455 implementation. Origin validation. Sec-WebSocket-Key SHA1+base64 accept. 1MB max frame. Mask validation for client frames. Ping/pong.
+| Control | Location | Status |
+|---------|----------|--------|
+| Authentication | `internal/auth/auth.go` | ✅ JWT + shared token |
+| Authorization | `internal/auth/auth.go` | ✅ RBAC |
+| Rate Limiting | `internal/api/server.go` | ✅ Login + API |
+| ACL | `internal/filter/acl.go` | ✅ CIDR-based |
+| Blocklist | `internal/blocklist/blocklist.go` | ✅ Domain/prefix |
+| RPZ | `internal/rpz/rpz.go` | ✅ QNAME/clientIP/respIP |
+| DNSSEC | `internal/dnssec/` | ✅ Signing + validation |
+| DNS Cookies | `internal/dnscookie/` | ✅ RFC 7873 |
+| Query Logging | `internal/audit/` | ✅ Configurable |
+| Goroutine Leak | `internal/api/server.go` | ✅ Liveness probe |
+| Input Validation | All handlers | ✅ Body limits (64KB) |
+| CORS | `internal/api/server.go` | ✅ Origin allowlist |
 
 ---
 
-## Security-Critical Components
+## 6. External Integrations
 
-### internal/auth/auth.go
-HMAC-SHA256 token signing. Password hashing: 10000-iteration SHA256 key derivation with random 16-byte salt. VerifyPassword uses subtle.ConstantTimeCompare. Empty HMAC secret warning on startup (tokens forgeable if secret empty). Auto-generates secure random default admin password.
-
-### internal/transfer/tsig.go
-TSIG authentication (HMAC-SHA256/384/512). Time fudge window for replay prevention. Sign/Verify message integrity.
-
-### internal/blocklist/blocklist.go
-Hosts file format parsing. URL fetching with SSRF protection: HTTPS only, blocks 169.254.169.254 (AWS), metadata.google.internal (GCP), azure metadata, googleusercontent, private IPs (10/8, 172.16/12, 192.168/16, 127/8, 169.254/16), loopback, link-local, RFC 4193. DNS resolution check for hostnames. Path traversal check for `..` in file paths.
-
-### internal/filter/acl.go
-CIDR-based ACL matching. IsAllowed() returns (bool, redirectTarget). Default allow when no rules.
-
-### internal/resolver/resolver.go
-Iterative resolver. QNAME minimization (RFC 7816). 0x20 encoding for response validation. MaxDepth=30, MaxCNAMEDepth=16. crypto/rand for secure ID selection (panics on failure).
+- **Upstream DNS** — `internal/upstream/` — HTTP client, load balancer
+- **Cluster** — `internal/cluster/raft/` — Raft consensus, gossip protocol
+- **Zone Transfers** — `internal/transfer/` — AXFR, IXFR, DDNS, NOTIFY
+- **TSIG** — HMAC-SHA256/384/512 for zone transfer authentication
 
 ---
 
-## API Layer
-
-### internal/api/server.go
-40+ REST endpoints. CORS middleware validates Origin against AllowedOrigins (supports *). Auth via auth_token query param or Authorization Bearer header. RBAC: requireOperator(), requireAdmin(). Rate limiting: 5 login attempts, 5min lockout. JSON body limited to 65536 bytes. getClientIP() checks X-Forwarded-For, X-Real-IP, RemoteAddr.
-
-### internal/dashboard/server.go
-WebSocket streaming dashboard. MaxWebSocketClients=1000. Broadcast to all clients (non-blocking, drops if channel full). ClientLoop read/write split with 1-minute write deadline.
-
----
-
-## Configuration
-
-### internal/config/config.go
-30+ subsystems. expandEnvVars() for ${VAR} and $VAR. Validate() runs 10+ validation functions. isValidIP, isValidHostname, isValidCIDR helpers. DefaultConfig().
-
-### internal/config/parser.go
-Custom YAML parser (recursive descent, zero external deps). advance() skips TokenComment automatically. ParseMapping, parseBlockSequence, parseFlowMapping.
-
----
-
-## Key Constants
+## 7. Key Security Constants
 
 | Constant | Value | Location |
 |----------|-------|----------|
-| MaxLabelLength | 63 | labels.go |
-| MaxNameLength | 255 | labels.go |
-| MaxPointerDepth | 5 | labels.go |
-| PointerMask | 0xC0 | labels.go |
-| TCPMaxMessageSize | 65535 | tcp.go |
-| TCPReadTimeout | 30s | tcp.go |
-| TCPWriteTimeout | 30s | tcp.go |
-| MaxGenerateRecords | 65536 | zone.go |
-| MaxIncludeDepth | 10 | zone.go |
-| TSIGFudgeWindow | 5min | tsig.go |
-| MaxWebSocketClients | 1000 | dashboard.go |
-| WSFrameMaxSize | 1MB | websocket.go |
-| DoHMaxBodySize | 65535 | doh/handler.go |
-| ODoHMaxBodySize | 4MB | odoh/odoh.go |
-| LoginRateLimit | 5 attempts, 5min lockout | api/server.go |
+| MaxLabelLength | 63 | `internal/protocol/labels.go` |
+| MaxNameLength | 255 | `internal/protocol/labels.go` |
+| MaxPointerDepth | 5 | `internal/protocol/labels.go` (compression loop prevention) |
+| TCPMaxMessageSize | 65535 | `internal/server/tcp.go` |
+| MaxGenerateRecords | 65536 | `internal/zone/zone.go` |
+| MaxIncludeDepth | 10 | `internal/zone/zone.go` |
+| LoginRateLimit | 5 attempts, 5min | `internal/api/server.go` |
+| APIRateLimit | 100 req/min | `internal/api/server.go` |
+| WSFrameMaxSize | 1MB | `internal/websocket/websocket.go` |
+| DoHMaxBodySize | 65535 | `internal/doh/handler.go` |
+
+---
+
+## 8. Language Detection
+
+- **Go** (95%) → activates `sc-lang-go`
+- **TypeScript** (5%) → activates `sc-lang-typescript`
+
+---
+
+*Generated by security-check sc-recon skill — Phase 1*
