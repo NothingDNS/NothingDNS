@@ -1,6 +1,8 @@
 package quic
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -275,27 +277,13 @@ func (tp *TransportParams) Validate() error {
 }
 
 // GenerateStatelessResetToken generates a stateless reset token from
-// a connection ID and a secret key.
+// a connection ID and a secret key per RFC 9002.
 func GenerateStatelessResetToken(secret []byte, connID ConnectionID) [16]byte {
-	// Simple HMAC-like construction using the secret and connection ID
+	// RFC 9002: HMAC-SHA256 of the connection ID with the secret key
+	mac := hmac.New(sha256.New, secret)
+	mac.Write(connID)
 	var token [16]byte
-	data := make([]byte, len(secret)+len(connID))
-	copy(data, secret)
-	copy(data[len(secret):], connID)
-
-	// Simple hash-based approach (no external deps)
-	for i := 0; i < 16; i++ {
-		token[i] = data[i%len(data)] ^ data[(i+7)%len(data)] ^ byte(i*17)
-	}
-
-	// Mix using binary operations
-	for round := 0; round < 8; round++ {
-		for i := 0; i < 16; i++ {
-			token[i] ^= token[(i+3)%16] + byte(round)*0x3b
-			token[(i+7)%16] += token[i]
-		}
-	}
-
+	copy(token[:], mac.Sum(nil)[:16])
 	return token
 }
 

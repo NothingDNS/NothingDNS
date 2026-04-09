@@ -199,19 +199,22 @@ func (s *Store) GenerateToken(username string, expiry time.Duration) (*Token, er
 // ValidateToken checks if a token is valid and returns the associated user.
 func (s *Store) ValidateToken(tokenStr string) (*User, error) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	token, ok := s.tokens[tokenStr]
 	if !ok {
+		s.mu.RUnlock()
 		return nil, fmt.Errorf("invalid token")
 	}
 
 	if time.Now().After(token.ExpiresAt) {
+		s.mu.RUnlock()
+		s.mu.Lock()
 		delete(s.tokens, tokenStr)
+		s.mu.Unlock()
 		return nil, fmt.Errorf("token expired")
 	}
 
 	user, ok := s.users[token.Username]
+	s.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("user not found")
 	}

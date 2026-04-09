@@ -85,6 +85,10 @@ func (z *ZoneStateMachine) applyCommand(cmd ZoneCommand) error {
 }
 
 func (z *ZoneStateMachine) addRecord(cmd ZoneCommand) error {
+	if len(cmd.RData) == 0 {
+		return fmt.Errorf("add_record requires RData")
+	}
+
 	zone, ok := z.zones[cmd.Zone]
 	if !ok {
 		zone = &ZoneData{
@@ -99,7 +103,7 @@ func (z *ZoneStateMachine) addRecord(cmd ZoneCommand) error {
 		Name:   cmd.Name,
 		RRType: cmd.RRType,
 		TTL:    cmd.TTL,
-		RData:  []byte(cmd.RData[0]), // Simplified
+		RData:  []byte(cmd.RData[0]),
 	})
 	zone.Modified = true
 
