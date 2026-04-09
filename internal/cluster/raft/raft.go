@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/nothingdns/nothingdns/internal/util"
 )
 
 // State represents the Raft node state.
@@ -731,7 +733,7 @@ func (n *Node) broadcastVoteRequest(term Term, lastLogIndex Index, lastLogTerm T
 		go func(peerID NodeID) {
 			defer func() {
 				if r := recover(); r != nil {
-					fmt.Printf("raft: panic in broadcastVoteRequest for peer %s: %v\n", peerID, r)
+					util.Errorf("raft: panic in broadcastVoteRequest for peer %s: %v", peerID, r)
 				}
 			}()
 			req := VoteRequest{
@@ -752,7 +754,7 @@ func (n *Node) broadcastHeartbeat(term Term) {
 		go func(peerID NodeID) {
 			defer func() {
 				if r := recover(); r != nil {
-					fmt.Printf("raft: panic in broadcastHeartbeat for peer %s: %v\n", peerID, r)
+					util.Errorf("raft: panic in broadcastHeartbeat for peer %s: %v", peerID, r)
 				}
 			}()
 			n.sendHeartbeat(peerID, term)
@@ -912,7 +914,7 @@ func (n *Node) replicateToFollowers(newEntry entry) {
 		go func(peerID NodeID) {
 			defer func() {
 				if r := recover(); r != nil {
-					fmt.Printf("raft: panic in replicateToFollowers for peer %s: %v\n", peerID, r)
+					util.Errorf("raft: panic in replicateToFollowers for peer %s: %v", peerID, r)
 				}
 			}()
 			n.mu.Lock()
@@ -960,7 +962,7 @@ func (n *Node) sendVoteRequest(peerID NodeID, req VoteRequest) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				fmt.Printf("raft: panic in sendVoteRequest: %v\n", r)
+				util.Errorf("raft: panic in sendVoteRequest: %v", r)
 			}
 		}()
 		resp, err := n.transport.SendRequestVote(peerID, req)
@@ -980,7 +982,7 @@ func (n *Node) sendAppendRequest(peerID NodeID, req AppendRequest) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				fmt.Printf("raft: panic in sendAppendRequest: %v\n", r)
+				util.Errorf("raft: panic in sendAppendRequest: %v", r)
 			}
 		}()
 		resp, err := n.transport.SendAppendEntries(peerID, req)
