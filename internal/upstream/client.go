@@ -356,7 +356,13 @@ func (c *Client) queryUDP(server *Server, msg *protocol.Message) (*protocol.Mess
 		} else {
 			buf = make([]byte, 4096)
 		}
-		putBack = func() { pool.Put(buf) }
+		putBack = func() {
+			// Reset buffer before returning to pool to prevent stale data aliasing
+			for i := range buf {
+				buf[i] = 0
+			}
+			pool.Put(buf)
+		}
 	} else {
 		buf = make([]byte, 4096)
 		putBack = func() {}
@@ -430,8 +436,13 @@ func (c *Client) queryTCP(server *Server, msg *protocol.Message) (*protocol.Mess
 		} else {
 			buf = make([]byte, 65535)
 		}
-		poolBuf := buf
-		putBack = func() { pool.Put(poolBuf) }
+		putBack = func() {
+			// Reset buffer before returning to pool to prevent stale data aliasing
+			for i := range buf {
+				buf[i] = 0
+			}
+			pool.Put(buf)
+		}
 	} else {
 		buf = make([]byte, 65535)
 		putBack = func() {}

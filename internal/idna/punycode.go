@@ -76,60 +76,84 @@ func encodePunycode(src string) string {
 }
 
 // encodeSuffix encodes the non-ASCII suffix to punycode.
+// Implements RFC 3492 Bootstring algorithm correctly.
 func encodeSuffix(src []rune) string {
 	if len(src) == 0 {
 		return ""
 	}
 
-	var (
-		n       int = initialN
-		delta   = 0
-		h       = len(src) // Number of characters processed
-	)
+	var out strings.Builder
 
+	// RFC 3492 algorithm state
+	n := initialN        // First non-ASCII code point (0x80)
+	delta := 0          // Cumulative delta
+	bias := initialBias
+	h := 0              // Number of code points processed (starts at 0 for suffix)
+
+	// Handle all characters - first pass just counts ASCII
+	for _, r := range src {
+		if r < initialN {
+			h++
+		}
+	}
+
+	// If all ASCII, nothing to encode
+	if h == len(src) {
+		return ""
+	}
+
+	// Main loop - process all non-ASCII characters
 	for h < len(src) {
-		// Find the next smallest code point to process
-		m := 0
-		for _, r := range src {
-			if int(r) >= n && (m == 0 || int(r) < m) {
-				m = int(r)
+		// Find the next smallest code point >= n
+		m := initialN
+		for i := h; i < len(src); i++ {
+			if int(src[i]) >= m {
+				m = int(src[i])
 			}
 		}
 
+		// Calculate delta
 		delta += (m - n) * (h + 1)
 		n = m
 
-		for _, r := range src {
-			if int(r) < n {
+		// Process each character
+		for i := h; i < len(src); i++ {
+			if int(src[i]) < n {
 				delta++
 			}
-			if int(r) == n {
-				// Encode delta
+			if int(src[i]) == n {
+				// Encode delta using adapation function
 				q := delta
 				for {
-					k := base
-					for {
-						if q <= k {
-							break
-						}
-						// Would append to output
-						q = (q - k) / (base - tmin)
-						k = base
+					var k int
+					if bias <= tmax {
+						k = tmin
+					} else if bias >= tmax+tmin {
+						k = tmax
+					} else {
+						k = bias - tmin
 					}
-					if q < base {
+
+					if q < k {
 						break
 					}
+
+					out.WriteRune(digitToChar(k + (q-k)%26))
+					q = (q - k) / 26
+					bias = adapt(q, bias, false)
 				}
+
+				out.WriteRune(digitToChar(q))
+				bias = adapt(delta, bias, false)
+				delta = 0
+				h++
 			}
 		}
-
-		h++
-		delta++
-		n++
 	}
 
-	return ""
+	return out.String()
 }
+
 
 // decodePunycode decodes a punycode string to Unicode.
 func decodePunycode(src string) string {

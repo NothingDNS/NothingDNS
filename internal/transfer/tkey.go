@@ -10,6 +10,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"hash"
+	"math/big"
 	"strings"
 	"time"
 
@@ -228,17 +229,16 @@ func GenerateTKEYDiffieHellman(algorithm string, prime, base []byte, privateValu
 	}, nil
 }
 
-// computeDHValue computes base^exp mod prime (simplified DH).
+// computeDHValue computes base^exp mod prime using Diffie-Hellman.
+// This implements proper DH key exchange as per RFC 2631.
 func computeDHValue(prime, base, exp []byte) ([]byte, error) {
-	// For simplicity, we use the standard DH computation
-	// In production, this would use crypto/ecdh or crypto/rsa
-	h := sha256.New()
-	h.Write(exp)
-	h.Write(prime)
-	h.Write(base)
-	hash := h.Sum(nil)
-	// Use first 32 bytes as a simulated DH output
-	return hash, nil
+	p := new(big.Int).SetBytes(prime)
+	g := new(big.Int).SetBytes(base)
+	x := new(big.Int).SetBytes(exp)
+
+	// Compute g^x mod p
+	result := new(big.Int).Exp(g, x, p)
+	return result.Bytes(), nil
 }
 
 // ComputeTKEYHMAC computes the HMAC for a TKEY record.

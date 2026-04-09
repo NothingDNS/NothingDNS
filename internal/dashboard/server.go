@@ -26,6 +26,7 @@ type Client struct {
 	conn      WebSocketConn
 	send      chan []byte
 	closeSend sync.Once
+	closed    chan struct{} // Used to signal write loop to exit
 }
 
 // WebSocketConn interface for WebSocket connections
@@ -226,8 +227,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := &Client{
-		conn: conn,
-		send: make(chan []byte, 256),
+		conn:   conn,
+		send:   make(chan []byte, 256),
+		closed: make(chan struct{}),
 	}
 
 	s.AddClient(client)
@@ -329,6 +331,7 @@ func (s *Server) broadcastLoop() {
 // ClientLoop handles a client's read/write loops
 func (s *Server) ClientLoop(client *Client) {
 	defer func() {
+		close(client.closed) // Signal write loop to exit
 		client.closeSend.Do(func() { close(client.send) })
 		s.RemoveClient(client)
 		client.conn.Close()
@@ -336,8 +339,13 @@ func (s *Server) ClientLoop(client *Client) {
 
 	// Write loop
 	go func() {
-		for data := range client.send {
-			if err := client.conn.WriteMessage(1, data); err != nil {
+		for {
+			select {
+			case data := <-client.send:
+				if err := client.conn.WriteMessage(1, data); err != nil {
+					return
+				}
+			case <-client.closed:
 				return
 			}
 		}

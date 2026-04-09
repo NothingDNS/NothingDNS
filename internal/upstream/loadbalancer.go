@@ -484,7 +484,13 @@ func (lb *LoadBalancer) queryUDP(address string, msg *protocol.Message) (*protoc
 	} else {
 		buf = make([]byte, 4096)
 	}
-	defer pool.Put(buf)
+	defer func() {
+		// Reset buffer before returning to pool to prevent stale data aliasing
+		for i := range buf {
+			buf[i] = 0
+		}
+		pool.Put(buf)
+	}()
 
 	n, err := msg.Pack(buf)
 	if err != nil {
@@ -560,8 +566,13 @@ func (lb *LoadBalancer) queryTCP(address string, msg *protocol.Message) (*protoc
 	} else {
 		buf = make([]byte, 65535)
 	}
-	poolBuf := buf
-	defer pool.Put(poolBuf)
+	defer func() {
+		// Reset buffer before returning to pool to prevent stale data aliasing
+		for i := range buf {
+			buf[i] = 0
+		}
+		pool.Put(buf)
+	}()
 
 	n, err := msg.Pack(buf)
 	if err != nil {
