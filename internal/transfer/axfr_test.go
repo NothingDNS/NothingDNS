@@ -110,7 +110,7 @@ func TestAXFRServer_IsAllowed(t *testing.T) {
 
 func TestAXFRServer_HandleAXFR_NoZone(t *testing.T) {
 	zones := make(map[string]*zone.Zone)
-	server := NewAXFRServer(zones)
+	server := NewAXFRServer(zones, WithAllowList([]string{"127.0.0.0/8"}))
 
 	// Create AXFR request
 	name, _ := protocol.ParseName("nonexistent.com.")
@@ -138,7 +138,7 @@ func TestAXFRServer_HandleAXFR_NoZone(t *testing.T) {
 
 func TestAXFRServer_HandleAXFR_NoSOA(t *testing.T) {
 	zones := make(map[string]*zone.Zone)
-	server := NewAXFRServer(zones)
+	server := NewAXFRServer(zones, WithAllowList([]string{"127.0.0.0/8"}))
 
 	// Add zone without SOA
 	z := zone.NewZone("example.com.")
@@ -169,7 +169,7 @@ func TestAXFRServer_HandleAXFR_NoSOA(t *testing.T) {
 
 func TestAXFRServer_HandleAXFR_Success(t *testing.T) {
 	zones := make(map[string]*zone.Zone)
-	server := NewAXFRServer(zones)
+	server := NewAXFRServer(zones, WithAllowList([]string{"127.0.0.0/8"}))
 
 	// Create zone with SOA and records
 	z := zone.NewZone("example.com.")
@@ -233,7 +233,7 @@ func TestAXFRServer_HandleAXFR_Success(t *testing.T) {
 
 func TestAXFRServer_HandleAXFR_InvalidQueryType(t *testing.T) {
 	zones := make(map[string]*zone.Zone)
-	server := NewAXFRServer(zones)
+	server := NewAXFRServer(zones, WithAllowList([]string{"127.0.0.0/8"}))
 
 	z := zone.NewZone("example.com.")
 	z.SOA = &zone.SOARecord{

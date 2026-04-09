@@ -4,9 +4,11 @@ package dashboard
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/nothingdns/nothingdns/internal/auth"
 	"github.com/nothingdns/nothingdns/internal/util"
 	"github.com/nothingdns/nothingdns/internal/websocket"
 )
@@ -20,6 +22,7 @@ type Server struct {
 	enabled        bool
 	wg             sync.WaitGroup
 	allowedOrigins []string // Allowed CORS origins for WebSocket
+	authStore      *auth.Store
 }
 
 // MaxWebSocketClients is the maximum number of concurrent WebSocket connections.
@@ -37,6 +40,7 @@ type Client struct {
 type WebSocketConn interface {
 	ReadMessage() (messageType int, p []byte, err error)
 	WriteMessage(messageType int, data []byte) error
+	SetReadDeadline(t time.Time) error
 	SetWriteDeadline(t time.Time) error
 	Close() error
 }
@@ -165,6 +169,13 @@ func (s *Server) SetAllowedOrigins(origins []string) {
 	s.mu.Unlock()
 }
 
+// SetAuthStore sets the auth store for WebSocket authentication.
+func (s *Server) SetAuthStore(store *auth.Store) {
+	s.mu.Lock()
+	s.authStore = store
+	s.mu.Unlock()
+}
+
 // ServeHTTP handles HTTP requests
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
@@ -232,6 +243,33 @@ func (s *Server) handleZones(w http.ResponseWriter, r *http.Request) {
 
 // handleWebSocket handles WebSocket connections
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	// Validate authentication token before accepting WebSocket connection
+	if s.authStore != nil {
+		token := r.Header.Get("Authorization")
+		token = strings.TrimPrefix(token, "Bearer ")
+		if token == "" {
+			// Try query parameter fallback
+			token = r.URL.Query().Get("token")
+		}
+		if token == "" {
+			if c, err := r.Cookie("ndns_token"); err == nil {
+				token = c.Value
+			}
+		}
+
+		if token == "" {
+			http.Error(w, "authentication required", http.StatusUnauthorized)
+			return
+		}
+
+		// Validate token
+		if _, err := s.authStore.ValidateToken(token); err != nil {
+			util.Warnf("dashboard: websocket auth failed: %v", err)
+			http.Error(w, "invalid token", http.StatusUnauthorized)
+			return
+		}
+	}
+
 	conn, err := websocket.Handshake(w, r, s.allowedOrigins...)
 	if err != nil {
 		util.Warnf("dashboard: websocket handshake failed: %v", err)
@@ -371,8 +409,12 @@ func (s *Server) ClientLoop(client *Client) {
 		}
 	}()
 
-	// Read loop
+	// Read loop with idle timeout to detect slow/dead clients
 	for {
+		// Set read deadline to prevent slow-client DoS (2 minute idle timeout)
+		if err := client.conn.SetReadDeadline(time.Now().Add(2 * time.Minute)); err != nil {
+			return
+		}
 		_, _, err := client.conn.ReadMessage()
 		if err != nil {
 			return

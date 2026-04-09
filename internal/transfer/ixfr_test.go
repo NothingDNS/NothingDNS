@@ -450,7 +450,7 @@ func TestIXFRServer_HandleIXFR_NoZone(t *testing.T) {
 
 func TestIXFRServer_HandleIXFR_NoSOA(t *testing.T) {
 	zones := make(map[string]*zone.Zone)
-	axfrServer := NewAXFRServer(zones)
+	axfrServer := NewAXFRServer(zones, WithAllowList([]string{"127.0.0.0/8"}))
 	server := NewIXFRServer(axfrServer)
 
 	// Add zone without SOA
@@ -482,7 +482,7 @@ func TestIXFRServer_HandleIXFR_NoSOA(t *testing.T) {
 
 func TestIXFRServer_HandleIXFR_ClientUpToDate(t *testing.T) {
 	zones := make(map[string]*zone.Zone)
-	axfrServer := NewAXFRServer(zones)
+	axfrServer := NewAXFRServer(zones, WithAllowList([]string{"127.0.0.0/8"}))
 	server := NewIXFRServer(axfrServer)
 
 	// Create zone
@@ -589,7 +589,7 @@ func TestIXFRServer_HandleIXFR_UnauthorizedClient(t *testing.T) {
 
 func TestIXFRServer_HandleIXFR_WrongQueryType(t *testing.T) {
 	zones := make(map[string]*zone.Zone)
-	axfrServer := NewAXFRServer(zones)
+	axfrServer := NewAXFRServer(zones, WithAllowList([]string{"127.0.0.0/8"}))
 	server := NewIXFRServer(axfrServer)
 
 	name, _ := protocol.ParseName("example.com.")
@@ -901,7 +901,7 @@ func TestIXFRClient_ParseIXFRResponse_IXFRFormat(t *testing.T) {
 
 func TestIXFRServer_HandleIXFR_MultipleQuestions(t *testing.T) {
 	zones := make(map[string]*zone.Zone)
-	axfrServer := NewAXFRServer(zones)
+	axfrServer := NewAXFRServer(zones, WithAllowList([]string{"127.0.0.0/8"}))
 	server := NewIXFRServer(axfrServer)
 
 	name, _ := protocol.ParseName("example.com.")
@@ -924,7 +924,7 @@ func TestIXFRServer_HandleIXFR_MultipleQuestions(t *testing.T) {
 
 func TestIXFRServer_HandleIXFR_FallbackToAXFR(t *testing.T) {
 	zones := make(map[string]*zone.Zone)
-	axfrServer := NewAXFRServer(zones)
+	axfrServer := NewAXFRServer(zones, WithAllowList([]string{"127.0.0.0/8"}))
 	server := NewIXFRServer(axfrServer)
 
 	// Create zone

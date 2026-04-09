@@ -57,21 +57,25 @@ type Server struct {
 	odohProxy       *odoh.ObliviousProxy // ODoH proxy (RFC 9230)
 	loginLimiter    *loginRateLimiter
 	apiRateLimiter  *apiRateLimiter
+	stopCh          chan struct{} // Channel to signal shutdown
+	stopOnce        sync.Once    // Ensure Stop is idempotent
 
 	// Goroutine leak detection baseline
 	goroutineBaseline int64
 }
 
-// loginRateLimiter tracks failed login attempts per IP and applies progressive delays.
+// loginRateLimiter tracks failed login attempts per IP and username.
+// It applies both IP-based and account-based rate limiting to prevent brute force attacks.
 type loginRateLimiter struct {
-	mu       sync.Mutex
-	attempts map[string]*loginAttempt
+	mu         sync.Mutex
+	ipAttempts    map[string]*loginAttempt    // IP-based tracking
+	userAttempts  map[string]*loginAttempt    // Username-based tracking (account lockout)
 }
 
-// loginAttempt tracks failed attempts for a single IP.
+// loginAttempt tracks failed attempts for a single IP or username.
 type loginAttempt struct {
-	count     int
-	lastTry   time.Time
+	count       int
+	lastTry     time.Time
 	lockedUntil time.Time
 }
 
@@ -79,7 +83,7 @@ type loginAttempt struct {
 const (
 	loginMaxAttempts   = 5             // Maximum attempts before lockout
 	loginLockoutPeriod = 5 * time.Minute // How long to lock out after max attempts
-	loginMaxDelay      = 30 * time.Second // Maximum delay between attempts
+	loginMaxDelay     = 30 * time.Second // Maximum delay between attempts
 )
 
 // checkRateLimit checks if the given IP is rate-limited.
@@ -89,7 +93,7 @@ func (l *loginRateLimiter) checkRateLimit(ip string) (bool, time.Duration) {
 	defer l.mu.Unlock()
 
 	now := time.Now()
-	attempt, exists := l.attempts[ip]
+	attempt, exists := l.ipAttempts[ip]
 
 	if !exists {
 		return false, 0
@@ -111,42 +115,81 @@ func (l *loginRateLimiter) checkRateLimit(ip string) (bool, time.Duration) {
 	return false, 0
 }
 
-// recordFailedAttempt records a failed login attempt for the given IP.
-func (l *loginRateLimiter) recordFailedAttempt(ip string) {
+// checkUserRateLimit checks if the given username is rate-limited (account lockout).
+// Returns true if the account should be locked, and the delay to apply.
+func (l *loginRateLimiter) checkUserRateLimit(username string) (bool, time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	now := time.Now()
-	attempt, exists := l.attempts[ip]
+	attempt, exists := l.userAttempts[username]
 
 	if !exists {
-		l.attempts[ip] = &loginAttempt{
+		return false, 0
+	}
+
+	// Check if currently locked out
+	if now.Before(attempt.lockedUntil) {
+		return true, time.Until(attempt.lockedUntil)
+	}
+
+	return false, 0
+}
+
+// recordFailedAttempt records a failed login attempt for the given IP and username.
+func (l *loginRateLimiter) recordFailedAttempt(ip, username string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	now := time.Now()
+
+	// Track by IP
+	attempt, exists := l.ipAttempts[ip]
+	if !exists {
+		l.ipAttempts[ip] = &loginAttempt{
 			count:   1,
 			lastTry: now,
 		}
-		return
+	} else {
+		// Reset lockout if expired
+		if now.After(attempt.lockedUntil) {
+			attempt.count = 0
+			attempt.lockedUntil = time.Time{}
+		}
+		attempt.count++
+		attempt.lastTry = now
+		if attempt.count >= loginMaxAttempts {
+			attempt.lockedUntil = now.Add(loginLockoutPeriod)
+		}
 	}
 
-	// Reset lockout if expired
-	if now.After(attempt.lockedUntil) {
-		attempt.count = 0
-		attempt.lockedUntil = time.Time{}
-	}
-
-	attempt.count++
-	attempt.lastTry = now
-
-	// Apply lockout if max attempts reached
-	if attempt.count >= loginMaxAttempts {
-		attempt.lockedUntil = now.Add(loginLockoutPeriod)
+	// Track by username (account lockout)
+	userAttempt, userExists := l.userAttempts[username]
+	if !userExists {
+		l.userAttempts[username] = &loginAttempt{
+			count:   1,
+			lastTry: now,
+		}
+	} else {
+		// Reset lockout if expired
+		if now.After(userAttempt.lockedUntil) {
+			userAttempt.count = 0
+			userAttempt.lockedUntil = time.Time{}
+		}
+		userAttempt.count++
+		userAttempt.lastTry = now
+		if userAttempt.count >= loginMaxAttempts {
+			userAttempt.lockedUntil = now.Add(loginLockoutPeriod)
+		}
 	}
 }
 
-// recordSuccess removes the IP from rate limiting on successful login.
-func (l *loginRateLimiter) recordSuccess(ip string) {
+// recordSuccess removes the IP and username from rate limiting on successful login.
+func (l *loginRateLimiter) recordSuccess(ip, username string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	delete(l.attempts, ip)
+	delete(l.ipAttempts, ip)
+	delete(l.userAttempts, username)
 }
 
 // apiRateLimiter implements a sliding window rate limiter for API endpoints.
@@ -275,7 +318,8 @@ func NewServer(cfg config.HTTPConfig, zm *zone.Manager, c *cache.Cache, reload f
 		cluster:         cl,
 		dashboardServer: ds,
 		loginLimiter: &loginRateLimiter{
-			attempts: make(map[string]*loginAttempt),
+			ipAttempts:   make(map[string]*loginAttempt),
+			userAttempts: make(map[string]*loginAttempt),
 		},
 		apiRateLimiter: newAPIRateLimiter(),
 	}
@@ -344,6 +388,10 @@ func (s *Server) Start() error {
 
 	// Capture goroutine baseline on startup
 	atomic.StoreInt64(&s.goroutineBaseline, int64(runtime.NumGoroutine()))
+
+	// Start rate limiter cleanup goroutine
+	s.stopCh = make(chan struct{})
+	go s.rateLimitCleanupLoop()
 
 	mux := http.NewServeMux()
 
@@ -459,6 +507,13 @@ func (s *Server) Start() error {
 
 // Stop stops the API server.
 func (s *Server) Stop() error {
+	// Signal cleanup goroutines to stop (idempotent via sync.Once)
+	s.stopOnce.Do(func() {
+		if s.stopCh != nil {
+			close(s.stopCh)
+		}
+	})
+
 	if s.httpServer == nil {
 		return nil
 	}
@@ -467,6 +522,20 @@ func (s *Server) Stop() error {
 	defer cancel()
 
 	return s.httpServer.Shutdown(ctx)
+}
+
+// rateLimitCleanupLoop periodically cleans up stale entries from rate limiters.
+func (s *Server) rateLimitCleanupLoop() {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.stopCh:
+			return
+		case <-ticker.C:
+			s.apiRateLimiter.cleanup()
+		}
+	}
 }
 
 // corsMiddleware adds CORS headers.
@@ -2368,7 +2437,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check rate limit
+	// Check IP-based rate limit
 	ip := getClientIP(r)
 	if rejected, delay := s.loginLimiter.checkRateLimit(ip); rejected {
 		w.Header().Set("Retry-After", strconv.Itoa(int(delay.Seconds())))
@@ -2382,23 +2451,30 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check account-based rate limit (username lockout)
+	if rejected, delay := s.loginLimiter.checkUserRateLimit(req.Username); rejected {
+		w.Header().Set("Retry-After", strconv.Itoa(int(delay.Seconds())))
+		s.writeError(w, http.StatusTooManyRequests, "Account locked due to too many failed attempts")
+		return
+	}
+
 	// Validate user
 	user, err := s.authStore.GetUser(req.Username)
 	if err != nil {
-		s.loginLimiter.recordFailedAttempt(ip)
+		s.loginLimiter.recordFailedAttempt(ip, req.Username)
 		s.writeError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
 	}
 
 	// Verify password
 	if !auth.VerifyPassword(req.Password, user.Hash) {
-		s.loginLimiter.recordFailedAttempt(ip)
+		s.loginLimiter.recordFailedAttempt(ip, req.Username)
 		s.writeError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
 	}
 
 	// Successful login - clear rate limit state
-	s.loginLimiter.recordSuccess(ip)
+	s.loginLimiter.recordSuccess(ip, req.Username)
 
 	// Generate token
 	token, err := s.authStore.GenerateToken(req.Username, 24*time.Hour)
@@ -2579,21 +2655,13 @@ func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 
-// getClientIP extracts the client IP from the request, checking X-Forwarded-For first.
+// getClientIP extracts the client IP from the request.
+// SECURITY: X-Forwarded-For is NOT trusted by default because it can be trivially spoofed.
+// An attacker can set X-Forwarded-For to any IP to bypass rate limiting.
+// If the server is behind a trusted reverse proxy, the proxy should set X-Real-IP
+// and this function will use it. Otherwise, RemoteAddr is used.
 func getClientIP(r *http.Request) string {
-	// Check X-Forwarded-For header (for proxies/load balancers)
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		// Take the first IP in the chain
-		if idx := strings.Index(xff, ","); idx != -1 {
-			xff = strings.TrimSpace(xff[:idx])
-		}
-		xff = strings.TrimSpace(xff)
-		if net.ParseIP(xff) != nil {
-			return xff
-		}
-	}
-
-	// Check X-Real-IP header
+	// Check X-Real-IP header (set by trusted proxies, not user-supplied)
 	if xri := r.Header.Get("X-Real-IP"); xri != "" {
 		xri = strings.TrimSpace(xri)
 		if net.ParseIP(xri) != nil {

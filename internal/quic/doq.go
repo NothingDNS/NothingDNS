@@ -31,6 +31,9 @@ const (
 
 	// DoQMaxStreamsPerConnection is the maximum concurrent streams per connection.
 	DoQMaxStreamsPerConnection = 100
+
+	// DoQMaxConnectionsPerIP is the maximum concurrent QUIC connections per source IP.
+	DoQMaxConnectionsPerIP = 10
 )
 
 // DoQHandler processes DNS queries received over QUIC.
@@ -78,6 +81,10 @@ type DoQServer struct {
 	// Connection limiting
 	connSem chan struct{}
 
+	// Per-IP connection limiting (Do not reuse variable names like ipConnCount to avoid shadowing in other files)
+	ipConns   map[string]int
+	ipConnsMu sync.Mutex
+
 	// Metrics
 	connectionsAccepted uint64
 	connectionsClosed   uint64
@@ -90,6 +97,7 @@ type DoQServer struct {
 type doqConn struct {
 	sc       *ServerConnection
 	scID     ConnectionID
+	remoteIP string // Source IP for per-IP connection counting
 	ctx      context.Context
 	cancel   context.CancelFunc
 	streamCh chan uint64 // Incoming stream IDs
@@ -115,6 +123,7 @@ func NewDoQServerWithConfig(addr string, handler DoQHandler, tlsConfig *tls.Conf
 		tlsConfig: tlsConfig,
 		config:    config,
 		conns:     make(map[cidKey]*doqConn),
+		ipConns:   make(map[string]int),
 		ctx:       ctx,
 		cancel:    cancel,
 		connSem:   make(chan struct{}, DoQMaxConnections),
@@ -245,7 +254,7 @@ func (s *DoQServer) handleInitialPacket(hdr *LongHeader, data []byte, remoteAddr
 		return
 	}
 
-	// New connection - check limit
+	// New connection - check global limit
 	select {
 	case s.connSem <- struct{}{}:
 	default:
@@ -253,17 +262,35 @@ func (s *DoQServer) handleInitialPacket(hdr *LongHeader, data []byte, remoteAddr
 		return
 	}
 
+	// Check per-IP connection limit
+	ip := remoteAddr.IP.String()
+	s.ipConnsMu.Lock()
+	if s.ipConns[ip] >= DoQMaxConnectionsPerIP {
+		s.ipConnsMu.Unlock()
+		<-s.connSem
+		atomic.AddUint64(&s.errors, 1)
+		return
+	}
+	s.ipConns[ip]++
+	s.ipConnsMu.Unlock()
+
 	// Generate server connection ID
 	scid, err := GenerateInitialConnectionID()
 	if err != nil {
+		s.ipConnsMu.Lock()
+		s.ipConns[ip]--
+		s.ipConnsMu.Unlock()
 		<-s.connSem
 		atomic.AddUint64(&s.errors, 1)
 		return
 	}
 
 	// Create new connection
-	dc, err = s.newDoQConnection(scid, remoteAddr)
+	dc, err = s.newDoQConnection(scid, remoteAddr, ip)
 	if err != nil {
+		s.ipConnsMu.Lock()
+		s.ipConns[ip]--
+		s.ipConnsMu.Unlock()
 		<-s.connSem
 		atomic.AddUint64(&s.errors, 1)
 		return
@@ -285,7 +312,7 @@ func (s *DoQServer) handleInitialPacket(hdr *LongHeader, data []byte, remoteAddr
 }
 
 // newDoQConnection creates a new DoQ connection.
-func (s *DoQServer) newDoQConnection(scid ConnectionID, remoteAddr net.Addr) (*doqConn, error) {
+func (s *DoQServer) newDoQConnection(scid ConnectionID, remoteAddr net.Addr, remoteIP string) (*doqConn, error) {
 	ctx, cancel := context.WithCancel(s.ctx)
 
 	sc := NewServerConnection(s.tlsConfig, scid, s.conn.LocalAddr(), remoteAddr, s.config)
@@ -293,6 +320,7 @@ func (s *DoQServer) newDoQConnection(scid ConnectionID, remoteAddr net.Addr) (*d
 	dc := &doqConn{
 		sc:       sc,
 		scID:     scid,
+		remoteIP: remoteIP,
 		ctx:      ctx,
 		cancel:   cancel,
 		streamCh: make(chan uint64, 64),
@@ -467,6 +495,14 @@ func (s *DoQServer) closeConnection(dc *doqConn) {
 
 	s.removeConn(dc)
 	<-s.connSem
+
+	// Decrement per-IP connection counter
+	if dc.remoteIP != "" {
+		s.ipConnsMu.Lock()
+		s.ipConns[dc.remoteIP]--
+		s.ipConnsMu.Unlock()
+	}
+
 	atomic.AddUint64(&s.connectionsClosed, 1)
 }
 

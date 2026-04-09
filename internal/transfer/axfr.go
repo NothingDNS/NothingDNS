@@ -149,9 +149,15 @@ func (s *AXFRServer) HandleAXFR(req *protocol.Message, clientIP net.IP) ([]*prot
 		return nil, nil, fmt.Errorf("zone %s not found", zoneName)
 	}
 
-	// Verify TSIG — if keyStore has keys, TSIG is required
+	// Verify TSIG — TSIG is required when:
+	// - No allow list is configured (secure by default: require TSIG for external access)
+	// - keyStore has keys configured
+	// This ensures zone transfers are protected even without IP-based ACLs.
+	hasAllowList := s.allowList != nil && len(s.allowList) > 0
 	var tsigKey *TSIGKey
+
 	if s.keyStore != nil && s.keyStore.HasKeys() {
+		// TSIG keys configured — require TSIG authentication
 		if !hasTSIG(req) {
 			return nil, nil, fmt.Errorf("TSIG authentication required for AXFR")
 		}
@@ -172,6 +178,9 @@ func (s *AXFRServer) HandleAXFR(req *protocol.Message, clientIP net.IP) ([]*prot
 	} else if hasTSIG(req) {
 		// TSIG was provided but we have no keys to verify it — reject
 		return nil, nil, fmt.Errorf("TSIG key not found")
+	} else if !hasAllowList {
+		// No TSIG keys AND no allow list configured — deny by default (secure by default)
+		return nil, nil, fmt.Errorf("TSIG authentication required for AXFR when no IP allow list is configured")
 	}
 
 	// Generate AXFR response

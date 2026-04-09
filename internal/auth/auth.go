@@ -37,6 +37,7 @@ type User struct {
 // Token represents an active authentication token.
 type Token struct {
 	Token     string    `json:"token"`
+	Signature string    `json:"signature"` // HMAC signature for verification
 	Username  string    `json:"username"`
 	Role      Role      `json:"role"`
 	ExpiresAt time.Time `json:"expires_at"`
@@ -202,9 +203,13 @@ func (s *Store) GenerateToken(username string, expiry time.Duration) (*Token, er
 	}
 	token := base64.URLEncoding.EncodeToString(tokenBytes)
 
+	// Sign the token with HMAC-SHA256
+	signature := s.signToken(token)
+
 	now := time.Now()
 	t := &Token{
 		Token:     token,
+		Signature: signature,
 		Username:  username,
 		Role:      user.Role,
 		ExpiresAt: now.Add(expiry),
@@ -215,6 +220,19 @@ func (s *Store) GenerateToken(username string, expiry time.Duration) (*Token, er
 	return t, nil
 }
 
+// signToken creates an HMAC-SHA256 signature for a token.
+func (s *Store) signToken(token string) string {
+	h := hmac.New(sha256.New, s.secret)
+	h.Write([]byte(token))
+	return base64.URLEncoding.EncodeToString(h.Sum(nil))
+}
+
+// verifyTokenSignature verifies an HMAC-SHA256 signature for a token.
+func (s *Store) verifyTokenSignature(token, signature string) bool {
+	expected := s.signToken(token)
+	return hmac.Equal([]byte(expected), []byte(signature))
+}
+
 // ValidateToken checks if a token is valid and returns the associated user.
 func (s *Store) ValidateToken(tokenStr string) (*User, error) {
 	s.mu.RLock()
@@ -222,6 +240,12 @@ func (s *Store) ValidateToken(tokenStr string) (*User, error) {
 	if !ok {
 		s.mu.RUnlock()
 		return nil, fmt.Errorf("invalid token")
+	}
+
+	// Verify HMAC signature to prevent token forgery
+	if !s.verifyTokenSignature(tokenStr, token.Signature) {
+		s.mu.RUnlock()
+		return nil, fmt.Errorf("invalid token signature")
 	}
 
 	if time.Now().After(token.ExpiresAt) {
@@ -429,17 +453,4 @@ func generateSecret(n int) string {
 	b := make([]byte, n)
 	rand.Read(b)
 	return base64.URLEncoding.EncodeToString(b)
-}
-
-// SignToken creates an HMAC signature for a token.
-func SignToken(token string, secret []byte) string {
-	h := hmac.New(sha256.New, secret)
-	h.Write([]byte(token))
-	return base64.URLEncoding.EncodeToString(h.Sum(nil))
-}
-
-// VerifyTokenSignature verifies an HMAC signature.
-func VerifyTokenSignature(token, sig string, secret []byte) bool {
-	expected := SignToken(token, secret)
-	return hmac.Equal([]byte(expected), []byte(sig))
 }

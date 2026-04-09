@@ -677,13 +677,10 @@ func TestAXFRServer_HandleAXFR_WithKeyStore_NoTSIG(t *testing.T) {
 		},
 	}
 
-	// No TSIG record, but keyStore is set - should still succeed
-	records, _, err := server.HandleAXFR(req, net.ParseIP("127.0.0.1"))
-	if err != nil {
-		t.Fatalf("HandleAXFR() error = %v", err)
-	}
-	if len(records) < 2 {
-		t.Errorf("Expected at least 2 records, got %d", len(records))
+	// TSIG key is configured but no TSIG provided - should FAIL (secure by default)
+	_, _, err := server.HandleAXFR(req, net.ParseIP("127.0.0.1"))
+	if err == nil {
+		t.Fatal("HandleAXFR() expected error when keyStore has keys but no TSIG provided")
 	}
 }
 
@@ -788,7 +785,7 @@ func TestAXFRServer_HandleAXFR_InvalidQueryType_Coverage(t *testing.T) {
 
 func TestAXFRServer_HandleAXFR_ZoneWithoutSOA(t *testing.T) {
 	zones := make(map[string]*zone.Zone)
-	server := NewAXFRServer(zones)
+	server := NewAXFRServer(zones, WithAllowList([]string{"127.0.0.0/8"}))
 
 	z := zone.NewZone("example.com.")
 	// No SOA set

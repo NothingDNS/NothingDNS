@@ -487,25 +487,28 @@ func TestSignToken(t *testing.T) {
 	secret := []byte("test-secret-key-32-bytes-long!!")
 	token := "test-token-string"
 
-	sig := SignToken(token, secret)
+	// Create a store with the secret to test signing
+	s := &Store{secret: secret}
+	sig := s.signToken(token)
 	if sig == "" {
-		t.Errorf("SignToken() returned empty signature")
+		t.Errorf("signToken() returned empty signature")
 	}
 
 	// Signature should be deterministic
-	sig2 := SignToken(token, secret)
+	sig2 := s.signToken(token)
 	if sig != sig2 {
-		t.Errorf("SignToken() not deterministic")
+		t.Errorf("signToken() not deterministic")
 	}
 
 	// Different token produces different signature
-	sig3 := SignToken("different-token", secret)
+	sig3 := s.signToken("different-token")
 	if sig == sig3 {
 		t.Errorf("Different tokens should produce different signatures")
 	}
 
 	// Different secret produces different signature
-	sig4 := SignToken(token, []byte("different-secret-key-32-bytes!!!!"))
+	s2 := &Store{secret: []byte("different-secret-key-32-bytes!!!!")}
+	sig4 := s2.signToken(token)
 	if sig == sig4 {
 		t.Errorf("Different secrets should produce different signatures")
 	}
@@ -515,7 +518,8 @@ func TestVerifyTokenSignature(t *testing.T) {
 	secret := []byte("test-secret-key-32-bytes-long!!")
 	token := "test-token-string"
 
-	sig := SignToken(token, secret)
+	s := &Store{secret: secret}
+	sig := s.signToken(token)
 
 	tests := []struct {
 		name   string
@@ -533,9 +537,10 @@ func TestVerifyTokenSignature(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := VerifyTokenSignature(tc.token, tc.sig, tc.secret)
+			s := &Store{secret: tc.secret}
+			got := s.verifyTokenSignature(tc.token, tc.sig)
 			if got != tc.want {
-				t.Errorf("VerifyTokenSignature() = %v, want %v", got, tc.want)
+				t.Errorf("verifyTokenSignature() = %v, want %v", got, tc.want)
 			}
 		})
 	}

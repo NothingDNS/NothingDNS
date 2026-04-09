@@ -327,6 +327,7 @@ func run() error {
 	// Initialize API server
 	dashboardServer := dashboard.NewServer()
 	dashboardServer.SetAllowedOrigins(cfg.Server.HTTP.AllowedOrigins)
+	dashboardServer.SetAuthStore(authStore)
 	apiServer := api.NewServer(cfg.Server.HTTP, zoneManagerInstance, dnsCache, func() error {
 		logger.Info("Reloading configuration via API...")
 		now := time.Now().UTC().Format(time.RFC3339)
@@ -501,6 +502,11 @@ func run() error {
 
 		tlsConfig := &tls.Config{
 			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS12,
+			CurvePreferences: []tls.CurveID{
+				tls.CurveP256,
+				tls.X25519,
+			},
 		}
 
 		tlsServer = server.NewTLSServer(tlsAddr, handler, tlsConfig)
@@ -540,6 +546,11 @@ func run() error {
 			quicTLSConfig := &tls.Config{
 				Certificates: []tls.Certificate{cert},
 				NextProtos:   []string{"doq"},
+				MinVersion:   tls.VersionTLS12,
+				CurvePreferences: []tls.CurveID{
+					tls.CurveP256,
+					tls.X25519,
+				},
 			}
 
 			doqHandler := &doqHandlerAdapter{handler: handler}

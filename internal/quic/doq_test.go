@@ -772,7 +772,7 @@ func TestDoQServerNewDoQConnection(t *testing.T) {
 	cid := ConnectionID{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x11, 0x22}
 	remoteAddr := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 5353}
 
-	dc, err := srv.newDoQConnection(cid, remoteAddr)
+	dc, err := srv.newDoQConnection(cid, remoteAddr, "10.0.0.1")
 	if err != nil {
 		t.Fatalf("newDoQConnection: %v", err)
 	}
