@@ -613,11 +613,11 @@ func TestTokenExpiry(t *testing.T) {
 
 func TestPasswordHashSaltIndependence(t *testing.T) {
 	password := "same-password"
-	// Must be exactly 16 bytes for salt extraction to work correctly
-	salt1 := make([]byte, 16)
-	salt2 := make([]byte, 16)
-	copy(salt1, []byte("salt-a-16byte-"))
-	copy(salt2, []byte("salt-b-16byte-"))
+	// Must be exactly 32 bytes for salt extraction to work correctly
+	salt1 := make([]byte, 32)
+	salt2 := make([]byte, 32)
+	copy(salt1, []byte("salt-a-32-bytes-for-hashing!!"))
+	copy(salt2, []byte("salt-b-32-bytes-for-hashing!!"))
 
 	hash1 := HashPassword(password, salt1)
 	hash2 := HashPassword(password, salt2)
