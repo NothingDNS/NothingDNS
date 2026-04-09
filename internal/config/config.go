@@ -114,9 +114,9 @@ type BlocklistConfig struct {
 
 // RPZConfig holds Response Policy Zone configuration.
 type RPZConfig struct {
-	Enabled bool              `yaml:"enabled"`
-	Files   []string          `yaml:"files"`
-	Zones   []RPZPolicyZone   `yaml:"zones"`
+	Enabled bool            `yaml:"enabled"`
+	Files   []string        `yaml:"files"`
+	Zones   []RPZPolicyZone `yaml:"zones"`
 }
 
 // RPZPolicyZone configures a single RPZ policy zone.
@@ -128,9 +128,9 @@ type RPZPolicyZone struct {
 
 // GeoDNSConfig holds GeoDNS configuration.
 type GeoDNSConfig struct {
-	Enabled  bool             `yaml:"enabled"`
-	MMDBFile string           `yaml:"mmdb_file"`
-	Rules    []GeoDNSRule     `yaml:"rules"`
+	Enabled  bool         `yaml:"enabled"`
+	MMDBFile string       `yaml:"mmdb_file"`
+	Rules    []GeoDNSRule `yaml:"rules"`
 }
 
 // GeoDNSRule configures a single geo DNS rule.
@@ -426,7 +426,7 @@ type HTTPConfig struct {
 type AuthUserConfig struct {
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
-	Role    string `yaml:"role"` // admin, operator, viewer
+	Role     string `yaml:"role"` // admin, operator, viewer
 }
 
 // ResolutionConfig contains DNS resolution settings.
@@ -701,10 +701,10 @@ func DefaultConfig() *Config {
 			StaleGraceSecs:    86400, // 24 hours
 		},
 		Logging: LoggingConfig{
-			Level:      "info",
-			Format:     "text",
-			Output:     "stdout",
-			QueryLog:   false,
+			Level:        "info",
+			Format:       "text",
+			Output:       "stdout",
+			QueryLog:     false,
 			QueryLogFile: "",
 		},
 		Metrics: MetricsConfig{
@@ -738,23 +738,23 @@ func DefaultConfig() *Config {
 		},
 		IDNA: IDNAConfig{
 			Enabled:         false,
-			UseSTD3Rules:   true,
+			UseSTD3Rules:    true,
 			AllowUnassigned: false,
-			CheckBidi:      true,
-			CheckJoiner:    true,
+			CheckBidi:       true,
+			CheckJoiner:     true,
 		},
 		ODoH: ODoHConfig{
 			Enabled: false,
 			Bind:    ":8080",
-			KEM:     4,  // X25519
-			KDF:     1,  // HKDF-SHA256
-			AEAD:    1,  // AES-256-GCM
+			KEM:     4, // X25519
+			KDF:     1, // HKDF-SHA256
+			AEAD:    1, // AES-256-GCM
 		},
 		mDNS: mDNSConfig{
-			Enabled:   false,
+			Enabled:     false,
 			MulticastIP: "224.0.0.251",
-			Port:     5353,
-			Browser:  false,
+			Port:        5353,
+			Browser:     false,
 		},
 		Catalog: CatalogConfig{
 			Enabled:       false,
@@ -763,17 +763,17 @@ func DefaultConfig() *Config {
 			ConsumerClass: "CLDNSET",
 		},
 		DSO: DSOConfig{
-			Enabled:          false,
-			SessionTimeout:   "10m",
-			MaxSessions:      10000,
+			Enabled:           false,
+			SessionTimeout:    "10m",
+			MaxSessions:       10000,
 			HeartbeatInterval: "1m",
 		},
 		YANG: YANGConfig{
-			Enabled:    false,
-			EnableCLI:  true,
+			Enabled:       false,
+			EnableCLI:     true,
 			EnableNETCONF: false,
-			NETCONFBind: ":8300",
-			Models:    []string{"dns-zone", "dns-query"},
+			NETCONFBind:   ":8300",
+			Models:        []string{"dns-zone", "dns-query"},
 		},
 		Cluster: ClusterConfig{
 			Enabled:    false,
@@ -1660,14 +1660,6 @@ func (c *Config) validateDNSSEC() []string {
 
 	if !c.DNSSEC.Enabled {
 		return errors
-	}
-
-	// Trust anchor is recommended but not strictly required (can use built-in)
-	if c.DNSSEC.TrustAnchor != "" {
-		// Check if file exists (optional validation)
-		if _, err := os.Stat(c.DNSSEC.TrustAnchor); os.IsNotExist(err) {
-			// Just a warning - don't fail validation for this
-		}
 	}
 
 	// Validate signing configuration

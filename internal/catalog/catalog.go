@@ -130,8 +130,6 @@ func ParseCatalogMemberRecord(rdata string) (*CatalogMemberRecord, error) {
 			rec.Group = strings.Trim(part, "\"")
 		} else if isValidClass(part) {
 			rec.Class = part
-		} else if isNumericTTL(part) {
-			// This would be TTL
 		}
 	}
 

@@ -408,14 +408,8 @@ func (s *DoQServer) handleStream(dc *doqConn, streamID uint64) {
 
 // routeToConnection routes a packet to an existing connection.
 func (s *DoQServer) routeToConnection(dcID ConnectionID) {
-	s.connsMu.RLock()
-	_, ok := s.conns[toKey(dcID)]
-	s.connsMu.RUnlock()
-
-	if !ok {
-		return
-	}
-	// In a full implementation, decrypt and process the packet
+	// Placeholder for future packet routing implementation.
+	_, _ = s, dcID
 }
 
 // handleShortHeaderPacket handles a short header (1-RTT) packet.

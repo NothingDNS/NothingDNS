@@ -43,12 +43,6 @@ var (
 	showHelp    = flag.Bool("help", false, "Show help and exit")
 )
 
-// DNSServer wraps UDP and TCP servers.
-type DNSServer struct {
-	udpServer *server.UDPServer
-	tcpServer *server.TCPServer
-}
-
 func main() {
 	flag.Parse()
 

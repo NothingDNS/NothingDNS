@@ -10,25 +10,6 @@ import (
 	"time"
 )
 
-// newTestMetrics creates a metrics server bound to an OS-assigned port.
-// This avoids hardcoded port conflicts on Windows (Hyper-V reserves port ranges).
-func newTestMetrics(t *testing.T) (*MetricsCollector, string) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Failed to listen: %v", err)
-	}
-	addr := ln.Addr().String()
-	ln.Close() // Port is released; tiny race window but acceptable for tests
-
-	cfg := Config{
-		Enabled: true,
-		Bind:    addr,
-		Path:    "/metrics",
-	}
-	m := New(cfg)
-	return m, addr
-}
-
 func TestMetricsCollector(t *testing.T) {
 	cfg := Config{
 		Enabled: true,
@@ -558,10 +539,7 @@ func TestGetHistory_Empty(t *testing.T) {
 	m := New(cfg)
 
 	history := m.GetHistory()
-	// Should return valid struct with count
-	if history.Count == 0 && len(history.Timestamps) == 0 {
-		// Empty history is valid
-	}
+	_ = history
 }
 
 func TestRecordHistorySnapshot(t *testing.T) {

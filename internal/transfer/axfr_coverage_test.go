@@ -525,10 +525,7 @@ func TestAXFRServer_HandleAXFR_GetTSIGKeyNameError(t *testing.T) {
 	}
 
 	// This should succeed since there's no TSIG record
-	_, _, err := server.HandleAXFR(req, net.ParseIP("127.0.0.1"))
-	if err != nil {
-		// This is expected since the zone exists
-	}
+	_, _, _ = server.HandleAXFR(req, net.ParseIP("127.0.0.1"))
 }
 
 // Test zoneRecordToRR with parseRData error
@@ -758,12 +755,12 @@ func (m *mockConn) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-func (m *mockConn) Close() error                                      { m.closed = true; return nil }
-func (m *mockConn) LocalAddr() net.Addr                               { return &net.TCPAddr{} }
-func (m *mockConn) RemoteAddr() net.Addr                              { return &net.TCPAddr{} }
-func (m *mockConn) SetDeadline(t time.Time) error                     { return nil }
-func (m *mockConn) SetReadDeadline(t time.Time) error                 { return nil }
-func (m *mockConn) SetWriteDeadline(t time.Time) error                { return nil }
+func (m *mockConn) Close() error                       { m.closed = true; return nil }
+func (m *mockConn) LocalAddr() net.Addr                { return &net.TCPAddr{} }
+func (m *mockConn) RemoteAddr() net.Addr               { return &net.TCPAddr{} }
+func (m *mockConn) SetDeadline(t time.Time) error      { return nil }
+func (m *mockConn) SetReadDeadline(t time.Time) error  { return nil }
+func (m *mockConn) SetWriteDeadline(t time.Time) error { return nil }
 
 // ---------------------------------------------------------------------------
 // AXFRClient.receiveAXFRResponse - various response scenarios via mockConn

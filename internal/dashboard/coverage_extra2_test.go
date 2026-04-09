@@ -20,12 +20,6 @@ import (
 // an unmarshallable value.
 // ============================================================================
 
-// unmarshallableEvent wraps a QueryEvent but causes JSON marshal to fail
-// by embedding a channel field.
-type unmarshallableEvent struct {
-	Ch chan struct{}
-}
-
 func TestBroadcastLoop_MarshalError(t *testing.T) {
 	server := NewServer()
 	defer server.Stop()
@@ -106,7 +100,7 @@ func (m *slowMockConn) WriteMessage(messageType int, data []byte) error {
 }
 
 func (m *slowMockConn) SetWriteDeadline(time.Time) error { return nil }
-func (m *slowMockConn) SetReadDeadline(time.Time) error { return nil }
+func (m *slowMockConn) SetReadDeadline(time.Time) error  { return nil }
 
 func (m *slowMockConn) Close() error {
 	m.mu.Lock()

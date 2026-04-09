@@ -292,8 +292,6 @@ func TestDoHLargeRequest(t *testing.T) {
 }
 
 func TestDoHMaxSize(t *testing.T) {
-	handler := NewHandler(&mockDNSHandler{})
-
 	queryData, _ := createTestQuery()
 	encoded := base64.RawURLEncoding.EncodeToString(queryData)
 
@@ -308,7 +306,7 @@ func TestDoHMaxSize(t *testing.T) {
 		})
 	})
 
-	handler = NewHandler(testHandler)
+	handler := NewHandler(testHandler)
 	req := httptest.NewRequest(http.MethodGet, "/dns-query?dns="+encoded, nil)
 	rr := httptest.NewRecorder()
 

@@ -733,8 +733,4 @@ func TestCluster_Stats_Started(t *testing.T) {
 	if stats.NodeID != "test-node" {
 		t.Errorf("Expected NodeID test-node, got %s", stats.NodeID)
 	}
-
-	if stats.GossipStats.MessagesSent == 0 && stats.GossipStats.MessagesReceived == 0 {
-		// Stats should be initialized
-	}
 }

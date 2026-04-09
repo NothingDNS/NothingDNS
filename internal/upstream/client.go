@@ -601,7 +601,9 @@ func (c *Client) checkHealth() {
 			if err != nil {
 				// Try TCP
 				util.Warnf("health check UDP failed for %s: %v, trying TCP", s.Address, err)
-				_, err = c.queryTCP(s, &queryCopy)
+				if _, tcpErr := c.queryTCP(s, &queryCopy); tcpErr != nil {
+					util.Debugf("health check TCP failed for %s: %v", s.Address, tcpErr)
+				}
 			}
 			// queryUDP/TCP already mark success/failure
 		}(server)

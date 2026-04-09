@@ -126,9 +126,6 @@ func (s *RPCServer) handleConn(conn net.Conn) {
 		// Read message type
 		var msgType uint8
 		if err := binary.Read(conn, binary.BigEndian, &msgType); err != nil {
-			if err != io.EOF {
-				// Log error
-			}
 			return
 		}
 
@@ -177,17 +174,17 @@ func (s *RPCServer) readMessage(r io.Reader, msg interface{}) error {
 // TCPTransport is a TCP-based Raft transport.
 type TCPTransport struct {
 	dialTimeout time.Duration
-	conns      map[NodeID]net.Conn
-	peerAddrs  map[NodeID]string
-	mu         sync.RWMutex
+	conns       map[NodeID]net.Conn
+	peerAddrs   map[NodeID]string
+	mu          sync.RWMutex
 }
 
 // NewTCPTransport creates a new TCP transport.
 func NewTCPTransport() *TCPTransport {
 	return &TCPTransport{
 		dialTimeout: 5 * time.Second,
-		conns:      make(map[NodeID]net.Conn),
-		peerAddrs:  make(map[NodeID]string),
+		conns:       make(map[NodeID]net.Conn),
+		peerAddrs:   make(map[NodeID]string),
 	}
 }
 

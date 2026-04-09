@@ -53,39 +53,39 @@ func TestAXFRServer_AddRemoveZone(t *testing.T) {
 
 func TestAXFRServer_IsAllowed(t *testing.T) {
 	tests := []struct {
-		name       string
-		allowList  []string
-		clientIP   string
+		name        string
+		allowList   []string
+		clientIP    string
 		wantAllowed bool
 	}{
 		{
-			name:       "no allowlist allows all",
-			allowList:  nil,
-			clientIP:   "192.168.1.1",
+			name:        "no allowlist allows all",
+			allowList:   nil,
+			clientIP:    "192.168.1.1",
 			wantAllowed: true,
 		},
 		{
-			name:       "empty allowlist allows all",
-			allowList:  []string{},
-			clientIP:   "192.168.1.1",
+			name:        "empty allowlist allows all",
+			allowList:   []string{},
+			clientIP:    "192.168.1.1",
 			wantAllowed: true,
 		},
 		{
-			name:       "allowed IP in network",
-			allowList:  []string{"192.168.1.0/24"},
-			clientIP:   "192.168.1.100",
+			name:        "allowed IP in network",
+			allowList:   []string{"192.168.1.0/24"},
+			clientIP:    "192.168.1.100",
 			wantAllowed: true,
 		},
 		{
-			name:       "disallowed IP not in network",
-			allowList:  []string{"192.168.1.0/24"},
-			clientIP:   "10.0.0.1",
+			name:        "disallowed IP not in network",
+			allowList:   []string{"192.168.1.0/24"},
+			clientIP:    "10.0.0.1",
 			wantAllowed: false,
 		},
 		{
-			name:       "multiple networks",
-			allowList:  []string{"192.168.1.0/24", "10.0.0.0/8"},
-			clientIP:   "10.1.2.3",
+			name:        "multiple networks",
+			allowList:   []string{"192.168.1.0/24", "10.0.0.0/8"},
+			clientIP:    "10.1.2.3",
 			wantAllowed: true,
 		},
 	}
@@ -554,14 +554,6 @@ func TestCanonicalSort(t *testing.T) {
 func TestGenerateMessageID(t *testing.T) {
 	id1 := generateMessageID()
 	id2 := generateMessageID()
-
-	// IDs should be valid uint16
-	if id1 > 65535 {
-		t.Errorf("ID1 %d exceeds uint16 max", id1)
-	}
-	if id2 > 65535 {
-		t.Errorf("ID2 %d exceeds uint16 max", id2)
-	}
 
 	// IDs should be different (with high probability)
 	// Small chance of collision, but extremely unlikely in test

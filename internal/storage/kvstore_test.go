@@ -647,7 +647,7 @@ func TestKVStoreDeleteBucket(t *testing.T) {
 	}
 
 	// Verify bucket is gone
-	err = store.View(func(tx *Tx) error {
+	_ = store.View(func(tx *Tx) error {
 		bucket := tx.Bucket([]byte("todelete"))
 		if bucket != nil {
 			t.Error("Expected bucket to be deleted")
@@ -741,7 +741,7 @@ func TestKVStoreNestedBucketOperations(t *testing.T) {
 	}
 
 	// Verify nested bucket is gone
-	err = store.View(func(tx *Tx) error {
+	_ = store.View(func(tx *Tx) error {
 		parent := tx.Bucket([]byte("parent"))
 		if parent == nil {
 			t.Fatal("Parent bucket not found")
@@ -912,7 +912,7 @@ func TestKVStoreCursorOperations(t *testing.T) {
 	}
 
 	// Test cursor operations
-	err = store.View(func(tx *Tx) error {
+	_ = store.View(func(tx *Tx) error {
 		bucket := tx.Bucket([]byte("test"))
 		if bucket == nil {
 			t.Fatal("Bucket not found")
@@ -930,25 +930,25 @@ func TestKVStoreCursorOperations(t *testing.T) {
 		}
 
 		// Test Next
-		k, v = cursor.Next()
+		k, _ = cursor.Next()
 		if string(k) != "banana" {
 			t.Errorf("Expected next key 'banana', got '%s'", k)
 		}
 
 		// Test Last
-		k, v = cursor.Last()
+		k, _ = cursor.Last()
 		if string(k) != "date" {
 			t.Errorf("Expected last key 'date', got '%s'", k)
 		}
 
 		// Test Prev
-		k, v = cursor.Prev()
+		k, _ = cursor.Prev()
 		if string(k) != "cherry" {
 			t.Errorf("Expected prev key 'cherry', got '%s'", k)
 		}
 
 		// Test Seek
-		k, v = cursor.Seek([]byte("ch"))
+		k, _ = cursor.Seek([]byte("ch"))
 		if string(k) != "cherry" {
 			t.Errorf("Expected seek to find 'cherry', got '%s'", k)
 		}
@@ -976,7 +976,7 @@ func TestKVStoreCursorEmptyBucket(t *testing.T) {
 	}
 
 	// Test cursor on empty bucket
-	err = store.View(func(tx *Tx) error {
+	_ = store.View(func(tx *Tx) error {
 		bucket := tx.Bucket([]byte("empty"))
 		if bucket == nil {
 			t.Fatal("Bucket not found")
@@ -1030,7 +1030,7 @@ func TestKVStoreCursorBoundaryConditions(t *testing.T) {
 	}
 
 	// Test cursor boundary conditions
-	err = store.View(func(tx *Tx) error {
+	_ = store.View(func(tx *Tx) error {
 		bucket := tx.Bucket([]byte("test"))
 		if bucket == nil {
 			t.Fatal("Bucket not found")
@@ -1443,7 +1443,7 @@ func TestKVStoreOpenWithExistingData(t *testing.T) {
 	}
 
 	// Verify both keys exist
-	err = store2.View(func(tx *Tx) error {
+	_ = store2.View(func(tx *Tx) error {
 		bucket := tx.Bucket([]byte("test"))
 		if bucket == nil {
 			t.Fatal("Bucket not found")

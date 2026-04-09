@@ -21,12 +21,11 @@ type Entry struct {
 
 // Blocklist manages blocked domains.
 type Blocklist struct {
-	mu       sync.RWMutex
-	entries  map[string]Entry
-	suffixes map[string]struct{} // Pre-computed suffixes for O(1) longest-match lookup
-	files    []string
-	urls     []string
-	enabled  bool
+	mu         sync.RWMutex
+	entries    map[string]Entry
+	files      []string
+	urls       []string
+	enabled    bool
 	httpClient *http.Client
 }
 

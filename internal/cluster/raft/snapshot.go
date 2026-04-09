@@ -21,9 +21,8 @@ type Snapshot struct {
 
 // Snapshotter manages snapshots for log compaction.
 type Snapshotter struct {
-	mu          sync.RWMutex
+	mu           sync.RWMutex
 	snapshotsDir string
-	maxAge      int64 // Max snapshots to retain
 }
 
 // NewSnapshotter creates a new snapshotter.
@@ -33,7 +32,6 @@ func NewSnapshotter(dir string) (*Snapshotter, error) {
 	}
 	return &Snapshotter{
 		snapshotsDir: dir,
-		maxAge:       3,
 	}, nil
 }
 
@@ -228,51 +226,6 @@ func (s *Snapshotter) readSnapshot(r io.Reader) (*Snapshot, error) {
 	}
 
 	return snap, nil
-}
-
-// purgeOldSnapshots removes old snapshot files.
-func (s *Snapshotter) purgeOldSnapshots() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	entries, err := os.ReadDir(s.snapshotsDir)
-	if err != nil {
-		return
-	}
-
-	// Collect snapshot files with their indices
-	type snapFile struct {
-		name  string
-		index Index
-	}
-	var snaps []snapFile
-	for _, e := range entries {
-		if e.IsDir() || e.Name()[0:9] != "snapshot-" {
-			continue
-		}
-		var idx Index
-		if _, parseErr := fmt.Sscanf(e.Name(), "snapshot-%d", &idx); parseErr == nil {
-			snaps = append(snaps, snapFile{e.Name(), idx})
-		}
-	}
-
-	if len(snaps) <= int(s.maxAge) {
-		return
-	}
-
-	// Sort by index ascending
-	for i := 0; i < len(snaps)-1; i++ {
-		for j := i + 1; j < len(snaps); j++ {
-			if snaps[j].index < snaps[i].index {
-				snaps[i], snaps[j] = snaps[j], snaps[i]
-			}
-		}
-	}
-
-	// Remove all but the latest maxAge snapshots
-	for i := 0; i < len(snaps)-int(s.maxAge); i++ {
-		os.Remove(s.snapshotsDir + "/" + snaps[i].name)
-	}
 }
 
 // snapFilename returns the filename for a snapshot index.

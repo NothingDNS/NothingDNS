@@ -23,7 +23,6 @@ type XoTServer struct {
 	zonesMu   *sync.RWMutex
 	address   string
 	port      int
-	tlsaCache *TLSCACache
 	closed    bool
 	mu        sync.Mutex
 }
@@ -39,19 +38,19 @@ const (
 
 // XoTConfig contains XoT-specific configuration.
 type XoTConfig struct {
-	CertFile          string
-	KeyFile           string
-	CAFile            string
-	TLSAUsage         TLSAUsage
-	MinTLSVersion     int
-	AllowedNetworks   []string
-	ListenPort        int
+	CertFile        string
+	KeyFile         string
+	CAFile          string
+	TLSAUsage       TLSAUsage
+	MinTLSVersion   int
+	AllowedNetworks []string
+	ListenPort      int
 }
 
 // TLSCACache caches TLSA records for XoT validation per RFC 9103 Section 6.
 type TLSCACache struct {
 	records map[string][]*TLSARecord
-	mu     sync.RWMutex
+	mu      sync.RWMutex
 }
 
 // TLSARecord represents a TLSA record for TLS validation (RFC 6698).
@@ -59,9 +58,9 @@ type TLSARecord struct {
 	Usage        uint8
 	Selector     uint8
 	MatchingType uint8
-	Certificate []byte
-	Domain      string
-	TTL         time.Duration
+	Certificate  []byte
+	Domain       string
+	TTL          time.Duration
 }
 
 // NewTLSCACache creates a new TLSA cache.

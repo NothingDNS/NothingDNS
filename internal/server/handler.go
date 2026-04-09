@@ -131,7 +131,6 @@ func NewResponseWriter(client *ClientInfo, maxSize int) ResponseWriter {
 type baseResponseWriter struct {
 	client  *ClientInfo
 	maxSize int
-	written bool
 }
 
 func (w *baseResponseWriter) ClientInfo() *ClientInfo {

@@ -203,7 +203,7 @@ func TestTrustAnchorStore(t *testing.T) {
 	}
 
 	// Test FindClosestAnchor for root
-	anchor, remaining = store.FindClosestAnchor("nonexistent.tld.")
+	anchor, _ = store.FindClosestAnchor("nonexistent.tld.")
 	if anchor == nil {
 		t.Fatal("Expected to find root anchor")
 	}

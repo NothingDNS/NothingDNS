@@ -66,7 +66,7 @@ func TestTCPServerHandleMessageEDNS0ECSExtractViaNetwork(t *testing.T) {
 			Name:  mustParseName("."),
 			Type:  protocol.TypeOPT,
 			Class: 4096,
-			Data:   opt,
+			Data:  opt,
 		},
 	}
 
@@ -159,7 +159,7 @@ func TestTCPServerHandleMessageEDNS0NonECSViaNetwork(t *testing.T) {
 			Name:  mustParseName("."),
 			Type:  protocol.TypeOPT,
 			Class: 4096,
-			Data:   opt,
+			Data:  opt,
 		},
 	}
 
@@ -244,7 +244,7 @@ func TestUDPServerHandleRequestEDNS0ECSViaNetwork(t *testing.T) {
 			Name:  mustParseName("."),
 			Type:  protocol.TypeOPT,
 			Class: 4096,
-			Data:   opt,
+			Data:  opt,
 		},
 	}
 
@@ -254,7 +254,7 @@ func TestUDPServerHandleRequestEDNS0ECSViaNetwork(t *testing.T) {
 
 	client.SetReadDeadline(time.Now().Add(time.Second))
 	respBuf := make([]byte, 512)
-	n, err = client.Read(respBuf)
+	_, err = client.Read(respBuf)
 	if err != nil {
 		t.Fatalf("Failed to read response: %v", err)
 	}

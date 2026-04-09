@@ -86,10 +86,8 @@ type Engine struct {
 	enabled bool
 
 	// Metrics.
-	matches   uint64
-	lookups   uint64
-	drops     uint64
-	overrides uint64
+	matches uint64
+	lookups uint64
 
 	// Last reload time.
 	lastReload time.Time

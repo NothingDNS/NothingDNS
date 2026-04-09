@@ -141,9 +141,6 @@ func TestValidateToken(t *testing.T) {
 				if err == nil {
 					t.Errorf("ValidateToken() should return error")
 				}
-				if tc.errType == "invalid" && err != nil && err.Error() != "invalid token" {
-					// Also accept token expired or other errors
-				}
 			} else {
 				if err != nil {
 					t.Errorf("ValidateToken() returned error: %v", err)
@@ -296,8 +293,8 @@ func TestUpdateUser(t *testing.T) {
 
 func TestDeleteUser(t *testing.T) {
 	store := NewStore(&Config{
-		Secret:      "test-secret",
-		Users:       []User{
+		Secret: "test-secret",
+		Users: []User{
 			{Username: "admin", Password: "pass", Role: RoleAdmin},
 			{Username: "todelete", Password: "pass", Role: RoleViewer},
 		},

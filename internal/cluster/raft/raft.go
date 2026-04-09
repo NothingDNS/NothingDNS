@@ -43,10 +43,10 @@ type Index uint64
 
 // Config configures the Raft node.
 type Config struct {
-	NodeID      NodeID
+	NodeID            NodeID
 	HeartbeatInterval time.Duration // Interval between heartbeats
-	ElectionTimeout  time.Duration // Election timeout (should be >> heartbeat)
-	MaxLogEntries    int           // Max entries per AppendEntries call
+	ElectionTimeout   time.Duration // Election timeout (should be >> heartbeat)
+	MaxLogEntries     int           // Max entries per AppendEntries call
 	SnapshotInterval  time.Duration // How often to snapshot
 }
 
@@ -124,30 +124,30 @@ func (n *Node) IsInJoint() bool {
 
 // JointConfigProposal describes a pending configuration change.
 type JointConfigProposal struct {
-	Type      EntryType // EntryAddNode or EntryRemoveNode
-	PeerID    NodeID
-	PeerAddr  string
-	Proposed  time.Time // When this was proposed
+	Type     EntryType // EntryAddNode or EntryRemoveNode
+	PeerID   NodeID
+	PeerAddr string
+	Proposed time.Time // When this was proposed
 }
 
 // EntryType distinguishes different entry types.
 type EntryType uint8
 
 const (
-	EntryNormal EntryType = iota // Regular application command
-	EntryNoOp                    // No-op entry for commit acknowledgment
-	EntryAddNode                 // Add node to cluster (joint consensus phase 1)
-	EntryRemoveNode              // Remove node from cluster (joint consensus phase 1)
-	EntryJointComplete           // Joint consensus complete, using new config
+	EntryNormal        EntryType = iota // Regular application command
+	EntryNoOp                           // No-op entry for commit acknowledgment
+	EntryAddNode                        // Add node to cluster (joint consensus phase 1)
+	EntryRemoveNode                     // Remove node from cluster (joint consensus phase 1)
+	EntryJointComplete                  // Joint consensus complete, using new config
 )
 
 // Node is a single Raft node.
 type Node struct {
-	config   Config
+	config    Config
 	transport Transport // Network transport for RPC
 
 	// Persistent state (must survive crashes)
-	mu sync.Mutex
+	mu          sync.Mutex
 	currentTerm Term
 	votedFor    NodeID
 	log         []entry
@@ -166,14 +166,14 @@ type Node struct {
 	peers map[NodeID]*Peer
 
 	// Joint consensus state (RFC 7003)
-	jointConfig       *JointConfig       // Current joint configuration (nil = using simple config)
-	jointConfigIdx    Index              // Index of joint config entry in log
+	jointConfig       *JointConfig         // Current joint configuration (nil = using simple config)
+	jointConfigIdx    Index                // Index of joint config entry in log
 	pendingConfChange *JointConfigProposal // Pending configuration change proposal
 
 	// Channels
-	voteCh       chan VoteRequest   // Incoming vote requests from RPC
-	appendCh     chan AppendRequest // Incoming append requests from RPC
-	voteRespCh   chan VoteResponse  // Outgoing vote responses
+	voteCh       chan VoteRequest    // Incoming vote requests from RPC
+	appendCh     chan AppendRequest  // Incoming append requests from RPC
+	voteRespCh   chan VoteResponse   // Outgoing vote responses
 	appendRespCh chan AppendResponse // Outgoing append responses
 	commitCh     chan Commit
 	applyCh      chan Apply
@@ -183,9 +183,6 @@ type Node struct {
 	// Control
 	stopCh chan struct{}
 	wg     sync.WaitGroup
-
-	// Tick function (injected for testing)
-	tick func()
 
 	// RNG for election timeout randomization
 	rng *LockedRand
@@ -207,9 +204,9 @@ type VoteRequest struct {
 
 // VoteResponse is the RequestVote RPC response.
 type VoteResponse struct {
-	Term    Term
+	Term        Term
 	VoteGranted bool
-	From     NodeID
+	From        NodeID
 }
 
 // AppendRequest is the AppendEntries RPC arguments.
@@ -273,15 +270,15 @@ func NewNode(config Config, peers []NodeID, transport Transport) *Node {
 	}
 
 	n := &Node{
-		config:     config,
-		transport: transport,
-		state:      StateFollower,
-		currentTerm: 0,
-		votedFor:   "",
-		log:        make([]entry, 0),
-		nextIndex:  make(map[NodeID]Index),
-		matchIndex: make(map[NodeID]Index),
-		peers:      make(map[NodeID]*Peer),
+		config:       config,
+		transport:    transport,
+		state:        StateFollower,
+		currentTerm:  0,
+		votedFor:     "",
+		log:          make([]entry, 0),
+		nextIndex:    make(map[NodeID]Index),
+		matchIndex:   make(map[NodeID]Index),
+		peers:        make(map[NodeID]*Peer),
 		voteCh:       make(chan VoteRequest, 10),
 		appendCh:     make(chan AppendRequest, 10),
 		voteRespCh:   make(chan VoteResponse, 10),
@@ -457,9 +454,9 @@ func (n *Node) handleVoteRequest(req VoteRequest) {
 	// Reply false if term < currentTerm
 	if req.Term < n.currentTerm {
 		n.voteRespCh <- VoteResponse{
-			Term:    n.currentTerm,
+			Term:        n.currentTerm,
 			VoteGranted: false,
-			From:    n.config.NodeID,
+			From:        n.config.NodeID,
 		}
 		return
 	}
@@ -469,15 +466,15 @@ func (n *Node) handleVoteRequest(req VoteRequest) {
 	if (n.votedFor == "" || n.votedFor == req.CandidateID) && n.isLogUpToDate(req.LastLogIndex, req.LastLogTerm) {
 		n.votedFor = req.CandidateID
 		n.voteRespCh <- VoteResponse{
-			Term:    n.currentTerm,
+			Term:        n.currentTerm,
 			VoteGranted: true,
-			From:    n.config.NodeID,
+			From:        n.config.NodeID,
 		}
 	} else {
 		n.voteRespCh <- VoteResponse{
-			Term:    n.currentTerm,
+			Term:        n.currentTerm,
 			VoteGranted: false,
-			From:    n.config.NodeID,
+			From:        n.config.NodeID,
 		}
 	}
 }
@@ -551,9 +548,9 @@ func (n *Node) HandleVoteRequest(req VoteRequest) VoteResponse {
 
 	if req.Term < n.currentTerm {
 		return VoteResponse{
-			Term:    n.currentTerm,
+			Term:        n.currentTerm,
 			VoteGranted: false,
-			From:    n.config.NodeID,
+			From:        n.config.NodeID,
 		}
 	}
 
@@ -566,15 +563,15 @@ func (n *Node) HandleVoteRequest(req VoteRequest) VoteResponse {
 	if (n.votedFor == "" || n.votedFor == req.CandidateID) && n.isLogUpToDate(req.LastLogIndex, req.LastLogTerm) {
 		n.votedFor = req.CandidateID
 		return VoteResponse{
-			Term:    n.currentTerm,
+			Term:        n.currentTerm,
 			VoteGranted: true,
-			From:    n.config.NodeID,
+			From:        n.config.NodeID,
 		}
 	}
 	return VoteResponse{
-		Term:    n.currentTerm,
+		Term:        n.currentTerm,
 		VoteGranted: false,
-		From:    n.config.NodeID,
+		From:        n.config.NodeID,
 	}
 }
 
@@ -1178,8 +1175,8 @@ func (n *Node) RemovePeer(id NodeID) error {
 	n.jointConfig = jointConfig
 	n.jointConfigIdx = entry.Index
 	n.pendingConfChange = &JointConfigProposal{
-		Type:   EntryRemoveNode,
-		PeerID: id,
+		Type:     EntryRemoveNode,
+		PeerID:   id,
 		Proposed: time.Now(),
 	}
 
@@ -1225,76 +1222,6 @@ func encodeJointConfig(jc *JointConfig) ([]byte, error) {
 	}
 
 	return buf.Bytes(), nil
-}
-
-// decodeJointConfig decodes bytes to a joint configuration.
-func decodeJointConfig(data []byte) (*JointConfig, error) {
-	jc := &JointConfig{
-		OldPeers: make(map[NodeID]*Peer),
-		NewPeers: make(map[NodeID]*Peer),
-	}
-
-	r := bytes.NewReader(data)
-
-	// Decode old peers
-	var oldCount uint32
-	if err := binary.Read(r, binary.BigEndian, &oldCount); err != nil {
-		return nil, err
-	}
-	for i := uint32(0); i < oldCount; i++ {
-		var idLen uint32
-		if err := binary.Read(r, binary.BigEndian, &idLen); err != nil {
-			return nil, err
-		}
-		idBytes := make([]byte, idLen)
-		if _, err := r.Read(idBytes); err != nil {
-			return nil, err
-		}
-		id := NodeID(idBytes)
-
-		var addrLen uint32
-		if err := binary.Read(r, binary.BigEndian, &addrLen); err != nil {
-			return nil, err
-		}
-		addrBytes := make([]byte, addrLen)
-		if _, err := r.Read(addrBytes); err != nil {
-			return nil, err
-		}
-		addr := string(addrBytes)
-
-		jc.OldPeers[id] = &Peer{ID: id, Addr: addr}
-	}
-
-	// Decode new peers
-	var newCount uint32
-	if err := binary.Read(r, binary.BigEndian, &newCount); err != nil {
-		return nil, err
-	}
-	for i := uint32(0); i < newCount; i++ {
-		var idLen uint32
-		if err := binary.Read(r, binary.BigEndian, &idLen); err != nil {
-			return nil, err
-		}
-		idBytes := make([]byte, idLen)
-		if _, err := r.Read(idBytes); err != nil {
-			return nil, err
-		}
-		id := NodeID(idBytes)
-
-		var addrLen uint32
-		if err := binary.Read(r, binary.BigEndian, &addrLen); err != nil {
-			return nil, err
-		}
-		addrBytes := make([]byte, addrLen)
-		if _, err := r.Read(addrBytes); err != nil {
-			return nil, err
-		}
-		addr := string(addrBytes)
-
-		jc.NewPeers[id] = &Peer{ID: id, Addr: addr}
-	}
-
-	return jc, nil
 }
 
 // State returns the current state.

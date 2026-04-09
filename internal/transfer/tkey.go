@@ -23,22 +23,22 @@ import (
 
 // TKEY Modes
 const (
-	TKEYModeServerAssignment    = 1
-	TKEYModeDiffieHellman       = 2
-	TKEYModeGSSAPI              = 3
-	TKEYModeResolverAssignment  = 4
-	TKEYModeKeyDeletion         = 5
+	TKEYModeServerAssignment   = 1
+	TKEYModeDiffieHellman      = 2
+	TKEYModeGSSAPI             = 3
+	TKEYModeResolverAssignment = 4
+	TKEYModeKeyDeletion        = 5
 )
 
 // TKEY Errors
 const (
-	TKEYErrNoError         = 0
-	TKEYErrBadSig          = 16
-	TKEYErrBadKey          = 17
-	TKEYErrBadTime         = 18
-	TKEYErrBadMode         = 19
-	TKEYErrBadName         = 20
-	TKEYErrBadAlgorithm    = 21
+	TKEYErrNoError      = 0
+	TKEYErrBadSig       = 16
+	TKEYErrBadKey       = 17
+	TKEYErrBadTime      = 18
+	TKEYErrBadMode      = 19
+	TKEYErrBadName      = 20
+	TKEYErrBadAlgorithm = 21
 )
 
 // TKEYRecord represents a TKEY record (RFC 2930).
@@ -169,17 +169,6 @@ func formatTKEYTime(t time.Time) []byte {
 	result[4] = byte(unixTime >> 8)
 	result[5] = byte(unixTime)
 	return result[:6]
-}
-
-// parseTKEYTime parses a 48-bit TKEY time value.
-func parseTKEYTime(data []byte) time.Time {
-	if len(data) < 6 {
-		return time.Time{}
-	}
-	unixTime := uint64(data[0])<<40 | uint64(data[1])<<32 |
-		uint64(data[2])<<24 | uint64(data[3])<<16 |
-		uint64(data[4])<<8 | uint64(data[5])
-	return time.Unix(int64(unixTime), 0)
 }
 
 // TKEYQuery builds a TKEY query record for key assignment.

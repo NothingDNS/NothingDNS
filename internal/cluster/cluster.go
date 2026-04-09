@@ -42,8 +42,8 @@ type Cluster struct {
 	// Status
 	started     bool
 	cacheClosed bool
-	mu         sync.RWMutex
-	wg         sync.WaitGroup
+	mu          sync.RWMutex
+	wg          sync.WaitGroup
 }
 
 // Config configures the cluster.
@@ -60,8 +60,8 @@ type Config struct {
 	SeedNodes     []string
 	CacheSync     bool
 	HTTPAddr      string
-	EncryptionKey string // hex-encoded 32-byte AES-256 key
-	DataDir       string // Directory for Raft WAL and snapshots
+	EncryptionKey string       // hex-encoded 32-byte AES-256 key
+	DataDir       string       // Directory for Raft WAL and snapshots
 	Peers         []PeerConfig // Raft peer nodes
 }
 
@@ -73,7 +73,7 @@ type PeerConfig struct {
 
 // CacheSyncEvent represents a cache synchronization event.
 type CacheSyncEvent struct {
-	Type      string   // "invalidate", "update"
+	Type      string // "invalidate", "update"
 	Keys      []string
 	Source    string
 	Timestamp time.Time
@@ -89,9 +89,9 @@ type EventHandler interface {
 
 // EventHandlerFunc is a function that implements EventHandler.
 type EventHandlerFunc struct {
-	OnJoinFunc        func(*Node)
-	OnLeaveFunc       func(*Node)
-	OnUpdateFunc      func(*Node)
+	OnJoinFunc         func(*Node)
+	OnLeaveFunc        func(*Node)
+	OnUpdateFunc       func(*Node)
 	OnCacheInvalidFunc func([]string)
 }
 
@@ -216,10 +216,8 @@ func (c *Cluster) initRaft() error {
 
 	// Build peer list
 	var peerIDs []raft.NodeID
-	var peerAddrs []string
 	for _, p := range c.config.Peers {
 		peerIDs = append(peerIDs, raft.NodeID(p.NodeID))
-		peerAddrs = append(peerAddrs, p.Addr)
 	}
 
 	// Create self node entry for nodeList (used for gossip compatibility)
@@ -540,12 +538,12 @@ func (c *Cluster) cacheSyncLoop() {
 
 // Stats contains cluster statistics.
 type Stats struct {
-	NodeID       string
+	NodeID        string
 	ConsensusMode ConsensusMode
-	NodeCount    int
-	AliveCount   int
-	IsHealthy    bool
-	IsLeader     bool
-	GossipStats  GossipStats  // Valid if consensus = SWIM
-	RaftStats    raft.ClusterStats // Valid if consensus = Raft
+	NodeCount     int
+	AliveCount    int
+	IsHealthy     bool
+	IsLeader      bool
+	GossipStats   GossipStats       // Valid if consensus = SWIM
+	RaftStats     raft.ClusterStats // Valid if consensus = Raft
 }

@@ -738,12 +738,7 @@ func TestIXFRServer_generateIncrementalIXFR_SerialNotInRange(t *testing.T) {
 	server.RecordChange("example.com.", 2024010104, 2024010105, nil, nil)
 
 	// Client serial 2024010101 is before our journal range - should fallback to AXFR
-	_, err := server.generateIncrementalIXFR(z, 2024010101)
-	// The function returns an error when no suitable starting point is found
-	if err == nil {
-		// If no error, then it should have fallen back to AXFR format
-		// which is also acceptable behavior
-	}
+	_, _ = server.generateIncrementalIXFR(z, 2024010101)
 }
 
 func TestIXFRServer_generateIncrementalIXFR_Success(t *testing.T) {
@@ -882,7 +877,7 @@ func TestIXFRClient_ParseIXFRResponse_IXFRFormat(t *testing.T) {
 		{Name: origin, Type: protocol.TypeA, Data: &protocol.RDataA{}}, // deletion
 		{Name: origin, Type: protocol.TypeSOA, Data: soaData2},
 		{Name: origin, Type: protocol.TypeA, Data: &protocol.RDataA{}}, // addition
-		{Name: origin, Type: protocol.TypeSOA, Data: soaData3}, // Different serial
+		{Name: origin, Type: protocol.TypeSOA, Data: soaData3},         // Different serial
 	}
 
 	resp, err := client.ParseIXFRResponse(records)

@@ -223,7 +223,6 @@ type TLSServer struct {
 	connectionsAccepted uint64
 	connectionsClosed   uint64
 	messagesReceived    uint64
-	messagesSent        uint64
 	errors              uint64
 }
 

@@ -77,11 +77,8 @@ type GossipProtocol struct {
 	conn     *net.UDPConn
 
 	// Encryption
-	aead     cipher.AEAD
-	encKey   []byte
-
-	// Message sequencing
-	seqNum uint64
+	aead   cipher.AEAD
+	encKey []byte
 
 	// Callbacks
 	callbacksMu    sync.RWMutex
@@ -104,15 +101,15 @@ type GossipProtocol struct {
 
 // GossipConfig configures the gossip protocol.
 type GossipConfig struct {
-	BindAddr         string
-	BindPort         int
-	GossipInterval   time.Duration
-	ProbeInterval    time.Duration
-	ProbeTimeout     time.Duration
-	SuspicionMult    int
-	RetransmitMult   int
-	GossipNodes      int
-	IndirectChecks   int
+	BindAddr       string
+	BindPort       int
+	GossipInterval time.Duration
+	ProbeInterval  time.Duration
+	ProbeTimeout   time.Duration
+	SuspicionMult  int
+	RetransmitMult int
+	GossipNodes    int
+	IndirectChecks int
 
 	// Encryption key (32 bytes for AES-256). When set, all gossip
 	// messages are encrypted with AES-256-GCM.

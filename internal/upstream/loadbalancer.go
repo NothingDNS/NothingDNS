@@ -53,9 +53,9 @@ type LoadBalancer struct {
 	wg                sync.WaitGroup
 
 	// Metrics
-	queriesTotal   uint64
-	queriesFailed  uint64
-	failoverCount  uint64
+	queriesTotal  uint64
+	queriesFailed uint64
+	failoverCount uint64
 }
 
 // LoadBalancerConfig holds load balancer configuration.
@@ -259,10 +259,10 @@ type Target struct {
 	Address string
 
 	// For anycast backends
-	AnycastIP   string
-	PhysicalIP  string
-	Region      string
-	Zone        string
+	AnycastIP  string
+	PhysicalIP string
+	Region     string
+	Zone       string
 
 	// Reference to original server (for standalone)
 	Server *Server
@@ -686,7 +686,9 @@ func (lb *LoadBalancer) checkHealth() {
 			_, err := lb.queryUDP(s.Address, &query)
 			if err != nil {
 				util.Warnf("health check UDP failed for %s: %v, trying TCP", s.Address, err)
-				_, err = lb.queryTCP(s.Address, &query)
+				if _, tcpErr := lb.queryTCP(s.Address, &query); tcpErr != nil {
+					util.Debugf("health check TCP failed for %s: %v", s.Address, tcpErr)
+				}
 			}
 			// queryUDP/TCP already mark success/failure
 		}(server)

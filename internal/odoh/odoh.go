@@ -34,27 +34,27 @@ var (
 
 // HPKE AEAD algorithms supported by ODoH.
 const (
-	HPKEAEADAES256GCM = 1
+	HPKEAEADAES256GCM        = 1
 	HPKEAEADChaCha20Poly1305 = 2
 )
 
 // HPKE DH key agreement algorithms.
 const (
-	HPKEDHP256 = 1 // ECDH P-256
-	HPKEDHP384 = 2 // ECDH P-384
-	HPKEDHP521 = 3 // ECDH P-521
+	HPKEDHP256   = 1 // ECDH P-256
+	HPKEDHP384   = 2 // ECDH P-384
+	HPKEDHP521   = 3 // ECDH P-521
 	HPKEDHX25519 = 4 // X25519
 )
 
 // ODoHConfig contains configuration for ODoH operations.
 type ODoHConfig struct {
-	TargetName   string // DNS name of the target resolver (e.g., "dns.example.com")
-	ProxyName    string // DNS name of the proxy (e.g., "proxy.example.com")
-	TargetURL    string // HTTPS URL of the target
-	ProxyURL     string // HTTPS URL of the proxy
-	HPKEKEM     int    // Key Encapsulation Mechanism (KEM) algorithm
-	HPKEKDF     int    // Key Derivation Function (KDF) algorithm
-	HPKEAEAD    int    // Authenticated Encryption with Associated Data (AEAD) algorithm
+	TargetName string // DNS name of the target resolver (e.g., "dns.example.com")
+	ProxyName  string // DNS name of the proxy (e.g., "proxy.example.com")
+	TargetURL  string // HTTPS URL of the target
+	ProxyURL   string // HTTPS URL of the proxy
+	HPKEKEM    int    // Key Encapsulation Mechanism (KEM) algorithm
+	HPKEKDF    int    // Key Derivation Function (KDF) algorithm
+	HPKEAEAD   int    // Authenticated Encryption with Associated Data (AEAD) algorithm
 }
 
 // ObliviousDNSMessage represents an ODoH message.
@@ -78,7 +78,6 @@ type ObliviousClient struct {
 // ObliviousProxy implements the proxy side of ODoH.
 type ObliviousProxy struct {
 	config *ODoHConfig
-	server *http.Server
 }
 
 // ObliviousTarget implements the target resolver side of ODoH.
@@ -135,7 +134,7 @@ func (c *ObliviousClient) Query(dnsQuery []byte) ([]byte, error) {
 	// Send encapsulated message to proxy
 	response, err := c.sendToProxy(encapsulated)
 	if err != nil {
-	 return nil, fmt.Errorf("sending to proxy: %w", err)
+		return nil, fmt.Errorf("sending to proxy: %w", err)
 	}
 
 	// Decapsulate the response
@@ -433,7 +432,7 @@ func (t *ObliviousTarget) processDNSQuery(query []byte) []byte {
 // keyDerivationKeys holds derived key material.
 type keyDerivationKeys struct {
 	ExpandKey []byte
-	SealKey  []byte
+	SealKey   []byte
 }
 
 // generateEphemeralKey generates an ephemeral HPKE key pair.
@@ -526,7 +525,7 @@ func deriveKeys(sharedSecret, kdfInfo []byte, kdf, aead int) (*keyDerivationKeys
 
 	return &keyDerivationKeys{
 		ExpandKey: expandKey,
-		SealKey:  sealKey,
+		SealKey:   sealKey,
 	}, nil
 }
 

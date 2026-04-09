@@ -23,8 +23,8 @@ import (
 	"github.com/nothingdns/nothingdns/internal/cluster"
 	"github.com/nothingdns/nothingdns/internal/config"
 	"github.com/nothingdns/nothingdns/internal/dashboard"
-	"github.com/nothingdns/nothingdns/internal/doh"
 	"github.com/nothingdns/nothingdns/internal/dnssec"
+	"github.com/nothingdns/nothingdns/internal/doh"
 	"github.com/nothingdns/nothingdns/internal/filter"
 	"github.com/nothingdns/nothingdns/internal/metrics"
 	"github.com/nothingdns/nothingdns/internal/odoh"
@@ -58,7 +58,7 @@ type Server struct {
 	loginLimiter    *loginRateLimiter
 	apiRateLimiter  *apiRateLimiter
 	stopCh          chan struct{} // Channel to signal shutdown
-	stopOnce        sync.Once    // Ensure Stop is idempotent
+	stopOnce        sync.Once     // Ensure Stop is idempotent
 
 	// Goroutine leak detection baseline
 	goroutineBaseline int64
@@ -67,9 +67,9 @@ type Server struct {
 // loginRateLimiter tracks failed login attempts per IP and username.
 // It applies both IP-based and account-based rate limiting to prevent brute force attacks.
 type loginRateLimiter struct {
-	mu         sync.Mutex
-	ipAttempts    map[string]*loginAttempt    // IP-based tracking
-	userAttempts  map[string]*loginAttempt    // Username-based tracking (account lockout)
+	mu           sync.Mutex
+	ipAttempts   map[string]*loginAttempt // IP-based tracking
+	userAttempts map[string]*loginAttempt // Username-based tracking (account lockout)
 }
 
 // loginAttempt tracks failed attempts for a single IP or username.
@@ -81,9 +81,9 @@ type loginAttempt struct {
 
 // LoginRateLimit constants
 const (
-	loginMaxAttempts   = 5             // Maximum attempts before lockout
-	loginLockoutPeriod = 5 * time.Minute // How long to lock out after max attempts
-	loginMaxDelay     = 30 * time.Second // Maximum delay between attempts
+	loginMaxAttempts   = 5                // Maximum attempts before lockout
+	loginLockoutPeriod = 5 * time.Minute  // How long to lock out after max attempts
+	loginMaxDelay      = 30 * time.Second // Maximum delay between attempts
 )
 
 // checkRateLimit checks if the given IP is rate-limited.
@@ -219,16 +219,16 @@ func (l *loginRateLimiter) cleanup() {
 
 // apiRateLimiter implements a sliding window rate limiter for API endpoints.
 type apiRateLimiter struct {
-	mu          sync.Mutex
-	requests    map[string][]time.Time // IP -> timestamps of recent requests
+	mu         sync.Mutex
+	requests   map[string][]time.Time // IP -> timestamps of recent requests
 	maxReqs    int                    // Maximum requests per window
 	windowSecs int                    // Window size in seconds
 }
 
 // apiRateLimit constants for authenticated endpoints
 const (
-	apiRateLimitMaxRequests = 100        // Max requests per window
-	apiRateLimitWindowSecs = 60          // Window size in seconds
+	apiRateLimitMaxRequests = 100 // Max requests per window
+	apiRateLimitWindowSecs  = 60  // Window size in seconds
 )
 
 // checkRateLimit checks if the IP is within rate limits.
@@ -320,9 +320,9 @@ func (r *apiRateLimiter) cleanup() {
 // newAPIRateLimiter creates a new API rate limiter
 func newAPIRateLimiter() *apiRateLimiter {
 	return &apiRateLimiter{
-		requests:    make(map[string][]time.Time),
-		maxReqs:     apiRateLimitMaxRequests,
-		windowSecs:  apiRateLimitWindowSecs,
+		requests:   make(map[string][]time.Time),
+		maxReqs:    apiRateLimitMaxRequests,
+		windowSecs: apiRateLimitWindowSecs,
 	}
 }
 
@@ -1470,8 +1470,8 @@ func (s *Server) handleBulkPTR(w http.ResponseWriter, r *http.Request, zoneName 
 			strings.ReplaceAll(strings.ReplaceAll(req.Pattern,
 				"[A]", fmt.Sprintf("%d", a)),
 				"[B]", fmt.Sprintf("%d", b)),
-				"[C]", fmt.Sprintf("%d", c)),
-				"[D]", fmt.Sprintf("%d", d))
+			"[C]", fmt.Sprintf("%d", c)),
+			"[D]", fmt.Sprintf("%d", d))
 
 		// Compute relative PTR record name within the zone
 		revRecord := reverseIPv4Relative(ip.String(), zoneOrigin, ones)
@@ -1542,13 +1542,13 @@ func (s *Server) handleBulkPTR(w http.ResponseWriter, r *http.Request, zoneName 
 	// If preview, return just the analysis
 	if req.Preview {
 		s.writeJSON(w, http.StatusOK, map[string]interface{}{
-			"preview":    true,
-			"total":      numIPs,
-			"willAdd":    add,
-			"willAddA":   addA,
-			"willSkip":   skip,
+			"preview":      true,
+			"total":        numIPs,
+			"willAdd":      add,
+			"willAddA":     addA,
+			"willSkip":     skip,
 			"willOverride": override + overrideA,
-			"changes":    changes,
+			"changes":      changes,
 		})
 		return
 	}
@@ -1605,11 +1605,11 @@ func (s *Server) handleBulkPTR(w http.ResponseWriter, r *http.Request, zoneName 
 		zoneName, req.CIDR, req.Pattern, req.Override, req.AddA, added, addedA, skipped, exists)
 
 	s.writeJSON(w, http.StatusOK, map[string]int{
-		"added":    added,
-		"addedA":   addedA,
-		"exists":   exists,
-		"existsA":  existsA,
-		"skipped":  skipped,
+		"added":   added,
+		"addedA":  addedA,
+		"exists":  exists,
+		"existsA": existsA,
+		"skipped": skipped,
 	})
 }
 
@@ -1660,12 +1660,12 @@ func (s *Server) handlePtr6Lookup(w http.ResponseWriter, r *http.Request, zoneNa
 		target := ptrName + "."
 		if fqdn == target || rec.Name == ptrName {
 			s.writeJSON(w, http.StatusOK, map[string]interface{}{
-				"ip":       ipStr,
-				"ptr":      ptrName,
-				"ptrFQDN":  target,
-				"target":   rec.RData,
-				"ttl":      rec.TTL,
-				"found":    true,
+				"ip":      ipStr,
+				"ptr":     ptrName,
+				"ptrFQDN": target,
+				"target":  rec.RData,
+				"ttl":     rec.TTL,
+				"found":   true,
 			})
 			return
 		}
@@ -1673,10 +1673,10 @@ func (s *Server) handlePtr6Lookup(w http.ResponseWriter, r *http.Request, zoneNa
 
 	// Not found
 	s.writeJSON(w, http.StatusOK, map[string]interface{}{
-		"ip":     ipStr,
-		"ptr":    ptrName,
+		"ip":      ipStr,
+		"ptr":     ptrName,
 		"ptrFQDN": ptrName + ".",
-		"found":  false,
+		"found":   false,
 	})
 }
 
@@ -2004,7 +2004,7 @@ func (s *Server) handleBlocklists(w http.ResponseWriter, r *http.Request) {
 
 	if s.blocklist == nil {
 		s.writeJSON(w, http.StatusOK, &BlocklistResponse{
-			Enabled:     false,
+			Enabled:    false,
 			TotalRules: 0,
 			FilesCount: 0,
 			URLsCount:  0,
@@ -2016,7 +2016,7 @@ func (s *Server) handleBlocklists(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		stats := s.blocklist.Stats()
 		s.writeJSON(w, http.StatusOK, &BlocklistResponse{
-			Enabled:     stats.Enabled,
+			Enabled:    stats.Enabled,
 			TotalRules: stats.TotalBlocks,
 			FilesCount: stats.Files,
 			URLsCount:  stats.URLs,
@@ -2108,11 +2108,11 @@ func (s *Server) handleUpstreams(w http.ResponseWriter, r *http.Request) {
 		if s.upstreamLB != nil {
 			queries, failed, failovers := s.upstreamLB.Stats()
 			upstreams = append(upstreams, UpstreamStatus{
-				Address:      "load-balancer",
-				Healthy:     s.upstreamLB.IsHealthy(),
-				Queries:     queries,
-				Failed:      failed,
-				Failovers:   failovers,
+				Address:   "load-balancer",
+				Healthy:   s.upstreamLB.IsHealthy(),
+				Queries:   queries,
+				Failed:    failed,
+				Failovers: failovers,
 			})
 		}
 		if s.upstreamClient != nil {
@@ -2366,7 +2366,7 @@ func (s *Server) handleServerConfig(w http.ResponseWriter, r *http.Request) {
 
 	s.writeJSON(w, http.StatusOK, &ServerConfigResponse{
 		Version:    util.Version,
-		ListenPort: 0, // Not available in HTTPConfig
+		ListenPort: 0,  // Not available in HTTPConfig
 		LogLevel:   "", // Not available in HTTPConfig
 	})
 }
@@ -2567,7 +2567,7 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 		resp := make([]UserResponse, 0, len(users))
 		for _, u := range users {
 			resp = append(resp, UserResponse{
-				Username:  u.Username,
+				Username: u.Username,
 				Role:     string(u.Role),
 				Created:  u.CreatedAt,
 				Updated:  u.UpdatedAt,
@@ -2664,22 +2664,6 @@ func (s *Server) requireOperator(w http.ResponseWriter, r *http.Request) bool {
 	}
 	if !hasRole(r.Context(), s.authStore, auth.RoleOperator) {
 		s.writeError(w, http.StatusForbidden, "Operator role required")
-		return true
-	}
-	return false
-}
-
-// requireAdmin checks if the request has admin role.
-// Writes error and returns true if access denied.
-func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
-	// If authStore is nil, RBAC checks cannot be performed.
-	// This happens in legacy single-token auth mode (auth_token without multi-user auth).
-	// In this case, allow through - the auth middleware already validated the token.
-	if s.authStore == nil {
-		return false
-	}
-	if !hasRole(r.Context(), s.authStore, auth.RoleAdmin) {
-		s.writeError(w, http.StatusForbidden, "Admin role required")
 		return true
 	}
 	return false

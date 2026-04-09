@@ -61,8 +61,5 @@ func TestCacheEvictorImplementsInterface(t *testing.T) {
 		MaxTTL:     1 * time.Hour,
 		DefaultTTL: 5 * time.Minute,
 	})
-	var iface Evictor = NewCacheEvictor(c)
-	if iface == nil {
-		t.Fatal("CacheEvictor does not implement Evictor")
-	}
+	_ = Evictor(NewCacheEvictor(c))
 }

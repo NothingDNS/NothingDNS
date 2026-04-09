@@ -271,16 +271,14 @@ func GetDefaultLogger() *Logger {
 
 // Package-level convenience functions.
 
-func Debug(msg string)                   { defaultLogger.Debug(msg) }
+func Debug(msg string)                          { defaultLogger.Debug(msg) }
 func Debugf(format string, args ...interface{}) { defaultLogger.Debugf(format, args...) }
-func Info(msg string)                    { defaultLogger.Info(msg) }
+func Info(msg string)                           { defaultLogger.Info(msg) }
 func Infof(format string, args ...interface{})  { defaultLogger.Infof(format, args...) }
-func Warn(msg string)                    { defaultLogger.Warn(msg) }
+func Warn(msg string)                           { defaultLogger.Warn(msg) }
 func Warnf(format string, args ...interface{})  { defaultLogger.Warnf(format, args...) }
-func Error(msg string)                   { defaultLogger.Error(msg) }
+func Error(msg string)                          { defaultLogger.Error(msg) }
 func Errorf(format string, args ...interface{}) { defaultLogger.Errorf(format, args...) }
-func Fatal(msg string)                   { defaultLogger.Fatal(msg) }
-func Fatalf(format string, args ...interface{}) { defaultLogger.Fatalf(format, args...) }
 func WithField(key string, value interface{}) *Logger {
 	return defaultLogger.WithField(key, value)
 }

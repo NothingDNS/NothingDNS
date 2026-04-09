@@ -184,7 +184,7 @@ func TestTCPServerHandleMessageEDNS0WithECS(t *testing.T) {
 			Name:  mustParseName("."),
 			Type:  protocol.TypeOPT,
 			Class: 4096,
-			Data:   opt,
+			Data:  opt,
 		},
 	}
 
@@ -270,7 +270,7 @@ func TestTCPServerHandleMessageEDNS0InvalidECS(t *testing.T) {
 			Name:  mustParseName("."),
 			Type:  protocol.TypeOPT,
 			Class: 4096,
-			Data:   opt,
+			Data:  opt,
 		},
 	}
 
@@ -1115,7 +1115,7 @@ func TestUDPServerHandleRequestEDNS0WithECS(t *testing.T) {
 			Name:  mustParseName("."),
 			Type:  protocol.TypeOPT,
 			Class: 4096,
-			Data:   opt,
+			Data:  opt,
 		},
 	}
 
@@ -1126,7 +1126,7 @@ func TestUDPServerHandleRequestEDNS0WithECS(t *testing.T) {
 	// Read response
 	client.SetReadDeadline(time.Now().Add(time.Second))
 	respBuf := make([]byte, 512)
-	n, err = client.Read(respBuf)
+	_, err = client.Read(respBuf)
 	if err != nil {
 		t.Fatalf("Failed to read response: %v", err)
 	}
@@ -1198,7 +1198,7 @@ func TestUDPServerHandleRequestEDNS0InvalidECS(t *testing.T) {
 			Name:  mustParseName("."),
 			Type:  protocol.TypeOPT,
 			Class: 4096,
-			Data:   opt,
+			Data:  opt,
 		},
 	}
 
@@ -1208,7 +1208,7 @@ func TestUDPServerHandleRequestEDNS0InvalidECS(t *testing.T) {
 
 	client.SetReadDeadline(time.Now().Add(time.Second))
 	respBuf := make([]byte, 512)
-	n, _ = client.Read(respBuf)
+	_, _ = client.Read(respBuf)
 
 	var receivedClientInfo *ClientInfo
 	select {
@@ -2386,8 +2386,8 @@ func TestUDPServerHandleRequestEDNS0ECSExtract(t *testing.T) {
 		},
 		Questions: []*protocol.Question{
 			{
-				Name:  mustParseName("ecs.example.com."),
-				QType: protocol.TypeA,
+				Name:   mustParseName("ecs.example.com."),
+				QType:  protocol.TypeA,
 				QClass: protocol.ClassIN,
 			},
 		},
@@ -2582,8 +2582,8 @@ func TestUDPResponseWriterTruncationStillTooLarge(t *testing.T) {
 		},
 		Questions: []*protocol.Question{
 			{
-				Name:  name,
-				QType: protocol.TypeA,
+				Name:   name,
+				QType:  protocol.TypeA,
 				QClass: protocol.ClassIN,
 			},
 		},
@@ -2638,8 +2638,8 @@ func TestTLSServerProcessMessageDirectEDNS0(t *testing.T) {
 		},
 		Questions: []*protocol.Question{
 			{
-				Name:  mustParseName("direct.example.com."),
-				QType: protocol.TypeA,
+				Name:   mustParseName("direct.example.com."),
+				QType:  protocol.TypeA,
 				QClass: protocol.ClassIN,
 			},
 		},

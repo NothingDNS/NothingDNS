@@ -9,11 +9,11 @@ import (
 
 // tcpConn wraps a net.Conn with metadata for pooling.
 type tcpConn struct {
-	conn        net.Conn
-	createdAt   time.Time
-	lastUsedAt  time.Time
-	pool        *tcpConnPool
-	inUse       atomic.Bool
+	conn       net.Conn
+	createdAt  time.Time
+	lastUsedAt time.Time
+	pool       *tcpConnPool
+	inUse      atomic.Bool
 }
 
 func (c *tcpConn) close() error {
@@ -28,10 +28,10 @@ type tcpConnPool struct {
 	idleTimeout time.Duration
 	dialTimeout time.Duration
 
-	mu       sync.Mutex
-	idle     []*tcpConn // ready for reuse
-	active   int         // currently in-flight
-	closed   bool
+	mu     sync.Mutex
+	idle   []*tcpConn // ready for reuse
+	active int        // currently in-flight
+	closed bool
 }
 
 // newTCPConnPool creates a new TCP connection pool.
@@ -161,11 +161,4 @@ func (p *tcpConnPool) closeAll() {
 		c.close()
 	}
 	p.idle = nil
-}
-
-// stats returns pool statistics.
-func (p *tcpConnPool) stats() (idle, active int) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return len(p.idle), p.active
 }

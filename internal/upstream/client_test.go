@@ -247,7 +247,7 @@ func TestClientServers(t *testing.T) {
 
 	// Verify servers match config
 	expectedServers := map[string]bool{
-		"8.8.8.8:53":  true,
+		"8.8.8.8:53": true,
 		"8.8.4.4:53": true,
 	}
 	for _, s := range servers {
@@ -464,7 +464,7 @@ func TestQueryContextSuccess(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	_, err = client.QueryContext(ctx, msg)
+	_, _ = client.QueryContext(ctx, msg)
 	// We don't assert on the error since network may or may not work
 	// Just ensure it doesn't panic
 }

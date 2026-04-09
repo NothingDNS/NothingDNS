@@ -83,14 +83,7 @@ type Tx struct {
 	writable       bool
 	closed         bool
 	txid           uint64
-	stats          TxStats
 	commitHandlers []func()
-}
-
-// TxStats contains transaction statistics
-type TxStats struct {
-	PageCount int64
-	NodeCount int64
 }
 
 // OpenKVStore opens or creates a key-value store

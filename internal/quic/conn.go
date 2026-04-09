@@ -31,21 +31,20 @@ func DefaultConfig() *Config {
 	return &Config{
 		TransportParams: DefaultTransportParams(),
 		MaxStreams:      DefaultInitialMaxStreamsBidi,
-		MaxStreamData:  DefaultInitialMaxStreamData,
+		MaxStreamData:   DefaultInitialMaxStreamData,
 		MaxData:         DefaultInitialMaxData,
 	}
 }
 
 // Stream represents a QUIC stream.
 type Stream struct {
-	id       uint64
-	readBuf  []byte
-	readOff  int
-	writeOff uint64
-	finSent  bool
-	finRecv  bool
-	closed   bool
-	mu       sync.Mutex
+	id      uint64
+	readBuf []byte
+	readOff int
+	finSent bool
+	finRecv bool
+	closed  bool
+	mu      sync.Mutex
 }
 
 // StreamID returns the stream ID.
@@ -135,9 +134,9 @@ type ServerConnection struct {
 	config     *Config
 
 	// Streams
-	streams   map[uint64]*Stream
-	streamMu  sync.RWMutex
-	nextBidi  uint64 // Next server bidi stream ID (starts at 1)
+	streams  map[uint64]*Stream
+	streamMu sync.RWMutex
+	nextBidi uint64 // Next server bidi stream ID (starts at 1)
 
 	// Packet number tracking
 	pktNumInitial   uint64

@@ -619,17 +619,17 @@ func TestCluster_MultipleEventHandlers(t *testing.T) {
 
 	// Add first handler
 	c.AddEventHandler(&EventHandlerFunc{
-		OnJoinFunc:        func(*Node) { joinCount++ },
-		OnLeaveFunc:       func(*Node) { leaveCount++ },
-		OnUpdateFunc:      func(*Node) { updateCount++ },
+		OnJoinFunc:         func(*Node) { joinCount++ },
+		OnLeaveFunc:        func(*Node) { leaveCount++ },
+		OnUpdateFunc:       func(*Node) { updateCount++ },
 		OnCacheInvalidFunc: func([]string) { cacheInvalidCount++ },
 	})
 
 	// Add second handler
 	c.AddEventHandler(&EventHandlerFunc{
-		OnJoinFunc:        func(*Node) { joinCount++ },
-		OnLeaveFunc:       func(*Node) { leaveCount++ },
-		OnUpdateFunc:      func(*Node) { updateCount++ },
+		OnJoinFunc:         func(*Node) { joinCount++ },
+		OnLeaveFunc:        func(*Node) { leaveCount++ },
+		OnUpdateFunc:       func(*Node) { updateCount++ },
 		OnCacheInvalidFunc: func([]string) { cacheInvalidCount++ },
 	})
 
@@ -754,9 +754,9 @@ func TestGossipProtocol_TwoNodeIntegration(t *testing.T) {
 
 func TestEncodePayload_UnregisteredType(t *testing.T) {
 	// Use a non-gob-encodable type to trigger encode error
-	_, err := encodePayload(errors.New("test"))
+	_, _ = encodePayload(errors.New("test"))
 	// errors.New actually might encode; use a channel to guarantee failure
-	_, err = encodePayload(func() {})
+	_, err := encodePayload(func() {})
 	if err == nil {
 		t.Error("encodePayload() should fail for function type")
 	}
