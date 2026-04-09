@@ -146,9 +146,9 @@ func encodeSuffix(src []rune) string {
 				out.WriteRune(digitToChar(q))
 				bias = adapt(delta, bias, false)
 				delta = 0
-				h++
 			}
 		}
+		h++
 	}
 
 	return out.String()
