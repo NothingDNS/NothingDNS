@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"bytes"
 	"encoding/hex"
 	"fmt"
 	"reflect"
@@ -70,6 +71,7 @@ type Config struct {
 	EncryptionKey string       // hex-encoded 32-byte AES-256 key
 	DataDir       string       // Directory for Raft WAL and snapshots
 	Peers         []PeerConfig // Raft peer nodes
+	ZoneManager   *zone.Manager // zone manager for replication
 }
 
 // PeerConfig describes a Raft cluster peer.
@@ -153,6 +155,7 @@ func New(config Config, logger *util.Logger, dnsCache *cache.Cache) (*Cluster, e
 		cache:         dnsCache,
 		cacheSyncChan: make(chan CacheSyncEvent, 100),
 		consensus:     config.ConsensusMode,
+		zoneManager:   config.ZoneManager,
 	}
 
 	// Initialize based on consensus mode
@@ -710,12 +713,22 @@ func (c *Cluster) handleCacheInvalid(keys []string) {
 func (c *Cluster) handleZoneUpdate(payload ZoneUpdatePayload) {
 	c.logger.Debugf("Received zone update for %s (action=%s, serial=%d)", payload.ZoneName, payload.Action, payload.Serial)
 
+	if c.zoneManager == nil {
+		c.logger.Warnf("zoneManager not configured, ignoring zone update for %s", payload.ZoneName)
+		return
+	}
+
 	switch payload.Action {
 	case "full", "reload":
-		// Full zone transfer — replace the zone data
+		// Full zone transfer — parse and reload zone data
 		if payload.RawZone != nil {
-			// TODO: Parse raw zone data and reload zone
-			c.logger.Infof("Zone %s reload requested via gossip (serial=%d)", payload.ZoneName, payload.Serial)
+			z, err := zone.ParseFile(payload.ZoneName, bytes.NewReader(payload.RawZone))
+			if err != nil {
+				c.logger.Warnf("Failed to parse zone %s from gossip: %v", payload.ZoneName, err)
+				return
+			}
+			c.zoneManager.LoadZone(z, "")
+			c.logger.Infof("Zone %s reloaded via gossip (serial=%d)", payload.ZoneName, payload.Serial)
 		}
 	case "add":
 		// Incremental add — apply record changes

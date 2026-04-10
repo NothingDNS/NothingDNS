@@ -11,6 +11,7 @@ import (
 	"github.com/nothingdns/nothingdns/internal/config"
 	"github.com/nothingdns/nothingdns/internal/metrics"
 	"github.com/nothingdns/nothingdns/internal/util"
+	"github.com/nothingdns/nothingdns/internal/zone"
 )
 
 // ClusterManager manages gossip-based clustering with cache sync.
@@ -21,7 +22,7 @@ type ClusterManager struct {
 }
 
 // NewClusterManager creates a new cluster manager with the given configuration.
-func NewClusterManager(cfg *config.Config, logger *util.Logger, dnsCache *cache.Cache, metricsCollector *metrics.MetricsCollector) (*ClusterManager, error) {
+func NewClusterManager(cfg *config.Config, logger *util.Logger, dnsCache *cache.Cache, metricsCollector *metrics.MetricsCollector, zoneMgr *zone.Manager) (*ClusterManager, error) {
 	mgr := &ClusterManager{
 		logger: logger,
 		stopCh: make(chan struct{}),
@@ -43,6 +44,7 @@ func NewClusterManager(cfg *config.Config, logger *util.Logger, dnsCache *cache.
 		CacheSync:     cfg.Cluster.CacheSync,
 		HTTPAddr:      cfg.Server.HTTP.Bind,
 		EncryptionKey: cfg.Cluster.EncryptionKey,
+		ZoneManager:   zoneMgr,
 	}
 
 	var err error

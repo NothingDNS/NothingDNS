@@ -157,7 +157,7 @@ func run() error {
 	stopCh := make(chan struct{})
 
 	// Initialize cluster manager
-	clusterManager, err := NewClusterManager(cfg, logger, dnsCache, metricsCollector)
+	clusterManager, err := NewClusterManager(cfg, logger, dnsCache, metricsCollector, zoneManagerInstance)
 	if err != nil {
 		return fmt.Errorf("creating cluster manager: %w", err)
 	}
