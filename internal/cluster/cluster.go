@@ -48,6 +48,9 @@ type Cluster struct {
 	cacheClosed bool
 	mu          sync.RWMutex
 	wg          sync.WaitGroup
+
+	// Local health stats for health-based routing
+	localHealth NodeHealthStats
 }
 
 // Config configures the cluster.
@@ -375,6 +378,38 @@ func (c *Cluster) GetNodeCount() int {
 // GetAliveCount returns the number of alive nodes.
 func (c *Cluster) GetAliveCount() int {
 	return c.nodeList.AliveCount()
+}
+
+// GetNodeForQuery returns the best node to handle a query using health-based routing.
+// Excludes draining nodes (via IsAlive()) and selects the healthiest node
+// using weighted random selection. Returns nil if no alive nodes are available.
+func (c *Cluster) GetNodeForQuery(excludeSelf bool) *Node {
+	exclude := []string{}
+	if excludeSelf {
+		exclude = append(exclude, c.config.NodeID)
+	}
+	return c.nodeList.GetBest(exclude)
+}
+
+// UpdateNodeHealth updates the health stats for the local node.
+// Other nodes will learn about this node's health via periodic gossip.
+// Call this periodically (e.g., every 10s) to keep health stats current.
+func (c *Cluster) UpdateNodeHealth(health NodeHealthStats) {
+	c.localHealth = health
+	c.nodeList.UpdateHealth(c.config.NodeID, health)
+
+	// Broadcast to all cluster peers
+	if c.gossip != nil && c.started {
+		if err := c.gossip.BroadcastNodeStats(health); err != nil {
+			c.logger.Warnf("Failed to broadcast node health stats: %v", err)
+		}
+	}
+}
+
+// GetNodesWithHealth returns all nodes including their health stats.
+// This is used by the API to expose health metrics.
+func (c *Cluster) GetNodesWithHealth() []Node {
+	return c.nodeList.GetAllWithHealth()
 }
 
 // AddEventHandler adds an event handler.

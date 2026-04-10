@@ -399,7 +399,7 @@ WS     /ws                              — WebSocket live query stream
 | CL-04 | **Node Draining** | Maintenance mode: gracefully remove a node from the cluster. Stop accepting new queries, complete in-flight queries, transfer state. | MEDIUM | MEDIUM | ✅ Done |
 | CL-05 | **Rolling Upgrade** | Sequential node restart. Version mismatch detection. Backward-compatible gossip protocol versioning. | MEDIUM | MEDIUM | 🔴 Missing |
 | CL-06 | **Cluster Config Sync** | Automatic propagation of config changes (blocklist, RPZ, ACL) to all nodes. | MEDIUM | LARGE | ✅ Done |
-| CL-07 | **Health-based Query Routing** | Automatic routing away from unhealthy nodes. Client-facing anycast or internal redirect. | MEDIUM | MEDIUM | 🔴 Missing |
+| CL-07 | **Health-based Query Routing** | Automatic routing away from unhealthy nodes. Client-facing anycast or internal redirect. | MEDIUM | MEDIUM | ✅ Done |
 | CL-08 | **Cluster Metrics Aggregation** | Centralized view of all node metrics. Per-node and cluster-wide statistics. | LOW | MEDIUM | 🔴 Missing |
 
 ---

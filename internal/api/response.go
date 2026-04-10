@@ -142,15 +142,22 @@ type ClusterStatusResponse struct {
 
 // NodeDetail represents a cluster node in the nodes list.
 type NodeDetail struct {
-	ID       string `json:"id"`
-	Addr     string `json:"addr"`
-	Port     int    `json:"port"`
-	State    string `json:"state"`
-	Region   string `json:"region"`
-	Zone     string `json:"zone"`
-	Weight   int    `json:"weight"`
-	HTTPAddr string `json:"http_addr"`
-	Version  uint64 `json:"version"`
+	ID       string  `json:"id"`
+	Addr     string  `json:"addr"`
+	Port     int     `json:"port"`
+	State    string  `json:"state"`
+	Region   string  `json:"region"`
+	Zone     string  `json:"zone"`
+	Weight   int     `json:"weight"`
+	HTTPAddr string  `json:"http_addr"`
+	Version  uint64  `json:"version"`
+	// Health fields (0 values if unknown)
+	HealthScore       int     `json:"health_score"`        // 0-100, higher is healthier
+	QueriesPerSecond  float64 `json:"queries_per_second"`  // Rolling average QPS
+	LatencyMs         float64 `json:"latency_ms"`          // Rolling average latency
+	CPUPercent        float64 `json:"cpu_percent"`         // Estimated CPU usage
+	MemoryPercent     float64 `json:"memory_percent"`      // Estimated memory usage
+	ActiveConnections int     `json:"active_connections"`  // Current active connections
 }
 
 // ClusterNodesResponse is returned by GET /api/v1/cluster/nodes.

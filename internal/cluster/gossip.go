@@ -31,6 +31,7 @@ const (
 	MessageTypeZoneUpdate  // Zone data propagated from leader to followers
 	MessageTypeConfigSync  // Cluster config propagated from leader to followers
 	MessageTypeDraining    // Node entering/leaving draining state
+	MessageTypeNodeStats   // Periodic node health stats broadcast
 )
 
 // Message is the envelope for all gossip messages.
@@ -148,6 +149,17 @@ type DrainingPayload struct {
 	Draining    bool      // true = entering draining, false = exiting (back to alive)
 	Timestamp   time.Time // When the draining action was initiated
 	InFlightReq int       // Estimated number of in-flight queries (for monitoring)
+}
+
+// NodeStatsPayload carries periodic health statistics for health-based routing.
+type NodeStatsPayload struct {
+	NodeID           string    // Node reporting stats
+	QueriesPerSecond float64   // Rolling average queries/sec
+	LatencyMs        float64   // Rolling average latency in milliseconds
+	CPUPercent       float64   // Estimated CPU usage (0-100)
+	MemoryPercent    float64   // Estimated memory pressure (0-100)
+	ActiveConns      int       // Current active connections
+	Timestamp        time.Time // When these stats were collected
 }
 
 // GossipProtocol implements the gossip-based membership protocol.
@@ -476,6 +488,8 @@ func (gp *GossipProtocol) handleMessage(data []byte, from *net.UDPAddr) {
 		gp.handleConfigSync(msg, from)
 	case MessageTypeDraining:
 		gp.handleDraining(msg, from)
+	case MessageTypeNodeStats:
+		gp.handleNodeStats(msg, from)
 	}
 }
 
@@ -873,6 +887,73 @@ func (gp *GossipProtocol) BroadcastDraining(draining bool, inFlightReq int) erro
 		addr := &net.UDPAddr{IP: net.ParseIP(node.Addr), Port: node.Port}
 		if _, err := gp.conn.WriteToUDP(data, addr); err != nil {
 			util.Warnf("gossip: failed to send draining message to %s: %v", addr, err)
+		}
+		atomic.AddUint64(&gp.messagesSent, 1)
+	}
+
+	return nil
+}
+
+// handleNodeStats processes node health statistics received via gossip.
+func (gp *GossipProtocol) handleNodeStats(msg Message, from *net.UDPAddr) {
+	var payload NodeStatsPayload
+	if err := decodePayload(msg.Payload, &payload); err != nil {
+		return
+	}
+
+	// Ignore messages from self
+	if payload.NodeID == gp.nodeList.GetSelf().ID {
+		return
+	}
+
+	// Update the health stats for this node in our local node list
+	health := NodeHealthStats{
+		QueriesPerSecond: payload.QueriesPerSecond,
+		LatencyMs:       payload.LatencyMs,
+		CPUPercent:       payload.CPUPercent,
+		MemoryPercent:    payload.MemoryPercent,
+		ActiveConns:      payload.ActiveConns,
+		LastUpdated:      payload.Timestamp,
+	}
+	gp.nodeList.UpdateHealth(payload.NodeID, health)
+}
+
+// BroadcastNodeStats broadcasts the local node's health statistics to all cluster nodes.
+// This enables health-based query routing across the cluster.
+// Should be called periodically (e.g., every 10 seconds) by the cluster.
+func (gp *GossipProtocol) BroadcastNodeStats(stats NodeHealthStats) error {
+	payload := NodeStatsPayload{
+		NodeID:           gp.nodeList.GetSelf().ID,
+		QueriesPerSecond: stats.QueriesPerSecond,
+		LatencyMs:        stats.LatencyMs,
+		CPUPercent:       stats.CPUPercent,
+		MemoryPercent:    stats.MemoryPercent,
+		ActiveConns:      stats.ActiveConns,
+		Timestamp:        time.Now(),
+	}
+
+	payloadBytes, err := encodePayload(payload)
+	if err != nil {
+		return err
+	}
+
+	msgBytes, err := encodeMessage(MessageTypeNodeStats, payloadBytes)
+	if err != nil {
+		return err
+	}
+
+	data := msgBytes
+	if gp.aead != nil {
+		data, _ = gp.encrypt(data)
+	}
+
+	for _, node := range gp.nodeList.GetAll() {
+		if node.ID == gp.nodeList.GetSelf().ID {
+			continue
+		}
+		addr := &net.UDPAddr{IP: net.ParseIP(node.Addr), Port: node.Port}
+		if _, err := gp.conn.WriteToUDP(data, addr); err != nil {
+			util.Warnf("gossip: failed to send node stats to %s: %v", addr, err)
 		}
 		atomic.AddUint64(&gp.messagesSent, 1)
 	}

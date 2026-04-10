@@ -2007,19 +2007,25 @@ func (s *Server) handleClusterNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	nodes := s.cluster.GetNodes()
+	nodes := s.cluster.GetNodesWithHealth()
 	resp := &ClusterNodesResponse{Nodes: make([]NodeDetail, 0, len(nodes))}
 	for _, node := range nodes {
 		resp.Nodes = append(resp.Nodes, NodeDetail{
-			ID:       node.ID,
-			Addr:     node.Addr,
-			Port:     node.Port,
-			State:    node.State.String(),
-			Region:   node.Meta.Region,
-			Zone:     node.Meta.Zone,
-			Weight:   node.Meta.Weight,
-			HTTPAddr: node.Meta.HTTPAddr,
-			Version:  node.Version,
+			ID:                node.ID,
+			Addr:              node.Addr,
+			Port:              node.Port,
+			State:             node.State.String(),
+			Region:            node.Meta.Region,
+			Zone:              node.Meta.Zone,
+			Weight:            node.Meta.Weight,
+			HTTPAddr:          node.Meta.HTTPAddr,
+			Version:           node.Version,
+			HealthScore:       node.Health.HealthScore(),
+			QueriesPerSecond:  node.Health.QueriesPerSecond,
+			LatencyMs:         node.Health.LatencyMs,
+			CPUPercent:        node.Health.CPUPercent,
+			MemoryPercent:     node.Health.MemoryPercent,
+			ActiveConnections: node.Health.ActiveConns,
 		})
 	}
 

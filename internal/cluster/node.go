@@ -38,13 +38,14 @@ func (s NodeState) String() string {
 
 // Node represents a member of the cluster.
 type Node struct {
-	ID       string
-	Addr     string
-	Port     int
-	State    NodeState
-	LastSeen time.Time
-	Version  uint64 // Incremented on state changes
-	Meta     NodeMeta
+	ID        string
+	Addr      string
+	Port      int
+	State     NodeState
+	LastSeen  time.Time
+	Version   uint64 // Incremented on state changes
+	Meta      NodeMeta
+	Health    NodeHealthStats // Health metrics for health-based routing
 }
 
 // NodeMeta contains node metadata.
@@ -53,6 +54,66 @@ type NodeMeta struct {
 	Zone     string
 	Weight   int // For load balancing
 	HTTPAddr string
+}
+
+// NodeHealthStats holds per-node health metrics used for health-based routing.
+type NodeHealthStats struct {
+	QueriesPerSecond float64 // Rolling average of queries/sec
+	LatencyMs        float64 // Rolling average latency in milliseconds
+	CPUPercent       float64 // Estimated CPU usage (0-100)
+	MemoryPercent    float64 // Estimated memory pressure (0-100)
+	ActiveConns      int     // Current active connections
+	LastUpdated      time.Time
+}
+
+// HealthScore returns a score from 0-100 representing node health.
+// Higher scores = healthier. Uses latency and resource usage to compute score.
+func (h NodeHealthStats) HealthScore() int {
+	if h.LastUpdated.IsZero() {
+		return 50 // Default score for nodes without health data
+	}
+
+	// Base score starts at 100
+	score := 100.0
+
+	// Penalize high latency (>500ms is severe)
+	if h.LatencyMs > 500 {
+		score -= 50
+	} else if h.LatencyMs > 200 {
+		score -= 25
+	} else if h.LatencyMs > 100 {
+		score -= 10
+	}
+
+	// Penalize high CPU (>80% is severe)
+	if h.CPUPercent > 80 {
+		score -= 40
+	} else if h.CPUPercent > 60 {
+		score -= 20
+	} else if h.CPUPercent > 40 {
+		score -= 10
+	}
+
+	// Penalize high memory (>85% is severe)
+	if h.MemoryPercent > 85 {
+		score -= 30
+	} else if h.MemoryPercent > 70 {
+		score -= 15
+	}
+
+	// Penalize high connections (>80% of "normal max")
+	if h.ActiveConns > 800 {
+		score -= 30
+	} else if h.ActiveConns > 500 {
+		score -= 15
+	} else if h.ActiveConns > 300 {
+		score -= 5
+	}
+
+	if score < 0 {
+		return 0
+	}
+	return int(score)
 }
 
 // IsAlive returns true if the node is alive and not draining.
@@ -243,6 +304,103 @@ func (nl *NodeList) AliveCount() int {
 		}
 	}
 	return count
+}
+
+// UpdateHealth updates the health stats for a node.
+func (nl *NodeList) UpdateHealth(id string, health NodeHealthStats) bool {
+	nl.mu.Lock()
+	defer nl.mu.Unlock()
+
+	node, ok := nl.nodes[id]
+	if !ok {
+		return false
+	}
+	node.Health = health
+	node.LastSeen = time.Now()
+	return true
+}
+
+// GetBest returns a copy of the healthiest alive node (excluding self).
+// Uses a weighted random selection where higher-health-score nodes have
+// proportionally higher chance of being selected. This prevents
+// overloading the single "best" node while still preferring healthy nodes.
+func (nl *NodeList) GetBest(exclude []string) *Node {
+	nl.mu.RLock()
+	defer nl.mu.RUnlock()
+
+	excludeMap := make(map[string]bool)
+	for _, id := range exclude {
+		excludeMap[id] = true
+	}
+
+	// Collect alive candidates with their health scores
+	type candidate struct {
+		node  *Node
+		score int
+	}
+	var candidates []candidate
+
+	for _, n := range nl.nodes {
+		if n.ID != nl.self.ID && n.IsAlive() && !excludeMap[n.ID] {
+			score := n.Health.HealthScore()
+			candidates = append(candidates, candidate{node: n, score: score})
+		}
+	}
+
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	// Weighted random selection: sum all scores, pick random point in range
+	total := 0
+	for _, c := range candidates {
+		total += c.score
+	}
+
+	if total == 0 {
+		// All nodes have score 0 (unknown health) — fall back to uniform random
+		var b [4]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			return &Node{}
+		}
+		idx := binary.BigEndian.Uint32(b[:]) % uint32(len(candidates))
+		cp := *candidates[idx].node
+		return &cp
+	}
+
+	// Pick random point in [0, total)
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return &Node{}
+	}
+	pick := binary.BigEndian.Uint32(b[:]) % uint32(total)
+
+	// Find the candidate at that point
+	sum := 0
+	for _, c := range candidates {
+		sum += c.score
+		if int(pick) < sum {
+			cp := *c.node
+			return &cp
+		}
+	}
+
+	// Fallback to last candidate
+	cp := *candidates[len(candidates)-1].node
+	return &cp
+}
+
+// GetAllWithHealth returns copies of all nodes including their health stats.
+// Used by the API to expose health information.
+func (nl *NodeList) GetAllWithHealth() []Node {
+	nl.mu.RLock()
+	defer nl.mu.RUnlock()
+
+	result := make([]Node, 0, len(nl.nodes))
+	for _, n := range nl.nodes {
+		result = append(result, *n)
+	}
+	return result
 }
 
 // GenerateNodeID creates a unique node ID.
