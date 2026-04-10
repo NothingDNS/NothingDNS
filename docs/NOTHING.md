@@ -296,6 +296,7 @@ GET    /api/v1/queries                  — Query log (paginated)
 GET    /api/v1/topdomains               — Top domains
 GET    /api/v1/metrics/history          — Time-series metrics
 GET    /api/v1/dnssec/status            — DNSSEC status
+GET    /api/v1/dnssec/keys            — DNSSEC signing keys
 GET    /api/v1/server/config            — Current config (read-only)
 POST   /api/v1/auth/login               — JWT login
 POST   /api/v1/auth/bootstrap           — Bootstrap first user
@@ -314,7 +315,7 @@ WS     /ws                              — WebSocket live query stream
 | Endpoint | Method | Description | Priority |
 |----------|--------|-------------|----------|
 | `/api/v1/blocklists/{id}/toggle` | POST | Enable/disable blocklist | MEDIUM | ✅ Done |
-| `/api/v1/dnssec/keys` | GET | DNSKEY list per zone | LOW |
+| `/api/v1/dnssec/keys` | GET | DNSKEY list per zone | LOW | ✅ Done |
 | `/api/v1/geodns/stats` | GET | GeoIP query distribution | LOW |
 
 ---
