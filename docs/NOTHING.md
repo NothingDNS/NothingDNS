@@ -419,8 +419,8 @@ WS     /ws                              — WebSocket live query stream
 | PH-09 | **Systemd Notify** | `sd_notify(READY=1)` support (Type=notify service). | LOW | ✅ Done | — |
 | PH-10 | **Signal-based Config Reload** | SIGHUP → config reload (in addition to API endpoint). | MEDIUM | ✅ Done | — |
 | PH-11 | **Structured Error Types** | Return Extended DNS Error (RFC 8914) responses on error conditions. Protocol support exists, needs handler wiring. | MEDIUM | ⚠️ Partial | M |
-| PH-12 | **Connection Limits** | Max concurrent TCP/TLS/QUIC connection limit (DoS protection). | MEDIUM | 🔴 Missing | S |
-| PH-13 | **Query Timeout** | Per-query context timeout (configurable, default 10s). | MEDIUM | 🔴 Missing | S |
+| PH-12 | **Connection Limits** | Max concurrent TCP/TLS/QUIC connection limit (DoS protection). | MEDIUM | ✅ Done | — |
+| PH-13 | **Query Timeout** | Per-query context timeout (configurable, default 10s). | MEDIUM | ✅ Done | — |
 
 **Effort:** S = Small (1-2 hours), M = Medium (4-8 hours), L = Large (1-2 days), XL = Extra Large (3+ days)
 
@@ -437,7 +437,7 @@ WS     /ws                              — WebSocket live query stream
 | SEC-05 | Cache key DoS | Very long domain names → unbounded cache keys | MEDIUM | 🔴 Missing |
 | SEC-06 | Resolver MaxDepth unlimited | Config value passed without bounds check (DEBT-006) | MEDIUM | ✅ Done |
 | SEC-07 | Incomplete audit trail | Zone transfers, DDNS, config changes not logged (DEBT-004) | MEDIUM | ✅ Done |
-| SEC-08 | No API rate limiting | REST API endpoints have no rate limits | MEDIUM | 🔴 Missing |
+| SEC-08 | No API rate limiting | REST API endpoints have no rate limits | MEDIUM | ✅ Done |
 | SEC-09 | CORS policy | API server missing CORS header configuration | LOW | 🔴 Missing |
 
 ---
