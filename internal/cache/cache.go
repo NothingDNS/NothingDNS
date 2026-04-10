@@ -167,13 +167,36 @@ func New(config Config) *Cache {
 
 // MakeKey creates a cache key from query name and type.
 // Uses strings.Builder instead of fmt.Sprintf for efficiency.
+//
+// SECURITY: Domain names longer than maxKeyNameLen are hashed to prevent
+// cache key DoS attacks where an attacker floods the cache with unique
+// long domain names.
 func MakeKey(name string, qtype uint16) string {
+	const maxKeyNameLen = 128 // Maximum domain name length before hashing
+
 	var b strings.Builder
-	b.Grow(len(name) + 1 + 10) // name + ":" + max uint16 digits
-	b.WriteString(name)
+	b.Grow(len(name) + 1 + 10)
+
+	if len(name) > maxKeyNameLen {
+		// Hash long domain names to prevent cache flooding
+		h := crc32Hash(name)
+		b.WriteString(strconv.FormatUint(uint64(h), 10))
+	} else {
+		b.WriteString(name)
+	}
+
 	b.WriteByte(':')
 	b.WriteString(strconv.FormatUint(uint64(qtype), 10))
 	return b.String()
+}
+
+// crc32Hash returns a CRC32 hash of the input string as uint64.
+func crc32Hash(s string) uint64 {
+	h := uint64(0)
+	for i := 0; i < len(s); i++ {
+		h = h*31 + uint64(s[i])
+	}
+	return h
 }
 
 // Get retrieves an entry from the cache.
