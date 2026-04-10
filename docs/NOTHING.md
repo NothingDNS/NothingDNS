@@ -282,6 +282,8 @@ GET    /api/v1/cluster/status           — Cluster status
 GET    /api/v1/cluster/nodes            — Node list
 GET    /api/v1/blocklists               — List blocklists
 POST   /api/v1/blocklists               — Add blocklist
+GET    /api/v1/blocklists/sources       — List sources with status
+POST   /api/v1/blocklists/{id}/toggle   — Toggle source
 DELETE /api/v1/blocklists/{id}          — Remove blocklist
 GET    /api/v1/upstreams                — Upstream server list + health
 PUT    /api/v1/upstreams                — Add/remove upstream servers
@@ -311,7 +313,7 @@ WS     /ws                              — WebSocket live query stream
 
 | Endpoint | Method | Description | Priority |
 |----------|--------|-------------|----------|
-| `/api/v1/blocklists/{id}/toggle` | POST | Enable/disable blocklist | MEDIUM |
+| `/api/v1/blocklists/{id}/toggle` | POST | Enable/disable blocklist | MEDIUM | ✅ Done |
 | `/api/v1/dnssec/keys` | GET | DNSKEY list per zone | LOW |
 | `/api/v1/geodns/stats` | GET | GeoIP query distribution | LOW |
 
