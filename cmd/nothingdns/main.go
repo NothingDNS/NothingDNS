@@ -509,6 +509,15 @@ func run() error {
 				tls.CurveP256,
 				tls.X25519,
 			},
+			// Dynamic certificate loading — reloads on each handshake
+			// Supports Let's Encrypt auto-renewal without restart
+			GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+				updatedCert, err := tls.LoadX509KeyPair(cfg.Server.TLS.CertFile, cfg.Server.TLS.KeyFile)
+				if err != nil {
+					return nil, err
+				}
+				return &updatedCert, nil
+			},
 		}
 
 		tlsServer = server.NewTLSServer(tlsAddr, handler, tlsConfig)

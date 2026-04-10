@@ -1,6 +1,6 @@
 # NOTHING.md — NothingDNS: Full Status Report & Development Roadmap
 
-> Last updated: 2026-04-05
+> Last updated: 2026-04-10
 > Scope: All gaps, bugs, technical debt, unwired features, test status, WebUI, API, Cluster/HA
 
 ---
@@ -111,7 +111,7 @@ Every feature below is initialized in `cmd/nothingdns/main.go`, connected to the
 | 35 | Cluster (Gossip + Cache Sync + AES-256) | `cluster/` | `cluster.*` |
 | 36 | REST API (18+ endpoints) | `api/` | `server.http.*` |
 | 37 | OpenAPI Spec + Swagger UI | `api/` | automatic |
-| 38 | React WebUI (6 pages) | `dashboard/` | automatic |
+| 38 | React WebUI (16 pages) | `dashboard/` | automatic |
 | 39 | WebSocket Live Query Stream | `dashboard/` | `/ws` |
 | 40 | CLI Tool (dnsctl) | `cmd/dnsctl/` | — |
 | 41 | Root Hints (custom file) | `resolver/` | `resolution.root_hints_file` |
@@ -262,6 +262,8 @@ make verify-zero-deps  # verify go.sum is empty
 ### 9.1 Existing API Endpoints (Working)
 ```
 GET    /health                          — Health check
+GET    /readyz                          — Kubernetes readiness probe
+GET    /livez                           — Kubernetes liveness probe
 GET    /api/v1/status                   — Server status
 GET    /api/v1/zones                    — List zones
 POST   /api/v1/zones                    — Create zone
@@ -278,6 +280,27 @@ POST   /api/v1/cache/flush              — Flush cache
 POST   /api/v1/config/reload            — Reload configuration
 GET    /api/v1/cluster/status           — Cluster status
 GET    /api/v1/cluster/nodes            — Node list
+GET    /api/v1/blocklists               — List blocklists
+POST   /api/v1/blocklists               — Add blocklist
+DELETE /api/v1/blocklists/{id}          — Remove blocklist
+GET    /api/v1/upstreams                — Upstream server list + health
+PUT    /api/v1/upstreams                — Add/remove upstream servers
+GET    /api/v1/acl                      — ACL rules
+PUT    /api/v1/acl                      — Update ACL rules
+GET    /api/v1/rpz                      — RPZ zone list
+POST   /api/v1/rpz                      — Add RPZ zone
+DELETE /api/v1/rpz/{name}              — Remove RPZ zone
+GET    /api/v1/queries                  — Query log (paginated)
+GET    /api/v1/topdomains               — Top domains
+GET    /api/v1/metrics/history          — Time-series metrics
+GET    /api/v1/dnssec/status            — DNSSEC status
+GET    /api/v1/server/config            — Current config (read-only)
+POST   /api/v1/auth/login               — JWT login
+POST   /api/v1/auth/bootstrap           — Bootstrap first user
+GET    /api/v1/auth/users               — List users
+POST   /api/v1/auth/users               — Create user
+DELETE /api/v1/auth/users/{id}          — Delete user
+GET    /api/v1/auth/roles               — RBAC roles
 GET    /api/dashboard/stats             — Dashboard statistics
 GET    /api/openapi.json                — OpenAPI spec
 GET    /api/docs                        — Swagger UI
@@ -288,43 +311,33 @@ WS     /ws                              — WebSocket live query stream
 
 | Endpoint | Method | Description | Priority |
 |----------|--------|-------------|----------|
-| `/api/v1/blocklists` | GET | Active blocklist list | HIGH |
-| `/api/v1/blocklists` | POST | Add blocklist (URL or file) | HIGH |
-| `/api/v1/blocklists/{id}` | DELETE | Remove blocklist | HIGH |
-| `/api/v1/blocklists/{id}/toggle` | POST | Enable/disable blocklist | HIGH |
-| `/api/v1/upstreams` | GET | Upstream server list + health status | HIGH |
-| `/api/v1/upstreams` | PUT | Update upstream servers | HIGH |
-| `/api/v1/acl` | GET | ACL rules | MEDIUM |
-| `/api/v1/acl` | PUT | Update ACL rules | MEDIUM |
-| `/api/v1/rpz` | GET | RPZ zone list + statistics | MEDIUM |
-| `/api/v1/rpz` | POST | Add RPZ zone | MEDIUM |
-| `/api/v1/rpz/{name}` | DELETE | Remove RPZ zone | MEDIUM |
-| `/api/v1/queries` | GET | Query log (paginated, filterable) | HIGH |
-| `/api/v1/queries/top` | GET | Top domains (count, group by) | HIGH |
-| `/api/v1/metrics/history` | GET | Time-series metrics (ring buffer) | MEDIUM |
-| `/api/v1/dnssec/status` | GET | Key status, rollover timeline | MEDIUM |
+| `/api/v1/blocklists/{id}/toggle` | POST | Enable/disable blocklist | MEDIUM |
 | `/api/v1/dnssec/keys` | GET | DNSKEY list per zone | LOW |
 | `/api/v1/geodns/stats` | GET | GeoIP query distribution | LOW |
-| `/api/v1/server/config` | GET | Current config (read-only, sanitized) | MEDIUM |
-| `/api/v1/auth/login` | POST | JWT/session login | HIGH |
-| `/api/v1/auth/users` | GET/POST/DELETE | User management | HIGH |
-| `/api/v1/auth/roles` | GET | RBAC roles | MEDIUM |
-| `/readyz` | GET | Readiness probe (k8s) | HIGH |
-| `/livez` | GET | Liveness probe (k8s) | HIGH |
 
 ---
 
 ## 10. WEBUI GAPS
 
-### 10.1 Existing Pages (6 pages, 827 lines TS/TSX)
+### 10.1 Existing Pages (16 pages, ~2,590 lines TS/TSX)
 | Page | File | Lines | Status |
 |------|------|-------|--------|
-| Dashboard | `web/src/pages/dashboard.tsx` | 75 | ✅ Live query stream + 8 stat cards |
+| Dashboard | `web/src/pages/dashboard.tsx` | 108 | ✅ Live query stream + 8 stat cards |
 | Zones | `web/src/pages/zones.tsx` | 60 | ✅ List + search + create |
-| Zone Detail | `web/src/pages/zone-detail.tsx` | 122 | ✅ Record CRUD + export |
-| Settings | `web/src/pages/settings.tsx` | 81 | ✅ Status + cache + cluster + actions |
+| Zone Detail | `web/src/pages/zone-detail.tsx` | 155 | ✅ Record CRUD + export |
+| Settings | `web/src/pages/settings.tsx` | 729 | ✅ Status + cache + cluster + actions |
 | Login | `web/src/pages/login.tsx` | 43 | ✅ Token-based auth |
-| About | `web/src/pages/about.tsx` | 64 | ✅ Project info |
+| About | `web/src/pages/about.tsx` | 72 | ✅ Project info |
+| Query Log | `web/src/pages/query-log.tsx` | 127 | ✅ Filterable table + pagination |
+| Top Domains | `web/src/pages/top-domains.tsx` | 59 | ✅ Bar chart |
+| Blocklist | `web/src/pages/blocklist.tsx` | 120 | ✅ List + add + enable/disable |
+| Upstreams | `web/src/pages/upstreams.tsx` | 111 | ✅ Server list + health status |
+| ACL | `web/src/pages/acl.tsx` | 143 | ✅ Rule list + CRUD |
+| RPZ | `web/src/pages/rpz.tsx` | 188 | ✅ RPZ zone management |
+| DNSSEC | `web/src/pages/dnssec.tsx` | 122 | ✅ Key states + trust chain |
+| Cluster | `web/src/pages/cluster.tsx` | 273 | ✅ Node grid + status |
+| Users | `web/src/pages/users.tsx` | 158 | ✅ User list + role assignment |
+| Historical Charts | `web/src/pages/historical-charts.tsx` | 123 | ✅ Time-series charts |
 
 ### 10.2 Existing Components
 - Sidebar (navigation, theme toggle, connection status)
@@ -334,31 +347,33 @@ WS     /ws                              — WebSocket live query stream
 
 ### 10.3 Missing Pages and Features
 
-| # | Page / Feature | Description | Priority | Est. LOC |
-|---|----------------|-------------|----------|----------|
-| W-01 | **Query Log Viewer** | Searchable/filterable table, time range, CSV export | HIGH | ~300 |
-| W-02 | **Top Domains** | Most queried domains, bar/pie chart | HIGH | ~200 |
-| W-03 | **Blocklist Management** | List, add (URL/file), enable/disable, import | HIGH | ~250 |
-| W-04 | **Upstream Management** | Server list, health status, add/remove | HIGH | ~200 |
-| W-05 | **ACL Editor** | IP/subnet rule list, CRUD, drag-drop ordering | MEDIUM | ~250 |
-| W-06 | **RPZ Management** | RPZ zone list, rule management, statistics | MEDIUM | ~200 |
-| W-07 | **DNSSEC Viewer** | Key states, rollover timeline, trust chain | MEDIUM | ~300 |
-| W-08 | **GeoIP Dashboard** | World map with query distribution overlay | LOW | ~400 |
-| W-09 | **Historical Charts** | Query/sec, latency, cache hit rate time series | HIGH | ~350 |
-| W-10 | **Cluster Node Map** | Node grid/map, status (alive/suspect/dead), region | MEDIUM | ~250 |
-| W-11 | **User Management** | User list, role assignment (admin/viewer/operator) | HIGH | ~300 |
-| W-12 | **DNS64 / Cookies Status** | Active feature on/off state and statistics | LOW | ~100 |
-| W-13 | **Zone Transfer Status** | Slave zone sync states, last transfer time | MEDIUM | ~150 |
-| W-14 | **Notifications** | Toast/alert system (config reload, zone update, errors) | MEDIUM | ~100 |
-| W-15 | **Mobile Responsive** | Sidebar collapse, responsive grid, touch-friendly | MEDIUM | ~refactor |
+| # | Page / Feature | Description | Priority | Status |
+|---|----------------|-------------|----------|--------|
+| W-01 | **Query Log Viewer** | Searchable/filterable table, time range, CSV export | HIGH | ✅ Done |
+| W-02 | **Top Domains** | Most queried domains, bar/pie chart | HIGH | ✅ Done |
+| W-03 | **Blocklist Management** | List, add (URL/file), enable/disable, import | HIGH | ✅ Done |
+| W-04 | **Upstream Management** | Server list, health status, add/remove | HIGH | ✅ Done |
+| W-05 | **ACL Editor** | IP/subnet rule list, CRUD, drag-drop ordering | MEDIUM | ✅ Done |
+| W-06 | **RPZ Management** | RPZ zone list, rule management, statistics | MEDIUM | ✅ Done |
+| W-07 | **DNSSEC Viewer** | Key states, rollover timeline, trust chain | MEDIUM | ✅ Done |
+| W-08 | **GeoIP Dashboard** | World map with query distribution overlay | LOW | 🔴 Missing |
+| W-09 | **Historical Charts** | Query/sec, latency, cache hit rate time series | HIGH | ✅ Done |
+| W-10 | **Cluster Node Map** | Node grid/map, status (alive/suspect/dead), region | MEDIUM | ✅ Done |
+| W-11 | **User Management** | User list, role assignment (admin/viewer/operator) | HIGH | ✅ Done |
+| W-12 | **DNS64 / Cookies Status** | Active feature on/off state and statistics | LOW | 🔴 Missing |
+| W-13 | **Zone Transfer Status** | Slave zone sync states, last transfer time | MEDIUM | 🔴 Missing |
+| W-14 | **Notifications** | Toast/alert system (config reload, zone update, errors) | MEDIUM | 🔴 Missing |
+| W-15 | **Mobile Responsive** | Sidebar collapse, responsive grid, touch-friendly | MEDIUM | 🔴 Missing |
 
-### 10.4 Auth System Gaps
-- **Current:** Single shared token (Bearer), stored in cookie for 24 hours
+### 10.4 Auth System
+
+- **Current:** Per-user accounts with bcrypt password hashing, JWT Bearer tokens (stored in cookie, 24h expiry)
+- **RBAC:** admin (full), operator (zone/cache), viewer (read-only) roles
+- **Sessions:** expire, revoke supported
 - **Missing:**
-  - Per-user accounts (username/password or OAuth)
-  - RBAC: admin (full), operator (zone/cache), viewer (read-only)
-  - Session management (expire, revoke)
   - 2FA (TOTP)
+  - OAuth provider integration (Google, GitHub, etc.)
+  - Session brute-force protection (rate limiting)
   - Audit trail (who did what)
 
 ---
@@ -391,21 +406,21 @@ WS     /ws                              — WebSocket live query stream
 
 ## 12. PRODUCTION HARDENING GAPS
 
-| # | Feature | Description | Priority | Effort |
-|---|---------|-------------|----------|--------|
-| PH-01 | **Handler Panic Recovery** | `recover()` middleware around `ServeDNS()`. Return SERVFAIL on panic, prevent server crash. | CRITICAL | S |
-| PH-02 | **Graceful Shutdown Timeout** | Complete in-flight queries on SIGTERM (configurable, default 30s). | HIGH | S |
-| PH-03 | **Readiness Endpoint** | `/readyz` — check cache warm, zones loaded, upstream healthy. k8s/HAProxy integration. | HIGH | S |
-| PH-04 | **Liveness Endpoint** | `/livez` — goroutine leak, deadlock detection. | HIGH | S |
-| PH-05 | **TLS Cert Hot-Reload** | Watch cert files for changes (fsnotify-like). Let's Encrypt auto-renewal compatible. | HIGH | M |
-| PH-06 | **Config Validation CLI** | `nothingdns --validate-config config.yaml` — parse + semantic validation + exit. | HIGH | S |
-| PH-07 | **Cache Persistence** | Cache should survive restarts. Write to disk via KVStore (UNWIRED-001) or gob serialization. | MEDIUM | M |
-| PH-08 | **PID File** | `/var/run/nothingdns.pid` for daemon mode. | LOW | S |
-| PH-09 | **Systemd Notify** | `sd_notify(READY=1)` support (Type=notify service). | LOW | S |
-| PH-10 | **Signal-based Config Reload** | SIGHUP → config reload (in addition to API endpoint). | MEDIUM | S |
-| PH-11 | **Structured Error Types** | Return Extended DNS Error (RFC 8914) responses on error conditions. Protocol support exists, needs handler wiring. | MEDIUM | M |
-| PH-12 | **Connection Limits** | Max concurrent TCP/TLS/QUIC connection limit (DoS protection). | MEDIUM | S |
-| PH-13 | **Query Timeout** | Per-query context timeout (configurable, default 10s). | MEDIUM | S |
+| # | Feature | Description | Priority | Status | Effort |
+|---|---------|-------------|----------|--------|--------|
+| PH-01 | **Handler Panic Recovery** | `recover()` middleware around `ServeDNS()`. Return SERVFAIL on panic, prevent server crash. | CRITICAL | 🔴 Missing | S |
+| PH-02 | **Graceful Shutdown Timeout** | Complete in-flight queries on SIGTERM (configurable, default 30s). | HIGH | 🔴 Missing | S |
+| PH-03 | **Readiness Endpoint** | `/readyz` — check cache warm, zones loaded, upstream healthy. k8s/HAProxy integration. | HIGH | ✅ Done | — |
+| PH-04 | **Liveness Endpoint** | `/livez` — goroutine leak, deadlock detection. | HIGH | ✅ Done | — |
+| PH-05 | **TLS Cert Hot-Reload** | Watch cert files for changes (fsnotify-like). Let's Encrypt auto-renewal compatible. | HIGH | 🔴 Missing | M |
+| PH-06 | **Config Validation CLI** | `nothingdns --validate-config config.yaml` — parse + semantic validation + exit. | HIGH | 🔴 Missing | S |
+| PH-07 | **Cache Persistence** | Cache should survive restarts. Write to disk via KVStore (UNWIRED-001) or gob serialization. | MEDIUM | 🔴 Missing | M |
+| PH-08 | **PID File** | `/var/run/nothingdns.pid` for daemon mode. | LOW | 🔴 Missing | S |
+| PH-09 | **Systemd Notify** | `sd_notify(READY=1)` support (Type=notify service). | LOW | 🔴 Missing | S |
+| PH-10 | **Signal-based Config Reload** | SIGHUP → config reload (in addition to API endpoint). | MEDIUM | 🔴 Missing | S |
+| PH-11 | **Structured Error Types** | Return Extended DNS Error (RFC 8914) responses on error conditions. Protocol support exists, needs handler wiring. | MEDIUM | 🔴 Missing | M |
+| PH-12 | **Connection Limits** | Max concurrent TCP/TLS/QUIC connection limit (DoS protection). | MEDIUM | 🔴 Missing | S |
+| PH-13 | **Query Timeout** | Per-query context timeout (configurable, default 10s). | MEDIUM | 🔴 Missing | S |
 
 **Effort:** S = Small (1-2 hours), M = Medium (4-8 hours), L = Large (1-2 days), XL = Extra Large (3+ days)
 

@@ -49,6 +49,7 @@ type WebSocketConn interface {
 type QueryEvent struct {
 	Timestamp    time.Time `json:"timestamp"`
 	ClientIP     string    `json:"clientIp"`
+	CountryCode  string    `json:"countryCode"`
 	Domain       string    `json:"domain"`
 	QueryType    string    `json:"queryType"`
 	ResponseCode string    `json:"responseCode"`

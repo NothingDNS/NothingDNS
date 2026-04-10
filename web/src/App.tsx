@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { ThemeProvider } from '@/hooks/useTheme';
 import { useWebSocket } from '@/hooks/useWebSocket';
+import { NotificationProvider } from '@/lib/notification';
 import { Sidebar } from '@/components/layout/sidebar';
 import { DashboardPage } from '@/pages/dashboard';
 import { ZonesPage } from '@/pages/zones';
@@ -18,6 +19,9 @@ import { DNSSECPage } from '@/pages/dnssec';
 import { ClusterPage } from '@/pages/cluster';
 import { RPZPage } from '@/pages/rpz';
 import { ACLPage } from '@/pages/acl';
+import { GeoIPPage } from '@/pages/geoip';
+import { DNS64CookiesPage } from '@/pages/dns64-cookies';
+import { ZoneTransferPage } from '@/pages/zone-transfer';
 import { useState, useEffect } from 'react';
 
 function getToken(): string | null {
@@ -62,6 +66,9 @@ function AppContent() {
               <Route path="/cluster" element={<ClusterPage />} />
               <Route path="/rpz" element={<RPZPage />} />
               <Route path="/acl" element={<ACLPage />} />
+              <Route path="/geoip" element={<GeoIPPage />} />
+              <Route path="/dns64-cookies" element={<DNS64CookiesPage />} />
+              <Route path="/zone-transfer" element={<ZoneTransferPage />} />
             </Routes>
           </div>
         </main>
@@ -73,7 +80,9 @@ function AppContent() {
 export default function App() {
   return (
     <ThemeProvider>
-      <AppContent />
+      <NotificationProvider>
+        <AppContent />
+      </NotificationProvider>
     </ThemeProvider>
   );
 }
