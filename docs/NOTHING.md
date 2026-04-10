@@ -451,7 +451,7 @@ WS     /ws                              — WebSocket live query stream
 |---|------|-------------|----------------|
 | PERF-01 | DNSSEC pre-signing | Sign at zone load/update instead of on-the-fly | 10-50x DNSSEC query speed |
 | PERF-02 | Cache eviction | LRU/TTL-based partial eviction instead of Clear() | Stable performance under memory pressure |
-| PERF-03 | Zone lookup | Radix tree / suffix tree instead of map iteration | O(n) → O(log n) zone matching |
+| PERF-03 | Zone lookup | Radix tree — implemented (O(log n) via suffix tree in `internal/zone/radix.go`). Note: query names that are not subdomains of any zone return the closest parent zone (e.g., `other.com.` → `com.`), matching `isSubdomain` fallback behavior. | O(n) → O(log n) zone matching |
 | PERF-04 | Connection pooling | QUIC connection reuse for DoQ | Reduced handshake overhead |
 | PERF-05 | Buffer pooling | Expand `sync.Pool` usage | Reduced GC pressure |
 | PERF-06 | Batch metrics | Per-goroutine counters + periodic merge instead of atomic counters | Reduced false sharing |

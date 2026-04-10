@@ -51,6 +51,7 @@ type integratedHandler struct {
 	metrics       *metrics.MetricsCollector
 	validator     *dnssec.Validator
 	zoneSigners   map[string]*dnssec.Signer
+	zoneTree      *zone.RadixTree     // Radix tree for O(log n) zone matching
 	cluster       *cluster.Cluster
 	axfrServer    *transfer.AXFRServer
 	ixfrServer    *transfer.IXFRServer
@@ -311,34 +312,46 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 	// Collect matching zones under the read lock, then release before processing
 	// to avoid blocking reload writers (zonesMu.Lock()) for extended periods.
 	h.zonesMu.RLock()
+	tree := h.zoneTree
 	var matchedZones []struct {
 		name string
 		z    *zone.Zone
 	}
-	for origin, z := range h.zones {
-		if isSubdomain(qname, origin) {
+	// Fast path: use radix tree for O(log n) best-match lookup
+	if tree != nil {
+		if best := tree.Find(qname); best != nil {
 			matchedZones = append(matchedZones, struct {
 				name string
 				z    *zone.Zone
-			}{origin, z})
+			}{best.Origin, best})
 		}
-	}
-	if h.kvPersistence != nil {
-		for name, z := range h.kvPersistence.Manager().List() {
-			if isSubdomain(qname, name) {
+	} else {
+		// Fallback: iterate all zones
+		for origin, z := range h.zones {
+			if isSubdomain(qname, origin) {
 				matchedZones = append(matchedZones, struct {
 					name string
 					z    *zone.Zone
-				}{name, z})
+				}{origin, z})
 			}
 		}
-	} else if h.zoneManager != nil {
-		for name, z := range h.zoneManager.List() {
-			if isSubdomain(qname, name) {
-				matchedZones = append(matchedZones, struct {
-					name string
-					z    *zone.Zone
-				}{name, z})
+		if h.kvPersistence != nil {
+			for name, z := range h.kvPersistence.Manager().List() {
+				if isSubdomain(qname, name) {
+					matchedZones = append(matchedZones, struct {
+						name string
+						z    *zone.Zone
+					}{name, z})
+				}
+			}
+		} else if h.zoneManager != nil {
+			for name, z := range h.zoneManager.List() {
+				if isSubdomain(qname, name) {
+					matchedZones = append(matchedZones, struct {
+						name string
+						z    *zone.Zone
+					}{name, z})
+				}
 			}
 		}
 	}
@@ -1168,6 +1181,30 @@ func extractNSNames(resp *protocol.Message) []string {
 		}
 	}
 	return nsNames
+}
+
+// RebuildZoneTree rebuilds the zone radix tree from all zone sources.
+// Call after adding or removing zones to maintain O(log n) zone lookup.
+func (h *integratedHandler) RebuildZoneTree() {
+	h.zonesMu.Lock()
+	defer h.zonesMu.Unlock()
+
+	// Merge all zone sources into one map for the radix tree
+	merged := make(map[string]*zone.Zone)
+	for k, v := range h.zones {
+		merged[k] = v
+	}
+	if h.kvPersistence != nil {
+		for k, v := range h.kvPersistence.Manager().List() {
+			merged[k] = v
+		}
+	}
+	if h.zoneManager != nil {
+		for k, v := range h.zoneManager.List() {
+			merged[k] = v
+		}
+	}
+	h.zoneTree = zone.BuildRadixTree(merged)
 }
 
 // ReloadViews reloads split-horizon view configuration and zone files.

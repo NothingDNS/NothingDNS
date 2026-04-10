@@ -271,6 +271,7 @@ func run() error {
 		upstream:      client,
 		loadBalancer:  loadBalancer,
 		zones:         zones,
+		zoneTree:      zone.BuildRadixTree(zones),
 		zoneManager:   zoneManagerInstance,
 		kvPersistence: kvPersistence,
 		blocklist:     bl,
@@ -760,6 +761,8 @@ func run() error {
 					}
 				}
 			}
+			// Rebuild zone radix tree after zone changes
+			handler.RebuildZoneTree()
 			// Reload blocklist
 			if bl != nil {
 				if err := bl.Reload(); err != nil {
