@@ -15,6 +15,9 @@ var staticFS embed.FS
 // distFS is the embedded React SPA filesystem rooted at "static/dist".
 var distFS, _ = fs.Sub(staticFS, "static/dist")
 
+// DistFS exposes the embedded filesystem for use by the API server.
+var DistFS = distFS
+
 // SPAHandler returns an http.Handler that serves the React SPA.
 // Static assets are served from /assets/. All other non-API, non-WebSocket
 // routes return index.html for client-side routing.
@@ -45,7 +48,7 @@ func SPAHandler() http.Handler {
 	})
 }
 
-// GetLoginHTML returns the login page HTML.
+// GetLoginHTML returns the login page HTML (legacy fallback).
 func GetLoginHTML() string {
 	return loginHTML
 }

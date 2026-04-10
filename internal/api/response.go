@@ -227,6 +227,19 @@ type UserResponse struct {
 	Updated  string `json:"updated_at,omitempty"`
 }
 
+// BootstrapRequest is the request body for POST /api/v1/auth/bootstrap.
+type BootstrapRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+// BootstrapResponse is returned by POST /api/v1/auth/bootstrap.
+type BootstrapResponse struct {
+	Token    string `json:"token"`
+	Username string `json:"username"`
+	Role     string `json:"role"`
+}
+
 // CreateUserRequest is the request body for POST /api/v1/auth/users.
 type CreateUserRequest struct {
 	Username string `json:"username"`

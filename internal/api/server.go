@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/url"
@@ -411,7 +412,9 @@ func (s *Server) Start() error {
 		return nil
 	}
 
-	// Capture goroutine baseline on startup
+	// Capture goroutine baseline on startup. This is a preliminary baseline;
+	// a proper baseline is captured later via SetGoroutineBaseline() after
+	// all servers (DNS, cluster, etc.) are running.
 	atomic.StoreInt64(&s.goroutineBaseline, int64(runtime.NumGoroutine()))
 
 	// Start rate limiter cleanup goroutine
@@ -474,9 +477,10 @@ func (s *Server) Start() error {
 	// Server config (read-only)
 	mux.HandleFunc("/api/v1/server/config", s.handleServerConfig)
 
-	// Auth endpoints (no auth required for login, all require auth for others)
+	// Auth endpoints (no auth required for login, bootstrap requires no auth when no users exist)
 	if s.authStore != nil {
 		mux.HandleFunc("/api/v1/auth/login", s.handleLogin)
+		mux.HandleFunc("/api/v1/auth/bootstrap", s.handleBootstrap)
 		mux.HandleFunc("/api/v1/auth/users", s.handleUsers)
 		mux.HandleFunc("/api/v1/auth/roles", s.handleRoles)
 		mux.HandleFunc("/api/v1/auth/logout", s.handleLogout)
@@ -528,6 +532,13 @@ func (s *Server) Start() error {
 	}()
 
 	return nil
+}
+
+// SetGoroutineBaseline captures the current goroutine count as the baseline.
+// Call this after all servers (DNS, cluster, etc.) have started their worker goroutines
+// for accurate leak detection.
+func (s *Server) SetGoroutineBaseline() {
+	atomic.StoreInt64(&s.goroutineBaseline, int64(runtime.NumGoroutine()))
 }
 
 // Stop stops the API server.
@@ -624,13 +635,20 @@ func isOriginAllowed(origin string, allowed []string) bool {
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Skip auth for login and public endpoints
-		if r.URL.Path == "/api/v1/auth/login" {
+		if r.URL.Path == "/api/v1/auth/login" || r.URL.Path == "/api/v1/auth/bootstrap" {
 			next.ServeHTTP(w, r)
 			return
 		}
 
 		// Skip auth for health and readiness endpoints (public information)
 		if r.URL.Path == "/health" || r.URL.Path == "/ready" || r.URL.Path == "/readyz" || r.URL.Path == "/livez" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Skip auth for static assets (React SPA) — let spaHandler serve them
+		if strings.HasPrefix(r.URL.Path, "/assets/") ||
+			r.URL.Path == "/favicon.svg" || r.URL.Path == "/favicon.ico" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -690,12 +708,20 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			}
 		}
 
-		// For SPA routes, serve the login page instead of JSON error
+		// For SPA routes, serve the React SPA instead of the old login HTML
+		// The React app handles authentication internally
 		if !strings.HasPrefix(r.URL.Path, "/api/") && !strings.HasPrefix(r.URL.Path, "/assets/") &&
 			r.URL.Path != "/health" && r.URL.Path != "/ws" &&
 			!strings.HasSuffix(r.URL.Path, ".svg") && !strings.HasSuffix(r.URL.Path, ".ico") {
+			indexHTML, err := fs.ReadFile(dashboard.DistFS, "index.html")
+			if err != nil {
+				// Fallback to old login HTML if React SPA not available
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.Write([]byte(dashboard.GetLoginHTML()))
+				return
+			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.Write([]byte(dashboard.GetLoginHTML()))
+			w.Write(indexHTML)
 			return
 		}
 
@@ -757,12 +783,15 @@ func (s *Server) handleReadiness(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleLiveness(w http.ResponseWriter, r *http.Request) {
 	status := "alive"
 	code := http.StatusOK
+	current := int64(0)
+	baseline := atomic.LoadInt64(&s.goroutineBaseline)
 
 	// Check for goroutine leak: compare current goroutine count to baseline
-	baseline := atomic.LoadInt64(&s.goroutineBaseline)
 	if baseline > 0 {
-		current := int64(runtime.NumGoroutine())
-		// Allow up to 2x baseline growth to account for normal async operations
+		current = int64(runtime.NumGoroutine())
+		// Allow up to 2x baseline growth to detect actual goroutine leaks.
+		// Baseline is now set via SetGoroutineBaseline() after all servers are running,
+		// so a 2x multiplier is sufficient to catch leaks while avoiding false positives.
 		if current > baseline*2 {
 			status = "goroutine_leak"
 			code = http.StatusServiceUnavailable
@@ -2486,16 +2515,16 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate user
-	user, err := s.authStore.GetUser(req.Username)
-	if err != nil {
+	// Validate user credentials
+	if !s.authStore.VerifyUserPassword(req.Username, req.Password) {
 		s.loginLimiter.recordFailedAttempt(ip, req.Username)
 		s.writeError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
 	}
 
-	// Verify password
-	if !auth.VerifyPassword(req.Password, user.Hash) {
+	// Get user for role and token generation
+	user, err := s.authStore.GetUser(req.Username)
+	if err != nil {
 		s.loginLimiter.recordFailedAttempt(ip, req.Username)
 		s.writeError(w, http.StatusUnauthorized, "Invalid credentials")
 		return
@@ -2527,6 +2556,97 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Username: user.Username,
 		Role:     string(user.Role),
 		Expires:  token.ExpiresAt.Format(time.RFC3339),
+	})
+}
+
+// handleBootstrap creates the first admin user when no users exist.
+// This endpoint allows initial setup without pre-configured credentials.
+func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	if s.authStore == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Auth not configured")
+		return
+	}
+
+	// Get client IP for localhost check
+	ip := getClientIP(r)
+	isLocalhost := ip == "127.0.0.1" || ip == "::1"
+
+	users := s.authStore.ListUsers()
+
+	// Allow bootstrap from localhost even if default admin exists (for password reset)
+	// Allow bootstrap from remote only if no users exist (first-time setup)
+	if len(users) > 0 && !isLocalhost {
+		s.writeError(w, http.StatusForbidden, "Bootstrap not available: users already exist. Use localhost for initial setup.")
+		return
+	}
+
+	var req BootstrapRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if req.Username == "" || req.Password == "" {
+		s.writeError(w, http.StatusBadRequest, "Username and password required")
+		return
+	}
+
+	if len(req.Username) < 2 || len(req.Username) > 64 {
+		s.writeError(w, http.StatusBadRequest, "Username must be 2-64 characters")
+		return
+	}
+
+	if len(req.Password) < 8 {
+		s.writeError(w, http.StatusBadRequest, "Password must be at least 8 characters")
+		return
+	}
+
+	var user *auth.User
+	var err error
+
+	if len(users) > 0 {
+		// Users exist (from localhost) - update the existing user's password
+		user, err = s.authStore.UpdateUser(req.Username, req.Password, "")
+		if err != nil {
+			s.writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+	} else {
+		// No users - create the first admin user
+		user, err = s.authStore.CreateUser(req.Username, req.Password, auth.RoleAdmin)
+		if err != nil {
+			s.writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+	}
+
+	// Generate token
+	token, err := s.authStore.GenerateToken(req.Username, 24*time.Hour)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "Failed to generate token")
+		return
+	}
+
+	// Set cookie
+	http.SetCookie(w, &http.Cookie{
+		Name:     "ndns_token",
+		Value:    token.Token,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   r.TLS != nil,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   86400,
+	})
+
+	s.writeJSON(w, http.StatusOK, &BootstrapResponse{
+		Token:    token.Token,
+		Username: user.Username,
+		Role:     string(user.Role),
 	})
 }
 

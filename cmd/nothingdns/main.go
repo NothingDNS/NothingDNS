@@ -596,6 +596,9 @@ func run() error {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
+	// Capture proper goroutine baseline after all servers are running
+	apiServer.SetGoroutineBaseline()
+
 	logger.Info("Server started successfully")
 
 	// Wait for signals

@@ -1,9 +1,11 @@
 package storage
 
 import (
+	"encoding/gob"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -119,8 +121,30 @@ func (s *KVStore) load() error {
 	}
 	defer f.Close()
 
-	decoder := json.NewDecoder(f)
-	return decoder.Decode(&s.root)
+	// Detect format: JSON starts with '{', GOB starts with GOB magic or type name
+	header := make([]byte, 16)
+	n, err := f.Read(header)
+	if err != nil || n == 0 {
+		return fmt.Errorf("cannot read data file header: %w", err)
+	}
+
+	// Reset to beginning for actual decoding
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("cannot seek data file: %w", err)
+	}
+
+	// JSON files start with '{', GOB files start with GOB type encoding
+	if n > 0 && header[0] == '{' {
+		// JSON format
+		decoder := json.NewDecoder(f)
+		return decoder.Decode(&s.root)
+	}
+
+	// GOB format (legacy) — decode and convert to JSON-compatible structure
+	if err := gob.NewDecoder(f).Decode(&s.root); err != nil {
+		return fmt.Errorf("failed to decode data file (tried JSON and GOB): %w", err)
+	}
+	return nil
 }
 
 // save saves data to disk atomically using a temp file + rename.

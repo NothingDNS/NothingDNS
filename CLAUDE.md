@@ -50,14 +50,32 @@ Violation of any rule is a blocking issue.
 - Upstream TCP messages must check `len(packed) > 65535` before sending
 - UDP truncation must be record-boundary-aware (remove answers from the end, not byte-level cut)
 
+### Build, Lint & Test
+
+```bash
+go build -o nothingdns ./cmd/nothingdns        # Server binary
+go build -o dnsctl ./cmd/dnsctl                # CLI binary
+go vet ./...                                   # Lint
+go test ./... -count=1 -short                  # All tests (short mode)
+go test ./internal/protocol/ -run TestName    # Single test
+```
+
 ### RTK Commands
 
-This project uses [RTK](https://github.com/nothingdns/rtk) for token-optimized command output. RTK prefixes commands automatically:
+This project uses [RTK](https://github.com/nothingdns/rtk) for token-optimized output:
 - `rtk go build ./...` — compact build output
 - `rtk go test ./...` — failures only (90%+ token savings)
 - `rtk go vet ./...` — grouped violations
+- `rtk go fmt ./...` — format check
 - `rtk git status` — compact status
+- `rtk git diff` — compact diff
+- `rtk git log` — compact log
+- `rtk git add` — compact staging
+- `rtk git commit` — compact commit
 - `rtk gh pr view <num>` — compact PR view
+- `rtk gh run list` — compact workflow runs
+
+RTK passes through any unlisted subcommands (e.g., `rtk git branch -a`).
 
 ### Web Dashboard
 
