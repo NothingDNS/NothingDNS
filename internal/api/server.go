@@ -2128,6 +2128,37 @@ func (s *Server) handleBlocklistActions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// List sources: GET /api/v1/blocklists/sources
+	if path == "sources" && r.Method == http.MethodGet {
+		sources := s.blocklist.GetSources()
+		s.writeJSON(w, http.StatusOK, sources)
+		return
+	}
+
+	// Toggle source: POST /api/v1/blocklists/{id}/toggle
+	if strings.HasSuffix(path, "/toggle") {
+		if r.Method != http.MethodPost {
+			s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+			return
+		}
+		if s.requireOperator(w, r) {
+			return
+		}
+		id := strings.TrimSuffix(path, "/toggle")
+		decodedID, err := url.QueryUnescape(id)
+		if err != nil {
+			decodedID = id
+		}
+		enabled, err := s.blocklist.ToggleSource(decodedID)
+		if err != nil {
+			s.writeError(w, http.StatusNotFound, "Source not found")
+			return
+		}
+		state := map[bool]string{true: "enabled", false: "disabled"}[enabled]
+		s.writeJSON(w, http.StatusOK, &MessageResponse{Message: fmt.Sprintf("Source %s", state)})
+		return
+	}
+
 	// Delete by file path: /api/v1/blocklists/{filepath}
 	if r.Method == http.MethodDelete {
 		if s.requireOperator(w, r) {
@@ -2138,11 +2169,11 @@ func (s *Server) handleBlocklistActions(w http.ResponseWriter, r *http.Request) 
 		if err != nil {
 			decodedPath = path
 		}
-		if err := s.blocklist.RemoveFile(decodedPath); err != nil {
-			s.writeError(w, http.StatusBadRequest, fmt.Sprintf("Failed to remove blocklist file: %v", err))
+		if err := s.blocklist.RemoveSource(decodedPath); err != nil {
+			s.writeError(w, http.StatusBadRequest, fmt.Sprintf("Failed to remove blocklist source: %v", err))
 			return
 		}
-		s.writeJSON(w, http.StatusOK, &MessageResponse{Message: "Blocklist file removed"})
+		s.writeJSON(w, http.StatusOK, &MessageResponse{Message: "Blocklist source removed"})
 		return
 	}
 

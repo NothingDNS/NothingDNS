@@ -21,12 +21,15 @@ type Entry struct {
 
 // Blocklist manages blocked domains.
 type Blocklist struct {
-	mu         sync.RWMutex
-	entries    map[string]Entry
-	files      []string
-	urls       []string
-	enabled    bool
-	httpClient *http.Client
+	mu              sync.RWMutex
+	entries         map[string]Entry
+	files           []string
+	urls            []string
+	enabled         bool
+	httpClient      *http.Client
+	sourceEntries   map[string]map[string]Entry // source → domain → Entry
+	disabledSources map[string]bool            // source → disabled
+	manualEntries  map[string]Entry           // manually added domains (no source)
 }
 
 // Config holds blocklist configuration.
@@ -39,10 +42,13 @@ type Config struct {
 // New creates a new blocklist manager.
 func New(cfg Config) *Blocklist {
 	bl := &Blocklist{
-		entries: make(map[string]Entry),
-		files:   cfg.Files,
-		urls:    cfg.URLs,
-		enabled: cfg.Enabled,
+		entries:         make(map[string]Entry),
+		sourceEntries:   make(map[string]map[string]Entry),
+		disabledSources: make(map[string]bool),
+		manualEntries:   make(map[string]Entry),
+		files:           cfg.Files,
+		urls:            cfg.URLs,
+		enabled:         cfg.Enabled,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -60,6 +66,7 @@ func (bl *Blocklist) Load() error {
 	defer bl.mu.Unlock()
 
 	bl.entries = make(map[string]Entry)
+	bl.sourceEntries = make(map[string]map[string]Entry)
 
 	// Load from files
 	for _, file := range bl.files {
@@ -216,6 +223,10 @@ func (bl *Blocklist) loadURL(url string) error {
 					Domain:  domain,
 					Comment: "url:" + url,
 				}
+				if bl.sourceEntries[url] == nil {
+					bl.sourceEntries[url] = make(map[string]Entry)
+				}
+				bl.sourceEntries[url][domain] = Entry{Domain: domain, Comment: "url:" + url}
 			}
 			continue
 		}
@@ -237,6 +248,10 @@ func (bl *Blocklist) loadURL(url string) error {
 			Domain:  domain,
 			Comment: comment,
 		}
+		if bl.sourceEntries[url] == nil {
+			bl.sourceEntries[url] = make(map[string]Entry)
+		}
+		bl.sourceEntries[url][domain] = Entry{Domain: domain, Comment: comment}
 	}
 
 	return scanner.Err()
@@ -286,6 +301,10 @@ func (bl *Blocklist) loadFile(path string) error {
 			Domain:  domain,
 			Comment: comment,
 		}
+		if bl.sourceEntries[path] == nil {
+			bl.sourceEntries[path] = make(map[string]Entry)
+		}
+		bl.sourceEntries[path][domain] = Entry{Domain: domain, Comment: comment}
 	}
 
 	return scanner.Err()
@@ -303,18 +322,35 @@ func (bl *Blocklist) IsBlocked(domain string) bool {
 
 	domain = strings.ToLower(strings.TrimSuffix(domain, "."))
 
-	// Check exact match
-	if _, blocked := bl.entries[domain]; blocked {
-		return true
+	// Check each enabled source
+	for source, entries := range bl.sourceEntries {
+		if bl.disabledSources[source] {
+			continue
+		}
+		// Check exact match
+		if _, blocked := entries[domain]; blocked {
+			return true
+		}
+		// Check parent domains by finding dots and checking substrings
+		// For "sub.ads.example.com", check "ads.example.com", then "example.com"
+		for i := 0; i < len(domain); i++ {
+			if domain[i] == '.' && i < len(domain)-1 {
+				parent := domain[i+1:]
+				if _, blocked := entries[parent]; blocked {
+					return true
+				}
+			}
+		}
 	}
 
-	// Check parent domains by finding dots and checking substrings
-	// For "sub.ads.example.com", check "ads.example.com", then "example.com"
-	// This avoids O(n²) string split+join operations
+	// Check manually added domains
+	if _, blocked := bl.manualEntries[domain]; blocked {
+		return true
+	}
 	for i := 0; i < len(domain); i++ {
 		if domain[i] == '.' && i < len(domain)-1 {
-			parent := domain[i+1:] // Everything after this dot
-			if _, blocked := bl.entries[parent]; blocked {
+			parent := domain[i+1:]
+			if _, blocked := bl.manualEntries[parent]; blocked {
 				return true
 			}
 		}
@@ -409,6 +445,10 @@ func (bl *Blocklist) RemoveFile(path string) error {
 	}
 	bl.files = newFiles
 
+	// Clean up source tracking
+	delete(bl.sourceEntries, path)
+	delete(bl.disabledSources, path)
+
 	// Rebuild entries from remaining files
 	bl.entries = make(map[string]Entry)
 	for _, f := range bl.files {
@@ -426,6 +466,109 @@ func (bl *Blocklist) SetEnabled(enabled bool) {
 	bl.enabled = enabled
 }
 
+// SourceInfo describes a blocklist source (file or URL).
+type SourceInfo struct {
+	ID      string `json:"id"`
+	Type    string `json:"type"` // "file" or "url"
+	Enabled bool   `json:"enabled"`
+	Domains int    `json:"domains"`
+}
+
+// GetSources returns status for all blocklist sources.
+func (bl *Blocklist) GetSources() []SourceInfo {
+	bl.mu.RLock()
+	defer bl.mu.RUnlock()
+
+	var sources []SourceInfo
+	for _, f := range bl.files {
+		sources = append(sources, SourceInfo{
+			ID:      f,
+			Type:    "file",
+			Enabled: !bl.disabledSources[f],
+			Domains: len(bl.sourceEntries[f]),
+		})
+	}
+	for _, u := range bl.urls {
+		sources = append(sources, SourceInfo{
+			ID:      u,
+			Type:    "url",
+			Enabled: !bl.disabledSources[u],
+			Domains: len(bl.sourceEntries[u]),
+		})
+	}
+	return sources
+}
+
+// ToggleSource enables or disables a blocklist source.
+// Returns the new enabled state and an error if the source is not found.
+func (bl *Blocklist) ToggleSource(id string) (bool, error) {
+	bl.mu.Lock()
+	defer bl.mu.Unlock()
+
+	// Check if source exists
+	found := false
+	for _, f := range bl.files {
+		if f == id {
+			found = true
+			break
+		}
+	}
+	if !found {
+		for _, u := range bl.urls {
+			if u == id {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		return false, fmt.Errorf("source not found: %s", id)
+	}
+
+	bl.disabledSources[id] = !bl.disabledSources[id]
+	return !bl.disabledSources[id], nil
+}
+
+// RemoveSource removes a source by ID (file path or URL).
+func (bl *Blocklist) RemoveSource(id string) error {
+	bl.mu.Lock()
+	defer bl.mu.Unlock()
+
+	// Try as file
+	for i, f := range bl.files {
+		if f == id {
+			bl.files = append(bl.files[:i], bl.files[i+1:]...)
+			delete(bl.sourceEntries, id)
+			delete(bl.disabledSources, id)
+			// Rebuild entries
+			bl.entries = make(map[string]Entry)
+			for _, f := range bl.files {
+				if err := bl.loadFile(f); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}
+	// Try as URL
+	for i, u := range bl.urls {
+		if u == id {
+			bl.urls = append(bl.urls[:i], bl.urls[i+1:]...)
+			delete(bl.sourceEntries, id)
+			delete(bl.disabledSources, id)
+			// Rebuild entries
+			bl.entries = make(map[string]Entry)
+			for _, u := range bl.urls {
+				if err := bl.loadURL(u); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("source not found: %s", id)
+}
+
 // AddDomain adds a single domain to the blocklist in-memory.
 func (bl *Blocklist) AddDomain(domain string) {
 	bl.mu.Lock()
@@ -433,6 +576,7 @@ func (bl *Blocklist) AddDomain(domain string) {
 
 	d := strings.ToLower(strings.TrimSuffix(domain, "."))
 	bl.entries[d] = Entry{Domain: d}
+	bl.manualEntries[d] = Entry{Domain: d}
 }
 
 // RemoveDomain removes a single domain from the blocklist in-memory.
@@ -442,6 +586,7 @@ func (bl *Blocklist) RemoveDomain(domain string) {
 
 	d := strings.ToLower(strings.TrimSuffix(domain, "."))
 	delete(bl.entries, d)
+	delete(bl.manualEntries, d)
 }
 
 // ListFiles returns the list of configured blocklist file paths.
