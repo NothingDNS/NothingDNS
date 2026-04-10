@@ -428,17 +428,17 @@ WS     /ws                              — WebSocket live query stream
 
 ## 13. SECURITY GAPS
 
-| # | Issue | Description | Priority |
-|---|-------|-------------|----------|
-| SEC-01 | Handler panic = server crash | No panic recovery (to be fixed by PH-01) | CRITICAL |
-| SEC-02 | TSIG signing error silent | Unsigned zone transfers accepted (BUG-006) | HIGH |
-| SEC-03 | RPZ bypass | Response IP and Client IP policies not working (BUG-007) | HIGH |
-| SEC-04 | Single shared auth token | No multi-user, no RBAC. Token leak = full access | HIGH |
-| SEC-05 | Cache key DoS | Very long domain names → unbounded cache keys | MEDIUM |
-| SEC-06 | Resolver MaxDepth unlimited | Config value passed without bounds check (DEBT-006) | MEDIUM |
-| SEC-07 | Incomplete audit trail | Zone transfers, DDNS, config changes not logged (DEBT-004) | MEDIUM |
-| SEC-08 | No API rate limiting | REST API endpoints have no rate limits | MEDIUM |
-| SEC-09 | CORS policy | API server missing CORS header configuration | LOW |
+| # | Issue | Description | Priority | Status |
+|---|-------|-------------|----------|--------|
+| SEC-01 | Handler panic = server crash | No panic recovery (PH-01 fixed) | CRITICAL | ✅ Done |
+| SEC-02 | TSIG signing error silent | Unsigned zone transfers accepted (BUG-006) | HIGH | ✅ Done |
+| SEC-03 | RPZ bypass | Response IP and Client IP policies not working (BUG-007) | HIGH | ✅ Done |
+| SEC-04 | Single shared auth token | No multi-user, no RBAC. Token leak = full access | HIGH | 🔴 Missing |
+| SEC-05 | Cache key DoS | Very long domain names → unbounded cache keys | MEDIUM | 🔴 Missing |
+| SEC-06 | Resolver MaxDepth unlimited | Config value passed without bounds check (DEBT-006) | MEDIUM | ✅ Done |
+| SEC-07 | Incomplete audit trail | Zone transfers, DDNS, config changes not logged (DEBT-004) | MEDIUM | ✅ Done |
+| SEC-08 | No API rate limiting | REST API endpoints have no rate limits | MEDIUM | 🔴 Missing |
+| SEC-09 | CORS policy | API server missing CORS header configuration | LOW | 🔴 Missing |
 
 ---
 
