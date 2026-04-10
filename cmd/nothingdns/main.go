@@ -621,6 +621,24 @@ func run() error {
 
 	logger.Info("Server started successfully")
 
+	// Write PID file if configured
+	if cfg.Server.PIDFile != "" {
+		if err := os.WriteFile(cfg.Server.PIDFile, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0644); err != nil {
+			logger.Warnf("Failed to write PID file %s: %v", cfg.Server.PIDFile, err)
+		} else {
+			logger.Infof("Wrote PID to %s", cfg.Server.PIDFile)
+		}
+	}
+
+	// Send systemd notify if configured
+	if cfg.Server.SystemdNotify != "" {
+		if err := sdNotifySend(cfg.Server.SystemdNotify); err != nil {
+			logger.Warnf("Failed to send systemd notify: %v", err)
+		} else {
+			logger.Infof("Sent systemd READY=1 to %s", cfg.Server.SystemdNotify)
+		}
+	}
+
 	// Wait for signals
 	for {
 		sig := <-sigChan
@@ -686,6 +704,12 @@ func run() error {
 			case <-shutdownCtx.Done():
 				logger.Warnf("Server shutdown timed out after 30s")
 			}
+
+			// Clean up PID file
+			if cfg.Server.PIDFile != "" {
+				os.Remove(cfg.Server.PIDFile)
+			}
+
 			return nil
 
 		case syscall.SIGHUP:
@@ -880,6 +904,30 @@ func validateConfigOnly(path string) error {
 	}
 	if errs := cfg.Validate(); len(errs) > 0 {
 		return fmt.Errorf("config validation failed: %s", strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+// sdNotifySend sends a notification to systemd via unix sock.
+func sdNotifySend(socket string) error {
+	// Try NOTIFY_SOCKET environment variable first, then explicit path
+	notifySocket := socket
+	if notifySocket == "" {
+		notifySocket = os.Getenv("NOTIFY_SOCKET")
+	}
+	if notifySocket == "" {
+		return fmt.Errorf("no systemd notify socket configured")
+	}
+
+	conn, err := net.Dial("unixgram", notifySocket)
+	if err != nil {
+		return fmt.Errorf("dialing systemd socket: %w", err)
+	}
+	defer conn.Close()
+
+	_, err = conn.Write([]byte("READY=1\n"))
+	if err != nil {
+		return fmt.Errorf("writing to systemd socket: %w", err)
 	}
 	return nil
 }

@@ -322,6 +322,12 @@ type ServerConfig struct {
 	// Worker pool sizes
 	UDPWorkers int `yaml:"udp_workers"`
 	TCPWorkers int `yaml:"tcp_workers"`
+
+	// PID file path (optional, for daemon mode)
+	PIDFile string `yaml:"pid_file"`
+
+	// Systemd notify socket path (empty = disabled)
+	SystemdNotify string `yaml:"systemd_notify"`
 }
 
 // TLSConfig contains TLS settings for DNS over TLS.
