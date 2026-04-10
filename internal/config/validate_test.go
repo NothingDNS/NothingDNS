@@ -13,8 +13,8 @@ func TestValidateServer(t *testing.T) {
 		errCount int
 	}{
 		{
-			name: "valid default config",
-			cfg:  DefaultConfig(),
+			name:    "valid default config",
+			cfg:     DefaultConfig(),
 			wantErr: false,
 		},
 		{

@@ -1470,9 +1470,9 @@ func TestLoadBalancerSelectAnycastTargetNoBackends(t *testing.T) {
 		anycastGroups: map[string]*AnycastGroup{
 			"192.0.2.1": NewAnycastGroup("192.0.2.1", 30*time.Second, 5*time.Second),
 		},
-		strategy:  Random,
-		udpPool:   make(map[string]*sync.Pool),
-		tcpPool:   make(map[string]*sync.Pool),
+		strategy: Random,
+		udpPool:  make(map[string]*sync.Pool),
+		tcpPool:  make(map[string]*sync.Pool),
 	}
 
 	_, err := lb.selectAnycastTarget()

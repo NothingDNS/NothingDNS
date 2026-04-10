@@ -85,11 +85,11 @@ func (c *SlaveZoneConfig) Validate() error {
 
 // SlaveZone represents a slave zone being replicated.
 type SlaveZone struct {
-	Config     SlaveZoneConfig
-	Zone       *zone.Zone
-	LastSerial uint32
+	Config       SlaveZoneConfig
+	Zone         *zone.Zone
+	LastSerial   uint32
 	LastTransfer time.Time
-	mu         sync.RWMutex
+	mu           sync.RWMutex
 }
 
 // NewSlaveZone creates a new slave zone.
@@ -133,13 +133,13 @@ func (sz *SlaveZone) GetLastSerial() uint32 {
 // SlaveManager manages slave zones and handles automatic zone transfers.
 // It listens for NOTIFY messages and initiates zone transfers when needed.
 type SlaveManager struct {
-	slaveZones   map[string]*SlaveZone  // zone name -> slave zone
-	clients      map[string]*IXFRClient // zone name -> IXFR client
-	notifyChan   chan *NOTIFYRequest
-	stopChan     chan struct{}
-	keyStore     *KeyStore
-	mu           sync.RWMutex
-	wg           sync.WaitGroup
+	slaveZones map[string]*SlaveZone  // zone name -> slave zone
+	clients    map[string]*IXFRClient // zone name -> IXFR client
+	notifyChan chan *NOTIFYRequest
+	stopChan   chan struct{}
+	keyStore   *KeyStore
+	mu         sync.RWMutex
+	wg         sync.WaitGroup
 }
 
 // NewSlaveManager creates a new slave zone manager.

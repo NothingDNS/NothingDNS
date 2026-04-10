@@ -19,19 +19,19 @@ import (
 type Role string
 
 const (
-	RoleAdmin   Role = "admin"   // Full access
+	RoleAdmin    Role = "admin"    // Full access
 	RoleOperator Role = "operator" // Can modify zones, cache, config
-	RoleViewer  Role = "viewer"  // Read-only access
+	RoleViewer   Role = "viewer"   // Read-only access
 )
 
 // User represents a user account.
 type User struct {
-	Username  string   `json:"username"`
-	Password  string   `json:"-"` // Never expose in JSON
-	Hash      []byte   `json:"hash"` // Stored password hash
-	Role      Role     `json:"role"`
-	CreatedAt string   `json:"created_at"`
-	UpdatedAt string   `json:"updated_at"`
+	Username  string `json:"username"`
+	Password  string `json:"-"`    // Never expose in JSON
+	Hash      []byte `json:"hash"` // Stored password hash
+	Role      Role   `json:"role"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 // Token represents an active authentication token.
@@ -49,14 +49,14 @@ type Store struct {
 	mu            sync.RWMutex
 	users         map[string]*User
 	tokens        map[string]*Token
-	secret        []byte        // HMAC signing key
-	tokenFilePath string        // Path to persist tokens (optional)
+	secret        []byte // HMAC signing key
+	tokenFilePath string // Path to persist tokens (optional)
 }
 
 // Config holds auth store configuration.
 type Config struct {
-	Secret      string   `yaml:"secret"`        // HMAC signing key
-	Users       []User   `yaml:"users"`         // Initial users
+	Secret      string   `yaml:"secret"`       // HMAC signing key
+	Users       []User   `yaml:"users"`        // Initial users
 	TokenExpiry Duration `yaml:"token_expiry"` // Token TTL (default: 24h)
 }
 
@@ -341,8 +341,8 @@ func (s *Store) CreateUser(username, password string, role Role) (*User, error) 
 	now := time.Now().UTC().Format(time.RFC3339)
 	user := &User{
 		Username:  username,
-		Hash:     hash,
-		Role:     role,
+		Hash:      hash,
+		Role:      role,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -484,9 +484,9 @@ func (s *Store) HasRole(username string, required Role) bool {
 
 	// Admin > Operator > Viewer
 	roleOrder := map[Role]int{
-		RoleViewer:  1,
+		RoleViewer:   1,
 		RoleOperator: 2,
-		RoleAdmin:   3,
+		RoleAdmin:    3,
 	}
 
 	return roleOrder[user.Role] >= roleOrder[required]

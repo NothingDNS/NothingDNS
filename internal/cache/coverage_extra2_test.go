@@ -62,11 +62,11 @@ func TestSetNegative_MinTTLClamping(t *testing.T) {
 	}
 
 	// Entry should NOT be expired at 8 seconds (since TTL was clamped to 10s).
-	if entry.IsExpired(time.Now().Add(8*time.Second)) {
+	if entry.IsExpired(time.Now().Add(8 * time.Second)) {
 		t.Error("entry should not be expired at 8s (negativeTTL clamped to minTTL=10s)")
 	}
 	// Entry SHOULD be expired well after 10 seconds.
-	if !entry.IsExpired(time.Now().Add(12*time.Second)) {
+	if !entry.IsExpired(time.Now().Add(12 * time.Second)) {
 		t.Error("entry should be expired at 12s (negativeTTL clamped to minTTL=10s)")
 	}
 }
@@ -88,11 +88,11 @@ func TestSetNegative_MaxTTLClamping(t *testing.T) {
 	}
 
 	// Entry should NOT be expired at 4 seconds (TTL clamped to maxTTL=5s).
-	if entry.IsExpired(time.Now().Add(4*time.Second)) {
+	if entry.IsExpired(time.Now().Add(4 * time.Second)) {
 		t.Error("entry should not be expired at 4s (negativeTTL clamped to maxTTL=5s)")
 	}
 	// Entry SHOULD be expired after 6 seconds.
-	if !entry.IsExpired(time.Now().Add(6*time.Second)) {
+	if !entry.IsExpired(time.Now().Add(6 * time.Second)) {
 		t.Error("entry should be expired at 6s (negativeTTL clamped to maxTTL=5s)")
 	}
 }

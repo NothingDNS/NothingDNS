@@ -23,13 +23,13 @@ const (
 
 // Common label errors.
 var (
-	ErrLabelTooLong     = errors.New("label too long")
-	ErrNameTooLong      = errors.New("domain name too long")
-	ErrInvalidLabel     = errors.New("invalid label")
-	ErrInvalidPointer   = errors.New("invalid compression pointer")
-	ErrPointerLoop      = errors.New("compression pointer loop detected")
-	ErrPointerTooDeep   = errors.New("compression pointer depth exceeded")
-	ErrInvalidWireData  = errors.New("invalid wire format data")
+	ErrLabelTooLong    = errors.New("label too long")
+	ErrNameTooLong     = errors.New("domain name too long")
+	ErrInvalidLabel    = errors.New("invalid label")
+	ErrInvalidPointer  = errors.New("invalid compression pointer")
+	ErrPointerLoop     = errors.New("compression pointer loop detected")
+	ErrPointerTooDeep  = errors.New("compression pointer depth exceeded")
+	ErrInvalidWireData = errors.New("invalid wire format data")
 )
 
 // Name represents a DNS domain name as a sequence of labels.

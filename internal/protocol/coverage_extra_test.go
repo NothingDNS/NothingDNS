@@ -122,7 +122,7 @@ func TestResourceRecordPackTypeTooSmall(t *testing.T) {
 		Type:  TypeA,
 		Class: ClassIN,
 		TTL:   300,
-		Data: &RDataA{Address: [4]byte{1, 2, 3, 4}},
+		Data:  &RDataA{Address: [4]byte{1, 2, 3, 4}},
 	}
 
 	// Buffer just enough for name but not for type (2 bytes)
@@ -141,7 +141,7 @@ func TestResourceRecordPackClassTooSmall(t *testing.T) {
 		Type:  TypeA,
 		Class: ClassIN,
 		TTL:   300,
-		Data: &RDataA{Address: [4]byte{1, 2, 3, 4}},
+		Data:  &RDataA{Address: [4]byte{1, 2, 3, 4}},
 	}
 
 	nameWireLen := name.WireLength()
@@ -160,7 +160,7 @@ func TestResourceRecordPackTTLTooSmall(t *testing.T) {
 		Type:  TypeA,
 		Class: ClassIN,
 		TTL:   300,
-		Data: &RDataA{Address: [4]byte{1, 2, 3, 4}},
+		Data:  &RDataA{Address: [4]byte{1, 2, 3, 4}},
 	}
 
 	nameWireLen := name.WireLength()
@@ -179,7 +179,7 @@ func TestResourceRecordPackRDLengthTooSmall(t *testing.T) {
 		Type:  TypeA,
 		Class: ClassIN,
 		TTL:   300,
-		Data: &RDataA{Address: [4]byte{1, 2, 3, 4}},
+		Data:  &RDataA{Address: [4]byte{1, 2, 3, 4}},
 	}
 
 	nameWireLen := name.WireLength()
@@ -789,8 +789,8 @@ func TestRDataNSEC3MultiWindow(t *testing.T) {
 		Salt:          []byte{0xAA},
 		NextHashed:    []byte{0x01, 0x02},
 		TypeBitMap: []uint16{
-			TypeA,   // Window 0
-			0x0101,  // Window 1
+			TypeA,  // Window 0
+			0x0101, // Window 1
 		},
 	}
 

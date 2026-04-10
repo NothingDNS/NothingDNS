@@ -320,8 +320,8 @@ func TestWireNameLength(t *testing.T) {
 // TestCompareNames tests CompareNames function
 func TestCompareNames(t *testing.T) {
 	tests := []struct {
-		a, b  string
-		want  int
+		a, b string
+		want int
 	}{
 		{"example.com.", "example.com.", 0},
 		{"a.example.com.", "b.example.com.", -1},
@@ -403,7 +403,7 @@ func TestBufferPool(t *testing.T) {
 	PutBuffer(b2)
 
 	// Test PutBufferSized
-	b3 := NewBuffer(10000)    // Large buffer
+	b3 := NewBuffer(10000)   // Large buffer
 	PutBufferSized(b3, 5000) // Should be discarded (too large)
 }
 
@@ -464,12 +464,12 @@ func TestPutUnpackUint16(t *testing.T) {
 func TestValidateMessage(t *testing.T) {
 	// Valid message (header only)
 	header := make([]byte, 12)
-	binary.BigEndian.PutUint16(header[0:2], 0x1234)   // ID
-	binary.BigEndian.PutUint16(header[2:4], 0x0100)   // Flags
-	binary.BigEndian.PutUint16(header[4:6], 1)        // QDCOUNT
-	binary.BigEndian.PutUint16(header[6:8], 0)        // ANCOUNT
-	binary.BigEndian.PutUint16(header[8:10], 0)       // NSCOUNT
-	binary.BigEndian.PutUint16(header[10:12], 0)      // ARCOUNT
+	binary.BigEndian.PutUint16(header[0:2], 0x1234) // ID
+	binary.BigEndian.PutUint16(header[2:4], 0x0100) // Flags
+	binary.BigEndian.PutUint16(header[4:6], 1)      // QDCOUNT
+	binary.BigEndian.PutUint16(header[6:8], 0)      // ANCOUNT
+	binary.BigEndian.PutUint16(header[8:10], 0)     // NSCOUNT
+	binary.BigEndian.PutUint16(header[10:12], 0)    // ARCOUNT
 	if err := ValidateMessage(header); err != nil {
 		t.Errorf("ValidateMessage failed for valid header: %v", err)
 	}
@@ -675,49 +675,49 @@ func TestFlagsMethods(t *testing.T) {
 // TestFlagsString tests Flags.String
 func TestFlagsString(t *testing.T) {
 	tests := []struct {
-		name     string
-		flags    Flags
-		wantHas  []string
+		name    string
+		flags   Flags
+		wantHas []string
 	}{
 		{
-			name:     "query",
-			flags:    NewQueryFlags(),
-			wantHas:  []string{"rd", "NOERROR"},
+			name:    "query",
+			flags:   NewQueryFlags(),
+			wantHas: []string{"rd", "NOERROR"},
 		},
 		{
-			name:     "response",
-			flags:    NewResponseFlags(RcodeSuccess),
-			wantHas:  []string{"qr", "aa", "ra", "NOERROR"},
+			name:    "response",
+			flags:   NewResponseFlags(RcodeSuccess),
+			wantHas: []string{"qr", "aa", "ra", "NOERROR"},
 		},
 		{
-			name:     "all_flags",
-			flags:    Flags{QR: true, Opcode: OpcodeQuery, AA: true, TC: true, RD: true, RA: true, AD: true, CD: true, RCODE: RcodeRefused},
-			wantHas:  []string{"qr", "aa", "tc", "rd", "ra", "ad", "cd", "REFUSED"},
+			name:    "all_flags",
+			flags:   Flags{QR: true, Opcode: OpcodeQuery, AA: true, TC: true, RD: true, RA: true, AD: true, CD: true, RCODE: RcodeRefused},
+			wantHas: []string{"qr", "aa", "tc", "rd", "ra", "ad", "cd", "REFUSED"},
 		},
 		{
-			name:     "opcode_notify",
-			flags:    Flags{Opcode: OpcodeNotify, RCODE: RcodeSuccess},
-			wantHas:  []string{"NOTIFY", "NOERROR"},
+			name:    "opcode_notify",
+			flags:   Flags{Opcode: OpcodeNotify, RCODE: RcodeSuccess},
+			wantHas: []string{"NOTIFY", "NOERROR"},
 		},
 		{
-			name:     "opcode_update",
-			flags:    Flags{Opcode: OpcodeUpdate, RCODE: RcodeSuccess},
-			wantHas:  []string{"UPDATE", "NOERROR"},
+			name:    "opcode_update",
+			flags:   Flags{Opcode: OpcodeUpdate, RCODE: RcodeSuccess},
+			wantHas: []string{"UPDATE", "NOERROR"},
 		},
 		{
-			name:     "opcode_status",
-			flags:    Flags{Opcode: OpcodeStatus, RCODE: RcodeSuccess},
-			wantHas:  []string{"STATUS", "NOERROR"},
+			name:    "opcode_status",
+			flags:   Flags{Opcode: OpcodeStatus, RCODE: RcodeSuccess},
+			wantHas: []string{"STATUS", "NOERROR"},
 		},
 		{
-			name:     "opcode_iquery",
-			flags:    Flags{Opcode: OpcodeIQuery, RCODE: RcodeSuccess},
-			wantHas:  []string{"IQUERY", "NOERROR"},
+			name:    "opcode_iquery",
+			flags:   Flags{Opcode: OpcodeIQuery, RCODE: RcodeSuccess},
+			wantHas: []string{"IQUERY", "NOERROR"},
 		},
 		{
-			name:     "unknown_opcode",
-			flags:    Flags{Opcode: 15, RCODE: RcodeSuccess},
-			wantHas:  []string{"OPCODE15", "NOERROR"},
+			name:    "unknown_opcode",
+			flags:   Flags{Opcode: 15, RCODE: RcodeSuccess},
+			wantHas: []string{"OPCODE15", "NOERROR"},
 		},
 	}
 

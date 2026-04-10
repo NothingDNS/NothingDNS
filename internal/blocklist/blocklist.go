@@ -28,8 +28,8 @@ type Blocklist struct {
 	enabled         bool
 	httpClient      *http.Client
 	sourceEntries   map[string]map[string]Entry // source → domain → Entry
-	disabledSources map[string]bool            // source → disabled
-	manualEntries  map[string]Entry           // manually added domains (no source)
+	disabledSources map[string]bool             // source → disabled
+	manualEntries   map[string]Entry            // manually added domains (no source)
 }
 
 // Config holds blocklist configuration.

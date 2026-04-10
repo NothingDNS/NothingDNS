@@ -10,9 +10,9 @@ import (
 func TestDecodeVarint1Byte(t *testing.T) {
 	// 1-byte encoding: prefix 00, value 0-63
 	tests := []struct {
-		data   []byte
-		want   uint64
-		wantN  int
+		data  []byte
+		want  uint64
+		wantN int
 	}{
 		{[]byte{0x00}, 0, 1},
 		{[]byte{0x01}, 1, 1},
@@ -190,15 +190,15 @@ func TestParseLongHeader(t *testing.T) {
 	// Length: varint
 	// Pkt num: 0x0000
 	data := []byte{
-		0xC1,                                           // first byte
-		0x00, 0x00, 0x00, 0x01,                         // version
+		0xC1,                   // first byte
+		0x00, 0x00, 0x00, 0x01, // version
 		0x08,                                           // DCID len
 		0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, // DCID
-		0x00,                                           // SCID len
-		0x00,                                           // Token len
-		0x03,                                           // Length (varint, 1 byte = 3)
-		0x00, 0x00,                                     // Packet number + payload
-		0xAA,                                           // payload byte
+		0x00,       // SCID len
+		0x00,       // Token len
+		0x03,       // Length (varint, 1 byte = 3)
+		0x00, 0x00, // Packet number + payload
+		0xAA, // payload byte
 	}
 
 	hdr, consumed, err := ParseLongHeader(data)
@@ -287,7 +287,7 @@ func TestBuildLongHeaderInvalidPktNumLen(t *testing.T) {
 func TestParseShortHeader(t *testing.T) {
 	connIDLen := 4
 	data := []byte{
-		0x40,       // short header first byte
+		0x40,                   // short header first byte
 		0x01, 0x02, 0x03, 0x04, // DCID
 		0xAA, 0xBB, // payload
 	}

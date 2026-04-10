@@ -39,10 +39,10 @@ func TestParseDomain(t *testing.T) {
 		{"*", false},            // Wildcard
 		{"*.example.com", false},
 		{"a.b.c.d.e.f.example.com", false},
-		{"", false}, // Root domain is valid
-		{".", false}, // Root domain with trailing dot is valid
-		{"-invalid.com", true},  // Label cannot start with hyphen
-		{"invalid-.com", true},  // Label cannot end with hyphen
+		{"", false},            // Root domain is valid
+		{".", false},           // Root domain with trailing dot is valid
+		{"-invalid.com", true}, // Label cannot start with hyphen
+		{"invalid-.com", true}, // Label cannot end with hyphen
 		{"test..example.com", true},
 	}
 
@@ -212,8 +212,8 @@ func TestSplitDomain(t *testing.T) {
 
 func TestJoinLabels(t *testing.T) {
 	tests := []struct {
-		labels []string
-		fqdn   bool
+		labels   []string
+		fqdn     bool
 		expected string
 	}{
 		{[]string{"www", "example", "com"}, false, "www.example.com"},
@@ -307,8 +307,8 @@ func TestLongestCommonSuffix(t *testing.T) {
 		b        string
 		expected int
 	}{
-		{"www.example.com", "mail.example.com", 2},  // example.com
-		{"a.b.c.d", "x.y.c.d", 2},                   // c.d
+		{"www.example.com", "mail.example.com", 2}, // example.com
+		{"a.b.c.d", "x.y.c.d", 2},                  // c.d
 		{"example.com", "example.org", 0},
 		{"same.domain.com", "same.domain.com", 3},
 	}

@@ -42,8 +42,8 @@ func TestAXFRServer_zoneRecordToRR_InvalidOwner_Extra5(t *testing.T) {
 func TestAXFRServer_generateAXFRRecords_InvalidRName_Extra5(t *testing.T) {
 	z := zone.NewZone("example.com.")
 	z.SOA = &zone.SOARecord{
-		MName: "ns1.example.com.",
-		RName: strings.Repeat("a", 70) + ".example.com.", // Invalid: label > 63 chars
+		MName:  "ns1.example.com.",
+		RName:  strings.Repeat("a", 70) + ".example.com.", // Invalid: label > 63 chars
 		Serial: 42, TTL: 3600,
 	}
 	s := NewAXFRServer(map[string]*zone.Zone{"example.com.": z})
@@ -60,8 +60,8 @@ func TestAXFRServer_generateAXFRRecords_InvalidRName_Extra5(t *testing.T) {
 func TestAXFRServer_generateAXFRRecords_InvalidMName_Extra5(t *testing.T) {
 	z := zone.NewZone("example.com.")
 	z.SOA = &zone.SOARecord{
-		MName: strings.Repeat("a", 70) + ".example.com.", // Invalid: label > 63 chars
-		RName: "admin.example.com.",
+		MName:  strings.Repeat("a", 70) + ".example.com.", // Invalid: label > 63 chars
+		RName:  "admin.example.com.",
 		Serial: 42, TTL: 3600,
 	}
 	s := NewAXFRServer(map[string]*zone.Zone{"example.com.": z})

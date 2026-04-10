@@ -79,7 +79,7 @@ func DefaultValidatorConfig() ValidatorConfig {
 		IgnoreTime:         false,
 		MaxDelegationDepth: 20,
 		ClockSkew:          5 * time.Minute,
-		ValidationCacheTTL:  5 * time.Minute,
+		ValidationCacheTTL: 5 * time.Minute,
 	}
 }
 
@@ -121,7 +121,7 @@ func newValidationCacheIfNeeded(config ValidatorConfig) *ValidationCache {
 // DNSSECStatus returns the current DNSSEC validation status.
 func (v *Validator) DNSSECStatus() DNSSECStatus {
 	return DNSSECStatus{
-		Enabled:      v.config.Enabled,
+		Enabled:       v.config.Enabled,
 		RequireDNSSEC: v.config.RequireDNSSEC,
 	}
 }
@@ -187,11 +187,11 @@ func (v *Validator) ValidateResponse(ctx context.Context, msg *protocol.Message,
 
 // chainLink represents one link in the validation chain.
 type chainLink struct {
-	zone         string
-	dnsKeys      []*protocol.ResourceRecord
-	dsRecords    []*protocol.ResourceRecord
-	validated    bool
-	nsec3Param   *protocol.RDataNSEC3PARAM // NSEC3 parameters for this zone (if using NSEC3)
+	zone       string
+	dnsKeys    []*protocol.ResourceRecord
+	dsRecords  []*protocol.ResourceRecord
+	validated  bool
+	nsec3Param *protocol.RDataNSEC3PARAM // NSEC3 parameters for this zone (if using NSEC3)
 }
 
 // buildChain builds a validation chain from trust anchor to target.

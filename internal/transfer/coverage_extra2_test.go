@@ -750,7 +750,7 @@ func TestHandleUpdate_ACLDenied(t *testing.T) {
 		Header: protocol.Header{
 			ID:      0x2222,
 			QDCount: 1,
-			Flags: protocol.Flags{Opcode: protocol.OpcodeUpdate},
+			Flags:   protocol.Flags{Opcode: protocol.OpcodeUpdate},
 		},
 		Questions: []*protocol.Question{
 			{Name: name, QType: protocol.TypeSOA, QClass: protocol.ClassIN},

@@ -61,7 +61,7 @@ func TestNewDoQServerWithConfig(t *testing.T) {
 	cfg := &Config{
 		TransportParams: DefaultTransportParams(),
 		MaxStreams:      50,
-		MaxStreamData:  131072,
+		MaxStreamData:   131072,
 		MaxData:         524288,
 	}
 
@@ -511,8 +511,8 @@ func TestDoQServerHandleShortHeaderNoConnection(t *testing.T) {
 
 	// Short header packet with no matching connection should be silently dropped.
 	data := []byte{
-		0x40,                         // Short header
-		0x01, 0x02, 0x03, 0x04,       // DCID (4 bytes)
+		0x40,                   // Short header
+		0x01, 0x02, 0x03, 0x04, // DCID (4 bytes)
 		0xAA, 0xBB, 0xCC, 0xDD, 0xEE, // Payload
 	}
 	srv.handlePacket(data, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345})

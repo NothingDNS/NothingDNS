@@ -191,11 +191,11 @@ func (s *TrustAnchorStore) Clear() {
 
 // RFC 7958 XML structures
 type trustAnchorXML struct {
-	XMLName    xml.Name         `xml:"TrustAnchor"`
-	ID         string           `xml:"id,attr"`
-	Source     string           `xml:"source,attr"`
-	Zone       string           `xml:"Zone"`
-	KeyDigests []keyDigestXML   `xml:"KeyDigest"`
+	XMLName    xml.Name       `xml:"TrustAnchor"`
+	ID         string         `xml:"id,attr"`
+	Source     string         `xml:"source,attr"`
+	Zone       string         `xml:"Zone"`
+	KeyDigests []keyDigestXML `xml:"KeyDigest"`
 }
 
 type keyDigestXML struct {

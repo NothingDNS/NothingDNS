@@ -38,7 +38,7 @@ func Encode0x20(name string) string {
 	for i := 0; i < len(name); i++ {
 		c := name[i]
 		if isASCIILetter(c) {
-			if (randomBits[bitIdx/8] >> (bitIdx % 8)) & 1 == 0 {
+			if (randomBits[bitIdx/8]>>(bitIdx%8))&1 == 0 {
 				c = toUpper(c)
 			} else {
 				c = toLower(c)

@@ -38,7 +38,7 @@ type Cache interface {
 
 // CacheEntry represents a cached DNS response.
 type CacheEntry struct {
-	Message *protocol.Message
+	Message    *protocol.Message
 	IsNegative bool
 	RCode      uint8
 }
@@ -104,7 +104,7 @@ func NewResolver(config Config, cache Cache, transport Transport) *Resolver {
 
 // delegation holds NS names and their resolved addresses for a zone.
 type delegation struct {
-	nsNames []string           // NS hostnames
+	nsNames []string            // NS hostnames
 	addrs   map[string][]string // nsName -> IP addresses (glue or resolved)
 }
 
@@ -602,9 +602,9 @@ func findDNAME(answers []*protocol.ResourceRecord, name string) dnameResult {
 		dnameTarget := strings.ToLower(dnameData.DName.String())
 		synthTarget := strings.TrimSuffix(nameLower, dnameOwner) + dnameTarget
 		return dnameResult{
-			dnameRR:    rr,
+			dnameRR:     rr,
 			synthTarget: synthTarget,
-			found:      true,
+			found:       true,
 		}
 	}
 	return dnameResult{}

@@ -333,8 +333,8 @@ func TestGeoRecord(t *testing.T) {
 func TestGeoRule(t *testing.T) {
 	rec := &GeoRecord{Default: "1.1.1.1"}
 	rule := &GeoRule{
-		Domain:    "example.com",
-		Type:      "A",
+		Domain:     "example.com",
+		Type:       "A",
 		GeoRecords: rec,
 	}
 

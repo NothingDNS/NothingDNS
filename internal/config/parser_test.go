@@ -284,9 +284,9 @@ tags:
 
 func TestNodeIsMethods(t *testing.T) {
 	tests := []struct {
-		input    string
-		isScalar bool
-		isMapping bool
+		input      string
+		isScalar   bool
+		isMapping  bool
 		isSequence bool
 	}{
 		{"value", true, false, false},

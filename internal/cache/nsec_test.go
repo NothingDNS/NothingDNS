@@ -150,8 +150,8 @@ func TestNSECCacheNODATA(t *testing.T) {
 		Class: protocol.ClassIN,
 		TTL:   300,
 		Data: &protocol.RDataSOA{
-			MName: mustName("ns1.example.com."),
-			RName: mustName("admin.example.com."),
+			MName:  mustName("ns1.example.com."),
+			RName:  mustName("admin.example.com."),
 			Serial: 1, Refresh: 3600, Retry: 600, Expire: 86400, Minimum: 300,
 		},
 	}
@@ -204,8 +204,8 @@ func TestNSECCacheExpiration(t *testing.T) {
 		Class: protocol.ClassIN,
 		TTL:   1,
 		Data: &protocol.RDataSOA{
-			MName: mustName("ns1.example.com."),
-			RName: mustName("admin.example.com."),
+			MName:  mustName("ns1.example.com."),
+			RName:  mustName("admin.example.com."),
 			Serial: 1, Refresh: 3600, Retry: 600, Expire: 86400, Minimum: 1,
 		},
 	}

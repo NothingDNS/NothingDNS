@@ -116,7 +116,7 @@ func TestTCPServerEDNS0ClientSubnet(t *testing.T) {
 			Name:  mustParseName("."),
 			Type:  protocol.TypeOPT,
 			Class: 4096,
-			Data:   opt,
+			Data:  opt,
 		},
 	}
 

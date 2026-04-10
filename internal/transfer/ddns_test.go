@@ -669,11 +669,11 @@ func TestDynamicDNSHandler_HandleUpdate_WithUpdates(t *testing.T) {
 		},
 		Authorities: []*protocol.ResourceRecord{
 			{
-				Name:   updateName,
-				Type:   protocol.TypeA,
-				Class:  protocol.ClassIN,
-				TTL:    3600,
-				Data:   &protocol.RDataA{Address: [4]byte{192, 0, 2, 1}},
+				Name:  updateName,
+				Type:  protocol.TypeA,
+				Class: protocol.ClassIN,
+				TTL:   3600,
+				Data:  &protocol.RDataA{Address: [4]byte{192, 0, 2, 1}},
 			},
 		},
 	}

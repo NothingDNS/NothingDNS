@@ -25,7 +25,7 @@ func TestVerifySignatureUnsupportedAlgorithm(t *testing.T) {
 	}
 	pub := &PublicKey{Algorithm: 200, Key: &privKey.PublicKey}
 	sig := &protocol.RDataRRSIG{
-		Algorithm:  200,
+		Algorithm: 200,
 		Signature: make([]byte, 128),
 	}
 	err = VerifySignature(sig, []byte("data"), pub)
@@ -61,7 +61,7 @@ func TestVerifyECDSAUnsupportedAlgorithmInKey(t *testing.T) {
 	}
 	pub := &PublicKey{Algorithm: 200, Key: &privKey.PublicKey}
 	sig := &protocol.RDataRRSIG{
-		Algorithm:  200,
+		Algorithm: 200,
 		Signature: make([]byte, 64),
 	}
 	err = VerifySignature(sig, []byte("data"), pub)
@@ -225,7 +225,7 @@ func TestVerifySignatureECDSAP384RoundTrip(t *testing.T) {
 
 	pub := &PublicKey{Algorithm: protocol.AlgorithmECDSAP384SHA384, Key: &privKey.PublicKey}
 	sig := &protocol.RDataRRSIG{
-		Algorithm:  protocol.AlgorithmECDSAP384SHA384,
+		Algorithm: protocol.AlgorithmECDSAP384SHA384,
 		Signature: signature,
 	}
 	err = VerifySignature(sig, data, pub)
@@ -246,7 +246,7 @@ func TestVerifyECDSAUnsupportedInSwitch(t *testing.T) {
 	// Use a key with algorithm that doesn't match P256 or P384
 	pub := &PublicKey{Algorithm: 200, Key: &privKey.PublicKey}
 	sig := &protocol.RDataRRSIG{
-		Algorithm:  200,
+		Algorithm: 200,
 		Signature: make([]byte, 64),
 	}
 	err = VerifySignature(sig, []byte("data"), pub)
@@ -638,4 +638,3 @@ func TestFindRRSIG_NoMatch(t *testing.T) {
 		t.Error("expected nil when no RRSIG found")
 	}
 }
-

@@ -28,16 +28,16 @@ type IXFRRequest struct {
 //   2. If server has history: sequences of changes
 //   3. If no history: full AXFR format
 type IXFRResponse struct {
-	ZoneName   string
-	Records    []*protocol.ResourceRecord
-	IsAXFR     bool   // True if fell back to full AXFR
-	OldSerial  uint32 // Client's original serial
-	NewSerial  uint32 // Server's current serial
+	ZoneName  string
+	Records   []*protocol.ResourceRecord
+	IsAXFR    bool   // True if fell back to full AXFR
+	OldSerial uint32 // Client's original serial
+	NewSerial uint32 // Server's current serial
 }
 
 // IXFRJournalEntry represents a single change to the zone
 type IXFRJournalEntry struct {
-	Serial    uint32    // SOA serial after this change
+	Serial    uint32 // SOA serial after this change
 	Added     []zone.RecordChange
 	Deleted   []zone.RecordChange
 	Timestamp time.Time
@@ -46,9 +46,9 @@ type IXFRJournalEntry struct {
 // IXFRServer handles IXFR requests
 // RFC 1995 - Incremental Zone Transfer in DNS
 type IXFRServer struct {
-	axfrServer     *AXFRServer                    // For AXFR fallback
+	axfrServer     *AXFRServer // For AXFR fallback
 	zones          map[string]*zone.Zone
- journals       map[string][]*IXFRJournalEntry // zone name -> journal entries (in-memory cache)
+	journals       map[string][]*IXFRJournalEntry // zone name -> journal entries (in-memory cache)
 	journalsMu     sync.RWMutex                   // Protects journals map
 	journalStore   JournalStore                   // Optional persistent storage
 	maxJournalSize int                            // Maximum entries per zone

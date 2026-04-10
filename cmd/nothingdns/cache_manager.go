@@ -26,8 +26,8 @@ type CacheManager struct {
 	MemMonitor  *memory.Monitor
 	logger      *util.Logger
 	persistPath string
-	stopCh     chan struct{}
-	wg         sync.WaitGroup
+	stopCh      chan struct{}
+	wg          sync.WaitGroup
 }
 
 // NewCacheManager creates a new cache manager with the given configuration.

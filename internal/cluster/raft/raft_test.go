@@ -9,12 +9,12 @@ import (
 
 // mockTransport implements Transport for testing.
 type mockTransport struct {
-	sendVoteCalled     int
-	sendAppendCalled  int
-	voteResp          *VoteResponse
-	appendResp        *AppendResponse
-	voteRespErr       error
-	appendRespErr     error
+	sendVoteCalled   int
+	sendAppendCalled int
+	voteResp         *VoteResponse
+	appendResp       *AppendResponse
+	voteRespErr      error
+	appendRespErr    error
 }
 
 func (m *mockTransport) SendRequestVote(peerID NodeID, req VoteRequest) (*VoteResponse, error) {
@@ -71,54 +71,54 @@ func TestNodeStartStop(t *testing.T) {
 
 func TestHandleVoteRequest(t *testing.T) {
 	tests := []struct {
-		name        string
-		nodeTerm    Term
-		votedFor    NodeID
+		name          string
+		nodeTerm      Term
+		votedFor      NodeID
 		candidateTerm Term
-		lastLogIdx  Index
-		lastLogTerm Term
-		wantGranted bool
-		wantTerm    Term
+		lastLogIdx    Index
+		lastLogTerm   Term
+		wantGranted   bool
+		wantTerm      Term
 	}{
 		{
-			name:        "vote for candidate with newer term",
-			nodeTerm:    1,
-			votedFor:    "",
+			name:          "vote for candidate with newer term",
+			nodeTerm:      1,
+			votedFor:      "",
 			candidateTerm: 2,
-			lastLogIdx:  1,
-			lastLogTerm: 1,
-			wantGranted: true,
-			wantTerm:    2,
+			lastLogIdx:    1,
+			lastLogTerm:   1,
+			wantGranted:   true,
+			wantTerm:      2,
 		},
 		{
-			name:        "reject candidate with older term",
-			nodeTerm:    3,
-			votedFor:    "",
+			name:          "reject candidate with older term",
+			nodeTerm:      3,
+			votedFor:      "",
 			candidateTerm: 2,
-			lastLogIdx:  1,
-			lastLogTerm: 1,
-			wantGranted: false,
-			wantTerm:    3,
+			lastLogIdx:    1,
+			lastLogTerm:   1,
+			wantGranted:   false,
+			wantTerm:      3,
 		},
 		{
-			name:        "reject already voted for different candidate",
-			nodeTerm:    2,
-			votedFor:    "node3",
+			name:          "reject already voted for different candidate",
+			nodeTerm:      2,
+			votedFor:      "node3",
 			candidateTerm: 2,
-			lastLogIdx:  1,
-			lastLogTerm: 1,
-			wantGranted: false,
-			wantTerm:    2,
+			lastLogIdx:    1,
+			lastLogTerm:   1,
+			wantGranted:   false,
+			wantTerm:      2,
 		},
 		{
-			name:        "allow vote for same candidate again",
-			nodeTerm:    2,
-			votedFor:    "node2",
+			name:          "allow vote for same candidate again",
+			nodeTerm:      2,
+			votedFor:      "node2",
 			candidateTerm: 2,
-			lastLogIdx:  1,
-			lastLogTerm: 1,
-			wantGranted: true,
-			wantTerm:    2,
+			lastLogIdx:    1,
+			lastLogTerm:   1,
+			wantGranted:   true,
+			wantTerm:      2,
 		},
 	}
 
@@ -173,7 +173,7 @@ func TestHandleAppendRequest(t *testing.T) {
 			log:        []entry{{Index: 1, Term: 1}},
 			prevIdx:    1,
 			prevTerm:   1,
-			entries:     []entry{{Index: 2, Term: 1, Command: []byte("test")}},
+			entries:    []entry{{Index: 2, Term: 1, Command: []byte("test")}},
 			leaderComm: 1,
 			wantSucc:   true,
 			wantTerm:   1,
@@ -185,7 +185,7 @@ func TestHandleAppendRequest(t *testing.T) {
 			log:        []entry{},
 			prevIdx:    0,
 			prevTerm:   0,
-			entries:     []entry{{Index: 1, Term: 2}},
+			entries:    []entry{{Index: 1, Term: 2}},
 			leaderComm: 0,
 			wantSucc:   false,
 			wantTerm:   3,
@@ -197,7 +197,7 @@ func TestHandleAppendRequest(t *testing.T) {
 			log:        []entry{{Index: 1, Term: 2}}, // term mismatch
 			prevIdx:    1,
 			prevTerm:   1,
-			entries:     []entry{{Index: 2, Term: 1}},
+			entries:    []entry{{Index: 2, Term: 1}},
 			leaderComm: 1,
 			wantSucc:   false,
 			wantTerm:   1,
@@ -688,9 +688,9 @@ func TestZoneStateMachineUnknownCommand(t *testing.T) {
 func TestZoneStateMachineDelNonexistentZone(t *testing.T) {
 	zsm := NewZoneStateMachine()
 	cmd := ZoneCommand{
-		Type: "del_record",
-		Zone: "nonexistent.com.",
-		Name: "www.nonexistent.com.",
+		Type:   "del_record",
+		Zone:   "nonexistent.com.",
+		Name:   "www.nonexistent.com.",
 		RRType: 1,
 	}
 	err := zsm.Apply(entry{Command: mustMarshalJSON(cmd)})

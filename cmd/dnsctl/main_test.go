@@ -20,12 +20,12 @@ import (
 
 func TestParseZoneRecords(t *testing.T) {
 	tests := []struct {
-		name       string
-		zoneData   string
-		origin     string
-		wantCount  int
-		wantTypes  []uint16 // expected record types in order
-		wantNames  []string // expected owner names in order
+		name      string
+		zoneData  string
+		origin    string
+		wantCount int
+		wantTypes []uint16 // expected record types in order
+		wantNames []string // expected owner names in order
 	}{
 		{
 			name: "single A record",
@@ -317,9 +317,9 @@ func TestParseRDataFromZone(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:   "A record IPv6 address rejected",
-			rrtype: protocol.TypeA,
-			rdata:  "2001:db8::1",
+			name:    "A record IPv6 address rejected",
+			rrtype:  protocol.TypeA,
+			rdata:   "2001:db8::1",
 			wantErr: true, // IPv6 is not a valid A record
 		},
 		{
@@ -496,9 +496,9 @@ func TestParseRDataFromZone(t *testing.T) {
 			},
 		},
 		{
-			name:   "RRSIG record invalid base64 signature",
-			rrtype: protocol.TypeRRSIG,
-			rdata:  "A 13 2 300 1735689600 1733088000 12345 example.com. !!invalid!!",
+			name:    "RRSIG record invalid base64 signature",
+			rrtype:  protocol.TypeRRSIG,
+			rdata:   "A 13 2 300 1735689600 1733088000 12345 example.com. !!invalid!!",
 			wantErr: true,
 		},
 		{
@@ -1245,7 +1245,7 @@ func TestWriteAndReadKeyFiles(t *testing.T) {
 
 func TestKeyType(t *testing.T) {
 	tests := []struct {
-		name string
+		name  string
 		isKSK bool
 		want  string
 	}{
@@ -1644,4 +1644,3 @@ func TestHexEncodeConsistency(t *testing.T) {
 		t.Errorf("hexEncode(%v) = %q, want %q", data, got, want)
 	}
 }
-

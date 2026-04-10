@@ -100,9 +100,9 @@ type Cache struct {
 	prefetchThreshold time.Duration
 
 	// Serve-stale (RFC 8767) configuration
-	serveStale     bool
-	staleGrace     time.Duration // How long past expiry to serve stale entries
-	staleServed    uint64        // Count of stale entries served
+	serveStale  bool
+	staleGrace  time.Duration // How long past expiry to serve stale entries
+	staleServed uint64        // Count of stale entries served
 
 	// Storage
 	mu      sync.RWMutex

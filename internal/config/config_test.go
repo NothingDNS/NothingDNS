@@ -1422,8 +1422,8 @@ func TestValidateDNSSEC(t *testing.T) {
 					Signing: SigningConfig{
 						Enabled: true,
 						Keys: []KeyConfig{
-							{PrivateKey: "/keys/5", Type: "ksk", Algorithm: 5},  // RSASHA1
-							{PrivateKey: "/keys/8", Type: "ksk", Algorithm: 8},  // RSASHA256
+							{PrivateKey: "/keys/5", Type: "ksk", Algorithm: 5},   // RSASHA1
+							{PrivateKey: "/keys/8", Type: "ksk", Algorithm: 8},   // RSASHA256
 							{PrivateKey: "/keys/10", Type: "ksk", Algorithm: 10}, // RSASHA512
 							{PrivateKey: "/keys/13", Type: "zsk", Algorithm: 13}, // ECDSAP256SHA256
 							{PrivateKey: "/keys/14", Type: "zsk", Algorithm: 14}, // ECDSAP384SHA384
@@ -1516,10 +1516,10 @@ func TestValidateCluster(t *testing.T) {
 			name: "valid cluster",
 			config: &Config{
 				Cluster: ClusterConfig{
-					Enabled:     true,
-					GossipPort:  7946,
-					Weight:      50,
-					SeedNodes:   []string{"node1:7946"},
+					Enabled:    true,
+					GossipPort: 7946,
+					Weight:     50,
+					SeedNodes:  []string{"node1:7946"},
 				},
 			},
 			wantErr: false,
@@ -1528,8 +1528,8 @@ func TestValidateCluster(t *testing.T) {
 			name: "invalid gossip port",
 			config: &Config{
 				Cluster: ClusterConfig{
-					Enabled:     true,
-					GossipPort:  0,
+					Enabled:    true,
+					GossipPort: 0,
 				},
 			},
 			wantErr: true,
@@ -1613,8 +1613,8 @@ func TestValidateSlaveZones(t *testing.T) {
 		errMsg  string
 	}{
 		{
-			name:   "no slave zones",
-			config: &Config{},
+			name:    "no slave zones",
+			config:  &Config{},
 			wantErr: false,
 		},
 		{
@@ -2596,10 +2596,10 @@ logging: {}
 // reads bind and path when they are explicitly set (not falling through to defaults).
 func TestUnmarshalMetricsWithBindAndPath(t *testing.T) {
 	tests := []struct {
-		name      string
-		input     string
-		wantBind  string
-		wantPath  string
+		name        string
+		input       string
+		wantBind    string
+		wantPath    string
 		wantEnabled bool
 	}{
 		{
@@ -3145,8 +3145,8 @@ func TestValidateUpstreamServerNoPort(t *testing.T) {
 func TestValidateUpstreamInvalidServerPort(t *testing.T) {
 	cfg := &Config{
 		Upstream: UpstreamConfig{
-				Strategy: "random",
-				Servers:  []string{"8.8.8.8:99999"},
+			Strategy: "random",
+			Servers:  []string{"8.8.8.8:99999"},
 		},
 	}
 	errors := cfg.Validate()

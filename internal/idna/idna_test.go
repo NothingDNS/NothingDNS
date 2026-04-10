@@ -272,9 +272,9 @@ func TestIsCombiningMark(t *testing.T) {
 		r    rune
 		want bool
 	}{
-		{0x0300, true},  // Combining grave accent
-		{0x0320, true},  // Combining diaeresis below
-		{0x0930, true},  // Devanagari
+		{0x0300, true}, // Combining grave accent
+		{0x0320, true}, // Combining diaeresis below
+		{0x0930, true}, // Devanagari
 		{'a', false},
 		{'0', false},
 		{0x200D, false}, // ZWJ is not a combining mark in this check
@@ -385,7 +385,7 @@ func TestMapLabel(t *testing.T) {
 	}{
 		{"EXAMPLE", "example"},
 		{"Example", "example"},
-		{"MÜNCHEN", "münchen"},  // Unicode stays as-is but lowercased
+		{"MÜNCHEN", "münchen"}, // Unicode stays as-is but lowercased
 		{"test123", "test123"},
 	}
 
@@ -409,7 +409,7 @@ func TestValidateSTD3(t *testing.T) {
 		{"test123", nil},
 		{"-example", ErrHyphenStart},
 		{"example-", ErrHyphenEnd},
-		{"", nil}, // empty returns nil (not validated)
+		{"", nil},                    // empty returns nil (not validated)
 		{"exam ple", ErrInvalidRune}, // space is invalid
 		{"exam\ble", ErrInvalidRune}, // control char
 	}
@@ -429,13 +429,13 @@ func TestValidateBidi(t *testing.T) {
 		label   string
 		wantErr error
 	}{
-		{"example", nil},                    // All LTR
-		{"مرحبا", nil},                      // All RTL (no number at end)
-		{"hello", nil},                      // LTR
-		{"123abc", nil},                     // LTR with numbers
-		{"a", nil},                          // Single LTR
+		{"example", nil}, // All LTR
+		{"مرحبا", nil},   // All RTL (no number at end)
+		{"hello", nil},   // LTR
+		{"123abc", nil},  // LTR with numbers
+		{"a", nil},       // Single LTR
 		// ErrInvalidBid: RTL string ending with number (Arabic numeral at end)
-		{"مرحبا١٢٣", ErrInvalidBid},        // RTL with Arabic-Indic digits at end (U+0660-0669)
+		{"مرحبا١٢٣", ErrInvalidBid}, // RTL with Arabic-Indic digits at end (U+0660-0669)
 	}
 
 	for _, tt := range tests {
@@ -459,7 +459,7 @@ func TestValidateContext(t *testing.T) {
 		// Arabic-Indic digit preceded by ASCII digit triggers O rule
 		{"test١٢٣", nil}, // Full string has ASCII then Arabic-Indic - no error
 		// ErrContextO: Arabic-Indic digit preceded by ASCII digit
-		{"١٢٣test", nil}, // Arabic-Indic first, then ASCII - no error
+		{"١٢٣test", nil},         // Arabic-Indic first, then ASCII - no error
 		{"test1٢٣", ErrContextO}, // ASCII digit followed by Arabic-Indic - triggers O rule
 	}
 
@@ -479,7 +479,7 @@ func TestDecodeLabel(t *testing.T) {
 		want    string
 		wantErr error
 	}{
-		{"example", "example", nil},     // ASCII only
+		{"example", "example", nil},       // ASCII only
 		{"mnchen-3ya", "mnchen-3ya", nil}, // No encoding
 		{"", "", ErrEmptyLabel},
 	}
@@ -503,8 +503,8 @@ func TestIsJoinable(t *testing.T) {
 		r    rune
 		want bool
 	}{
-		{0x1F600, true},  // Emoji
-		{0x0300, true},   // Combining diacritical
+		{0x1F600, true}, // Emoji
+		{0x0300, true},  // Combining diacritical
 		{'a', false},
 		{'0', false},
 	}
@@ -653,9 +653,9 @@ func TestEncodePunycode(t *testing.T) {
 	tests := []struct {
 		input string
 	}{
-		{"example"},     // ASCII only
-		{"münchen"},     // Has non-ASCII
-		{"München"},     // Uppercase
+		{"example"}, // ASCII only
+		{"münchen"}, // Has non-ASCII
+		{"München"}, // Uppercase
 	}
 
 	for _, tt := range tests {
@@ -673,9 +673,9 @@ func TestDecodePunycode(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"example", "example"},   // ASCII only
-		{"", ""},                 // Empty
-		{"mnchen", "mnchen"},     // No hyphen = ASCII returned as-is
+		{"example", "example"}, // ASCII only
+		{"", ""},               // Empty
+		{"mnchen", "mnchen"},   // No hyphen = ASCII returned as-is
 	}
 
 	for _, tt := range tests {
@@ -692,7 +692,7 @@ func TestAdapt(t *testing.T) {
 	tests := []struct {
 		delta     int
 		numPoints int
-		first    bool
+		first     bool
 	}{
 		{10, 10, true},
 		{10, 10, false},

@@ -12,11 +12,11 @@ import (
 
 // UpdateOperation represents a single update operation
 type UpdateOperation struct {
-	Name       string
-	Type       uint16
-	TTL        uint32
-	RData      string
-	Operation  UpdateOpType
+	Name      string
+	Type      uint16
+	TTL       uint32
+	RData     string
+	Operation UpdateOpType
 }
 
 // UpdateOpType represents the type of update operation
@@ -60,11 +60,11 @@ const (
 
 // UpdateRequest represents a Dynamic DNS update request
 type UpdateRequest struct {
-	ZoneName       string
-	ClientIP       net.IP
-	Prerequisites  []UpdatePrerequisite
-	Updates        []UpdateOperation
-	TSIGKeyName    string
+	ZoneName      string
+	ClientIP      net.IP
+	Prerequisites []UpdatePrerequisite
+	Updates       []UpdateOperation
+	TSIGKeyName   string
 }
 
 // UpdateResponse represents the result of an update request

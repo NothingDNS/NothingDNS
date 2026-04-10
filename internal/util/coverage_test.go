@@ -369,7 +369,7 @@ func TestUnescapeLabelEdgeCases(t *testing.T) {
 		{
 			name:  "backslash followed by unknown char",
 			input: "\\z",
-			want:   "\\z",
+			want:  "\\z",
 		},
 		{
 			name:  "backslash at very end of string",

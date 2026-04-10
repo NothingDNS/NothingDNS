@@ -10,36 +10,36 @@ import (
 
 // Transport parameter IDs (RFC 9000 Section 18.2).
 const (
-	ParamOriginalDestConnID     = 0x0000
-	ParamMaxIdleTimeout         = 0x0001
-	ParamStatelessResetToken    = 0x0002
-	ParamMaxUDPPayloadSize      = 0x0003
-	ParamInitialMaxData         = 0x0004
+	ParamOriginalDestConnID             = 0x0000
+	ParamMaxIdleTimeout                 = 0x0001
+	ParamStatelessResetToken            = 0x0002
+	ParamMaxUDPPayloadSize              = 0x0003
+	ParamInitialMaxData                 = 0x0004
 	ParamInitialMaxStreamDataBidiLocal  = 0x0005
 	ParamInitialMaxStreamDataBidiRemote = 0x0006
 	ParamInitialMaxStreamDataUni        = 0x0007
-	ParamInitialMaxStreamsBidi   = 0x0008
-	ParamInitialMaxStreamsUni    = 0x0009
-	ParamAckDelayExponent       = 0x000a
-	ParamMaxAckDelay            = 0x000b
-	ParamDisableActiveMigration = 0x000c
-	ParamActiveConnIDLimit      = 0x000e
-	ParamInitialSourceConnID    = 0x000f
+	ParamInitialMaxStreamsBidi          = 0x0008
+	ParamInitialMaxStreamsUni           = 0x0009
+	ParamAckDelayExponent               = 0x000a
+	ParamMaxAckDelay                    = 0x000b
+	ParamDisableActiveMigration         = 0x000c
+	ParamActiveConnIDLimit              = 0x000e
+	ParamInitialSourceConnID            = 0x000f
 	// DoQ-specific (RFC 9250)
-	ParamDoQMaxIDLETimeout      = 0x0047 // Draft-identified but not in RFC 9000
+	ParamDoQMaxIDLETimeout = 0x0047 // Draft-identified but not in RFC 9000
 )
 
 // Default transport parameter values.
 const (
-	DefaultMaxUDPPayloadSize    = 65527
-	DefaultInitialMaxData       = 1048576 // 1 MB
-	DefaultInitialMaxStreamData = 262144  // 256 KB
+	DefaultMaxUDPPayloadSize     = 65527
+	DefaultInitialMaxData        = 1048576 // 1 MB
+	DefaultInitialMaxStreamData  = 262144  // 256 KB
 	DefaultInitialMaxStreamsBidi = 100
 	DefaultInitialMaxStreamsUni  = 100
-	DefaultAckDelayExponent     = 3
-	DefaultMaxAckDelay          = 25 // ms
-	DefaultActiveConnIDLimit    = 2
-	DefaultMaxIdleTimeoutMs     = 30000 // 30 seconds
+	DefaultAckDelayExponent      = 3
+	DefaultMaxAckDelay           = 25 // ms
+	DefaultActiveConnIDLimit     = 2
+	DefaultMaxIdleTimeoutMs      = 30000 // 30 seconds
 )
 
 var (
@@ -48,23 +48,23 @@ var (
 
 // TransportParams holds QUIC transport parameters.
 type TransportParams struct {
-	MaxUDPPayloadSize           uint64
-	InitialMaxData              uint64
+	MaxUDPPayloadSize              uint64
+	InitialMaxData                 uint64
 	InitialMaxStreamDataBidiLocal  uint64
 	InitialMaxStreamDataBidiRemote uint64
 	InitialMaxStreamDataUni        uint64
-	InitialMaxStreamsBidi       uint64
-	InitialMaxStreamsUni        uint64
-	MaxIdleTimeout              uint64 // milliseconds
-	AckDelayExponent            uint64
-	MaxAckDelay                 uint64 // milliseconds
-	ActiveConnIDLimit           uint64
-	DisableActiveMigration      bool
-	OriginalDestConnID          ConnectionID
-	InitialSourceConnID         ConnectionID
-	RetrySourceConnID           ConnectionID
-	StatelessResetToken         [16]byte
-	HasStatelessResetToken      bool
+	InitialMaxStreamsBidi          uint64
+	InitialMaxStreamsUni           uint64
+	MaxIdleTimeout                 uint64 // milliseconds
+	AckDelayExponent               uint64
+	MaxAckDelay                    uint64 // milliseconds
+	ActiveConnIDLimit              uint64
+	DisableActiveMigration         bool
+	OriginalDestConnID             ConnectionID
+	InitialSourceConnID            ConnectionID
+	RetrySourceConnID              ConnectionID
+	StatelessResetToken            [16]byte
+	HasStatelessResetToken         bool
 }
 
 // DefaultTransportParams returns server transport parameters with sensible defaults.

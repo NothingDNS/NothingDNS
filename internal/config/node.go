@@ -29,10 +29,10 @@ func (t NodeType) String() string {
 // Node represents a node in the YAML tree.
 type Node struct {
 	Type     NodeType
-	Value    string      // For scalars
-	Children []*Node     // For mappings (key-value pairs) and sequences
-	Line     int         // Line number for error reporting
-	Col      int         // Column number for error reporting
+	Value    string  // For scalars
+	Children []*Node // For mappings (key-value pairs) and sequences
+	Line     int     // Line number for error reporting
+	Col      int     // Column number for error reporting
 }
 
 // IsMapping returns true if this is a mapping node.

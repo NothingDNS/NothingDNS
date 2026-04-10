@@ -26,8 +26,8 @@ const (
 
 // WSHandler handles DNS over WebSocket requests.
 type WSHandler struct {
-	dnsHandler      server.Handler
-	allowedOrigins  []string
+	dnsHandler     server.Handler
+	allowedOrigins []string
 }
 
 // NewWSHandler creates a new DNS-over-WebSocket handler.

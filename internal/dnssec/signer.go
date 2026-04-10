@@ -32,13 +32,13 @@ type SigningKey struct {
 
 // SignerConfig holds signing parameters.
 type SignerConfig struct {
-	NSEC3Enabled        bool
-	NSEC3Algorithm      uint8
-	NSEC3Iterations     uint16
-	NSEC3Salt           []byte
-	NSEC3OptOut         bool   // RFC 5155 Section 6 - opt-out for unsigned delegations
-	SignatureValidity   time.Duration
-	InceptionOffset     time.Duration
+	NSEC3Enabled      bool
+	NSEC3Algorithm    uint8
+	NSEC3Iterations   uint16
+	NSEC3Salt         []byte
+	NSEC3OptOut       bool // RFC 5155 Section 6 - opt-out for unsigned delegations
+	SignatureValidity time.Duration
+	InceptionOffset   time.Duration
 }
 
 // DefaultSignerConfig returns recommended signing settings.
@@ -528,7 +528,7 @@ func (s *Signer) generateNSEC(records []*protocol.ResourceRecord) []*protocol.Re
 func (s *Signer) generateNSEC3(records []*protocol.ResourceRecord) []*protocol.ResourceRecord {
 	// Collect unique owner names and their record types
 	type nameInfo struct {
-		original   string
+		original  string
 		hasNS     bool
 		hasSecure bool // has records that require proof (not just NS)
 	}
@@ -554,10 +554,10 @@ func (s *Signer) generateNSEC3(records []*protocol.ResourceRecord) []*protocol.R
 
 	// Calculate NSEC3 hashes for all names
 	type hashedName struct {
-		original   string
-		hashed     string
-		hashBytes  []byte
-		isOptOut   bool
+		original  string
+		hashed    string
+		hashBytes []byte
+		isOptOut  bool
 	}
 
 	var hashes []hashedName
@@ -572,9 +572,9 @@ func (s *Signer) generateNSEC3(records []*protocol.ResourceRecord) []*protocol.R
 		}
 		hashes = append(hashes, hashedName{
 			original:  name,
-			hashed:   protocol.Base32Encode(hash),
+			hashed:    protocol.Base32Encode(hash),
 			hashBytes: hash,
-			isOptOut: isOptOut,
+			isOptOut:  isOptOut,
 		})
 	}
 
@@ -651,4 +651,3 @@ func (s *Signer) generateNSEC3(records []*protocol.ResourceRecord) []*protocol.R
 func CreateDS(zone string, dnskey *protocol.RDataDNSKEY, digestType uint8) (*TrustAnchor, error) {
 	return DSFromDNSKEY(zone, dnskey, digestType)
 }
-

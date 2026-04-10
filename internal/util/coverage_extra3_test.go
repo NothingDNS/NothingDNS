@@ -52,10 +52,10 @@ func TestUnescapeLabelDecimalEscapeValidValues(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"\\097", "a"},       // 97 = 'a'
-		{"\\048", "0"},       // 48 = '0'
-		{"\\032", " "},       // 32 = space
-		{"\\127", "\x7f"},    // 127 = DEL
+		{"\\097", "a"},    // 97 = 'a'
+		{"\\048", "0"},    // 48 = '0'
+		{"\\032", " "},    // 32 = space
+		{"\\127", "\x7f"}, // 127 = DEL
 	}
 	for _, tt := range tests {
 		result, err := UnescapeLabel(tt.input)

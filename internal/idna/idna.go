@@ -11,21 +11,21 @@ import (
 
 // Errors returned by IDNA operations.
 var (
-	ErrEmptyLabel           = errors.New("empty label")
-	ErrLabelTooLong         = errors.New("label too long")
-	ErrNameTooLong          = errors.New("domain name too long")
-	ErrInvalidRune          = errors.New("invalid rune for IDNA")
-	ErrInvalidPunycode      = errors.New("invalid punycode")
-	ErrInvalidACEPrefix     = errors.New("invalid ACE prefix")
-	ErrInvalidBid           = errors.New("bidirectional restriction violation")
-	ErrContextJ             = errors.New("contextual rule J failure")
-	ErrContextO             = errors.New("contextual rule O failure")
-	ErrHyphenStart          = errors.New("label starts with hyphen")
-	ErrHyphenEnd            = errors.New("label ends with hyphen")
-	ErrDigitStart           = errors.New("label starts with digit")
-	ErrLeadingCombining     = errors.New("leading combining character")
-	ErrDisallowed           = errors.New("disallowed character")
-	ErrUnassigned           = errors.New("unassigned character")
+	ErrEmptyLabel       = errors.New("empty label")
+	ErrLabelTooLong     = errors.New("label too long")
+	ErrNameTooLong      = errors.New("domain name too long")
+	ErrInvalidRune      = errors.New("invalid rune for IDNA")
+	ErrInvalidPunycode  = errors.New("invalid punycode")
+	ErrInvalidACEPrefix = errors.New("invalid ACE prefix")
+	ErrInvalidBid       = errors.New("bidirectional restriction violation")
+	ErrContextJ         = errors.New("contextual rule J failure")
+	ErrContextO         = errors.New("contextual rule O failure")
+	ErrHyphenStart      = errors.New("label starts with hyphen")
+	ErrHyphenEnd        = errors.New("label ends with hyphen")
+	ErrDigitStart       = errors.New("label starts with digit")
+	ErrLeadingCombining = errors.New("leading combining character")
+	ErrDisallowed       = errors.New("disallowed character")
+	ErrUnassigned       = errors.New("unassigned character")
 )
 
 // MaxLabelLength is the maximum length of a label (63 bytes per RFC 5891).
@@ -237,7 +237,6 @@ func validateLabel(label string, isIDNA bool) error {
 	if !isIDNA {
 		return nil
 	}
-
 
 	// Check bidirectional rules (RFC 5893)
 	if err := validateBidi(label); err != nil {

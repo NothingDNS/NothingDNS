@@ -57,8 +57,8 @@ type MetricsCollector struct {
 	tcpErrors      uint64
 
 	// Latency histograms
-	latencyMu      sync.RWMutex
-	latencyHists   map[string]*latencyHistogram // by query type
+	latencyMu    sync.RWMutex
+	latencyHists map[string]*latencyHistogram // by query type
 
 	// Metrics history ring buffer (snapshots every minute, last 60 minutes)
 	historyMu          sync.RWMutex
@@ -68,8 +68,8 @@ type MetricsCollector struct {
 	historyTimestamps  []int64
 	historyQueries     []uint64
 	historyCacheHits   []uint64
-	historyCacheMisses  []uint64
-	historyUpstreamMs   []int64 // average upstream latency in ms per minute
+	historyCacheMisses []uint64
+	historyUpstreamMs  []int64 // average upstream latency in ms per minute
 }
 
 // latencyHistogram implements a fixed-bucket histogram without external dependencies.
@@ -112,20 +112,20 @@ func New(cfg Config) *MetricsCollector {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	return &MetricsCollector{
-		config:          cfg,
-		queriesTotal:    make(map[string]*uint64),
-		responsesTotal:  make(map[uint8]*uint64),
-		upstreamQueries: make(map[string]*uint64),
-		latencyHists:    make(map[string]*latencyHistogram),
-		startTime:       time.Now(),
-		ctx:             ctx,
-		cancel:          cancel,
-		historySize:     60, // 60 minutes of history
-		historyTimestamps: make([]int64, 60),
-		historyQueries:    make([]uint64, 60),
-		historyCacheHits:  make([]uint64, 60),
+		config:             cfg,
+		queriesTotal:       make(map[string]*uint64),
+		responsesTotal:     make(map[uint8]*uint64),
+		upstreamQueries:    make(map[string]*uint64),
+		latencyHists:       make(map[string]*latencyHistogram),
+		startTime:          time.Now(),
+		ctx:                ctx,
+		cancel:             cancel,
+		historySize:        60, // 60 minutes of history
+		historyTimestamps:  make([]int64, 60),
+		historyQueries:     make([]uint64, 60),
+		historyCacheHits:   make([]uint64, 60),
 		historyCacheMisses: make([]uint64, 60),
-		historyUpstreamMs: make([]int64, 60),
+		historyUpstreamMs:  make([]int64, 60),
 	}
 }
 
@@ -535,7 +535,7 @@ func (m *MetricsCollector) handleMetrics(w http.ResponseWriter, r *http.Request)
 
 // MetricsHistoryResponse is returned by GET /api/v1/metrics/history.
 type MetricsHistoryResponse struct {
-	Timestamps   []int64 `json:"timestamps"`
+	Timestamps  []int64  `json:"timestamps"`
 	Queries     []uint64 `json:"queries"`
 	CacheHits   []uint64 `json:"cache_hits"`
 	CacheMisses []uint64 `json:"cache_misses"`
@@ -565,7 +565,7 @@ func (m *MetricsCollector) GetHistory() MetricsHistoryResponse {
 	}
 
 	return MetricsHistoryResponse{
-		Timestamps:   timestamps,
+		Timestamps:  timestamps,
 		Queries:     queries,
 		CacheHits:   cacheHits,
 		CacheMisses: cacheMisses,

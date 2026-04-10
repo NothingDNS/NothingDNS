@@ -30,11 +30,11 @@ func TestCatalogZoneNameNormalization(t *testing.T) {
 func TestAddMember(t *testing.T) {
 	cz := NewCatalogZone("catalog.example.com.")
 	member := &CatalogMember{
-		ZoneName:      "zone1.example.com.",
-		ZoneClass:     "IN",
-		ZoneTTL:       300,
-		Applications:  []string{"*"},
-		Group:         "group1",
+		ZoneName:     "zone1.example.com.",
+		ZoneClass:    "IN",
+		ZoneTTL:      300,
+		Applications: []string{"*"},
+		Group:        "group1",
 	}
 
 	cz.AddMember(member)
@@ -146,10 +146,10 @@ func TestParseCatalogMemberRecord(t *testing.T) {
 			name:  "zone with wildcard application",
 			rdata: "zone1.example.com. *",
 			want: &CatalogMemberRecord{
-				ZoneName:      "zone1.example.com.",
-				Class:         "IN",
-				TTL:           0,
-				Applications:  []string{"*"},
+				ZoneName:     "zone1.example.com.",
+				Class:        "IN",
+				TTL:          0,
+				Applications: []string{"*"},
 			},
 			wantErr: false,
 		},

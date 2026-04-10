@@ -254,9 +254,9 @@ $GENERATE 1-254 $ PTR host-$.example.com.
 
 func TestParseGenerateRange(t *testing.T) {
 	tests := []struct {
-		input      string
+		input             string
 		start, stop, step int
-		wantErr    bool
+		wantErr           bool
 	}{
 		{"1-10", 1, 10, 1, false},
 		{"0-255", 0, 255, 1, false},

@@ -22,9 +22,9 @@ type NOTIFYRequest struct {
 
 // NOTIFYResponse represents the result of a NOTIFY request
 type NOTIFYResponse struct {
-	Success   bool
-	Message   string
-	ZoneName  string
+	Success  bool
+	Message  string
+	ZoneName string
 }
 
 // NOTIFYSender sends NOTIFY messages to slave servers

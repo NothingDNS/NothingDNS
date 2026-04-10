@@ -543,9 +543,9 @@ func TestWithUserAndGetUser(t *testing.T) {
 func TestHandleListZones_WithZones(t *testing.T) {
 	zm := zone.NewManager()
 	testZone := &zone.Zone{
-		Origin:    "test.com.",
+		Origin:     "test.com.",
 		DefaultTTL: 3600,
-		Records:   map[string][]zone.Record{},
+		Records:    map[string][]zone.Record{},
 	}
 	testZone.SOA = &zone.SOARecord{Serial: 12345}
 	zm.LoadZone(testZone, "")
@@ -579,9 +579,9 @@ func TestHandleListZones_WithZones(t *testing.T) {
 func TestHandleGetZone(t *testing.T) {
 	zm := zone.NewManager()
 	testZone := &zone.Zone{
-		Origin:    "example.com.",
+		Origin:     "example.com.",
 		DefaultTTL: 3600,
-		Records:   map[string][]zone.Record{},
+		Records:    map[string][]zone.Record{},
 	}
 	testZone.SOA = &zone.SOARecord{
 		Serial:  2024010101,
@@ -637,7 +637,7 @@ func TestHandleGetZone_NotFound(t *testing.T) {
 func TestHandleDeleteZone(t *testing.T) {
 	zm := zone.NewManager()
 	testZone := &zone.Zone{
-		Origin: "delete.me.",
+		Origin:  "delete.me.",
 		Records: map[string][]zone.Record{},
 	}
 	testZone.SOA = &zone.SOARecord{}
@@ -681,9 +681,9 @@ func TestHandleDeleteZone_NotFound(t *testing.T) {
 func TestHandleExportZone(t *testing.T) {
 	zm := zone.NewManager()
 	testZone := &zone.Zone{
-		Origin:    "export.com.",
+		Origin:     "export.com.",
 		DefaultTTL: 3600,
-		Records:   map[string][]zone.Record{},
+		Records:    map[string][]zone.Record{},
 	}
 	testZone.SOA = &zone.SOARecord{Serial: 1}
 	testZone.NS = []zone.NSRecord{{NSDName: "ns1.export.com."}}

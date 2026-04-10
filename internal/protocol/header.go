@@ -291,7 +291,7 @@ func (f Flags) String() string {
 func (h *Header) String() string {
 	return fmt.Sprintf(
 		";; ->>HEADER<<- opcode: %s, status: %s, id: %d\n"+
-		";; flags: %s; QUERY: %d, ANSWER: %d, AUTHORITY: %d, ADDITIONAL: %d",
+			";; flags: %s; QUERY: %d, ANSWER: %d, AUTHORITY: %d, ADDITIONAL: %d",
 		opcodeString(h.Flags.Opcode),
 		RcodeString(int(h.Flags.RCODE)),
 		h.ID,

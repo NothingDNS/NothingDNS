@@ -11,8 +11,8 @@ import (
 
 // DNSSECManager manages DNSSEC validation and trust anchors.
 type DNSSECManager struct {
-	Validator  *dnssec.Validator
-	logger     *util.Logger
+	Validator *dnssec.Validator
+	logger    *util.Logger
 }
 
 // NewDNSSECManager creates a new DNSSEC manager with the given configuration.

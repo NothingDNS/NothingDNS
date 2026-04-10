@@ -183,7 +183,7 @@ func TestHandleZones(t *testing.T) {
 
 		// Create a test zone
 		testZone := &zone.Zone{
-			Origin:    "example.com.",
+			Origin:     "example.com.",
 			DefaultTTL: 3600,
 			Records: map[string][]zone.Record{
 				"example.com.": {

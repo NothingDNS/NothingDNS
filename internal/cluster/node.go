@@ -38,14 +38,14 @@ func (s NodeState) String() string {
 
 // Node represents a member of the cluster.
 type Node struct {
-	ID        string
-	Addr      string
-	Port      int
-	State     NodeState
-	LastSeen  time.Time
-	Version   uint64 // Incremented on state changes
-	Meta      NodeMeta
-	Health    NodeHealthStats // Health metrics for health-based routing
+	ID       string
+	Addr     string
+	Port     int
+	State    NodeState
+	LastSeen time.Time
+	Version  uint64 // Incremented on state changes
+	Meta     NodeMeta
+	Health   NodeHealthStats // Health metrics for health-based routing
 }
 
 // NodeMeta contains node metadata.

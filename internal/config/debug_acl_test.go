@@ -1,8 +1,8 @@
 package config
 
 import (
-	"testing"
 	"fmt"
+	"testing"
 )
 
 func TestDebugACL(t *testing.T) {

@@ -93,10 +93,10 @@ func DefaultRolloverConfig() RolloverConfig {
 	return RolloverConfig{
 		Enabled:       false,
 		ZSKLifetime:   90 * 24 * time.Hour,  // 90 days
-		KSKLifetime:   365 * 24 * time.Hour,  // ~1 year
-		PublishSafety: 24 * time.Hour,         // 1 day
-		RetireSafety:  30 * 24 * time.Hour,    // 30 days (matches SignatureValidity)
-		Algorithm:     13,                      // ECDSAP256SHA256
+		KSKLifetime:   365 * 24 * time.Hour, // ~1 year
+		PublishSafety: 24 * time.Hour,       // 1 day
+		RetireSafety:  30 * 24 * time.Hour,  // 30 days (matches SignatureValidity)
+		Algorithm:     13,                   // ECDSAP256SHA256
 		CheckInterval: 1 * time.Hour,
 	}
 }

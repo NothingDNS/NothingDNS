@@ -107,8 +107,8 @@ type bufferConn struct {
 }
 
 func (bc *bufferConn) Read(p []byte) (int, error)  { return bc.reader.Read(p) }
-func (bc *bufferConn) Write(p []byte) (int, error)  { return bc.writer.Write(p) }
-func (bc *bufferConn) Close() error                 { return nil }
+func (bc *bufferConn) Write(p []byte) (int, error) { return bc.writer.Write(p) }
+func (bc *bufferConn) Close() error                { return nil }
 
 func newConn(data []byte) *Conn {
 	return &Conn{conn: &bufferConn{

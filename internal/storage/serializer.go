@@ -41,18 +41,18 @@ const MaxValueSize = 16 * 1024 * 1024
 
 // Common errors
 var (
-	ErrValueTooLarge    = errors.New("value exceeds maximum size")
-	ErrInvalidTLV       = errors.New("invalid TLV format")
-	ErrUnexpectedEOF    = errors.New("unexpected end of data")
-	ErrTypeMismatch     = errors.New("type mismatch")
-	ErrCorruptedData    = errors.New("corrupted data")
-	ErrUnsupportedType  = errors.New("unsupported type")
+	ErrValueTooLarge   = errors.New("value exceeds maximum size")
+	ErrInvalidTLV      = errors.New("invalid TLV format")
+	ErrUnexpectedEOF   = errors.New("unexpected end of data")
+	ErrTypeMismatch    = errors.New("type mismatch")
+	ErrCorruptedData   = errors.New("corrupted data")
+	ErrUnsupportedType = errors.New("unsupported type")
 )
 
 // TLV represents a Type-Length-Value structure
 type TLV struct {
-	Type   byte
-	Value  []byte
+	Type  byte
+	Value []byte
 }
 
 // TLVEncoder encodes TLV structures to a writer

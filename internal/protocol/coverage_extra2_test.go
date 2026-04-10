@@ -101,8 +101,8 @@ func TestRDataSOAUnpackRNameError(t *testing.T) {
 	r := &RDataSOA{}
 	// Valid MName (root), then truncated RName
 	buf := []byte{
-		0x00,                   // MName = root (1 byte)
-		0x10, 'a', 'b', 'c',   // RName label length=16, only 3 chars
+		0x00,                // MName = root (1 byte)
+		0x10, 'a', 'b', 'c', // RName label length=16, only 3 chars
 	}
 	_, err := r.Unpack(buf, 0, 30)
 	if err == nil {
@@ -118,8 +118,8 @@ func TestRDataSOAUnpackFixedFieldsTooSmall(t *testing.T) {
 	r := &RDataSOA{}
 	// Valid MName and RName (both root), but only 5 bytes remaining for fixed fields (need 20)
 	buf := []byte{
-		0x00, // MName = root
-		0x00, // RName = root
+		0x00,                         // MName = root
+		0x00,                         // RName = root
 		0x01, 0x02, 0x03, 0x04, 0x05, // Only 5 bytes, need 20
 	}
 	_, err := r.Unpack(buf, 0, 27)
@@ -313,8 +313,8 @@ func TestRDataNAPTRUnpackFlagsDataTooShort(t *testing.T) {
 	buf := []byte{
 		0x00, 0x01, // Order
 		0x00, 0x01, // Preference
-		0x05,       // Flags length = 5
-		'U',        // Only 1 byte of flags data
+		0x05, // Flags length = 5
+		'U',  // Only 1 byte of flags data
 	}
 	r := &RDataNAPTR{}
 	_, err := r.Unpack(buf, 0, 8)
@@ -332,9 +332,9 @@ func TestRDataNAPTRUnpackServiceDataTooShort(t *testing.T) {
 	buf := []byte{
 		0x00, 0x01, // Order
 		0x00, 0x01, // Preference
-		0x01, 'U',  // Flags: length=1, data="U"
-		0x05,       // Service length = 5
-		'a',        // Only 1 byte of service data
+		0x01, 'U', // Flags: length=1, data="U"
+		0x05, // Service length = 5
+		'a',  // Only 1 byte of service data
 	}
 	r := &RDataNAPTR{}
 	_, err := r.Unpack(buf, 0, 10)
@@ -352,10 +352,10 @@ func TestRDataNAPTRUnpackRegexpDataTooShort(t *testing.T) {
 	buf := []byte{
 		0x00, 0x01, // Order
 		0x00, 0x01, // Preference
-		0x01, 'U',                // Flags: length=1, data="U"
-		0x01, 'S',                // Service: length=1, data="S"
-		0x05,                     // Regexp length = 5
-		'a',                      // Only 1 byte of regexp data
+		0x01, 'U', // Flags: length=1, data="U"
+		0x01, 'S', // Service: length=1, data="S"
+		0x05, // Regexp length = 5
+		'a',  // Only 1 byte of regexp data
 	}
 	r := &RDataNAPTR{}
 	_, err := r.Unpack(buf, 0, 12)
@@ -372,10 +372,10 @@ func TestRDataNAPTRUnpackReplacementError(t *testing.T) {
 	buf := []byte{
 		0x00, 0x01, // Order
 		0x00, 0x01, // Preference
-		0x01, 'U',  // Flags
-		0x01, 'S',  // Service
-		0x01, 'R',  // Regexp
-		0x10,       // Replacement: label length=16, no data
+		0x01, 'U', // Flags
+		0x01, 'S', // Service
+		0x01, 'R', // Regexp
+		0x10, // Replacement: label length=16, no data
 	}
 	r := &RDataNAPTR{}
 	_, err := r.Unpack(buf, 0, 14)
@@ -636,7 +636,7 @@ func TestRDataNAPTRUnpackServiceLenPastBuf(t *testing.T) {
 	buf := []byte{
 		0x00, 0x01, // Order
 		0x00, 0x01, // Preference
-		0x00,       // Flags: length=0 (empty)
+		0x00, // Flags: length=0 (empty)
 		// No more bytes for service length
 	}
 	r := &RDataNAPTR{}
@@ -654,8 +654,8 @@ func TestRDataNAPTRUnpackRegexpLenPastBuf(t *testing.T) {
 	buf := []byte{
 		0x00, 0x01, // Order
 		0x00, 0x01, // Preference
-		0x00,       // Flags: length=0 (empty)
-		0x00,       // Service: length=0 (empty)
+		0x00, // Flags: length=0 (empty)
+		0x00, // Service: length=0 (empty)
 		// No more bytes for regexp length
 	}
 	r := &RDataNAPTR{}
@@ -685,7 +685,7 @@ func TestRDataNAPTRUnpackOrderTooSmall(t *testing.T) {
 func TestRDataNAPTRUnpackPreferenceTooSmall(t *testing.T) {
 	buf := []byte{
 		0x00, 0x01, // Order
-		0x00,       // Only 1 byte, need 2 for preference
+		0x00, // Only 1 byte, need 2 for preference
 	}
 	r := &RDataNAPTR{}
 	_, err := r.Unpack(buf, 0, 4)
@@ -811,8 +811,8 @@ func TestUnpackResourceRecordSOAUnpackError(t *testing.T) {
 
 	// Provide SOA rdata with valid MName but truncated RName
 	rdata := []byte{
-		0x00,                   // MName = root
-		0x10, 'a', 'b', 'c',   // RName: label length=16, only 3 bytes
+		0x00,                // MName = root
+		0x10, 'a', 'b', 'c', // RName: label length=16, only 3 bytes
 	}
 
 	buf := append(name, fixedFields...)

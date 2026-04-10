@@ -177,11 +177,11 @@ func (ks *KeyStore) DeleteZoneKeys(zoneName string) error {
 
 func serializeSigningKey(key *SigningKey) (*StoredKey, error) {
 	stored := &StoredKey{
-		KeyTag:    key.KeyTag,
-		Algorithm: key.DNSKEY.Algorithm,
-		Flags:     key.DNSKEY.Flags,
-		IsKSK:     key.IsKSK,
-		IsZSK:     key.IsZSK,
+		KeyTag:        key.KeyTag,
+		Algorithm:     key.DNSKEY.Algorithm,
+		Flags:         key.DNSKEY.Flags,
+		IsKSK:         key.IsKSK,
+		IsZSK:         key.IsZSK,
 		PublicKeyData: key.DNSKEY.PublicKey,
 	}
 

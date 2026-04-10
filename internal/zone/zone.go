@@ -23,10 +23,10 @@ const maxGenerateRecords = 65536
 // RecordChange represents a single record addition or deletion
 // Used for IXFR (Incremental Zone Transfer) journaling
 type RecordChange struct {
-	Name   string
-	Type   uint16 // protocol.TypeA, protocol.TypeAAAA, etc.
-	TTL    uint32
-	RData  string
+	Name  string
+	Type  uint16 // protocol.TypeA, protocol.TypeAAAA, etc.
+	TTL   uint32
+	RData string
 }
 
 // ZoneChange represents a set of changes made to a zone in one update
@@ -59,31 +59,31 @@ type Zone struct {
 
 // Record represents a single DNS resource record in a zone.
 type Record struct {
-	Name   string // Domain name (relative or absolute)
-	TTL    uint32 // Time to live in seconds
-	Class  string // Usually "IN" for Internet
-	Type   string // Record type (A, AAAA, CNAME, etc.)
-	RData  string // Record data (type-specific)
-	Line   int    // Line number in source file (for error reporting)
+	Name  string // Domain name (relative or absolute)
+	TTL   uint32 // Time to live in seconds
+	Class string // Usually "IN" for Internet
+	Type  string // Record type (A, AAAA, CNAME, etc.)
+	RData string // Record data (type-specific)
+	Line  int    // Line number in source file (for error reporting)
 }
 
 // SOARecord represents a Start of Authority record.
 type SOARecord struct {
-	Name     string // Zone name
-	TTL      uint32
-	MName    string // Primary name server
-	RName    string // Responsible person's email
-	Serial   uint32 // Zone serial number
-	Refresh  uint32 // Refresh interval
-	Retry    uint32 // Retry interval
-	Expire   uint32 // Expire interval
-	Minimum  uint32 // Minimum TTL (negative caching)
+	Name    string // Zone name
+	TTL     uint32
+	MName   string // Primary name server
+	RName   string // Responsible person's email
+	Serial  uint32 // Zone serial number
+	Refresh uint32 // Refresh interval
+	Retry   uint32 // Retry interval
+	Expire  uint32 // Expire interval
+	Minimum uint32 // Minimum TTL (negative caching)
 }
 
 // NSRecord represents an NS record.
 type NSRecord struct {
-	Name string // Domain name
-	TTL  uint32
+	Name    string // Domain name
+	TTL     uint32
 	NSDName string // Name server hostname
 }
 
@@ -103,15 +103,15 @@ type AAAARecord struct {
 
 // CNAMERecord represents a CNAME record.
 type CNAMERecord struct {
-	Name    string
-	TTL     uint32
-	CName   string // Canonical name
+	Name  string
+	TTL   uint32
+	CName string // Canonical name
 }
 
 // MXRecord represents an MX record.
 type MXRecord struct {
-	Name     string
-	TTL      uint32
+	Name       string
+	TTL        uint32
 	Preference uint16
 	Exchange   string // Mail server hostname
 }
@@ -125,8 +125,8 @@ type TXTRecord struct {
 
 // PTRRecord represents a PTR record.
 type PTRRecord struct {
-	Name   string
-	TTL    uint32
+	Name     string
+	TTL      uint32
 	PtrDName string // Domain name
 }
 

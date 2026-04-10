@@ -12,7 +12,7 @@ import (
 type ValidationCache struct {
 	mu    sync.RWMutex
 	items map[string]*cacheEntry
-	ttl  time.Duration
+	ttl   time.Duration
 }
 
 // cacheEntry holds a cached validation result.

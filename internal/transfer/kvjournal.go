@@ -13,9 +13,9 @@ import (
 // Each zone has its own directory under dataDir/ixfr-journals/.
 // Each journal entry is stored as a separate file named <serial>.journal.
 type KVJournalStore struct {
-	dataDir       string
+	dataDir        string
 	maxJournalSize int
-	mu            sync.RWMutex
+	mu             sync.RWMutex
 }
 
 // NewKVJournalStore creates a new file-based IXFR journal store.
@@ -24,7 +24,7 @@ func NewKVJournalStore(dataDir string) *KVJournalStore {
 	journalDir := filepath.Join(dataDir, "ixfr-journals")
 	os.MkdirAll(journalDir, 0755)
 	return &KVJournalStore{
-		dataDir:       journalDir,
+		dataDir:        journalDir,
 		maxJournalSize: 100,
 	}
 }

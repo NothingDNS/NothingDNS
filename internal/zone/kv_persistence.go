@@ -27,7 +27,7 @@ type KVPersistence struct {
 func NewKVPersistence(manager *Manager, kvStore *storage.KVStore) *KVPersistence {
 	return &KVPersistence{
 		manager: manager,
-		store:  storage.NewZoneStore(kvStore),
+		store:   storage.NewZoneStore(kvStore),
 	}
 }
 

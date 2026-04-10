@@ -59,22 +59,22 @@ type Cluster struct {
 
 // Config configures the cluster.
 type Config struct {
-	Enabled             bool
-	NodeID              string
-	BindAddr            string
-	BindPort            int
-	GossipPort          int
-	ConsensusMode       ConsensusMode // "swim" (default) or "raft"
-	Region              string
-	Zone                string
-	Weight              int
-	SeedNodes           []string
-	CacheSync           bool
-	HTTPAddr            string
-	EncryptionKey       string       // hex-encoded 32-byte AES-256 key
-	DataDir             string       // Directory for Raft WAL and snapshots
-	Peers               []PeerConfig // Raft peer nodes
-	ZoneManager         *zone.Manager // zone manager for replication
+	Enabled              bool
+	NodeID               string
+	BindAddr             string
+	BindPort             int
+	GossipPort           int
+	ConsensusMode        ConsensusMode // "swim" (default) or "raft"
+	Region               string
+	Zone                 string
+	Weight               int
+	SeedNodes            []string
+	CacheSync            bool
+	HTTPAddr             string
+	EncryptionKey        string                         // hex-encoded 32-byte AES-256 key
+	DataDir              string                         // Directory for Raft WAL and snapshots
+	Peers                []PeerConfig                   // Raft peer nodes
+	ZoneManager          *zone.Manager                  // zone manager for replication
 	ConfigReloadCallback func(*ClusterConfigJSON) error // called when leader sends config
 }
 
@@ -154,12 +154,12 @@ func New(config Config, logger *util.Logger, dnsCache *cache.Cache) (*Cluster, e
 	}
 
 	c := &Cluster{
-		config:        config,
-		logger:        logger,
-		cache:         dnsCache,
-		cacheSyncChan: make(chan CacheSyncEvent, 100),
-		consensus:     config.ConsensusMode,
-		zoneManager:   config.ZoneManager,
+		config:               config,
+		logger:               logger,
+		cache:                dnsCache,
+		cacheSyncChan:        make(chan CacheSyncEvent, 100),
+		consensus:            config.ConsensusMode,
+		zoneManager:          config.ZoneManager,
 		configReloadCallback: config.ConfigReloadCallback,
 	}
 
@@ -604,9 +604,9 @@ func (c *Cluster) BroadcastConfigUpdate(configSHA256 string, clusterConfig *Clus
 
 	selfID := c.gossip.GetSelfID()
 	payload := ConfigSyncPayload{
-		ConfigSHA256: configSHA256,
-		Timestamp:    time.Now(),
-		NodeID:       selfID,
+		ConfigSHA256:  configSHA256,
+		Timestamp:     time.Now(),
+		NodeID:        selfID,
 		ClusterConfig: clusterConfig,
 	}
 

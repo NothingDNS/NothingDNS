@@ -13,53 +13,53 @@ const (
 	HeaderFormShort = false
 
 	// Fixed bit patterns
-	longHeaderFixedBit = 0x80
+	longHeaderFixedBit  = 0x80
 	shortHeaderFixedBit = 0x40
 
 	// Packet types
-	PacketTypeInitial     = 0x0
-	PacketType0RTT        = 0x1
-	PacketTypeHandshake   = 0x2
-	PacketTypeRetry       = 0x3
+	PacketTypeInitial   = 0x0
+	PacketType0RTT      = 0x1
+	PacketTypeHandshake = 0x2
+	PacketTypeRetry     = 0x3
 
 	// Version
 	Version1 = 0x00000001
 
 	// Connection ID limits
-	MaxConnIDLen = 20
+	MaxConnIDLen        = 20
 	MinInitialConnIDLen = 8
 
 	// Packet number limits
 	MaxPacketNumberLen = 4
 
 	// Frame types
-	FrameTypePadding        = 0x00
-	FrameTypePing           = 0x01
-	FrameTypeAck            = 0x02
-	FrameTypeAckECN         = 0x03
-	FrameTypeResetStream    = 0x04
-	FrameTypeStopSending    = 0x05
-	FrameTypeCrypto         = 0x06
-	FrameTypeNewToken       = 0x07
-	FrameTypeStream         = 0x08
-	FrameTypeMaxData        = 0x10
-	FrameTypeMaxStreamData  = 0x11
-	FrameTypeMaxStreamsBidir  = 0x12
-	FrameTypeMaxStreamsUnidir = 0x13
+	FrameTypePadding              = 0x00
+	FrameTypePing                 = 0x01
+	FrameTypeAck                  = 0x02
+	FrameTypeAckECN               = 0x03
+	FrameTypeResetStream          = 0x04
+	FrameTypeStopSending          = 0x05
+	FrameTypeCrypto               = 0x06
+	FrameTypeNewToken             = 0x07
+	FrameTypeStream               = 0x08
+	FrameTypeMaxData              = 0x10
+	FrameTypeMaxStreamData        = 0x11
+	FrameTypeMaxStreamsBidir      = 0x12
+	FrameTypeMaxStreamsUnidir     = 0x13
 	FrameTypeDataBlocked          = 0x14
 	FrameTypeStreamDataBlocked    = 0x15
 	FrameTypeStreamsBlockedBidir  = 0x16
 	FrameTypeStreamsBlockedUnidir = 0x17
-	FrameTypeNewConnectionID   = 0x18
-	FrameTypeRetireConnectionID = 0x19
-	FrameTypePathChallenge     = 0x1a
-	FrameTypePathResponse      = 0x1b
-	FrameTypeConnectionClose   = 0x1c
-	FrameTypeConnectionCloseApp = 0x1d
-	FrameTypeHandshakeDone     = 0x1e
+	FrameTypeNewConnectionID      = 0x18
+	FrameTypeRetireConnectionID   = 0x19
+	FrameTypePathChallenge        = 0x1a
+	FrameTypePathResponse         = 0x1b
+	FrameTypeConnectionClose      = 0x1c
+	FrameTypeConnectionCloseApp   = 0x1d
+	FrameTypeHandshakeDone        = 0x1e
 
 	// Stream types
-	StreamTypeBidirectional = 0x00
+	StreamTypeBidirectional  = 0x00
 	StreamTypeUnidirectional = 0x01
 
 	// DoQ stream type for DNS queries (RFC 9250 §4.2)
@@ -73,11 +73,11 @@ const (
 )
 
 var (
-	ErrInvalidPacket       = errors.New("quic: invalid packet")
-	ErrPacketTooShort      = errors.New("quic: packet too short")
-	ErrUnknownVersion      = errors.New("quic: unknown version")
-	ErrInvalidConnID       = errors.New("quic: invalid connection id")
-	ErrUnsupportedFrame    = errors.New("quic: unsupported frame type")
+	ErrInvalidPacket    = errors.New("quic: invalid packet")
+	ErrPacketTooShort   = errors.New("quic: packet too short")
+	ErrUnknownVersion   = errors.New("quic: unknown version")
+	ErrInvalidConnID    = errors.New("quic: invalid connection id")
+	ErrUnsupportedFrame = errors.New("quic: unsupported frame type")
 )
 
 // ConnectionID represents a QUIC Connection ID.

@@ -89,8 +89,8 @@ func TestCacheDifferentKeysAreIndependent(t *testing.T) {
 func TestCacheSameNameDifferentTypeAreIndependent(t *testing.T) {
 	cache := NewValidationCache(5 * time.Minute)
 
-	cache.Set("example.com", 1, ValidationSecure)  // Type A
-	cache.Set("example.com", 28, ValidationBogus)  // Type AAAA
+	cache.Set("example.com", 1, ValidationSecure) // Type A
+	cache.Set("example.com", 28, ValidationBogus) // Type AAAA
 
 	resultA, okA := cache.Get("example.com", 1)
 	resultAAAA, okAAAA := cache.Get("example.com", 28)

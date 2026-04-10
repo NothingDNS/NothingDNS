@@ -15,8 +15,8 @@ import (
 type ResolverInfoType uint8
 
 const (
-	ResolverInfoTypeBasic      ResolverInfoType = 0
-	ResolverInfoTypeExtended   ResolverInfoType = 1
+	ResolverInfoTypeBasic    ResolverInfoType = 0
+	ResolverInfoTypeExtended ResolverInfoType = 1
 )
 
 // ResolverInfoOption represents a resolver information option.
@@ -67,12 +67,12 @@ func BasicResolverInfo(id string, capabilities []string) *ResolverInfo {
 // ExtendedResolverInfo creates an extended resolver info structure.
 func ExtendedResolverInfo(id string, version string, dnssec bool, filtering bool, cacheSize uint32, upstreams []string) *ResolverInfo {
 	return &ResolverInfo{
-		Version:           version,
+		Version:          version,
 		ID:               id,
-		Capabilities:      nil,
-		DNSSecValidation:  dnssec,
-		FilteringEnabled:  filtering,
-		CacheSize:         cacheSize,
+		Capabilities:     nil,
+		DNSSecValidation: dnssec,
+		FilteringEnabled: filtering,
+		CacheSize:        cacheSize,
 		Upstreams:        append([]string(nil), upstreams...),
 	}
 }
@@ -112,10 +112,10 @@ func (ri *ResolverInfo) Validate() error {
 
 // ResolverInfoOptionCodes for RESPInfo.
 const (
-	ResponderOptionCodeResolverInfo    = 1
-	ResponderOptionCodeExtendedInfo   = 2
-	ResponderOptionCodeCacheInfo      = 3
-	ResponderOptionCodeUpstreamInfo   = 4
+	ResponderOptionCodeResolverInfo = 1
+	ResponderOptionCodeExtendedInfo = 2
+	ResponderOptionCodeCacheInfo    = 3
+	ResponderOptionCodeUpstreamInfo = 4
 )
 
 // RESPInfoWireFormat represents RESPInfo in wire format.
@@ -369,11 +369,11 @@ func parseExtendedRESPInfo(data []byte) (*ResolverInfo, error) {
 	}
 
 	return &ResolverInfo{
-		ID:                id,
-		Version:           version,
-		DNSSecValidation:  dnssec,
-		FilteringEnabled:  filtering,
-		CacheSize:         cacheSize,
+		ID:               id,
+		Version:          version,
+		DNSSecValidation: dnssec,
+		FilteringEnabled: filtering,
+		CacheSize:        cacheSize,
 		Upstreams:        upstreams,
 	}, nil
 }

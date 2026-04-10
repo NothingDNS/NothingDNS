@@ -8,16 +8,16 @@ import (
 // Mock implementations for testing
 
 type MockZoneManager struct {
-	zones       []ZoneInfo
-	records     []RecordInfo
-	createErr   error
-	deleteErr   error
-	getErr      error
-	listErr     error
-	addRecErr   error
-	delRecErr   error
-	importErr   error
-	exportErr   error
+	zones     []ZoneInfo
+	records   []RecordInfo
+	createErr error
+	deleteErr error
+	getErr    error
+	listErr   error
+	addRecErr error
+	delRecErr error
+	importErr error
+	exportErr error
 }
 
 func (m *MockZoneManager) ListZones() ([]ZoneInfo, error) {

@@ -26,8 +26,8 @@ func TestHeaderRoundTrip(t *testing.T) {
 		{
 			name: "response with AA",
 			header: Header{
-				ID:    0x5678,
-				Flags: NewResponseFlags(RcodeSuccess),
+				ID:      0x5678,
+				Flags:   NewResponseFlags(RcodeSuccess),
 				QDCount: 1,
 				ANCount: 1,
 			},
@@ -35,8 +35,8 @@ func TestHeaderRoundTrip(t *testing.T) {
 		{
 			name: "truncated response",
 			header: Header{
-				ID:    0x9ABC,
-				Flags: Flags{QR: true, TC: true, RCODE: RcodeServerFailure},
+				ID:      0x9ABC,
+				Flags:   Flags{QR: true, TC: true, RCODE: RcodeServerFailure},
 				QDCount: 1,
 				ANCount: 0,
 			},
@@ -161,8 +161,8 @@ func TestQuestionRoundTrip(t *testing.T) {
 // TestRDataARoundTrip tests A record pack/unpack round-trip.
 func TestRDataARoundTrip(t *testing.T) {
 	tests := []struct {
-		name  string
-		addr  string
+		name string
+		addr string
 	}{
 		{"IPv4 localhost", "127.0.0.1"},
 		{"IPv4 private", "192.168.1.1"},

@@ -16,7 +16,7 @@ import (
 
 // MCP version constants
 const (
-	MCPVersion    = "2024-11-05"
+	MCPVersion   = "2024-11-05"
 	ProtocolName = "mcp"
 )
 
@@ -147,16 +147,16 @@ type Tool struct {
 
 // InputSchema represents a JSON schema for tool input
 type InputSchema struct {
-	Type       string                 `json:"type"`
-	Properties map[string]Property    `json:"properties,omitempty"`
-	Required   []string               `json:"required,omitempty"`
+	Type       string              `json:"type"`
+	Properties map[string]Property `json:"properties,omitempty"`
+	Required   []string            `json:"required,omitempty"`
 }
 
 // Property represents a JSON schema property
 type Property struct {
-	Type        string   `json:"type"`
-	Description string   `json:"description,omitempty"`
-	Enum        []string `json:"enum,omitempty"`
+	Type        string      `json:"type"`
+	Description string      `json:"description,omitempty"`
+	Enum        []string    `json:"enum,omitempty"`
 	Default     interface{} `json:"default,omitempty"`
 }
 
@@ -211,8 +211,8 @@ type ResourceContents struct {
 
 // Prompt represents an MCP prompt
 type Prompt struct {
-	Name        string       `json:"name"`
-	Description string       `json:"description,omitempty"`
+	Name        string      `json:"name"`
+	Description string      `json:"description,omitempty"`
 	Arguments   []PromptArg `json:"arguments,omitempty"`
 }
 
@@ -231,14 +231,14 @@ type GetPromptParams struct {
 
 // PromptResult represents prompt result
 type PromptResult struct {
-	Description string        `json:"description,omitempty"`
+	Description string          `json:"description,omitempty"`
 	Messages    []PromptMessage `json:"messages"`
 }
 
 // PromptMessage represents a prompt message
 type PromptMessage struct {
-	Role    string      `json:"role"`
-	Content Content     `json:"content"`
+	Role    string  `json:"role"`
+	Content Content `json:"content"`
 }
 
 // Handler handles MCP requests
@@ -253,12 +253,12 @@ type Handler interface {
 
 // Server represents an MCP server
 type Server struct {
-	name        string
-	version     string
-	handler     Handler
+	name         string
+	version      string
+	handler      Handler
 	capabilities ServerCapabilities
-	mu          sync.RWMutex
-	initialized bool
+	mu           sync.RWMutex
+	initialized  bool
 }
 
 // NewServer creates a new MCP server
@@ -501,9 +501,9 @@ type SSEEvent struct {
 
 // SSETransport handles SSE-based transport for web clients
 type SSETransport struct {
-	server   *Server
-	clients  map[string]chan SSEEvent
-	mu       sync.RWMutex
+	server  *Server
+	clients map[string]chan SSEEvent
+	mu      sync.RWMutex
 }
 
 // NewSSETransport creates a new SSE transport

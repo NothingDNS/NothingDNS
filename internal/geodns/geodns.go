@@ -48,7 +48,7 @@ type Engine struct {
 	rules map[string]*GeoRecord
 
 	// MMDB data.
-	mmdbData []byte
+	mmdbData      []byte
 	mmdbIPv4Count uint32
 	mmdbIPv6Count uint32
 	mmdbTreeSize  uint32

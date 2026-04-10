@@ -104,11 +104,11 @@ func TestEncodeJSON_MultipleAnswerTypes(t *testing.T) {
 				Data:  &protocol.RDataA{Address: [4]byte{93, 184, 216, 34}},
 			},
 			{
-				Name: &protocol.Name{Labels: []string{"example", "com"}, FQDN: true},
-				Type: protocol.TypeAAAA,
+				Name:  &protocol.Name{Labels: []string{"example", "com"}, FQDN: true},
+				Type:  protocol.TypeAAAA,
 				Class: protocol.ClassIN,
-				TTL:  600,
-				Data: makeAAAA("2606:2800:220:1:248:1893:25c8:1946"),
+				TTL:   600,
+				Data:  makeAAAA("2606:2800:220:1:248:1893:25c8:1946"),
 			},
 			{
 				Name:  &protocol.Name{Labels: []string{"example", "com"}, FQDN: true},
@@ -360,11 +360,11 @@ func TestDecodeJSONQuery_Roundtrip(t *testing.T) {
 		Questions: msg.Questions,
 		Answers: []*protocol.ResourceRecord{
 			{
-				Name: q.Name,
-				Type: protocol.TypeAAAA,
+				Name:  q.Name,
+				Type:  protocol.TypeAAAA,
 				Class: protocol.ClassIN,
-				TTL:  600,
-				Data: makeAAAA("2001:db8::1"),
+				TTL:   600,
+				Data:  makeAAAA("2001:db8::1"),
 			},
 		},
 	}

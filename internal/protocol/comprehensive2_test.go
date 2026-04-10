@@ -1410,7 +1410,7 @@ func TestParseEDNS0Header(t *testing.T) {
 	rr := &ResourceRecord{
 		Name:  name,
 		Type:  TypeOPT,
-		Class: 4096, // UDP Size
+		Class: 4096,       // UDP Size
 		TTL:   0x01028000, // ExtendedRCODE=1, Version=2, DO=1, Z=0
 	}
 
@@ -1863,7 +1863,7 @@ func TestNewResourceRecord(t *testing.T) {
 func TestRDataRawMethods(t *testing.T) {
 	raw := &RDataRaw{
 		TypeVal: 99, // Unknown type
-		Data:     []byte{1, 2, 3, 4, 5},
+		Data:    []byte{1, 2, 3, 4, 5},
 	}
 
 	// Test Type

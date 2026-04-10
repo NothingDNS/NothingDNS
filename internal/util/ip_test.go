@@ -261,8 +261,8 @@ func TestMaskIP(t *testing.T) {
 // TestParseIP tests the ParseIP function
 func TestParseIP(t *testing.T) {
 	tests := []struct {
-		input    string
-		isNil    bool
+		input string
+		isNil bool
 	}{
 		{"192.168.1.1", false},
 		{"::1", false},

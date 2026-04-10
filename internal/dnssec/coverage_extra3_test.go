@@ -89,8 +89,8 @@ func TestVerifyECDSA_DefaultBranchInSwitch(t *testing.T) {
 	// Create a public key with algorithm 250 (not P256 or P384) but actual ECDSA key
 	pub := &PublicKey{Algorithm: 250, Key: &privKey.PublicKey}
 	sig := &protocol.RDataRRSIG{
-		Algorithm:  250,
-		Signature:  make([]byte, 64),
+		Algorithm: 250,
+		Signature: make([]byte, 64),
 	}
 	err = VerifySignature(sig, []byte("data"), pub)
 	if err == nil {
@@ -773,7 +773,7 @@ func TestValidateNSEC3_SuccessfulRangeCheck(t *testing.T) {
 		t.Fatalf("NSEC3Hash: %v", err)
 	}
 	// Use a small owner hash and large next hash so range check passes
-	ownerHash := "0AAAAAAAAAAAAAAAAAAAAAAAA"  // small value
+	ownerHash := "0AAAAAAAAAAAAAAAAAAAAAAAA" // small value
 	nextHash := make([]byte, 20)
 	for i := range nextHash {
 		nextHash[i] = 0xFF // large value

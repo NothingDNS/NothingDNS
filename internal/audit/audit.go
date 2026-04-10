@@ -10,14 +10,14 @@ import (
 
 // QueryAuditEntry represents a single query audit log entry.
 type QueryAuditEntry struct {
-	Timestamp  string
-	ClientIP   string
-	QueryName  string
-	QueryType  string
-	Rcode      string
-	Latency    time.Duration
-	CacheHit   bool
-	Upstream   string
+	Timestamp string
+	ClientIP  string
+	QueryName string
+	QueryType string
+	Rcode     string
+	Latency   time.Duration
+	CacheHit  bool
+	Upstream  string
 }
 
 // AXFRAuditEntry represents an AXFR (full zone transfer) audit log entry.
@@ -50,13 +50,13 @@ type NOTIFYAuditEntry struct {
 
 // UpdateAuditEntry represents a DDNS UPDATE (RFC 2136) audit log entry.
 type UpdateAuditEntry struct {
-	Timestamp  string
-	ClientIP   string
-	Zone       string
-	Action     string // "request", "success", "failure"
-	Rcode      string
-	Added      int
-	Deleted    int
+	Timestamp string
+	ClientIP  string
+	Zone      string
+	Action    string // "request", "success", "failure"
+	Rcode     string
+	Added     int
+	Deleted   int
 }
 
 // ReloadAuditEntry represents a configuration reload audit log entry.

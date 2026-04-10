@@ -24,9 +24,9 @@ type AXFRRequest struct {
 
 // AXFRResponse represents an AXFR response
 // Wire format: Sequence of resource records:
-//   1. SOA record (start)
-//   2. All zone records in canonical order
-//   3. SOA record (end)
+//  1. SOA record (start)
+//  2. All zone records in canonical order
+//  3. SOA record (end)
 type AXFRResponse struct {
 	ZoneName  string
 	Records   []*protocol.ResourceRecord

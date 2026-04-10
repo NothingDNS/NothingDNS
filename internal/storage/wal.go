@@ -22,20 +22,20 @@ import (
 
 // WAL constants
 const (
-	WALHeaderSize   = 9 // CRC32(4) + Type(1) + Length(4)
-	WALFilePrefix   = "wal-"
-	WALFileSuffix   = ".log"
-	MaxSegmentSize  = 64 * 1024 * 1024 // 64MB max segment size
-	SyncInterval    = 100 * time.Millisecond
+	WALHeaderSize  = 9 // CRC32(4) + Type(1) + Length(4)
+	WALFilePrefix  = "wal-"
+	WALFileSuffix  = ".log"
+	MaxSegmentSize = 64 * 1024 * 1024 // 64MB max segment size
+	SyncInterval   = 100 * time.Millisecond
 )
 
 // Entry types for WAL
 const (
-	EntryTypePut    byte = 0x01
-	EntryTypeDelete byte = 0x02
-	EntryTypeBegin  byte = 0x10
-	EntryTypeCommit byte = 0x11
-	EntryTypeAbort  byte = 0x12
+	EntryTypePut        byte = 0x01
+	EntryTypeDelete     byte = 0x02
+	EntryTypeBegin      byte = 0x10
+	EntryTypeCommit     byte = 0x11
+	EntryTypeAbort      byte = 0x12
 	EntryTypeCheckpoint byte = 0x20
 )
 
@@ -58,12 +58,12 @@ type WALEntry struct {
 
 // WALSegment represents a single WAL segment file
 type WALSegment struct {
-	ID       uint64
-	Path     string
-	file     *os.File
-	size     int64
-	sealed   bool
-	created  time.Time
+	ID      uint64
+	Path    string
+	file    *os.File
+	size    int64
+	sealed  bool
+	created time.Time
 }
 
 // WAL implements Write-Ahead Logging
@@ -641,11 +641,11 @@ type WALStats struct {
 
 // WALReader provides sequential reading of WAL entries
 type WALReader struct {
-	wal       *WAL
-	segment   int
-	file      *os.File
-	pos       int64
-	buf       *bytes.Buffer
+	wal     *WAL
+	segment int
+	file    *os.File
+	pos     int64
+	buf     *bytes.Buffer
 }
 
 // NewReader creates a new WAL reader

@@ -48,11 +48,11 @@ type AnycastBackend struct {
 	Weight int
 
 	// Health tracking
-	mu          sync.RWMutex
-	healthy     bool
-	lastCheck   time.Time
-	latency     time.Duration
-	failCount   int
+	mu           sync.RWMutex
+	healthy      bool
+	lastCheck    time.Time
+	latency      time.Duration
+	failCount    int
 	successCount int
 }
 

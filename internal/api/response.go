@@ -133,11 +133,11 @@ type GossipInfo struct {
 
 // ClusterStatusResponse is returned by GET /api/v1/cluster/status.
 type ClusterStatusResponse struct {
-	NodeID     string          `json:"node_id"`
-	NodeCount  int             `json:"node_count"`
-	AliveCount int             `json:"alive_count"`
-	Healthy    bool            `json:"healthy"`
-	Gossip     GossipInfo      `json:"gossip"`
+	NodeID     string     `json:"node_id"`
+	NodeCount  int        `json:"node_count"`
+	AliveCount int        `json:"alive_count"`
+	Healthy    bool       `json:"healthy"`
+	Gossip     GossipInfo `json:"gossip"`
 	// Aggregated cluster-wide metrics
 	Metrics ClusterMetricsInfo `json:"metrics"`
 }
@@ -146,31 +146,31 @@ type ClusterStatusResponse struct {
 type ClusterMetricsInfo struct {
 	QueriesTotal  uint64  `json:"queries_total"`   // Total queries across all nodes
 	QueriesPerSec float64 `json:"queries_per_sec"` // Cluster-wide QPS
-	CacheHits     uint64  `json:"cache_hits"`     // Total cache hits
-	CacheMisses   uint64  `json:"cache_misses"`   // Total cache misses
-	CacheHitRate  float64 `json:"cache_hit_rate"` // Cache hit ratio (0-1)
-	LatencyMsAvg  float64 `json:"latency_avg_ms"` // Average latency across nodes
-	LatencyMsP99  float64 `json:"latency_p99_ms"` // P99 latency across nodes
+	CacheHits     uint64  `json:"cache_hits"`      // Total cache hits
+	CacheMisses   uint64  `json:"cache_misses"`    // Total cache misses
+	CacheHitRate  float64 `json:"cache_hit_rate"`  // Cache hit ratio (0-1)
+	LatencyMsAvg  float64 `json:"latency_avg_ms"`  // Average latency across nodes
+	LatencyMsP99  float64 `json:"latency_p99_ms"`  // P99 latency across nodes
 }
 
 // NodeDetail represents a cluster node in the nodes list.
 type NodeDetail struct {
-	ID       string  `json:"id"`
-	Addr     string  `json:"addr"`
-	Port     int     `json:"port"`
-	State    string  `json:"state"`
-	Region   string  `json:"region"`
-	Zone     string  `json:"zone"`
-	Weight   int     `json:"weight"`
-	HTTPAddr string  `json:"http_addr"`
-	Version  uint64  `json:"version"`
+	ID       string `json:"id"`
+	Addr     string `json:"addr"`
+	Port     int    `json:"port"`
+	State    string `json:"state"`
+	Region   string `json:"region"`
+	Zone     string `json:"zone"`
+	Weight   int    `json:"weight"`
+	HTTPAddr string `json:"http_addr"`
+	Version  uint64 `json:"version"`
 	// Health fields (0 values if unknown)
-	HealthScore       int     `json:"health_score"`        // 0-100, higher is healthier
-	QueriesPerSecond  float64 `json:"queries_per_second"`  // Rolling average QPS
-	LatencyMs         float64 `json:"latency_ms"`          // Rolling average latency
-	CPUPercent        float64 `json:"cpu_percent"`         // Estimated CPU usage
-	MemoryPercent     float64 `json:"memory_percent"`      // Estimated memory usage
-	ActiveConnections int     `json:"active_connections"`  // Current active connections
+	HealthScore       int     `json:"health_score"`       // 0-100, higher is healthier
+	QueriesPerSecond  float64 `json:"queries_per_second"` // Rolling average QPS
+	LatencyMs         float64 `json:"latency_ms"`         // Rolling average latency
+	CPUPercent        float64 `json:"cpu_percent"`        // Estimated CPU usage
+	MemoryPercent     float64 `json:"memory_percent"`     // Estimated memory usage
+	ActiveConnections int     `json:"active_connections"` // Current active connections
 }
 
 // ClusterNodesResponse is returned by GET /api/v1/cluster/nodes.
@@ -180,10 +180,10 @@ type ClusterNodesResponse struct {
 
 // BlocklistResponse is returned by GET /api/v1/blocklists.
 type BlocklistResponse struct {
-	Enabled     bool   `json:"enabled"`
-	TotalRules  int    `json:"total_rules"`
-	FilesCount  int    `json:"files_count"`
-	URLsCount   int    `json:"urls_count"`
+	Enabled    bool `json:"enabled"`
+	TotalRules int  `json:"total_rules"`
+	FilesCount int  `json:"files_count"`
+	URLsCount  int  `json:"urls_count"`
 }
 
 // BlocklistAddRequest is the request body for POST /api/v1/blocklists.
@@ -323,7 +323,7 @@ type DNSSECKeysResponse struct {
 // TopDomainsResponse is returned by GET /api/v1/topdomains.
 type TopDomainsResponse struct {
 	Domains []TopDomainsEntry `json:"domains"`
-	Limit   int              `json:"limit"`
+	Limit   int               `json:"limit"`
 }
 
 // RPZStatsResponse is returned by GET /api/v1/rpz.

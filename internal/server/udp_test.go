@@ -309,8 +309,8 @@ func TestResponseSizeLimit(t *testing.T) {
 		{
 			name: "TCP client",
 			client: &ClientInfo{
-				Protocol: "tcp",
-				HasEDNS0: true,
+				Protocol:     "tcp",
+				HasEDNS0:     true,
 				EDNS0UDPSize: 8192,
 			},
 			expected: 65535,

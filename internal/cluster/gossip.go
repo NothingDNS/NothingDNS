@@ -25,22 +25,22 @@ const (
 	MessageTypeGossip
 	MessageTypeCacheInvalidate
 	MessageTypeCacheUpdate
-	MessageTypeElection    // Leader election (bully algorithm)
-	MessageTypeLeader      // Leader announcement
-	MessageTypeHeartbeat   // Leader heartbeat to confirm leadership
-	MessageTypeZoneUpdate  // Zone data propagated from leader to followers
-	MessageTypeConfigSync  // Cluster config propagated from leader to followers
-	MessageTypeDraining    // Node entering/leaving draining state
-	MessageTypeNodeStats   // Periodic node health stats broadcast
+	MessageTypeElection       // Leader election (bully algorithm)
+	MessageTypeLeader         // Leader announcement
+	MessageTypeHeartbeat      // Leader heartbeat to confirm leadership
+	MessageTypeZoneUpdate     // Zone data propagated from leader to followers
+	MessageTypeConfigSync     // Cluster config propagated from leader to followers
+	MessageTypeDraining       // Node entering/leaving draining state
+	MessageTypeNodeStats      // Periodic node health stats broadcast
 	MessageTypeClusterMetrics // Periodic cluster metrics aggregation
 )
 
 // Message is the envelope for all gossip messages.
 type Message struct {
-	Type           MessageType
-	From           string
-	Timestamp      time.Time
-	Payload        []byte
+	Type            MessageType
+	From            string
+	Timestamp       time.Time
+	Payload         []byte
 	ProtocolVersion uint32 // Gossip protocol version for rolling upgrade compatibility
 }
 
@@ -103,46 +103,46 @@ type LeaderHeartbeatPayload struct {
 // ZoneUpdatePayload carries zone change data from leader to follower nodes.
 // This enables master/slave zone replication via the gossip protocol.
 type ZoneUpdatePayload struct {
-	ZoneName    string            // Origin of the zone being updated
-	Action      string            // "add", "delete", "reload", "full"
-	Serial      uint32            // SOA serial of the zone after this change
-	Records     []ZoneRecord      // Records being added/deleted
-	DeletedKeys []string          // Record names deleted (for "delete" action)
-	RawZone     []byte            // Full zone file content (for "full" or "reload" action)
+	ZoneName    string       // Origin of the zone being updated
+	Action      string       // "add", "delete", "reload", "full"
+	Serial      uint32       // SOA serial of the zone after this change
+	Records     []ZoneRecord // Records being added/deleted
+	DeletedKeys []string     // Record names deleted (for "delete" action)
+	RawZone     []byte       // Full zone file content (for "full" or "reload" action)
 }
 
 // ZoneRecord is a serialized DNS record for gossip transport.
 type ZoneRecord struct {
-	Name   string
-	TTL    uint32
-	Class  string
-	Type   string
-	RData  string
+	Name  string
+	TTL   uint32
+	Class string
+	Type  string
+	RData string
 }
 
 // ConfigSyncPayload carries configuration changes from leader to followers.
 // This enables automatic propagation and synchronization of config changes.
 type ConfigSyncPayload struct {
-	ConfigSHA256  string            // SHA-256 hash of the config for change detection
-	Timestamp     time.Time         // When this config was generated
-	NodeID        string            // Leader's node ID
+	ConfigSHA256  string             // SHA-256 hash of the config for change detection
+	Timestamp     time.Time          // When this config was generated
+	NodeID        string             // Leader's node ID
 	ClusterConfig *ClusterConfigJSON // Serialized cluster configuration
 }
 
 // ClusterConfigJSON is a JSON-serializable version of cluster configuration.
 type ClusterConfigJSON struct {
-	Enabled      bool     `json:"enabled"`
-	NodeID       string   `json:"node_id"`
-	BindAddr     string   `json:"bind_addr"`
-	BindPort     int      `json:"bind_port"`
-	GossipPort   int      `json:"gossip_port"`
+	Enabled       bool     `json:"enabled"`
+	NodeID        string   `json:"node_id"`
+	BindAddr      string   `json:"bind_addr"`
+	BindPort      int      `json:"bind_port"`
+	GossipPort    int      `json:"gossip_port"`
 	ConsensusMode string   `json:"consensus_mode"`
-	Region       string   `json:"region"`
-	Zone         string   `json:"zone"`
-	Weight       int      `json:"weight"`
-	SeedNodes    []string `json:"seed_nodes"`
-	CacheSync    bool     `json:"cache_sync"`
-	HTTPAddr     string   `json:"http_addr"`
+	Region        string   `json:"region"`
+	Zone          string   `json:"zone"`
+	Weight        int      `json:"weight"`
+	SeedNodes     []string `json:"seed_nodes"`
+	CacheSync     bool     `json:"cache_sync"`
+	HTTPAddr      string   `json:"http_addr"`
 }
 
 // DrainingPayload is broadcast when a node enters or leaves draining state.
@@ -167,15 +167,15 @@ type NodeStatsPayload struct {
 // ClusterMetricsPayload carries aggregated per-node operational metrics for
 // cluster-wide monitoring and aggregation.
 type ClusterMetricsPayload struct {
-	NodeID           string    // Node reporting metrics
-	QueriesTotal     uint64    // Total queries processed by this node
-	QueriesPerSec    float64   // Current queries per second
-	CacheHits        uint64    // Total cache hits
-	CacheMisses      uint64    // Total cache misses
-	LatencyMsAvg     float64   // Average latency in milliseconds
-	LatencyMsP99     float64   // P99 latency in milliseconds
-	UptimeSeconds    uint64    // Node uptime in seconds
-	Timestamp        time.Time // When these metrics were collected
+	NodeID        string    // Node reporting metrics
+	QueriesTotal  uint64    // Total queries processed by this node
+	QueriesPerSec float64   // Current queries per second
+	CacheHits     uint64    // Total cache hits
+	CacheMisses   uint64    // Total cache misses
+	LatencyMsAvg  float64   // Average latency in milliseconds
+	LatencyMsP99  float64   // P99 latency in milliseconds
+	UptimeSeconds uint64    // Node uptime in seconds
+	Timestamp     time.Time // When these metrics were collected
 }
 
 // GossipProtocol implements the gossip-based membership protocol.
@@ -194,17 +194,17 @@ type GossipProtocol struct {
 	onNodeLeave    func(*Node)
 	onNodeUpdate   func(*Node)
 	onCacheInvalid func([]string)
-	onZoneUpdate   func(ZoneUpdatePayload)   // Called when leader propagates zone changes
-	onConfigSync   func(ConfigSyncPayload)   // Called when leader propagates config changes
+	onZoneUpdate   func(ZoneUpdatePayload) // Called when leader propagates zone changes
+	onConfigSync   func(ConfigSyncPayload) // Called when leader propagates config changes
 
 	// Leader election state
 	leaderMu          sync.RWMutex
 	currentLeader     string        // NodeID of current leader (empty if none)
 	isLeader          bool          // True if this node is the leader
 	leaderTerm        uint64        // Current term
-	electionTerm       uint64        // Current election term
+	electionTerm      uint64        // Current election term
 	heartbeatInterval time.Duration // Interval for leader heartbeats
-	lastHeartbeat      time.Time     // Last heartbeat received
+	lastHeartbeat     time.Time     // Last heartbeat received
 
 	// Control
 	ctx    context.Context
@@ -937,7 +937,7 @@ func (gp *GossipProtocol) handleNodeStats(msg Message, from *net.UDPAddr) {
 	// Update the health stats for this node in our local node list
 	health := NodeHealthStats{
 		QueriesPerSecond: payload.QueriesPerSecond,
-		LatencyMs:       payload.LatencyMs,
+		LatencyMs:        payload.LatencyMs,
 		CPUPercent:       payload.CPUPercent,
 		MemoryPercent:    payload.MemoryPercent,
 		ActiveConns:      payload.ActiveConns,
@@ -1534,10 +1534,10 @@ func (gp *GossipProtocol) decrypt(ciphertext []byte) ([]byte, error) {
 // encodeMessage encodes a message with its payload.
 func encodeMessage(msgType MessageType, from string, protocolVersion uint32, payload []byte) ([]byte, error) {
 	msg := Message{
-		Type:           msgType,
-		From:           from,
-		Timestamp:      time.Now(),
-		Payload:        payload,
+		Type:            msgType,
+		From:            from,
+		Timestamp:       time.Now(),
+		Payload:         payload,
 		ProtocolVersion: protocolVersion,
 	}
 

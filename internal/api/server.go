@@ -54,7 +54,7 @@ type Server struct {
 	authStore       *auth.Store
 	metrics         *metrics.MetricsCollector
 	validator       *dnssec.Validator
-	zoneSigners    map[string]*dnssec.Signer // zone name → signer
+	zoneSigners     map[string]*dnssec.Signer // zone name → signer
 	rpzEngine       *rpz.Engine
 	odohProxy       *odoh.ObliviousProxy // ODoH proxy (RFC 9230)
 	loginLimiter    *loginRateLimiter

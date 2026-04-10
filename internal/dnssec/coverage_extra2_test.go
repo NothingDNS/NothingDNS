@@ -751,7 +751,7 @@ func TestValidateMessage_EmptyRRSetContinue(t *testing.T) {
 	}
 
 	msg := &protocol.Message{
-		Header: protocol.Header{},
+		Header:  protocol.Header{},
 		Answers: answers,
 	}
 

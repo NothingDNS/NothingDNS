@@ -6,9 +6,9 @@ import (
 
 // Message represents a complete DNS message (RFC 1035).
 type Message struct {
-	Header     Header
-	Questions  []*Question
-	Answers    []*ResourceRecord
+	Header      Header
+	Questions   []*Question
+	Answers     []*ResourceRecord
 	Authorities []*ResourceRecord
 	Additionals []*ResourceRecord
 }

@@ -51,7 +51,7 @@ type integratedHandler struct {
 	metrics       *metrics.MetricsCollector
 	validator     *dnssec.Validator
 	zoneSigners   map[string]*dnssec.Signer
-	zoneTree      *zone.RadixTree     // Radix tree for O(log n) zone matching
+	zoneTree      *zone.RadixTree // Radix tree for O(log n) zone matching
 	cluster       *cluster.Cluster
 	axfrServer    *transfer.AXFRServer
 	ixfrServer    *transfer.IXFRServer
@@ -106,8 +106,8 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 				ClientIP:  clientIP,
 				QueryName: qnameAudit,
 				QueryType: qtypeStr,
-				Latency:    latency,
-				CacheHit:   cacheHit,
+				Latency:   latency,
+				CacheHit:  cacheHit,
 			})
 		}
 	}()

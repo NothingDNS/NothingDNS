@@ -13,12 +13,12 @@ import (
 
 // ZoneManagerResult holds the results of zone initialization.
 type ZoneManagerResult struct {
-	Manager      *zone.Manager
-	Zones        map[string]*zone.Zone
-	ZoneFiles    map[string]string // origin -> file path
-	Signers      map[string]*dnssec.Signer
+	Manager       *zone.Manager
+	Zones         map[string]*zone.Zone
+	ZoneFiles     map[string]string // origin -> file path
+	Signers       map[string]*dnssec.Signer
 	KVPersistence *zone.KVPersistence
-	KVStore      *storage.KVStore
+	KVStore       *storage.KVStore
 }
 
 // ZoneManager manages DNS zones, zone files, and DNSSEC signing.

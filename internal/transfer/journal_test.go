@@ -87,9 +87,9 @@ func TestEncodeDecodeJournalEntryTypes(t *testing.T) {
 		Serial:    100,
 		Timestamp: time.Now(),
 		Added: []zone.RecordChange{
-			{Name: "example.com.", Type: 1, TTL: 300, RData: "1.2.3.4"},    // A
-			{Name: "example.com.", Type: 28, TTL: 300, RData: "2001:db8::1"}, // AAAA
-			{Name: "example.com.", Type: 15, TTL: 300, RData: "10 mail.example.com."}, // MX
+			{Name: "example.com.", Type: 1, TTL: 300, RData: "1.2.3.4"},                          // A
+			{Name: "example.com.", Type: 28, TTL: 300, RData: "2001:db8::1"},                     // AAAA
+			{Name: "example.com.", Type: 15, TTL: 300, RData: "10 mail.example.com."},            // MX
 			{Name: "example.com.", Type: 16, TTL: 300, RData: "v=spf1 include:example.com ~all"}, // TXT
 		},
 		Deleted: nil,

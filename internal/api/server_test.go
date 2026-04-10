@@ -25,7 +25,7 @@ func TestAPIServer(t *testing.T) {
 
 	cfg := config.HTTPConfig{
 		Enabled:   true,
-		Bind:     addr,
+		Bind:      addr,
 		AuthToken: "test-token", // Required for auth
 	}
 
@@ -64,7 +64,7 @@ func TestAPIServer(t *testing.T) {
 func TestAPIStatus(t *testing.T) {
 	cfg := config.HTTPConfig{
 		Enabled:   true,
-		Bind:     "127.0.0.1:18081",
+		Bind:      "127.0.0.1:18081",
 		AuthToken: "test-token",
 	}
 
@@ -117,7 +117,7 @@ func TestAPIStatus(t *testing.T) {
 func TestAPICacheFlush(t *testing.T) {
 	cfg := config.HTTPConfig{
 		Enabled:   true,
-		Bind:     "127.0.0.1:18082",
+		Bind:      "127.0.0.1:18082",
 		AuthToken: "test-token",
 	}
 
@@ -244,10 +244,10 @@ func TestReverseIPv4(t *testing.T) {
 
 func TestReverseIPv4Relative(t *testing.T) {
 	tests := []struct {
-		ip       string
-		origin   string
-		prefix   int
-		want     string
+		ip     string
+		origin string
+		prefix int
+		want   string
 	}{
 		// /24 zone (24 fixed octets = 3, varying = 1): only last octet varies
 		{"192.168.1.4", "1.168.192.in-addr.arpa.", 24, "4"},
@@ -283,18 +283,18 @@ func TestValidateZoneCIDR(t *testing.T) {
 		// Zone /24, CIDR must be >= 24
 		{"1.168.192.in-addr.arpa.", 24, 24, false},
 		{"1.168.192.in-addr.arpa.", 25, 24, false}, // /25 is more specific, OK
-		{"1.168.192.in-addr.arpa.", 16, 0, true},  // /16 is less specific, NOT OK
-		{"1.168.192.in-addr.arpa.", 8, 0, true},   // /8 is less specific, NOT OK
+		{"1.168.192.in-addr.arpa.", 16, 0, true},   // /16 is less specific, NOT OK
+		{"1.168.192.in-addr.arpa.", 8, 0, true},    // /8 is less specific, NOT OK
 		// Zone /16, CIDR must be >= 16
 		{"168.192.in-addr.arpa.", 16, 16, false},
-		{"168.192.in-addr.arpa.", 24, 16, false},  // /24 is more specific, OK
-		{"168.192.in-addr.arpa.", 8, 0, true},     // /8 is less specific, NOT OK
+		{"168.192.in-addr.arpa.", 24, 16, false}, // /24 is more specific, OK
+		{"168.192.in-addr.arpa.", 8, 0, true},    // /8 is less specific, NOT OK
 		// Zone /8
 		{"192.in-addr.arpa.", 8, 8, false},
-		{"192.in-addr.arpa.", 16, 8, false},       // /16 is more specific, OK
+		{"192.in-addr.arpa.", 16, 8, false}, // /16 is more specific, OK
 		// Invalid origins
 		{"example.com.", 24, 0, true},
-		{"1.168.192.in-addr.arpa", 24, 0, true},  // missing trailing dot - FIX THIS
+		{"1.168.192.in-addr.arpa", 24, 0, true}, // missing trailing dot - FIX THIS
 	}
 	for _, tt := range tests {
 		gotPref, err := validateZoneCIDR(tt.origin, tt.prefix)

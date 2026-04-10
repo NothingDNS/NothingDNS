@@ -25,8 +25,8 @@ type TransferManagerResult struct {
 
 // TransferManager manages zone transfers and slave zone handling.
 type TransferManager struct {
-	result TransferManagerResult
-	logger *util.Logger
+	result  TransferManagerResult
+	logger  *util.Logger
 	zonesMu *sync.RWMutex
 }
 
@@ -77,7 +77,7 @@ func NewTransferManager(cfg *config.Config, zones map[string]*zone.Zone, zonesMu
 			TSIGSecret:    slaveConfig.TSIGSecret,
 			Timeout:       parseDurationOrDefault(slaveConfig.Timeout, 30*time.Second),
 			RetryInterval: parseDurationOrDefault(slaveConfig.RetryInterval, 5*time.Minute),
-			MaxRetries:   slaveConfig.MaxRetries,
+			MaxRetries:    slaveConfig.MaxRetries,
 		}
 
 		if err := mgr.result.SlaveManager.AddSlaveZone(transferConfig); err != nil {

@@ -39,10 +39,10 @@ const (
 )
 
 var (
-	configPath       = flag.String("config", "/etc/nothingdns/nothingdns.yaml", "Path to configuration file")
-	showVersion      = flag.Bool("version", false, "Show version and exit")
-	showHelp         = flag.Bool("help", false, "Show help and exit")
-	validateConfig   = flag.Bool("validate-config", false, "Validate configuration file and exit")
+	configPath     = flag.String("config", "/etc/nothingdns/nothingdns.yaml", "Path to configuration file")
+	showVersion    = flag.Bool("version", false, "Show version and exit")
+	showHelp       = flag.Bool("help", false, "Show help and exit")
+	validateConfig = flag.Bool("validate-config", false, "Validate configuration file and exit")
 )
 
 func main() {

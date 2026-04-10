@@ -399,7 +399,7 @@ func TestTLVDecoderDecodeErrorPaths(t *testing.T) {
 		data := make([]byte, 5)
 		data[0] = TypeRecord
 		binary.BigEndian.PutUint32(data[1:5], 16) // Claims 16 bytes
-		data = append(data, []byte("only")...)     // Only 4 bytes
+		data = append(data, []byte("only")...)    // Only 4 bytes
 
 		reader := bytes.NewReader(data)
 		decoder := NewTLVDecoder(reader)
@@ -1677,7 +1677,7 @@ func TestWALDecodeEntryDataLengthMismatch(t *testing.T) {
 		// Keep CRC valid for type+length part, but make length larger
 		// First, recalculate with a larger length field in the header portion
 		modified := make([]byte, WALHeaderSize+2) // only 2 bytes of data
-		copy(modified, encoded[:4])                // Copy CRC - but CRC will be wrong
+		copy(modified, encoded[:4])               // Copy CRC - but CRC will be wrong
 
 		// Instead, let's create a proper test: encode entry with data "hi",
 		// then manually increase the length field, keeping the rest as-is.
@@ -1688,7 +1688,7 @@ func TestWALDecodeEntryDataLengthMismatch(t *testing.T) {
 		buf := make([]byte, WALHeaderSize+2)
 		buf[4] = EntryTypePut
 		binary.BigEndian.PutUint32(buf[5:9], 100) // Claims 100 bytes of data
-		copy(buf[WALHeaderSize:], []byte("ab"))    // Only 2 bytes of data
+		copy(buf[WALHeaderSize:], []byte("ab"))   // Only 2 bytes of data
 
 		// Recompute CRC over type+length+data
 		crc := crc32.ChecksumIEEE(buf[4:])

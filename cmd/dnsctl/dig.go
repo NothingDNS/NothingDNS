@@ -81,7 +81,7 @@ func cmdDig(args []string) error {
 			{
 				Name:  name,
 				Type:  protocol.TypeOPT,
-				Class: 4096, // UDP payload size
+				Class: 4096,   // UDP payload size
 				TTL:   0x8000, // DO bit set
 			},
 		}

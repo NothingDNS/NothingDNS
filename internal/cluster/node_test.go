@@ -28,9 +28,9 @@ func TestNodeState_String(t *testing.T) {
 
 func TestNode_IsAlive(t *testing.T) {
 	tests := []struct {
-		name string
+		name  string
 		state NodeState
-		want bool
+		want  bool
 	}{
 		{"alive", NodeStateAlive, true},
 		{"suspect", NodeStateSuspect, false},

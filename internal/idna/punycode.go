@@ -85,10 +85,10 @@ func encodeSuffix(src []rune) string {
 	var out strings.Builder
 
 	// RFC 3492 algorithm state
-	n := initialN        // First non-ASCII code point (0x80)
-	delta := 0          // Cumulative delta
+	n := initialN // First non-ASCII code point (0x80)
+	delta := 0    // Cumulative delta
 	bias := initialBias
-	h := 0              // Number of code points processed (starts at 0 for suffix)
+	h := 0 // Number of code points processed (starts at 0 for suffix)
 
 	// Handle all characters - first pass just counts ASCII
 	for _, r := range src {
@@ -154,7 +154,6 @@ func encodeSuffix(src []rune) string {
 	return out.String()
 }
 
-
 // decodePunycode decodes a punycode string to Unicode.
 func decodePunycode(src string) string {
 	if src == "" {
@@ -182,10 +181,10 @@ func decodePunycode(src string) string {
 
 	// Decode the suffix
 	var (
-		n     int = initialN
-		bias  = initialBias
-		i     = 0
-		out   []rune
+		n    int = initialN
+		bias     = initialBias
+		i        = 0
+		out  []rune
 	)
 
 	// Initialize output with the prefix
@@ -266,10 +265,10 @@ func adapt(delta, numPoints int, first bool) int {
 	delta += delta / numPoints
 
 	k := 0
-	for delta > ((base - tmin) * tmax) / 2 {
+	for delta > ((base-tmin)*tmax)/2 {
 		delta = delta / (base - tmin)
 		k += base
 	}
 
-	return k + ((base - tmin + 1)*delta)/(delta+skew)
+	return k + ((base-tmin+1)*delta)/(delta+skew)
 }

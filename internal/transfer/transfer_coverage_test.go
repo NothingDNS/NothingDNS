@@ -127,7 +127,7 @@ func TestAXFRClient_receiveAXFRResponse_SingleMessageComplete(t *testing.T) {
 	aRR := &protocol.ResourceRecord{
 		Name: mustParseName2("www.example.com."), Type: protocol.TypeA,
 		Class: protocol.ClassIN, TTL: 3600,
-		Data:  &protocol.RDataA{Address: [4]byte{192, 0, 2, 1}},
+		Data: &protocol.RDataA{Address: [4]byte{192, 0, 2, 1}},
 	}
 
 	// Single message with SOA + A + SOA (complete transfer in one message)
@@ -218,7 +218,7 @@ func TestAXFRClient_receiveAXFRResponse_ReadErrorOnSecond(t *testing.T) {
 	aRR := &protocol.ResourceRecord{
 		Name: mustParseName2("www.example.com."), Type: protocol.TypeA,
 		Class: protocol.ClassIN, TTL: 3600,
-		Data:  &protocol.RDataA{Address: [4]byte{192, 0, 2, 1}},
+		Data: &protocol.RDataA{Address: [4]byte{192, 0, 2, 1}},
 	}
 
 	// First message: SOA + A (soaCount = 1, not complete)
@@ -402,7 +402,7 @@ func TestAXFRClient_Transfer_WithTSIG_TCPServer(t *testing.T) {
 		// Create response and sign it
 		respMsg := &protocol.Message{
 			Header: protocol.Header{
-				ID: reqMsg.Header.ID,
+				ID:    reqMsg.Header.ID,
 				Flags: protocol.Flags{QR: true, RCODE: protocol.RcodeSuccess},
 			},
 			Answers: []*protocol.ResourceRecord{soaRR, soaRR},
@@ -620,7 +620,7 @@ func TestIXFRClient_receiveIXFRResponse_WithMiddleRecords(t *testing.T) {
 	aRR := &protocol.ResourceRecord{
 		Name: mustParseName2("www.example.com."), Type: protocol.TypeA,
 		Class: protocol.ClassIN, TTL: 3600,
-		Data:  &protocol.RDataA{Address: [4]byte{192, 0, 2, 1}},
+		Data: &protocol.RDataA{Address: [4]byte{192, 0, 2, 1}},
 	}
 
 	// SOA + A + SOA, soaCount reaches 2 after this message
@@ -694,10 +694,10 @@ func TestAXFRServer_HandleAXFR_AllowListAuthorized(t *testing.T) {
 
 	z := zone.NewZone("example.com.")
 	z.SOA = &zone.SOARecord{
-		MName:   "ns1.example.com.",
-		RName:   "admin.example.com.",
-		Serial:  2024010101,
-		TTL:     86400,
+		MName:  "ns1.example.com.",
+		RName:  "admin.example.com.",
+		Serial: 2024010101,
+		TTL:    86400,
 	}
 	server.AddZone(z)
 
@@ -859,7 +859,7 @@ func TestVerifyMessage_InvalidTSIGDataType(t *testing.T) {
 	}
 
 	msg := &protocol.Message{
-		Header:     protocol.Header{ID: 1234},
+		Header:      protocol.Header{ID: 1234},
 		Additionals: []*protocol.ResourceRecord{tsigRR},
 	}
 	err := VerifyMessage(msg, key, nil)
@@ -1084,7 +1084,7 @@ func TestCloneMessageWithoutTSIG(t *testing.T) {
 
 func TestExtractMAC_NoTSIG(t *testing.T) {
 	msg := &protocol.Message{
-		Header:     protocol.Header{ID: 1234},
+		Header:      protocol.Header{ID: 1234},
 		Additionals: []*protocol.ResourceRecord{},
 	}
 	mac, err := extractMAC(msg)
@@ -1272,7 +1272,7 @@ func TestApplyUpdate_DeleteNameOp(t *testing.T) {
 	z := newTestZoneWithRecords()
 
 	update := &UpdateRequest{
-		ZoneName: "example.com.",
+		ZoneName:      "example.com.",
 		Prerequisites: []UpdatePrerequisite{},
 		Updates: []UpdateOperation{
 			{
@@ -1294,7 +1294,7 @@ func TestApplyUpdate_DeleteRRSetOp(t *testing.T) {
 	z := newTestZoneWithRecords()
 
 	update := &UpdateRequest{
-		ZoneName: "example.com.",
+		ZoneName:      "example.com.",
 		Prerequisites: []UpdatePrerequisite{},
 		Updates: []UpdateOperation{
 			{
@@ -1408,14 +1408,14 @@ func TestAXFRClient_sendMessage_WriteBodyError(t *testing.T) {
 // failingWriteConn fails on write
 type failingWriteConn struct{}
 
-func (p *failingWriteConn) Read(b []byte) (int, error)                       { return 0, net.ErrClosed }
-func (p *failingWriteConn) Write(b []byte) (int, error)                      { return 0, fmt.Errorf("write failed") }
-func (p *failingWriteConn) Close() error                                      { return nil }
-func (p *failingWriteConn) LocalAddr() net.Addr                               { return &net.TCPAddr{} }
-func (p *failingWriteConn) RemoteAddr() net.Addr                              { return &net.TCPAddr{} }
-func (p *failingWriteConn) SetDeadline(t time.Time) error                     { return nil }
-func (p *failingWriteConn) SetReadDeadline(t time.Time) error                 { return nil }
-func (p *failingWriteConn) SetWriteDeadline(t time.Time) error                { return nil }
+func (p *failingWriteConn) Read(b []byte) (int, error)         { return 0, net.ErrClosed }
+func (p *failingWriteConn) Write(b []byte) (int, error)        { return 0, fmt.Errorf("write failed") }
+func (p *failingWriteConn) Close() error                       { return nil }
+func (p *failingWriteConn) LocalAddr() net.Addr                { return &net.TCPAddr{} }
+func (p *failingWriteConn) RemoteAddr() net.Addr               { return &net.TCPAddr{} }
+func (p *failingWriteConn) SetDeadline(t time.Time) error      { return nil }
+func (p *failingWriteConn) SetReadDeadline(t time.Time) error  { return nil }
+func (p *failingWriteConn) SetWriteDeadline(t time.Time) error { return nil }
 
 // ---------------------------------------------------------------------------
 // AXFRClient.receiveAXFRResponse - read msg body error
@@ -1688,9 +1688,9 @@ func TestUnpackTSIGRecord_InsufficientMAC(t *testing.T) {
 	algoBytes := make([]byte, 256)
 	n, _ := protocol.PackName(algoName, algoBytes, 0, nil)
 	// Add time signed (6 bytes) + fudge (2 bytes) + MAC size indicating more than available
-	data := append(algoBytes[:n], make([]byte, 6)...)  // time
-	data = append(data, []byte{0, 100}...)             // fudge = 300
-	data = append(data, []byte{0, 50}...)              // MAC size = 50
+	data := append(algoBytes[:n], make([]byte, 6)...) // time
+	data = append(data, []byte{0, 100}...)            // fudge = 300
+	data = append(data, []byte{0, 50}...)             // MAC size = 50
 	// Don't add enough MAC data
 	_, _, err := UnpackTSIGRecord(data, 0)
 	if err == nil {
@@ -1706,9 +1706,9 @@ func TestUnpackTSIGRecord_InsufficientOriginalID(t *testing.T) {
 	algoName, _ := protocol.ParseName("hmac-sha256.")
 	algoBytes := make([]byte, 256)
 	n, _ := protocol.PackName(algoName, algoBytes, 0, nil)
-	data := append(algoBytes[:n], make([]byte, 6)...)  // time
-	data = append(data, []byte{0, 100}...)             // fudge
-	data = append(data, []byte{0, 0}...)               // MAC size = 0
+	data := append(algoBytes[:n], make([]byte, 6)...) // time
+	data = append(data, []byte{0, 100}...)            // fudge
+	data = append(data, []byte{0, 0}...)              // MAC size = 0
 	// No original ID bytes
 	_, _, err := UnpackTSIGRecord(data, 0)
 	if err == nil {
@@ -1724,10 +1724,10 @@ func TestUnpackTSIGRecord_InsufficientError(t *testing.T) {
 	algoName, _ := protocol.ParseName("hmac-sha256.")
 	algoBytes := make([]byte, 256)
 	n, _ := protocol.PackName(algoName, algoBytes, 0, nil)
-	data := append(algoBytes[:n], make([]byte, 6)...)  // time
-	data = append(data, []byte{0, 100}...)             // fudge
-	data = append(data, []byte{0, 0}...)               // MAC size = 0
-	data = append(data, []byte{0x04, 0xD2}...)         // original ID
+	data := append(algoBytes[:n], make([]byte, 6)...) // time
+	data = append(data, []byte{0, 100}...)            // fudge
+	data = append(data, []byte{0, 0}...)              // MAC size = 0
+	data = append(data, []byte{0x04, 0xD2}...)        // original ID
 	// No error bytes
 	_, _, err := UnpackTSIGRecord(data, 0)
 	if err == nil {
@@ -1743,11 +1743,11 @@ func TestUnpackTSIGRecord_InsufficientOtherLen(t *testing.T) {
 	algoName, _ := protocol.ParseName("hmac-sha256.")
 	algoBytes := make([]byte, 256)
 	n, _ := protocol.PackName(algoName, algoBytes, 0, nil)
-	data := append(algoBytes[:n], make([]byte, 6)...)  // time
-	data = append(data, []byte{0, 100}...)             // fudge
-	data = append(data, []byte{0, 0}...)               // MAC size = 0
-	data = append(data, []byte{0x04, 0xD2}...)         // original ID
-	data = append(data, []byte{0, 0}...)               // error
+	data := append(algoBytes[:n], make([]byte, 6)...) // time
+	data = append(data, []byte{0, 100}...)            // fudge
+	data = append(data, []byte{0, 0}...)              // MAC size = 0
+	data = append(data, []byte{0x04, 0xD2}...)        // original ID
+	data = append(data, []byte{0, 0}...)              // error
 	// No other len bytes
 	_, _, err := UnpackTSIGRecord(data, 0)
 	if err == nil {
@@ -1763,12 +1763,12 @@ func TestUnpackTSIGRecord_InsufficientOtherData(t *testing.T) {
 	algoName, _ := protocol.ParseName("hmac-sha256.")
 	algoBytes := make([]byte, 256)
 	n, _ := protocol.PackName(algoName, algoBytes, 0, nil)
-	data := append(algoBytes[:n], make([]byte, 6)...)  // time
-	data = append(data, []byte{0, 100}...)             // fudge
-	data = append(data, []byte{0, 0}...)               // MAC size = 0
-	data = append(data, []byte{0x04, 0xD2}...)         // original ID
-	data = append(data, []byte{0, 0}...)               // error
-	data = append(data, []byte{0, 10}...)              // other len = 10
+	data := append(algoBytes[:n], make([]byte, 6)...) // time
+	data = append(data, []byte{0, 100}...)            // fudge
+	data = append(data, []byte{0, 0}...)              // MAC size = 0
+	data = append(data, []byte{0x04, 0xD2}...)        // original ID
+	data = append(data, []byte{0, 0}...)              // error
+	data = append(data, []byte{0, 10}...)             // other len = 10
 	// Don't add 10 bytes of other data
 	_, _, err := UnpackTSIGRecord(data, 0)
 	if err == nil {
@@ -1830,7 +1830,7 @@ func TestApplyUpdate_DeleteSpecificRecordOp(t *testing.T) {
 	z := newTestZoneWithRecords()
 
 	update := &UpdateRequest{
-		ZoneName:     "example.com.",
+		ZoneName:      "example.com.",
 		Prerequisites: []UpdatePrerequisite{},
 		Updates: []UpdateOperation{
 			{
@@ -2019,7 +2019,7 @@ func TestAXFRClient_buildAXFRRequest_SigningError_Coverage(t *testing.T) {
 	_, err := client.buildAXFRRequest("example.com.", key)
 	if err == nil {
 		t.Error("Expected error for SHA-1 signing failure")
-    }
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -2158,7 +2158,7 @@ func TestAXFRClient_receiveAXFRResponse_ReadBodyErrAfterPartial(t *testing.T) {
 	aRR := &protocol.ResourceRecord{
 		Name: mustParseName2("www.example.com."), Type: protocol.TypeA,
 		Class: protocol.ClassIN, TTL: 3600,
-		Data:  &protocol.RDataA{Address: [4]byte{192, 0, 2, 1}},
+		Data: &protocol.RDataA{Address: [4]byte{192, 0, 2, 1}},
 	}
 
 	// First message: SOA + A (soaCount=1, not complete) then connection closes

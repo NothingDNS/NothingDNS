@@ -282,7 +282,7 @@ func TestSlaveManager_handleNotify_NonexistentZone(t *testing.T) {
 	sm := NewSlaveManager(nil)
 	req := &NOTIFYRequest{
 		ZoneName: "nonexistent.com.",
-		Serial:  999,
+		Serial:   999,
 		ClientIP: net.ParseIP("10.0.0.1"),
 	}
 	sm.handleNotify(req)
@@ -307,7 +307,7 @@ func TestSlaveManager_handleNotify_OldSerial(t *testing.T) {
 
 	req := &NOTIFYRequest{
 		ZoneName: "test.com.",
-		Serial:  100, // Old serial
+		Serial:   100, // Old serial
 		ClientIP: net.ParseIP("10.0.0.1"),
 	}
 	sm.handleNotify(req)
@@ -337,7 +337,7 @@ func TestSlaveManager_handleNotify_NewerSerial(t *testing.T) {
 
 	req := &NOTIFYRequest{
 		ZoneName: "test.com.",
-		Serial:  200, // Newer serial
+		Serial:   200, // Newer serial
 		ClientIP: net.ParseIP("10.0.0.1"),
 	}
 	sm.handleNotify(req)
@@ -460,9 +460,9 @@ func TestSlaveManager_performAXFR_WithTSIGKey(t *testing.T) {
 
 	sm := NewSlaveManager(ks)
 	sm.AddSlaveZone(SlaveZoneConfig{
-		ZoneName:     "test.com.",
-		Masters:      []string{"192.0.2.1:53"},
-		Timeout:      1 * time.Millisecond,
+		ZoneName:    "test.com.",
+		Masters:     []string{"192.0.2.1:53"},
+		Timeout:     1 * time.Millisecond,
 		TSIGKeyName: "test-key.example.com.",
 	})
 	sz := sm.GetSlaveZone("test.com.")
@@ -680,9 +680,9 @@ func TestSlaveManager_AddSlaveZone_WithTSIGKey(t *testing.T) {
 
 	sm := NewSlaveManager(ks)
 	err := sm.AddSlaveZone(SlaveZoneConfig{
-		ZoneName:     "test.com.",
-		Masters:      []string{"192.168.1.1:53"},
-		Timeout:      5 * time.Second,
+		ZoneName:    "test.com.",
+		Masters:     []string{"192.168.1.1:53"},
+		Timeout:     5 * time.Second,
 		TSIGKeyName: "test-key.example.com.",
 	})
 	if err != nil {
@@ -705,9 +705,9 @@ func TestSlaveManager_AddSlaveZone_WithMissingTSIGKey(t *testing.T) {
 
 	sm := NewSlaveManager(ks)
 	err := sm.AddSlaveZone(SlaveZoneConfig{
-		ZoneName:     "test.com.",
-		Masters:      []string{"192.168.1.1:53"},
-		Timeout:      5 * time.Second,
+		ZoneName:    "test.com.",
+		Masters:     []string{"192.168.1.1:53"},
+		Timeout:     5 * time.Second,
 		TSIGKeyName: "missing-key.example.com.",
 	})
 	if err != nil {

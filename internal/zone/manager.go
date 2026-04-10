@@ -444,7 +444,7 @@ func IncrementSerial(z *Zone) {
 	}
 
 	now := time.Now().UTC()
-	datePrefix := uint32(now.Year()*10000 + int(now.Month())*100 + now.Day()) * 100
+	datePrefix := uint32(now.Year()*10000+int(now.Month())*100+now.Day()) * 100
 
 	if z.SOA.Serial < datePrefix {
 		z.SOA.Serial = datePrefix + 1

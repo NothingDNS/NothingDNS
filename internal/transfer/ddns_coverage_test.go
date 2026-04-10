@@ -280,10 +280,10 @@ func TestParsePrerequisites_AllConditions(t *testing.T) {
 	name, _ := protocol.ParseName("www.example.com.")
 
 	tests := []struct {
-		name      string
-		class     uint16
-		rrType    uint16
-		expected  PreconditionType
+		name     string
+		class    uint16
+		rrType   uint16
+		expected PreconditionType
 	}{
 		{"NameInUse", protocol.ClassANY, protocol.TypeANY, PrecondNameInUse},
 		{"Exists", protocol.ClassANY, protocol.TypeA, PrecondExists},

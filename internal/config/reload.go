@@ -27,11 +27,11 @@ type ReloadCallback func() error
 type ReloadPriority int
 
 const (
-	PriorityFirst   ReloadPriority = 0
-	PriorityHigh    ReloadPriority = 10
-	PriorityNormal  ReloadPriority = 50
-	PriorityLow     ReloadPriority = 100
-	PriorityLast    ReloadPriority = 1000
+	PriorityFirst  ReloadPriority = 0
+	PriorityHigh   ReloadPriority = 10
+	PriorityNormal ReloadPriority = 50
+	PriorityLow    ReloadPriority = 100
+	PriorityLast   ReloadPriority = 1000
 )
 
 // ReloadError records an error during reload
@@ -144,12 +144,12 @@ func (h *ReloadHandler) Components() []string {
 
 // ReloadManager provides typed reload methods
 type ReloadManager struct {
-	handler    *ReloadHandler
-	configPath string
-	config     atomic.Pointer[Config]
-	zoneManager  ZoneReloader
-	blocklist    BlocklistReloader
-	logger       Logger
+	handler     *ReloadHandler
+	configPath  string
+	config      atomic.Pointer[Config]
+	zoneManager ZoneReloader
+	blocklist   BlocklistReloader
+	logger      Logger
 }
 
 // ZoneReloader interface for zone hot reload

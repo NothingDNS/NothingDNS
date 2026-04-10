@@ -9,30 +9,30 @@ const (
 	TokenError
 
 	// Structural tokens
-	TokenIndent    // Indentation (tracked for block context)
-	TokenDedent    // Decrease in indentation
-	TokenNewline   // Line break
-	TokenColon     // ':' key-value separator
-	TokenDash      // '-' sequence item marker
-	TokenComma     // ',' (for flow style)
-	TokenLBrace    // '{' (flow mapping)
-	TokenRBrace    // '}' (flow mapping)
-	TokenLBracket  // '[' (flow sequence)
-	TokenRBracket  // ']' (flow sequence)
+	TokenIndent   // Indentation (tracked for block context)
+	TokenDedent   // Decrease in indentation
+	TokenNewline  // Line break
+	TokenColon    // ':' key-value separator
+	TokenDash     // '-' sequence item marker
+	TokenComma    // ',' (for flow style)
+	TokenLBrace   // '{' (flow mapping)
+	TokenRBrace   // '}' (flow mapping)
+	TokenLBracket // '[' (flow sequence)
+	TokenRBracket // ']' (flow sequence)
 
 	// Scalar tokens
-	TokenString    // Regular string/scalar
-	TokenNumber    // Integer or float
-	TokenBool      // true/false
-	TokenNull      // null, ~, empty
+	TokenString // Regular string/scalar
+	TokenNumber // Integer or float
+	TokenBool   // true/false
+	TokenNull   // null, ~, empty
 
 	// Special markers
-	TokenComment   // # comment
-	TokenAnchor    // &anchor
-	TokenAlias     // *alias
-	TokenTag       // !tag
-	TokenPipe      // | literal block scalar
-	TokenGreater   // > folded block scalar
+	TokenComment // # comment
+	TokenAnchor  // &anchor
+	TokenAlias   // *alias
+	TokenTag     // !tag
+	TokenPipe    // | literal block scalar
+	TokenGreater // > folded block scalar
 )
 
 // String returns the human-readable name of a token type.

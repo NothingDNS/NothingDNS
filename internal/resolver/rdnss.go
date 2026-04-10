@@ -75,7 +75,7 @@ func (r *RDNSSOption) ToTLV() *RDNSSOptionTLV {
 	length := 1 + 1 + 4 + (16 * numAddrs)
 
 	return &RDNSSOptionTLV{
-		Type:      31, // RDNSS option type
+		Type:      31,                // RDNSS option type
 		Length:    uint8(length / 8), // Length is in 8-byte units
 		Lifetime:  r.Lifetime,
 		Addresses: r.Servers,
@@ -140,7 +140,7 @@ type DNSSLOption struct {
 // NewDNSSLOption creates a new DNSSL option.
 func NewDNSSLOption(lifetime time.Duration, domains []string) *DNSSLOption {
 	return &DNSSLOption{
-		Lifetime:     uint32(lifetime.Seconds()),
+		Lifetime:      uint32(lifetime.Seconds()),
 		SearchDomains: append([]string(nil), domains...),
 	}
 }
@@ -201,7 +201,7 @@ func ParseDNSSLOption(tlv *DNSSLTLV) (*DNSSLOption, error) {
 	}
 
 	return &DNSSLOption{
-		Lifetime:     tlv.Lifetime,
+		Lifetime:      tlv.Lifetime,
 		SearchDomains: tlv.SearchDomains,
 	}, nil
 }
@@ -254,8 +254,8 @@ type DNSConfig struct {
 // NewDNSConfig creates a new DNS configuration.
 func NewDNSConfig() *DNSConfig {
 	return &DNSConfig{
-		RDNSS:    make([]*RDNSSOption, 0),
-		DNSSL:    make([]*DNSSLOption, 0),
+		RDNSS:     make([]*RDNSSOption, 0),
+		DNSSL:     make([]*DNSSLOption, 0),
 		SourcedAt: time.Now(),
 	}
 }

@@ -15,7 +15,7 @@ import (
 
 // SecurityManagerResult holds the results of security initialization.
 type SecurityManagerResult struct {
-	Blocklist    *blocklist.Blocklist
+	Blocklist   *blocklist.Blocklist
 	RPZEngine   *rpz.Engine
 	GeoEngine   *geodns.Engine
 	DNS64Synth  *dns64.Synthesizer

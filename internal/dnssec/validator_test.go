@@ -237,10 +237,10 @@ func TestValidateTrustAnchor(t *testing.T) {
 	v := NewValidator(DefaultValidatorConfig(), nil, nil)
 
 	tests := []struct {
-		name    string
-		anchor  *TrustAnchor
-		keys    []*protocol.ResourceRecord
-		valid   bool
+		name   string
+		anchor *TrustAnchor
+		keys   []*protocol.ResourceRecord
+		valid  bool
 	}{
 		{
 			name:   "matching anchor",
@@ -1705,7 +1705,7 @@ func TestValidateNegativeResponseWithNSEC3(t *testing.T) {
 	questionName, _ := protocol.ParseName("nonexistent.example.com.")
 	msg := &protocol.Message{
 		Header: protocol.Header{
-			Flags: protocol.NewResponseFlags(protocol.RcodeNameError),
+			Flags:   protocol.NewResponseFlags(protocol.RcodeNameError),
 			QDCount: 1,
 		},
 		Authorities: []*protocol.ResourceRecord{nsec3RR},

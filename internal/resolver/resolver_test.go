@@ -92,9 +92,9 @@ func (m *mockTransport) setAllRootHandlers(fn func(msg *protocol.Message) *proto
 // --- Mock Cache ---
 
 type mockCache struct {
-	mu       sync.Mutex
-	entries  map[string]*CacheEntry
-	sets     []string
+	mu        sync.Mutex
+	entries   map[string]*CacheEntry
+	sets      []string
 	negatives []string
 }
 
