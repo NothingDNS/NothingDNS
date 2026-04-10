@@ -23,7 +23,7 @@ func TestEncodeMessage_AllTypes(t *testing.T) {
 		MessageTypeCacheInvalidate,
 		MessageTypeCacheUpdate,
 	} {
-		data, err := encodeMessage(msgType, []byte("payload"))
+		data, err := encodeMessage(msgType, "test-node", 1, []byte("payload"))
 		if err != nil {
 			t.Errorf("encodeMessage(type=%d) failed: %v", msgType, err)
 		}
@@ -312,7 +312,7 @@ func TestEncodeDecode_RoundTripPingAck(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encodePayload(ping) error: %v", err)
 	}
-	msgData, err := encodeMessage(MessageTypePing, pingBytes)
+	msgData, err := encodeMessage(MessageTypePing, "test-node", 1, pingBytes)
 	if err != nil {
 		t.Fatalf("encodeMessage(ping) error: %v", err)
 	}
@@ -338,7 +338,7 @@ func TestEncodeDecode_RoundTripPingAck(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encodePayload(ack) error: %v", err)
 	}
-	ackMsgData, err := encodeMessage(MessageTypeAck, ackBytes)
+	ackMsgData, err := encodeMessage(MessageTypeAck, "test-node", 1, ackBytes)
 	if err != nil {
 		t.Fatalf("encodeMessage(ack) error: %v", err)
 	}

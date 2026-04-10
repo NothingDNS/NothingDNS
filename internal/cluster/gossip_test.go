@@ -150,7 +150,7 @@ func TestEncodeDecodeMessage(t *testing.T) {
 		t.Fatalf("encodePayload() error = %v", err)
 	}
 
-	data, err := encodeMessage(MessageTypePing, payloadBytes)
+	data, err := encodeMessage(MessageTypePing, "test-node", 1, payloadBytes)
 	if err != nil {
 		t.Fatalf("encodeMessage() error = %v", err)
 	}
@@ -214,7 +214,7 @@ func TestEncodeDecodeGossipPayload(t *testing.T) {
 		t.Fatalf("encodePayload() error = %v", err)
 	}
 
-	data, err := encodeMessage(MessageTypeGossip, payloadBytes)
+	data, err := encodeMessage(MessageTypeGossip, "test-node", 1, payloadBytes)
 	if err != nil {
 		t.Fatalf("encodeMessage() error = %v", err)
 	}
@@ -262,7 +262,7 @@ func TestEncodeDecodeCacheInvalidatePayload(t *testing.T) {
 		t.Fatalf("encodePayload() error = %v", err)
 	}
 
-	data, err := encodeMessage(MessageTypeCacheInvalidate, payloadBytes)
+	data, err := encodeMessage(MessageTypeCacheInvalidate, "test-node", 1, payloadBytes)
 	if err != nil {
 		t.Fatalf("encodeMessage() error = %v", err)
 	}
@@ -414,7 +414,7 @@ func TestGossipProtocol_handleMessage(t *testing.T) {
 		Version: 1,
 	}
 	pingBytes, _ := encodePayload(ping)
-	data, _ := encodeMessage(MessageTypePing, pingBytes)
+	data, _ := encodeMessage(MessageTypePing, "test-node", 1, pingBytes)
 
 	// Handle the message
 	from, _ := net.ResolveUDPAddr("udp", "127.0.0.1:12345")
@@ -445,13 +445,13 @@ func TestGossipProtocol_handleMessage_FromSelf(t *testing.T) {
 		From:    "self",
 		Payload: pingBytes,
 	}
-	data, _ := encodeMessage(msg.Type, msg.Payload)
+	data, _ := encodeMessage(msg.Type, "test-node", 1, msg.Payload)
 
 	// Decode and set From
 	var decodedMsg Message
 	decodeMessageRaw(data, &decodedMsg)
 	decodedMsg.From = "self"
-	data2, _ := encodeMessage(decodedMsg.Type, decodedMsg.Payload)
+	data2, _ := encodeMessage(decodedMsg.Type, "test-node", 1, decodedMsg.Payload)
 
 	from, _ := net.ResolveUDPAddr("udp", "127.0.0.1:12345")
 	gp.handleMessage(data2, from)

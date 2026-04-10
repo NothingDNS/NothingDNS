@@ -80,7 +80,7 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 			if h.metrics != nil {
 				h.metrics.RecordResponse(protocol.RcodeServerFailure)
 			}
-			sendError(w, r, protocol.RcodeServerFailure)
+			sendErrorWithEDE(w, r, protocol.RcodeServerFailure, protocol.EDEOtherError, "internal server error")
 		}
 	}()
 
@@ -362,7 +362,7 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 			if h.metrics != nil {
 				h.metrics.RecordResponse(protocol.RcodeServerFailure)
 			}
-			sendError(w, r, protocol.RcodeServerFailure)
+			sendErrorWithEDE(w, r, protocol.RcodeServerFailure, protocol.EDERecursiveLoop, "CNAME loop detected")
 			return
 		}
 		if len(result.cnameRecords) > 0 {
@@ -421,7 +421,7 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 			if h.metrics != nil {
 				h.metrics.RecordResponse(protocol.RcodeServerFailure)
 			}
-			sendError(w, r, protocol.RcodeServerFailure)
+			sendErrorWithEDE(w, r, protocol.RcodeServerFailure, protocol.EDENetworkError, "iterative resolution failed")
 			return
 		}
 
@@ -510,7 +510,7 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 			if h.metrics != nil {
 				h.metrics.RecordResponse(protocol.RcodeServerFailure)
 			}
-			sendError(w, r, protocol.RcodeServerFailure)
+			sendErrorWithEDE(w, r, protocol.RcodeServerFailure, protocol.EDENetworkError, "upstream unavailable")
 			return
 		}
 
@@ -534,13 +534,20 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 					if h.metrics != nil {
 						h.metrics.RecordResponse(protocol.RcodeServerFailure)
 					}
-					sendError(w, r, protocol.RcodeServerFailure)
+					sendErrorWithEDE(w, r, protocol.RcodeServerFailure, protocol.EDEDNSSECBogus, "DNSSEC validation failed")
 					return
 				}
 			case dnssec.ValidationInsecure:
 				h.logger.Debugf("DNSSEC insecure zone for %s", qname)
 			case dnssec.ValidationIndeterminate:
 				h.logger.Debugf("DNSSEC indeterminate for %s", qname)
+				if h.config.DNSSEC.Enabled {
+					if h.metrics != nil {
+						h.metrics.RecordResponse(protocol.RcodeServerFailure)
+					}
+					sendErrorWithEDE(w, r, protocol.RcodeServerFailure, protocol.EDEDNSSECIndeterminate, "DNSSEC indeterminate")
+					return
+				}
 			}
 		}
 
@@ -615,7 +622,7 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 	if h.metrics != nil {
 		h.metrics.RecordResponse(protocol.RcodeNameError)
 	}
-	sendError(w, r, protocol.RcodeNameError)
+	sendErrorWithEDE(w, r, protocol.RcodeNameError, protocol.EDENotAuthoritative, "no upstream configured")
 }
 
 // tryDNS64Synthesis checks whether DNS64 synthesis is needed for an AAAA query

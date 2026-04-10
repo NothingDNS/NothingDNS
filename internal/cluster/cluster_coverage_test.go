@@ -275,7 +275,7 @@ func TestGossipProtocol_handleMessage_AllTypes(t *testing.T) {
 	// Test MessageTypeAck
 	ack := AckPayload{NodeID: "other-node", Version: 1}
 	ackBytes, _ := encodePayload(ack)
-	ackData, _ := encodeMessage(MessageTypeAck, ackBytes)
+	ackData, _ := encodeMessage(MessageTypeAck, "test-node", 1, ackBytes)
 	gp.handleMessage(ackData, from)
 
 	// Test MessageTypeGossip
@@ -285,7 +285,7 @@ func TestGossipProtocol_handleMessage_AllTypes(t *testing.T) {
 		},
 	}
 	gossipBytes, _ := encodePayload(gossipPayload)
-	gossipData, _ := encodeMessage(MessageTypeGossip, gossipBytes)
+	gossipData, _ := encodeMessage(MessageTypeGossip, "test-node", 1, gossipBytes)
 	gp.handleMessage(gossipData, from)
 
 	// Test MessageTypeCacheInvalidate
@@ -295,7 +295,7 @@ func TestGossipProtocol_handleMessage_AllTypes(t *testing.T) {
 		Timestamp: time.Now(),
 	}
 	cacheBytes, _ := encodePayload(cachePayload)
-	cacheData, _ := encodeMessage(MessageTypeCacheInvalidate, cacheBytes)
+	cacheData, _ := encodeMessage(MessageTypeCacheInvalidate, "test-node", 1, cacheBytes)
 	gp.handleMessage(cacheData, from)
 }
 
@@ -310,22 +310,22 @@ func TestGossipProtocol_handleMessage_InvalidPayload(t *testing.T) {
 
 	// Test handlePing with invalid payload - should not panic
 	msg := Message{Type: MessageTypePing, Payload: []byte{0xFF, 0xFE}}
-	data, _ := encodeMessage(msg.Type, msg.Payload)
+	data, _ := encodeMessage(msg.Type, "test-node", 1, msg.Payload)
 	gp.handleMessage(data, from)
 
 	// Test handleAck with invalid payload
 	msg = Message{Type: MessageTypeAck, Payload: []byte{0xFF, 0xFE}}
-	data, _ = encodeMessage(msg.Type, msg.Payload)
+	data, _ = encodeMessage(msg.Type, "test-node", 1, msg.Payload)
 	gp.handleMessage(data, from)
 
 	// Test handleGossip with invalid payload
 	msg = Message{Type: MessageTypeGossip, Payload: []byte{0xFF, 0xFE}}
-	data, _ = encodeMessage(msg.Type, msg.Payload)
+	data, _ = encodeMessage(msg.Type, "test-node", 1, msg.Payload)
 	gp.handleMessage(data, from)
 
 	// Test handleCacheInvalidate with invalid payload
 	msg = Message{Type: MessageTypeCacheInvalidate, Payload: []byte{0xFF, 0xFE}}
-	data, _ = encodeMessage(msg.Type, msg.Payload)
+	data, _ = encodeMessage(msg.Type, "test-node", 1, msg.Payload)
 	gp.handleMessage(data, from)
 }
 

@@ -177,7 +177,7 @@ func TestEncodeMessage_JsonMarshalError(t *testing.T) {
 	// We'll encode a json message with a channel type embedded.
 
 	// First, verify that a normal encodeMessage works
-	_, err := encodeMessage(MessageTypePing, []byte("test"))
+	_, err := encodeMessage(MessageTypePing, "test-node", 1, []byte("test"))
 	if err != nil {
 		t.Fatalf("encodeMessage with valid payload should succeed: %v", err)
 	}

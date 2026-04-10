@@ -37,10 +37,11 @@ const (
 
 // Message is the envelope for all gossip messages.
 type Message struct {
-	Type      MessageType
-	From      string
-	Timestamp time.Time
-	Payload   []byte
+	Type           MessageType
+	From           string
+	Timestamp      time.Time
+	Payload        []byte
+	ProtocolVersion uint32 // Gossip protocol version for rolling upgrade compatibility
 }
 
 // PingPayload is sent to check node liveness.
@@ -233,6 +234,10 @@ type GossipConfig struct {
 	GossipNodes    int
 	IndirectChecks int
 
+	// Protocol version for rolling upgrade compatibility.
+	// Nodes with different protocol versions can coexist during rolling upgrades.
+	ProtocolVersion uint32
+
 	// Encryption key (32 bytes for AES-256). When set, all gossip
 	// messages are encrypted with AES-256-GCM.
 	EncryptionKey []byte
@@ -241,15 +246,16 @@ type GossipConfig struct {
 // DefaultGossipConfig returns default configuration.
 func DefaultGossipConfig() GossipConfig {
 	return GossipConfig{
-		BindAddr:       "0.0.0.0",
-		BindPort:       7946,
-		GossipInterval: 200 * time.Millisecond,
-		ProbeInterval:  1 * time.Second,
-		ProbeTimeout:   500 * time.Millisecond,
-		SuspicionMult:  4,
-		RetransmitMult: 4,
-		GossipNodes:    3,
-		IndirectChecks: 3,
+		BindAddr:        "0.0.0.0",
+		BindPort:        7946,
+		GossipInterval:  200 * time.Millisecond,
+		ProbeInterval:   1 * time.Second,
+		ProbeTimeout:    500 * time.Millisecond,
+		SuspicionMult:   4,
+		RetransmitMult:  4,
+		GossipNodes:     3,
+		IndirectChecks:  3,
+		ProtocolVersion: 1, // Gossip protocol version for rolling upgrade compatibility
 	}
 }
 
@@ -373,7 +379,7 @@ func (gp *GossipProtocol) BroadcastCacheInvalidation(keys []string) error {
 		return err
 	}
 
-	data, err := encodeMessage(MessageTypeCacheInvalidate, payloadBytes)
+	data, err := encodeMessage(MessageTypeCacheInvalidate, gp.nodeList.GetSelf().ID, gp.config.ProtocolVersion, payloadBytes)
 	if err != nil {
 		return err
 	}
@@ -418,7 +424,7 @@ func (gp *GossipProtocol) BroadcastZoneUpdate(payload ZoneUpdatePayload) error {
 		return err
 	}
 
-	msgBytes, err := encodeMessage(MessageTypeZoneUpdate, payloadBytes)
+	msgBytes, err := encodeMessage(MessageTypeZoneUpdate, gp.nodeList.GetSelf().ID, gp.config.ProtocolVersion, payloadBytes)
 	if err != nil {
 		return err
 	}
@@ -538,7 +544,7 @@ func (gp *GossipProtocol) handlePing(msg Message, from *net.UDPAddr) {
 		util.Warnf("gossip: failed to encode ack payload: %v", err)
 		return
 	}
-	data, err := encodeMessage(MessageTypeAck, ackBytes)
+	data, err := encodeMessage(MessageTypeAck, gp.nodeList.GetSelf().ID, gp.config.ProtocolVersion, ackBytes)
 	if err != nil {
 		util.Warnf("gossip: failed to encode ack message: %v", err)
 		return
@@ -826,7 +832,7 @@ func (gp *GossipProtocol) BroadcastConfigUpdate(payload ConfigSyncPayload) error
 		return err
 	}
 
-	msgBytes, err := encodeMessage(MessageTypeConfigSync, payloadBytes)
+	msgBytes, err := encodeMessage(MessageTypeConfigSync, gp.nodeList.GetSelf().ID, gp.config.ProtocolVersion, payloadBytes)
 	if err != nil {
 		return err
 	}
@@ -892,7 +898,7 @@ func (gp *GossipProtocol) BroadcastDraining(draining bool, inFlightReq int) erro
 		return err
 	}
 
-	msgBytes, err := encodeMessage(MessageTypeDraining, payloadBytes)
+	msgBytes, err := encodeMessage(MessageTypeDraining, gp.nodeList.GetSelf().ID, gp.config.ProtocolVersion, payloadBytes)
 	if err != nil {
 		return err
 	}
@@ -959,7 +965,7 @@ func (gp *GossipProtocol) BroadcastNodeStats(stats NodeHealthStats) error {
 		return err
 	}
 
-	msgBytes, err := encodeMessage(MessageTypeNodeStats, payloadBytes)
+	msgBytes, err := encodeMessage(MessageTypeNodeStats, gp.nodeList.GetSelf().ID, gp.config.ProtocolVersion, payloadBytes)
 	if err != nil {
 		return err
 	}
@@ -1012,7 +1018,7 @@ func (gp *GossipProtocol) BroadcastClusterMetrics(metrics ClusterMetricsPayload)
 		return err
 	}
 
-	msgBytes, err := encodeMessage(MessageTypeClusterMetrics, payloadBytes)
+	msgBytes, err := encodeMessage(MessageTypeClusterMetrics, gp.nodeList.GetSelf().ID, gp.config.ProtocolVersion, payloadBytes)
 	if err != nil {
 		return err
 	}
@@ -1149,7 +1155,7 @@ func (gp *GossipProtocol) muLeaderSendHeartbeat() {
 		return
 	}
 
-	msgBytes, err := encodeMessage(MessageTypeHeartbeat, payloadBytes)
+	msgBytes, err := encodeMessage(MessageTypeHeartbeat, gp.nodeList.GetSelf().ID, gp.config.ProtocolVersion, payloadBytes)
 	if err != nil {
 		return
 	}
@@ -1186,7 +1192,7 @@ func (gp *GossipProtocol) startElection() {
 		return
 	}
 
-	msgBytes, err := encodeMessage(MessageTypeElection, payloadBytes)
+	msgBytes, err := encodeMessage(MessageTypeElection, gp.nodeList.GetSelf().ID, gp.config.ProtocolVersion, payloadBytes)
 	if err != nil {
 		return
 	}
@@ -1226,7 +1232,7 @@ func (gp *GossipProtocol) AnnounceLeader() error {
 		return err
 	}
 
-	msgBytes, err := encodeMessage(MessageTypeLeader, payloadBytes)
+	msgBytes, err := encodeMessage(MessageTypeLeader, gp.nodeList.GetSelf().ID, gp.config.ProtocolVersion, payloadBytes)
 	if err != nil {
 		return err
 	}
@@ -1327,7 +1333,7 @@ func (gp *GossipProtocol) gossip() {
 		return
 	}
 
-	data, err := encodeMessage(MessageTypeGossip, payloadBytes)
+	data, err := encodeMessage(MessageTypeGossip, gp.nodeList.GetSelf().ID, gp.config.ProtocolVersion, payloadBytes)
 	if err != nil {
 		return
 	}
@@ -1432,7 +1438,7 @@ func (gp *GossipProtocol) sendPing(node *Node) {
 		util.Warnf("gossip: failed to encode ping payload: %v", err)
 		return
 	}
-	data, err := encodeMessage(MessageTypePing, pingBytes)
+	data, err := encodeMessage(MessageTypePing, gp.nodeList.GetSelf().ID, gp.config.ProtocolVersion, pingBytes)
 	if err != nil {
 		util.Warnf("gossip: failed to encode ping message: %v", err)
 		return
@@ -1526,11 +1532,13 @@ func (gp *GossipProtocol) decrypt(ciphertext []byte) ([]byte, error) {
 }
 
 // encodeMessage encodes a message with its payload.
-func encodeMessage(msgType MessageType, payload []byte) ([]byte, error) {
+func encodeMessage(msgType MessageType, from string, protocolVersion uint32, payload []byte) ([]byte, error) {
 	msg := Message{
-		Type:      msgType,
-		Timestamp: time.Now(),
-		Payload:   payload,
+		Type:           msgType,
+		From:           from,
+		Timestamp:      time.Now(),
+		Payload:        payload,
+		ProtocolVersion: protocolVersion,
 	}
 
 	return json.Marshal(msg)
@@ -1544,6 +1552,7 @@ func encodePayload(payload any) ([]byte, error) {
 // decodeMessage decodes a message envelope, decrypting if needed.
 // If decryption fails (e.g., during rolling upgrade with mixed encrypted/unencrypted nodes),
 // falls back to parsing as unencrypted message.
+// If the message protocol version is incompatible, it is logged and skipped.
 func (gp *GossipProtocol) decodeMessage(data []byte, msg *Message) error {
 	// Try decryption first if encryption is enabled
 	if gp.aead != nil {
@@ -1558,12 +1567,25 @@ func (gp *GossipProtocol) decodeMessage(data []byte, msg *Message) error {
 		data = decrypted
 	}
 
-	return json.Unmarshal(data, msg)
+	if err := json.Unmarshal(data, msg); err != nil {
+		return err
+	}
+
+	// Check protocol version compatibility during rolling upgrades.
+	// Messages without a ProtocolVersion field (version 0) are from pre-versioning nodes.
+	// Accept version 0 (legacy) or matching version.
+	if msg.ProtocolVersion != 0 && msg.ProtocolVersion != gp.config.ProtocolVersion {
+		util.Warnf("gossip: dropped message from node %s: protocol version %d != our version %d",
+			msg.From, msg.ProtocolVersion, gp.config.ProtocolVersion)
+		return fmt.Errorf("incompatible protocol version")
+	}
+
+	return nil
 }
 
 // sendMessage encodes, encrypts, and sends a message to a UDP address.
 func (gp *GossipProtocol) sendMessage(msgType MessageType, payload []byte, addr *net.UDPAddr) error {
-	data, err := encodeMessage(msgType, payload)
+	data, err := encodeMessage(msgType, gp.nodeList.GetSelf().ID, gp.config.ProtocolVersion, payload)
 	if err != nil {
 		return err
 	}

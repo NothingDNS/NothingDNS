@@ -268,7 +268,7 @@ func TestEncodeMessage_Error(t *testing.T) {
 	// Verify encodeMessage works with valid data.
 	// The error branch of encodeMessage is practically unreachable because
 	// Message contains only JSON-encodable fields.
-	data, err := encodeMessage(MessageTypePing, []byte("test"))
+	data, err := encodeMessage(MessageTypePing, "test-node", 1, []byte("test"))
 	if err != nil {
 		t.Errorf("encodeMessage() with valid payload should succeed, got: %v", err)
 	}
@@ -759,7 +759,7 @@ func TestEncodePayload_UnregisteredType(t *testing.T) {
 
 func TestEncodeMessage_NilPayload(t *testing.T) {
 	// Verify encodeMessage works with empty payload
-	data, err := encodeMessage(MessageTypePing, []byte{})
+	data, err := encodeMessage(MessageTypePing, "test-node", 1, []byte{})
 	if err != nil {
 		t.Errorf("encodeMessage() with empty payload should succeed, got: %v", err)
 	}
