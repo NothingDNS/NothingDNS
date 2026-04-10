@@ -356,14 +356,14 @@ WS     /ws                              — WebSocket live query stream
 | W-05 | **ACL Editor** | IP/subnet rule list, CRUD, drag-drop ordering | MEDIUM | ✅ Done |
 | W-06 | **RPZ Management** | RPZ zone list, rule management, statistics | MEDIUM | ✅ Done |
 | W-07 | **DNSSEC Viewer** | Key states, rollover timeline, trust chain | MEDIUM | ✅ Done |
-| W-08 | **GeoIP Dashboard** | World map with query distribution overlay | LOW | 🔴 Missing |
+| W-08 | **GeoIP Dashboard** | World map with query distribution overlay | LOW | ✅ Done |
 | W-09 | **Historical Charts** | Query/sec, latency, cache hit rate time series | HIGH | ✅ Done |
 | W-10 | **Cluster Node Map** | Node grid/map, status (alive/suspect/dead), region | MEDIUM | ✅ Done |
 | W-11 | **User Management** | User list, role assignment (admin/viewer/operator) | HIGH | ✅ Done |
-| W-12 | **DNS64 / Cookies Status** | Active feature on/off state and statistics | LOW | 🔴 Missing |
-| W-13 | **Zone Transfer Status** | Slave zone sync states, last transfer time | MEDIUM | 🔴 Missing |
-| W-14 | **Notifications** | Toast/alert system (config reload, zone update, errors) | MEDIUM | 🔴 Missing |
-| W-15 | **Mobile Responsive** | Sidebar collapse, responsive grid, touch-friendly | MEDIUM | 🔴 Missing |
+| W-12 | **DNS64 / Cookies Status** | Active feature on/off state and statistics | LOW | ✅ Done |
+| W-13 | **Zone Transfer Status** | Slave zone sync states, last transfer time | MEDIUM | ✅ Done |
+| W-14 | **Notifications** | Toast/alert system (config reload, zone update, errors) | MEDIUM | ✅ Done |
+| W-15 | **Mobile Responsive** | Sidebar collapse, responsive grid, touch-friendly | MEDIUM | ✅ Done |
 
 ### 10.4 Auth System
 
