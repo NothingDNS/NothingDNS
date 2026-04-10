@@ -32,6 +32,9 @@ type Cluster struct {
 	// Zone manager for replication
 	zoneManager *zone.Manager
 
+	// Config hot-reload callback from leader
+	configReloadCallback func(*ClusterConfigJSON) error
+
 	// Raft consensus (when mode = raft)
 	raft      *raft.ClusterIntegration
 	consensus ConsensusMode
@@ -56,22 +59,23 @@ type Cluster struct {
 
 // Config configures the cluster.
 type Config struct {
-	Enabled       bool
-	NodeID        string
-	BindAddr      string
-	BindPort      int
-	GossipPort    int
-	ConsensusMode ConsensusMode // "swim" (default) or "raft"
-	Region        string
-	Zone          string
-	Weight        int
-	SeedNodes     []string
-	CacheSync     bool
-	HTTPAddr      string
-	EncryptionKey string       // hex-encoded 32-byte AES-256 key
-	DataDir       string       // Directory for Raft WAL and snapshots
-	Peers         []PeerConfig // Raft peer nodes
-	ZoneManager   *zone.Manager // zone manager for replication
+	Enabled             bool
+	NodeID              string
+	BindAddr            string
+	BindPort            int
+	GossipPort          int
+	ConsensusMode       ConsensusMode // "swim" (default) or "raft"
+	Region              string
+	Zone                string
+	Weight              int
+	SeedNodes           []string
+	CacheSync           bool
+	HTTPAddr            string
+	EncryptionKey       string       // hex-encoded 32-byte AES-256 key
+	DataDir             string       // Directory for Raft WAL and snapshots
+	Peers               []PeerConfig // Raft peer nodes
+	ZoneManager         *zone.Manager // zone manager for replication
+	ConfigReloadCallback func(*ClusterConfigJSON) error // called when leader sends config
 }
 
 // PeerConfig describes a Raft cluster peer.
@@ -156,6 +160,7 @@ func New(config Config, logger *util.Logger, dnsCache *cache.Cache) (*Cluster, e
 		cacheSyncChan: make(chan CacheSyncEvent, 100),
 		consensus:     config.ConsensusMode,
 		zoneManager:   config.ZoneManager,
+		configReloadCallback: config.ConfigReloadCallback,
 	}
 
 	// Initialize based on consensus mode
@@ -773,13 +778,16 @@ func splitKey(key string) []string {
 func (c *Cluster) handleConfigSync(payload ConfigSyncPayload) {
 	c.logger.Debugf("Received config sync from leader %s (SHA=%s)", payload.NodeID, payload.ConfigSHA256)
 
-	// TODO: Apply the received config to local state
-	// For now, just log that we received it
-	// In a full implementation, this would:
-	// 1. Validate the config SHA
-	// 2. Apply changes to local cluster config
-	// 3. Trigger any necessary restarts or reloads
-	c.logger.Infof("Config sync payload received: node=%s, timestamp=%v", payload.NodeID, payload.Timestamp)
+	if c.configReloadCallback == nil {
+		c.logger.Debugf("configReloadCallback not set, ignoring config sync")
+		return
+	}
+
+	if err := c.configReloadCallback(payload.ClusterConfig); err != nil {
+		c.logger.Warnf("Failed to apply config sync from leader %s: %v", payload.NodeID, err)
+		return
+	}
+	c.logger.Infof("Config sync applied from leader %s (SHA=%s)", payload.NodeID, payload.ConfigSHA256)
 }
 
 // cacheSyncLoop processes cache synchronization events.
