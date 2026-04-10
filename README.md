@@ -683,6 +683,7 @@ cluster:
 │   ├── util/           # Logging utilities
 │   ├── websocket/      # WebSocket server for live streaming
 │   └── zone/           # Zone file parser with $GENERATE
+├── docs/               # Additional documentation
 ├── Dockerfile
 ├── docker-compose.yml
 └── go.mod
@@ -960,7 +961,7 @@ Contributions are welcome! Please ensure:
 - [x] Iterative recursive resolver
 - [x] Runtime memory monitoring and OOM protection
 - [x] Audit logging
-- [x] Production-ready code quality (see [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md))
+- [x] Production-ready code quality (see [docs/PRODUCTION_READINESS.md](docs/PRODUCTION_READINESS.md))
 - [x] DNS64/NAT64 support (RFC 6147)
 - [x] SVCB/HTTPS record types (RFC 9460)
 - [x] DNS Cookies anti-spoofing (RFC 7873)
