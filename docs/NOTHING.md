@@ -433,12 +433,12 @@ WS     /ws                              — WebSocket live query stream
 | SEC-01 | Handler panic = server crash | No panic recovery (PH-01 fixed) | CRITICAL | ✅ Done |
 | SEC-02 | TSIG signing error silent | Unsigned zone transfers accepted (BUG-006) | HIGH | ✅ Done |
 | SEC-03 | RPZ bypass | Response IP and Client IP policies not working (BUG-007) | HIGH | ✅ Done |
-| SEC-04 | Single shared auth token | No multi-user, no RBAC. Token leak = full access | HIGH | 🔴 Missing |
+| SEC-04 | Single shared auth token | No multi-user, no RBAC. Token leak = full access | HIGH | ✅ Done |
 | SEC-05 | Cache key DoS | Very long domain names → unbounded cache keys | MEDIUM | ✅ Done |
 | SEC-06 | Resolver MaxDepth unlimited | Config value passed without bounds check (DEBT-006) | MEDIUM | ✅ Done |
 | SEC-07 | Incomplete audit trail | Zone transfers, DDNS, config changes not logged (DEBT-004) | MEDIUM | ✅ Done |
 | SEC-08 | No API rate limiting | REST API endpoints have no rate limits | MEDIUM | ✅ Done |
-| SEC-09 | CORS policy | API server missing CORS header configuration | LOW | 🔴 Missing |
+| SEC-09 | CORS policy | API server missing CORS header configuration | LOW | ✅ Done |
 
 ---
 
