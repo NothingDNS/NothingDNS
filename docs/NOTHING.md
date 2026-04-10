@@ -397,7 +397,7 @@ WS     /ws                              — WebSocket live query stream
 | CL-02 | **Zone Replication** | Leader node zone update → propagate to other nodes via gossip. All nodes should be able to serve authoritative responses. | HIGH | XL | ✅ Done |
 | CL-03 | **Split-Brain Detection** | Network partition detection. Detect when nodes become isolated and ensure the largest partition remains authoritative. | HIGH | LARGE | ✅ Done |
 | CL-04 | **Node Draining** | Maintenance mode: gracefully remove a node from the cluster. Stop accepting new queries, complete in-flight queries, transfer state. | MEDIUM | MEDIUM | ✅ Done |
-| CL-05 | **Rolling Upgrade** | Sequential node restart. Version mismatch detection. Backward-compatible gossip protocol versioning. | MEDIUM | MEDIUM | 🔴 Missing |
+| CL-05 | **Rolling Upgrade** | Sequential node restart. Version mismatch detection. Backward-compatible gossip protocol versioning. | MEDIUM | MEDIUM | ✅ Done |
 | CL-06 | **Cluster Config Sync** | Automatic propagation of config changes (blocklist, RPZ, ACL) to all nodes. | MEDIUM | LARGE | ✅ Done |
 | CL-07 | **Health-based Query Routing** | Automatic routing away from unhealthy nodes. Client-facing anycast or internal redirect. | MEDIUM | MEDIUM | ✅ Done |
 | CL-08 | **Cluster Metrics Aggregation** | Centralized view of all node metrics. Per-node and cluster-wide statistics. | LOW | MEDIUM | ✅ Done |
@@ -418,7 +418,7 @@ WS     /ws                              — WebSocket live query stream
 | PH-08 | **PID File** | `/var/run/nothingdns.pid` for daemon mode. | LOW | ✅ Done | — |
 | PH-09 | **Systemd Notify** | `sd_notify(READY=1)` support (Type=notify service). | LOW | ✅ Done | — |
 | PH-10 | **Signal-based Config Reload** | SIGHUP → config reload (in addition to API endpoint). | MEDIUM | ✅ Done | — |
-| PH-11 | **Structured Error Types** | Return Extended DNS Error (RFC 8914) responses on error conditions. Protocol support exists, needs handler wiring. | MEDIUM | ⚠️ Partial | M |
+| PH-11 | **Structured Error Types** | Return Extended DNS Error (RFC 8914) responses on error conditions. Protocol support exists, needs handler wiring. | MEDIUM | ✅ Done | M |
 | PH-12 | **Connection Limits** | Max concurrent TCP/TLS/QUIC connection limit (DoS protection). | MEDIUM | ✅ Done | — |
 | PH-13 | **Query Timeout** | Per-query context timeout (configurable, default 10s). | MEDIUM | ✅ Done | — |
 
