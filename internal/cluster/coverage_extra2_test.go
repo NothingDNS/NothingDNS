@@ -464,6 +464,7 @@ func TestGossipProtocol_HandleMessage_SelfFromGob(t *testing.T) {
 	gp.SetCallbacks(
 		func(*Node) { joinCalled = true },
 		nil, nil, nil,
+		nil, nil,
 	)
 
 	if err := gp.Start(); err != nil {

@@ -10,6 +10,7 @@ import (
 	"github.com/nothingdns/nothingdns/internal/cache"
 	"github.com/nothingdns/nothingdns/internal/cluster/raft"
 	"github.com/nothingdns/nothingdns/internal/util"
+	"github.com/nothingdns/nothingdns/internal/zone"
 )
 
 // ConsensusMode defines the consensus protocol for the cluster.
@@ -26,6 +27,9 @@ type Cluster struct {
 	nodeList *NodeList
 	gossip   *GossipProtocol
 	logger   *util.Logger
+
+	// Zone manager for replication
+	zoneManager *zone.Manager
 
 	// Raft consensus (when mode = raft)
 	raft      *raft.ClusterIntegration
@@ -203,6 +207,8 @@ func (c *Cluster) initGossip() error {
 		c.handleNodeLeave,
 		c.handleNodeUpdate,
 		c.handleCacheInvalid,
+		c.handleZoneUpdate,
+		c.handleConfigSync,
 	)
 
 	return nil
@@ -416,6 +422,68 @@ func (c *Cluster) InvalidateCache(keys []string) error {
 	return nil
 }
 
+// BroadcastZoneUpdate propagates a zone update to all follower nodes.
+// Only the leader calls this to push changes to followers.
+func (c *Cluster) BroadcastZoneUpdate(zoneName, action string, serial uint32, records []ZoneRecord, deletedKeys []string) error {
+	if c.gossip == nil {
+		return fmt.Errorf("gossip protocol not initialized")
+	}
+
+	payload := ZoneUpdatePayload{
+		ZoneName:    zoneName,
+		Action:      action,
+		Serial:      serial,
+		Records:     records,
+		DeletedKeys: deletedKeys,
+	}
+
+	return c.gossip.BroadcastZoneUpdate(payload)
+}
+
+// GetLeader returns the current cluster leader's node ID and whether a leader exists.
+func (c *Cluster) GetLeader() (leaderID string, ok bool) {
+	if c.gossip != nil {
+		id := c.gossip.GetLeader()
+		return id, id != ""
+	}
+	return "", false
+}
+
+// IsLeader returns true if this node is the cluster leader.
+func (c *Cluster) IsLeader() bool {
+	if c.gossip != nil {
+		return c.gossip.IsLeader()
+	}
+	return false
+}
+
+// DetectSplitBrain checks for split-brain conditions in the cluster.
+// Returns true if this node should step down due to split-brain detected.
+func (c *Cluster) DetectSplitBrain() bool {
+	if c.gossip != nil {
+		return c.gossip.DetectSplitBrain()
+	}
+	return false
+}
+
+// BroadcastConfigUpdate propagates a config update to all follower nodes.
+// Only the leader calls this to push config changes to followers.
+func (c *Cluster) BroadcastConfigUpdate(configSHA256 string, clusterConfig *ClusterConfigJSON) error {
+	if c.gossip == nil {
+		return fmt.Errorf("gossip protocol not initialized")
+	}
+
+	selfID := c.gossip.GetSelfID()
+	payload := ConfigSyncPayload{
+		ConfigSHA256: configSHA256,
+		Timestamp:    time.Now(),
+		NodeID:       selfID,
+		ClusterConfig: clusterConfig,
+	}
+
+	return c.gossip.BroadcastConfigUpdate(payload)
+}
+
 // InvalidateCacheLocal invalidates cache entries locally.
 func (c *Cluster) InvalidateCacheLocal(keys []string) {
 	if c.cache == nil {
@@ -514,6 +582,70 @@ func (c *Cluster) handleCacheInvalid(keys []string) {
 	for _, handler := range c.handlers {
 		handler.OnCacheInvalid(keys)
 	}
+}
+
+// handleZoneUpdate processes zone update messages received via gossip.
+// Leader propagates zone changes; followers apply them locally.
+func (c *Cluster) handleZoneUpdate(payload ZoneUpdatePayload) {
+	c.logger.Debugf("Received zone update for %s (action=%s, serial=%d)", payload.ZoneName, payload.Action, payload.Serial)
+
+	switch payload.Action {
+	case "full", "reload":
+		// Full zone transfer — replace the zone data
+		if payload.RawZone != nil {
+			// TODO: Parse raw zone data and reload zone
+			c.logger.Infof("Zone %s reload requested via gossip (serial=%d)", payload.ZoneName, payload.Serial)
+		}
+	case "add":
+		// Incremental add — apply record changes
+		for _, rec := range payload.Records {
+			record := zone.Record{
+				Name:  rec.Name,
+				TTL:   rec.TTL,
+				Class: rec.Class,
+				Type:  rec.Type,
+				RData: rec.RData,
+			}
+			if err := c.zoneManager.AddRecord(payload.ZoneName, record); err != nil {
+				c.logger.Warnf("Failed to add record %s %s via gossip: %v", rec.Name, rec.Type, err)
+			}
+		}
+	case "delete":
+		// Incremental delete — remove records
+		for _, key := range payload.DeletedKeys {
+			// Extract record name and type from key (format: "name/type")
+			parts := splitKey(key)
+			if len(parts) == 2 {
+				if err := c.zoneManager.DeleteRecord(payload.ZoneName, parts[0], parts[1]); err != nil {
+					c.logger.Warnf("Failed to delete record %s via gossip: %v", key, err)
+				}
+			}
+		}
+	}
+}
+
+// splitKey splits a "name/type" key into name and type components.
+func splitKey(key string) []string {
+	for i := 0; i < len(key); i++ {
+		if key[i] == '/' {
+			return []string{key[:i], key[i+1:]}
+		}
+	}
+	return []string{key}
+}
+
+// handleConfigSync processes configuration sync messages received via gossip.
+// The leader broadcasts config changes; followers apply them locally.
+func (c *Cluster) handleConfigSync(payload ConfigSyncPayload) {
+	c.logger.Debugf("Received config sync from leader %s (SHA=%s)", payload.NodeID, payload.ConfigSHA256)
+
+	// TODO: Apply the received config to local state
+	// For now, just log that we received it
+	// In a full implementation, this would:
+	// 1. Validate the config SHA
+	// 2. Apply changes to local cluster config
+	// 3. Trigger any necessary restarts or reloads
+	c.logger.Infof("Config sync payload received: node=%s, timestamp=%v", payload.NodeID, payload.Timestamp)
 }
 
 // cacheSyncLoop processes cache synchronization events.

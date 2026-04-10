@@ -334,6 +334,7 @@ func TestGossipProtocol_handleMessage_IgnoresFromSelf(t *testing.T) {
 	gp.SetCallbacks(
 		func(*Node) { joinCalled = true },
 		nil, nil, nil,
+		nil, nil,
 	)
 
 	if err := gp.Start(); err != nil {
@@ -698,6 +699,7 @@ func TestGossipProtocol_TwoNodeIntegration(t *testing.T) {
 	gp1.SetCallbacks(
 		func(*Node) { joinCalled = true },
 		nil, nil, nil,
+		nil, nil,
 	)
 
 	if err := gp1.Start(); err != nil {

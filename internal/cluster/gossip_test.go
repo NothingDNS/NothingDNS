@@ -73,6 +73,7 @@ func TestGossipProtocol_SetCallbacks(t *testing.T) {
 		func(*Node) { leaveCalled = true },
 		func(*Node) { updateCalled = true },
 		func([]string) { cacheInvalidCalled = true },
+		nil, nil,
 	)
 
 	// Test callbacks are set
@@ -544,6 +545,7 @@ func TestGossipProtocol_handleGossip_NewNode(t *testing.T) {
 	gp.SetCallbacks(
 		func(*Node) { joinCalled = true },
 		nil, nil, nil,
+		nil, nil,
 	)
 
 	// Create a gossip message with a new node
@@ -596,6 +598,7 @@ func TestGossipProtocol_handleGossip_UpdateNode(t *testing.T) {
 		nil, nil,
 		func(*Node) { updateCalled = true },
 		nil,
+		nil, nil,
 	)
 
 	// Create gossip with updated node
@@ -636,6 +639,7 @@ func TestGossipProtocol_handleCacheInvalidate(t *testing.T) {
 	gp.SetCallbacks(
 		nil, nil, nil,
 		func(keys []string) { cacheInvalidKeys = keys },
+		nil, nil,
 	)
 
 	// Create cache invalidate message
@@ -669,6 +673,7 @@ func TestGossipProtocol_handleCacheInvalidate_FromSelf(t *testing.T) {
 	gp.SetCallbacks(
 		nil, nil, nil,
 		func(keys []string) { called = true },
+		nil, nil,
 	)
 
 	// Create cache invalidate message from self
@@ -761,6 +766,7 @@ func TestGossipProtocol_probeNodes_DeadNode(t *testing.T) {
 	gp.SetCallbacks(
 		nil,
 		func(*Node) { leaveCalled = true },
+		nil, nil,
 		nil, nil,
 	)
 

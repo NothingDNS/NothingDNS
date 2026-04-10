@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -38,13 +39,23 @@ const (
 )
 
 var (
-	configPath  = flag.String("config", "/etc/nothingdns/nothingdns.yaml", "Path to configuration file")
-	showVersion = flag.Bool("version", false, "Show version and exit")
-	showHelp    = flag.Bool("help", false, "Show help and exit")
+	configPath       = flag.String("config", "/etc/nothingdns/nothingdns.yaml", "Path to configuration file")
+	showVersion      = flag.Bool("version", false, "Show version and exit")
+	showHelp         = flag.Bool("help", false, "Show help and exit")
+	validateConfig   = flag.Bool("validate-config", false, "Validate configuration file and exit")
 )
 
 func main() {
 	flag.Parse()
+
+	if *validateConfig {
+		if err := validateConfigOnly(*configPath); err != nil {
+			fmt.Fprintf(os.Stderr, "Config validation failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Config file %s is valid\n", *configPath)
+		os.Exit(0)
+	}
 
 	if *showHelp {
 		printHelp()
@@ -861,6 +872,18 @@ func loadZoneSigner(z *zone.Zone, signingCfg config.SigningConfig) (*dnssec.Sign
 	return signer, nil
 }
 
+// validateConfigOnly loads and validates a configuration file without starting the server.
+func validateConfigOnly(path string) error {
+	cfg, err := loadConfig(path)
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+	if errs := cfg.Validate(); len(errs) > 0 {
+		return fmt.Errorf("config validation failed: %s", strings.Join(errs, "; "))
+	}
+	return nil
+}
+
 func printHelp() {
 	fmt.Printf(`%s - Zero-dependency DNS server
 
@@ -869,6 +892,8 @@ Usage: %s [options]
 Options:
   -config string
         Path to configuration file (default "/etc/nothingdns/nothingdns.yaml")
+  -validate-config
+        Validate configuration file and exit
   -version
         Show version and exit
   -help
@@ -881,9 +906,12 @@ Examples:
   # Start with custom configuration
   %s -config /path/to/config.yaml
 
+  # Validate configuration
+  %s -validate-config /path/to/config.yaml
+
   # Show version
   %s -version
 
 For more information, visit: https://github.com/nothingdns/nothingdns
-`, Name, os.Args[0], os.Args[0], os.Args[0], os.Args[0])
+`, Name, os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0])
 }

@@ -573,6 +573,8 @@ func TestGossipProtocol_handleGossip_OldVersion(t *testing.T) {
 		nil, nil,
 		func(*Node) { updateCalled = true },
 		nil,
+		nil,
+		nil,
 	)
 
 	from, _ := net.ResolveUDPAddr("udp", "127.0.0.1:12345")

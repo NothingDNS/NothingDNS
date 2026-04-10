@@ -353,6 +353,8 @@ func TestGossipProtocol_HandleGossip_ExistingNodeSameVersion(t *testing.T) {
 		nil,
 		func(*Node) { updateCalled = true },
 		nil,
+		nil,
+		nil,
 	)
 
 	// Gossip with same version node info - should NOT trigger join or update
@@ -439,6 +441,7 @@ func TestGossipProtocol_FullPingAckRoundTrip(t *testing.T) {
 	gp2.SetCallbacks(
 		func(*Node) { pingReceived = true },
 		nil, nil, nil,
+		nil, nil,
 	)
 
 	if err := gp1.Start(); err != nil {

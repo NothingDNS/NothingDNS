@@ -422,6 +422,7 @@ func TestGossipProtocol_HandleGossip_SelfInPayload(t *testing.T) {
 	gp.SetCallbacks(
 		func(*Node) { joinCalled = true },
 		nil, nil, nil,
+		nil, nil,
 	)
 
 	// Gossip includes self - should be skipped
@@ -459,6 +460,7 @@ func TestGossipProtocol_HandleGossip_EmptyNodes(t *testing.T) {
 	gp.SetCallbacks(
 		func(*Node) { joinCalled = true },
 		nil, nil, nil,
+		nil, nil,
 	)
 
 	gossipPayload := GossipPayload{
@@ -588,6 +590,7 @@ func TestGossipProtocol_HandleCacheInvalidate_InvalidPayload(t *testing.T) {
 	gp.SetCallbacks(
 		nil, nil, nil,
 		func([]string) { cacheInvalidCalled = true },
+		nil, nil,
 	)
 
 	msg := Message{
@@ -742,6 +745,7 @@ func TestGossipProtocol_HandleMessage_CacheInvalidate(t *testing.T) {
 	gp.SetCallbacks(
 		nil, nil, nil,
 		func(keys []string) { receivedKeys = keys },
+		nil, nil,
 	)
 
 	if err := gp.Start(); err != nil {
@@ -1150,7 +1154,7 @@ func TestGossipProtocol_SetCallbacks_Nil(t *testing.T) {
 	gp, _ := NewGossipProtocol(cfg, nl)
 
 	// Set all nil callbacks
-	gp.SetCallbacks(nil, nil, nil, nil)
+	gp.SetCallbacks(nil, nil, nil, nil, nil, nil)
 
 	if gp.onNodeJoin != nil {
 		t.Error("onNodeJoin should be nil")

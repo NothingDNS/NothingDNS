@@ -25,6 +25,11 @@ const (
 	MessageTypeGossip
 	MessageTypeCacheInvalidate
 	MessageTypeCacheUpdate
+	MessageTypeElection    // Leader election (bully algorithm)
+	MessageTypeLeader      // Leader announcement
+	MessageTypeHeartbeat   // Leader heartbeat to confirm leadership
+	MessageTypeZoneUpdate  // Zone data propagated from leader to followers
+	MessageTypeConfigSync  // Cluster config propagated from leader to followers
 )
 
 // Message is the envelope for all gossip messages.
@@ -70,6 +75,72 @@ type CacheInvalidatePayload struct {
 	Timestamp time.Time
 }
 
+// ElectionPayload is sent during leader election (bully algorithm).
+// A node proposes itself as leader by sending its ID and priority.
+type ElectionPayload struct {
+	ProposedLeader string // NodeID of the proposed leader
+	Priority       int    // Higher priority wins (use NodeID as tiebreaker)
+	Term           uint64 // Election term (increments each election)
+}
+
+// LeaderPayload announces the current leader to all nodes.
+type LeaderPayload struct {
+	LeaderID   string
+	LeaderAddr string
+	Term       uint64 // Leader's term
+}
+
+// LeaderHeartbeatPayload is sent periodically by the leader to confirm leadership.
+type LeaderHeartbeatPayload struct {
+	LeaderID string
+	Term     uint64
+}
+
+// ZoneUpdatePayload carries zone change data from leader to follower nodes.
+// This enables master/slave zone replication via the gossip protocol.
+type ZoneUpdatePayload struct {
+	ZoneName    string            // Origin of the zone being updated
+	Action      string            // "add", "delete", "reload", "full"
+	Serial      uint32            // SOA serial of the zone after this change
+	Records     []ZoneRecord      // Records being added/deleted
+	DeletedKeys []string          // Record names deleted (for "delete" action)
+	RawZone     []byte            // Full zone file content (for "full" or "reload" action)
+}
+
+// ZoneRecord is a serialized DNS record for gossip transport.
+type ZoneRecord struct {
+	Name   string
+	TTL    uint32
+	Class  string
+	Type   string
+	RData  string
+}
+
+// ConfigSyncPayload carries configuration changes from leader to followers.
+// This enables automatic propagation and synchronization of config changes.
+type ConfigSyncPayload struct {
+	ConfigSHA256  string            // SHA-256 hash of the config for change detection
+	Timestamp     time.Time         // When this config was generated
+	NodeID        string            // Leader's node ID
+	ClusterConfig *ClusterConfigJSON // Serialized cluster configuration
+}
+
+// ClusterConfigJSON is a JSON-serializable version of cluster configuration.
+type ClusterConfigJSON struct {
+	Enabled      bool     `json:"enabled"`
+	NodeID       string   `json:"node_id"`
+	BindAddr     string   `json:"bind_addr"`
+	BindPort     int      `json:"bind_port"`
+	GossipPort   int      `json:"gossip_port"`
+	ConsensusMode string   `json:"consensus_mode"`
+	Region       string   `json:"region"`
+	Zone         string   `json:"zone"`
+	Weight       int      `json:"weight"`
+	SeedNodes    []string `json:"seed_nodes"`
+	CacheSync    bool     `json:"cache_sync"`
+	HTTPAddr     string   `json:"http_addr"`
+}
+
 // GossipProtocol implements the gossip-based membership protocol.
 type GossipProtocol struct {
 	config   GossipConfig
@@ -86,6 +157,17 @@ type GossipProtocol struct {
 	onNodeLeave    func(*Node)
 	onNodeUpdate   func(*Node)
 	onCacheInvalid func([]string)
+	onZoneUpdate   func(ZoneUpdatePayload)   // Called when leader propagates zone changes
+	onConfigSync   func(ConfigSyncPayload)   // Called when leader propagates config changes
+
+	// Leader election state
+	leaderMu          sync.RWMutex
+	currentLeader     string        // NodeID of current leader (empty if none)
+	isLeader          bool          // True if this node is the leader
+	leaderTerm        uint64        // Current term
+	electionTerm       uint64        // Current election term
+	heartbeatInterval time.Duration // Interval for leader heartbeats
+	lastHeartbeat      time.Time     // Last heartbeat received
 
 	// Control
 	ctx    context.Context
@@ -157,6 +239,8 @@ func NewGossipProtocol(config GossipConfig, nodeList *NodeList) (*GossipProtocol
 func (gp *GossipProtocol) SetCallbacks(
 	onJoin, onLeave, onUpdate func(*Node),
 	onCacheInvalid func([]string),
+	onZoneUpdate func(ZoneUpdatePayload),
+	onConfigSync func(ConfigSyncPayload),
 ) {
 	gp.callbacksMu.Lock()
 	defer gp.callbacksMu.Unlock()
@@ -164,6 +248,8 @@ func (gp *GossipProtocol) SetCallbacks(
 	gp.onNodeLeave = onLeave
 	gp.onNodeUpdate = onUpdate
 	gp.onCacheInvalid = onCacheInvalid
+	gp.onZoneUpdate = onZoneUpdate
+	gp.onConfigSync = onConfigSync
 }
 
 // Start starts the gossip protocol.
@@ -180,10 +266,17 @@ func (gp *GossipProtocol) Start() error {
 	gp.conn = conn
 
 	// Start goroutines
-	gp.wg.Add(3)
+	gp.wg.Add(5)
 	go gp.receiveLoop()
 	go gp.gossipLoop()
 	go gp.probeLoop()
+	go gp.leaderHeartbeatLoop()
+	go gp.leaderFailureDetector()
+
+	// Start leader election if we're the only node (no peers to join)
+	if len(gp.nodeList.GetAll()) <= 1 {
+		go gp.startElection()
+	}
 
 	return nil
 }
@@ -268,6 +361,47 @@ func (gp *GossipProtocol) BroadcastCacheInvalidation(keys []string) error {
 	return nil
 }
 
+// BroadcastZoneUpdate propagates a zone update to all follower nodes.
+// Only the leader should call this method.
+func (gp *GossipProtocol) BroadcastZoneUpdate(payload ZoneUpdatePayload) error {
+	gp.leaderMu.RLock()
+	isLeader := gp.isLeader
+	gp.leaderMu.RUnlock()
+
+	if !isLeader {
+		return fmt.Errorf("only the leader can broadcast zone updates")
+	}
+
+	payloadBytes, err := encodePayload(payload)
+	if err != nil {
+		return err
+	}
+
+	msgBytes, err := encodeMessage(MessageTypeZoneUpdate, payloadBytes)
+	if err != nil {
+		return err
+	}
+
+	data := msgBytes
+	if gp.aead != nil {
+		data, _ = gp.encrypt(data)
+	}
+
+	self := gp.nodeList.GetSelf()
+	for _, node := range gp.nodeList.GetAll() {
+		if node.ID == self.ID || node.State != NodeStateAlive {
+			continue
+		}
+		addr := &net.UDPAddr{IP: net.ParseIP(node.Addr), Port: node.Port}
+		if _, err := gp.conn.WriteToUDP(data, addr); err != nil {
+			util.Warnf("gossip: failed to send zone update to %s: %v", addr, err)
+		}
+		atomic.AddUint64(&gp.messagesSent, 1)
+	}
+
+	return nil
+}
+
 // receiveLoop handles incoming messages.
 func (gp *GossipProtocol) receiveLoop() {
 	defer gp.wg.Done()
@@ -321,6 +455,16 @@ func (gp *GossipProtocol) handleMessage(data []byte, from *net.UDPAddr) {
 		gp.handleGossip(msg, from)
 	case MessageTypeCacheInvalidate:
 		gp.handleCacheInvalidate(msg, from)
+	case MessageTypeElection:
+		gp.handleElection(msg, from)
+	case MessageTypeLeader:
+		gp.handleLeader(msg, from)
+	case MessageTypeHeartbeat:
+		gp.handleHeartbeat(msg, from)
+	case MessageTypeZoneUpdate:
+		gp.handleZoneUpdate(msg, from)
+	case MessageTypeConfigSync:
+		gp.handleConfigSync(msg, from)
 	}
 }
 
@@ -447,6 +591,429 @@ func (gp *GossipProtocol) handleCacheInvalidate(msg Message, from *net.UDPAddr) 
 		}()
 	}
 	gp.callbacksMu.RUnlock()
+}
+
+// handleElection handles leader election messages (bully algorithm).
+func (gp *GossipProtocol) handleElection(msg Message, from *net.UDPAddr) {
+	var payload ElectionPayload
+	if err := decodePayload(msg.Payload, &payload); err != nil {
+		return
+	}
+
+	gp.leaderMu.Lock()
+	defer gp.leaderMu.Unlock()
+
+	selfID := gp.nodeList.GetSelf().ID
+
+	// If we have a higher priority (lower NodeID lexically as tiebreaker), we win
+	if payload.ProposedLeader != selfID {
+		// Start our own election with higher term
+		gp.electionTerm = payload.Term + 1
+		go gp.startElection()
+		return
+	}
+
+	// We are the proposed leader — send Leader message to all
+	gp.leaderTerm = payload.Term
+	gp.currentLeader = selfID
+	gp.isLeader = true
+}
+
+// handleLeader handles leader announcement messages.
+func (gp *GossipProtocol) handleLeader(msg Message, from *net.UDPAddr) {
+	var payload LeaderPayload
+	if err := decodePayload(msg.Payload, &payload); err != nil {
+		return
+	}
+
+	gp.leaderMu.Lock()
+	defer gp.leaderMu.Unlock()
+
+	// Accept leader if term is >= our term
+	if payload.Term >= gp.leaderTerm {
+		gp.currentLeader = payload.LeaderID
+		gp.isLeader = false
+		gp.leaderTerm = payload.Term
+		gp.lastHeartbeat = time.Now()
+	}
+}
+
+// handleHeartbeat handles leader heartbeat messages.
+func (gp *GossipProtocol) handleHeartbeat(msg Message, from *net.UDPAddr) {
+	var payload LeaderHeartbeatPayload
+	if err := decodePayload(msg.Payload, &payload); err != nil {
+		return
+	}
+
+	gp.leaderMu.Lock()
+	defer gp.leaderMu.Unlock()
+
+	if payload.Term >= gp.leaderTerm && payload.LeaderID == gp.currentLeader {
+		gp.lastHeartbeat = time.Now()
+	}
+}
+
+// DetectSplitBrain checks for split-brain conditions.
+// Returns true if this node should step down as leader due to split-brain.
+// A split-brain occurs when multiple nodes believe they are the leader simultaneously.
+func (gp *GossipProtocol) DetectSplitBrain() bool {
+	gp.leaderMu.Lock()
+	defer gp.leaderMu.Unlock()
+
+	// If we're not the leader, we can't be in split-brain as leader
+	if !gp.isLeader {
+		return false
+	}
+
+	// Split-brain detection: if we receive election messages with higher term
+	// while being the leader, it means another node started a new election.
+	// The handleElection method updates electionTerm when receiving higher-term messages.
+	// We check if electionTerm > leaderTerm which indicates a higher-term election
+	// is in progress and we should step down.
+	if gp.electionTerm > gp.leaderTerm {
+		gp.isLeader = false
+		gp.currentLeader = ""
+		return true
+	}
+
+	return false
+}
+
+// StepDown forces this node to step down as leader.
+// Used when split-brain is detected or when a higher-term leader is discovered.
+func (gp *GossipProtocol) StepDown() {
+	gp.leaderMu.Lock()
+	defer gp.leaderMu.Unlock()
+
+	if gp.isLeader {
+		gp.isLeader = false
+		gp.currentLeader = ""
+		gp.leaderTerm++ // Increment to invalidate our old leadership
+	}
+}
+
+// handleZoneUpdate processes zone update messages from the leader.
+// This enables master/slave zone replication via the gossip protocol.
+func (gp *GossipProtocol) handleZoneUpdate(msg Message, from *net.UDPAddr) {
+	// Only accept zone updates from the current leader
+	gp.leaderMu.RLock()
+	isLeader := gp.isLeader
+	currentLeader := gp.currentLeader
+	gp.leaderMu.RUnlock()
+
+	// Followers accept zone updates; leader does not process its own updates
+	if isLeader {
+		return
+	}
+
+	if currentLeader == "" {
+		return
+	}
+
+	// Optionally verify the message came from the leader via from address
+	// For now we trust the message type + leader state
+
+	gp.callbacksMu.RLock()
+	onZoneUpdate := gp.onZoneUpdate
+	gp.callbacksMu.RUnlock()
+
+	if onZoneUpdate != nil {
+		var payload ZoneUpdatePayload
+		if err := decodePayload(msg.Payload, &payload); err != nil {
+			return
+		}
+		func() {
+			defer recover()
+			onZoneUpdate(payload)
+		}()
+	}
+}
+
+// handleConfigSync processes configuration sync messages from the leader.
+// The leader broadcasts config changes to all follower nodes.
+func (gp *GossipProtocol) handleConfigSync(msg Message, from *net.UDPAddr) {
+	// Only accept config sync from the current leader
+	gp.leaderMu.RLock()
+	isLeader := gp.isLeader
+	currentLeader := gp.currentLeader
+	gp.leaderMu.RUnlock()
+
+	// Followers accept config updates; leader does not process its own updates
+	if isLeader {
+		return
+	}
+
+	if currentLeader == "" {
+		return
+	}
+
+	gp.callbacksMu.RLock()
+	onConfigSync := gp.onConfigSync
+	gp.callbacksMu.RUnlock()
+
+	if onConfigSync != nil {
+		var payload ConfigSyncPayload
+		if err := decodePayload(msg.Payload, &payload); err != nil {
+			return
+		}
+		func() {
+			defer recover()
+			onConfigSync(payload)
+		}()
+	}
+}
+
+// BroadcastConfigUpdate sends a configuration update to all follower nodes.
+// Called by the leader when config changes.
+func (gp *GossipProtocol) BroadcastConfigUpdate(payload ConfigSyncPayload) error {
+	gp.leaderMu.RLock()
+	isLeader := gp.isLeader
+	gp.leaderMu.RUnlock()
+
+	if !isLeader {
+		return fmt.Errorf("only the leader can broadcast config updates")
+	}
+
+	payloadBytes, err := encodePayload(payload)
+	if err != nil {
+		return err
+	}
+
+	msgBytes, err := encodeMessage(MessageTypeConfigSync, payloadBytes)
+	if err != nil {
+		return err
+	}
+
+	data := msgBytes
+	if gp.aead != nil {
+		data, _ = gp.encrypt(data)
+	}
+
+	self := gp.nodeList.GetSelf()
+	for _, node := range gp.nodeList.GetAll() {
+		if node.ID == self.ID || node.State != NodeStateAlive {
+			continue
+		}
+		addr := &net.UDPAddr{IP: net.ParseIP(node.Addr), Port: node.Port}
+		if _, err := gp.conn.WriteToUDP(data, addr); err != nil {
+			util.Warnf("gossip: failed to send config sync to %s: %v", addr, err)
+		}
+		atomic.AddUint64(&gp.messagesSent, 1)
+	}
+
+	return nil
+}
+
+// leaderHeartbeatLoop periodically sends leader heartbeats if this node is the leader.
+func (gp *GossipProtocol) leaderHeartbeatLoop() {
+	defer gp.wg.Done()
+
+	interval := 5 * time.Second
+	if gp.heartbeatInterval > 0 {
+		interval = gp.heartbeatInterval
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-gp.ctx.Done():
+			return
+		case <-ticker.C:
+			gp.muLeaderSendHeartbeat()
+		}
+	}
+}
+
+// leaderFailureDetector monitors leader health and triggers new election if leader dies.
+func (gp *GossipProtocol) leaderFailureDetector() {
+	defer gp.wg.Done()
+
+	// Check leader health every 10 seconds
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-gp.ctx.Done():
+			return
+		case <-ticker.C:
+			gp.checkLeaderHealth()
+		}
+	}
+}
+
+func (gp *GossipProtocol) checkLeaderHealth() {
+	gp.leaderMu.Lock()
+	defer gp.leaderMu.Unlock()
+
+	// Skip if we are the leader or no leader exists
+	if gp.isLeader || gp.currentLeader == "" {
+		return
+	}
+
+	// If last heartbeat is too old, leader is dead — start new election
+	if time.Since(gp.lastHeartbeat) > 15*time.Second {
+		gp.leaderTerm++ // Increment term — old leader's term is no longer valid
+		go gp.startElection()
+	}
+}
+
+func (gp *GossipProtocol) muLeaderSendHeartbeat() {
+	gp.leaderMu.Lock()
+	defer gp.leaderMu.Unlock()
+
+	if !gp.isLeader {
+		return
+	}
+
+	self := gp.nodeList.GetSelf()
+	payload := LeaderHeartbeatPayload{
+		LeaderID: self.ID,
+		Term:     gp.leaderTerm,
+	}
+
+	payloadBytes, err := encodePayload(payload)
+	if err != nil {
+		return
+	}
+
+	msgBytes, err := encodeMessage(MessageTypeHeartbeat, payloadBytes)
+	if err != nil {
+		return
+	}
+
+	data := msgBytes
+	if gp.aead != nil {
+		data, _ = gp.encrypt(data)
+	}
+
+	for _, node := range gp.nodeList.GetAll() {
+		if node.ID == self.ID || node.State != NodeStateAlive {
+			continue
+		}
+		addr := &net.UDPAddr{IP: net.ParseIP(node.Addr), Port: node.Port}
+		gp.conn.WriteToUDP(data, addr)
+	}
+}
+
+// startElection begins a new leader election.
+func (gp *GossipProtocol) startElection() {
+	gp.leaderMu.Lock()
+	gp.electionTerm++
+	selfID := gp.nodeList.GetSelf().ID
+
+	payload := ElectionPayload{
+		ProposedLeader: selfID,
+		Priority:       1,
+		Term:           gp.electionTerm,
+	}
+	gp.leaderMu.Unlock()
+
+	payloadBytes, err := encodePayload(payload)
+	if err != nil {
+		return
+	}
+
+	msgBytes, err := encodeMessage(MessageTypeElection, payloadBytes)
+	if err != nil {
+		return
+	}
+
+	// Broadcast to all known nodes
+	for _, node := range gp.nodeList.GetAll() {
+		if node.ID == selfID || node.State != NodeStateAlive {
+			continue
+		}
+		addr := &net.UDPAddr{IP: net.ParseIP(node.Addr), Port: node.Port}
+		data := msgBytes
+		if gp.aead != nil {
+			data, _ = gp.encrypt(data)
+		}
+		gp.conn.WriteToUDP(data, addr)
+	}
+}
+
+// AnnounceLeader sends a leader announcement to all nodes.
+func (gp *GossipProtocol) AnnounceLeader() error {
+	gp.leaderMu.RLock()
+	defer gp.leaderMu.RUnlock()
+
+	if !gp.isLeader {
+		return fmt.Errorf("not the leader")
+	}
+
+	self := gp.nodeList.GetSelf()
+	payload := LeaderPayload{
+		LeaderID:   self.ID,
+		LeaderAddr: fmt.Sprintf("%s:%d", self.Addr, self.Port),
+		Term:       gp.leaderTerm,
+	}
+
+	payloadBytes, err := encodePayload(payload)
+	if err != nil {
+		return err
+	}
+
+	msgBytes, err := encodeMessage(MessageTypeLeader, payloadBytes)
+	if err != nil {
+		return err
+	}
+
+	// Broadcast to all known nodes
+	for _, node := range gp.nodeList.GetAll() {
+		if node.ID == self.ID || node.State != NodeStateAlive {
+			continue
+		}
+		addr := &net.UDPAddr{IP: net.ParseIP(node.Addr), Port: node.Port}
+		data := msgBytes
+		if gp.aead != nil {
+			data, _ = gp.encrypt(data)
+		}
+		gp.conn.WriteToUDP(data, addr)
+	}
+
+	return nil
+}
+
+// GetLeader returns the current leader's node ID.
+func (gp *GossipProtocol) GetLeader() string {
+	gp.leaderMu.RLock()
+	defer gp.leaderMu.RUnlock()
+	return gp.currentLeader
+}
+
+// IsLeader returns true if this node is the leader.
+func (gp *GossipProtocol) IsLeader() bool {
+	gp.leaderMu.RLock()
+	defer gp.leaderMu.RUnlock()
+	return gp.isLeader
+}
+
+// GetSelfID returns this node's own ID.
+func (gp *GossipProtocol) GetSelfID() string {
+	return gp.nodeList.GetSelf().ID
+}
+
+// GetLeaderTerm returns the current leader term.
+func (gp *GossipProtocol) GetLeaderTerm() uint64 {
+	gp.leaderMu.RLock()
+	defer gp.leaderMu.RUnlock()
+	return gp.leaderTerm
+}
+
+// IsLeaderAlive checks if the current leader is alive via heartbeat.
+func (gp *GossipProtocol) IsLeaderAlive(timeout time.Duration) bool {
+	gp.leaderMu.RLock()
+	defer gp.leaderMu.RUnlock()
+	if gp.currentLeader == "" {
+		return false
+	}
+	if time.Since(gp.lastHeartbeat) > timeout {
+		return false
+	}
+	return true
 }
 
 // gossipLoop periodically gossips node state.
