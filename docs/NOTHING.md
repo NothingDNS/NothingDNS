@@ -417,7 +417,7 @@ WS     /ws                              — WebSocket live query stream
 | PH-07 | **Cache Persistence** | Cache should survive restarts. Write to disk via KVStore (UNWIRED-001) or gob serialization. | MEDIUM | 🔴 Missing | M |
 | PH-08 | **PID File** | `/var/run/nothingdns.pid` for daemon mode. | LOW | 🔴 Missing | S |
 | PH-09 | **Systemd Notify** | `sd_notify(READY=1)` support (Type=notify service). | LOW | 🔴 Missing | S |
-| PH-10 | **Signal-based Config Reload** | SIGHUP → config reload (in addition to API endpoint). | MEDIUM | 🔴 Missing | S |
+| PH-10 | **Signal-based Config Reload** | SIGHUP → config reload (in addition to API endpoint). | MEDIUM | ✅ Done | — |
 | PH-11 | **Structured Error Types** | Return Extended DNS Error (RFC 8914) responses on error conditions. Protocol support exists, needs handler wiring. | MEDIUM | 🔴 Missing | M |
 | PH-12 | **Connection Limits** | Max concurrent TCP/TLS/QUIC connection limit (DoS protection). | MEDIUM | 🔴 Missing | S |
 | PH-13 | **Query Timeout** | Per-query context timeout (configurable, default 10s). | MEDIUM | 🔴 Missing | S |
