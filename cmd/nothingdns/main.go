@@ -98,6 +98,11 @@ func run() error {
 	}
 	dnsCache := cacheManager.Cache
 
+	// Load cache from persistent storage
+	cacheManager.LoadCache()
+	// Start periodic cache persistence
+	cacheManager.StartPersistence(5 * time.Minute)
+
 	// Initialize upstream manager
 	upstreamManager, err := NewUpstreamManager(cfg, logger)
 	if err != nil {

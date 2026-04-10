@@ -414,7 +414,7 @@ WS     /ws                              — WebSocket live query stream
 | PH-04 | **Liveness Endpoint** | `/livez` — goroutine leak, deadlock detection. | HIGH | ✅ Done | — |
 | PH-05 | **TLS Cert Hot-Reload** | Watch cert files for changes (fsnotify-like). Let's Encrypt auto-renewal compatible. | HIGH | ✅ Done | — |
 | PH-06 | **Config Validation CLI** | `nothingdns --validate-config config.yaml` — parse + semantic validation + exit. | HIGH | ✅ Done | — |
-| PH-07 | **Cache Persistence** | Cache should survive restarts. Write to disk via KVStore (UNWIRED-001) or gob serialization. | MEDIUM | 🔴 Missing | M |
+| PH-07 | **Cache Persistence** | Cache should survive restarts. Write to disk via KVStore (UNWIRED-001) or gob serialization. | MEDIUM | ✅ Done | M |
 | PH-08 | **PID File** | `/var/run/nothingdns.pid` for daemon mode. | LOW | ✅ Done | — |
 | PH-09 | **Systemd Notify** | `sd_notify(READY=1)` support (Type=notify service). | LOW | ✅ Done | — |
 | PH-10 | **Signal-based Config Reload** | SIGHUP → config reload (in addition to API endpoint). | MEDIUM | ✅ Done | — |

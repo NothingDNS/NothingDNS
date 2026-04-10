@@ -564,3 +564,91 @@ func ExtractQueryInfo(key string) (string, uint16) {
 	}
 	return "", 0
 }
+
+// CacheEntryJSON is a JSON-serializable cache entry for persistence.
+type CacheEntryJSON struct {
+	Key        string    `json:"key"`
+	WireBytes  []byte    `json:"wire"`
+	TTL        uint32    `json:"ttl"`
+	RCode      uint8     `json:"rcode"`
+	IsNegative bool      `json:"negative"`
+	ExpireTime time.Time `json:"expire_time"`
+}
+
+// Save returns a serializable snapshot of all non-negative cache entries.
+// Negative entries are excluded because they have very short TTLs and
+// add little value on restart. Only entries that have not yet expired are included.
+func (c *Cache) Save() []CacheEntryJSON {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	now := time.Now()
+	var entries []CacheEntryJSON
+
+	for _, entry := range c.entries {
+		// Skip expired entries
+		if entry.IsExpired(now) {
+			continue
+		}
+		// Skip negative entries (short TTL, low value on restart)
+		if entry.IsNegative {
+			continue
+		}
+		// Skip entries without a message (shouldn't happen)
+		if entry.Message == nil {
+			continue
+		}
+
+		// Pack message to wire format
+		buf := make([]byte, entry.Message.WireLength())
+		n, err := entry.Message.Pack(buf)
+		if err != nil {
+			continue // Skip entries that can't be packed
+		}
+
+		entries = append(entries, CacheEntryJSON{
+			Key:        entry.Key,
+			WireBytes:  buf[:n],
+			TTL:        entry.TTL,
+			RCode:      entry.RCode,
+			IsNegative: entry.IsNegative,
+			ExpireTime: entry.ExpireTime,
+		})
+	}
+
+	return entries
+}
+
+// Load restores cache entries from a previously saved snapshot.
+// Only non-expired entries are restored. Entries that have already
+// expired are skipped. The cache is not cleared before loading.
+func (c *Cache) Load(entries []CacheEntryJSON) (restored int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	now := time.Now()
+	for _, e := range entries {
+		// Skip expired entries
+		if e.ExpireTime.Before(now) {
+			continue
+		}
+
+		// Unpack the wire-format message
+		msg, err := protocol.UnpackMessage(e.WireBytes)
+		if err != nil {
+			continue
+		}
+
+		// Calculate remaining TTL
+		remainingTTL := uint32(e.ExpireTime.Sub(now).Seconds())
+		if remainingTTL == 0 {
+			continue
+		}
+
+		// Use setInternal to add without triggering callbacks
+		c.setInternal(e.Key, msg, remainingTTL, false)
+		restored++
+	}
+
+	return restored
+}
