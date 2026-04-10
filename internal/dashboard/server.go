@@ -257,6 +257,10 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			token = c.Value
 		}
 	}
+	// Also accept token from query parameter (for WebSocket auth)
+	if token == "" {
+		token = r.URL.Query().Get("token")
+	}
 
 	if token == "" {
 		http.Error(w, "authentication required", http.StatusUnauthorized)

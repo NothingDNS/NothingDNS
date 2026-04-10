@@ -21,7 +21,14 @@ export function useWebSocket(path: string, opts: UseWebSocketOpts = {}) {
     const connect = () => {
       if (cancelled) return;
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const url = `${proto}//${location.host}${path}`;
+      let url = `${proto}//${location.host}${path}`;
+
+      // Pass auth token via query param (WebSocket can't send headers)
+      const tokenMatch = document.cookie.match(/ndns_token=([^;]+)/);
+      if (tokenMatch) {
+        const token = decodeURIComponent(tokenMatch[1]);
+        url += (path.includes('?') ? '&' : '?') + `token=${encodeURIComponent(token)}`;
+      }
 
       const ws = new WebSocket(url);
       wsRef.current = ws;
