@@ -391,16 +391,16 @@ WS     /ws                              — WebSocket live query stream
 
 ### 11.2 Missing Cluster Features
 
-| # | Feature | Description | Priority | Complexity |
-|---|---------|-------------|----------|------------|
-| CL-01 | **Leader Election** | Gossip-based leader election. Required to determine primary authoritative node. Not Raft — lightweight election over gossip (CRDT or bully algorithm). | HIGH | LARGE |
-| CL-02 | **Zone Replication** | Leader node zone update → propagate to other nodes via gossip. All nodes should be able to serve authoritative responses. | HIGH | XL |
-| CL-03 | **Split-Brain Detection** | Network partition detection. Detect when nodes become isolated and ensure the largest partition remains authoritative. | HIGH | LARGE |
-| CL-04 | **Node Draining** | Maintenance mode: gracefully remove a node from the cluster. Stop accepting new queries, complete in-flight queries, transfer state. | MEDIUM | MEDIUM |
-| CL-05 | **Rolling Upgrade** | Sequential node restart. Version mismatch detection. Backward-compatible gossip protocol versioning. | MEDIUM | MEDIUM |
-| CL-06 | **Cluster Config Sync** | Automatic propagation of config changes (blocklist, RPZ, ACL) to all nodes. | MEDIUM | LARGE |
-| CL-07 | **Health-based Query Routing** | Automatic routing away from unhealthy nodes. Client-facing anycast or internal redirect. | MEDIUM | MEDIUM |
-| CL-08 | **Cluster Metrics Aggregation** | Centralized view of all node metrics. Per-node and cluster-wide statistics. | LOW | MEDIUM |
+| # | Feature | Description | Priority | Complexity | Status |
+|---|---------|-------------|----------|------------|--------|
+| CL-01 | **Leader Election** | Gossip-based leader election. Required to determine primary authoritative node. Not Raft — lightweight election over gossip (CRDT or bully algorithm). | HIGH | LARGE | ✅ Done |
+| CL-02 | **Zone Replication** | Leader node zone update → propagate to other nodes via gossip. All nodes should be able to serve authoritative responses. | HIGH | XL | ✅ Done |
+| CL-03 | **Split-Brain Detection** | Network partition detection. Detect when nodes become isolated and ensure the largest partition remains authoritative. | HIGH | LARGE | ✅ Done |
+| CL-04 | **Node Draining** | Maintenance mode: gracefully remove a node from the cluster. Stop accepting new queries, complete in-flight queries, transfer state. | MEDIUM | MEDIUM | 🔴 Missing |
+| CL-05 | **Rolling Upgrade** | Sequential node restart. Version mismatch detection. Backward-compatible gossip protocol versioning. | MEDIUM | MEDIUM | 🔴 Missing |
+| CL-06 | **Cluster Config Sync** | Automatic propagation of config changes (blocklist, RPZ, ACL) to all nodes. | MEDIUM | LARGE | ✅ Done |
+| CL-07 | **Health-based Query Routing** | Automatic routing away from unhealthy nodes. Client-facing anycast or internal redirect. | MEDIUM | MEDIUM | 🔴 Missing |
+| CL-08 | **Cluster Metrics Aggregation** | Centralized view of all node metrics. Per-node and cluster-wide statistics. | LOW | MEDIUM | 🔴 Missing |
 
 ---
 
@@ -408,12 +408,12 @@ WS     /ws                              — WebSocket live query stream
 
 | # | Feature | Description | Priority | Status | Effort |
 |---|---------|-------------|----------|--------|--------|
-| PH-01 | **Handler Panic Recovery** | `recover()` middleware around `ServeDNS()`. Return SERVFAIL on panic, prevent server crash. | CRITICAL | 🔴 Missing | S |
-| PH-02 | **Graceful Shutdown Timeout** | Complete in-flight queries on SIGTERM (configurable, default 30s). | HIGH | 🔴 Missing | S |
+| PH-01 | **Handler Panic Recovery** | `recover()` middleware around `ServeDNS()`. Return SERVFAIL on panic, prevent server crash. | CRITICAL | ✅ Done | — |
+| PH-02 | **Graceful Shutdown Timeout** | Complete in-flight queries on SIGTERM (configurable, default 30s). | HIGH | ✅ Done | — |
 | PH-03 | **Readiness Endpoint** | `/readyz` — check cache warm, zones loaded, upstream healthy. k8s/HAProxy integration. | HIGH | ✅ Done | — |
 | PH-04 | **Liveness Endpoint** | `/livez` — goroutine leak, deadlock detection. | HIGH | ✅ Done | — |
-| PH-05 | **TLS Cert Hot-Reload** | Watch cert files for changes (fsnotify-like). Let's Encrypt auto-renewal compatible. | HIGH | 🔴 Missing | M |
-| PH-06 | **Config Validation CLI** | `nothingdns --validate-config config.yaml` — parse + semantic validation + exit. | HIGH | 🔴 Missing | S |
+| PH-05 | **TLS Cert Hot-Reload** | Watch cert files for changes (fsnotify-like). Let's Encrypt auto-renewal compatible. | HIGH | ✅ Done | — |
+| PH-06 | **Config Validation CLI** | `nothingdns --validate-config config.yaml` — parse + semantic validation + exit. | HIGH | ✅ Done | — |
 | PH-07 | **Cache Persistence** | Cache should survive restarts. Write to disk via KVStore (UNWIRED-001) or gob serialization. | MEDIUM | 🔴 Missing | M |
 | PH-08 | **PID File** | `/var/run/nothingdns.pid` for daemon mode. | LOW | 🔴 Missing | S |
 | PH-09 | **Systemd Notify** | `sd_notify(READY=1)` support (Type=notify service). | LOW | 🔴 Missing | S |
