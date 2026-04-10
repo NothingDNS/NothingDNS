@@ -1981,6 +1981,14 @@ func (s *Server) handleClusterStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	stats := s.cluster.Stats()
+	clusterMetrics := s.cluster.GetClusterMetrics()
+
+	// Calculate cache hit rate
+	var cacheHitRate float64
+	if clusterMetrics.CacheHits+clusterMetrics.CacheMisses > 0 {
+		cacheHitRate = float64(clusterMetrics.CacheHits) / float64(clusterMetrics.CacheHits+clusterMetrics.CacheMisses)
+	}
+
 	s.writeJSON(w, http.StatusOK, &ClusterStatusResponse{
 		NodeID:     stats.NodeID,
 		NodeCount:  stats.NodeCount,
@@ -1991,6 +1999,15 @@ func (s *Server) handleClusterStatus(w http.ResponseWriter, r *http.Request) {
 			MessagesReceived: stats.GossipStats.MessagesReceived,
 			PingSent:         stats.GossipStats.PingSent,
 			PingReceived:     stats.GossipStats.PingReceived,
+		},
+		Metrics: ClusterMetricsInfo{
+			QueriesTotal:  clusterMetrics.QueriesTotal,
+			QueriesPerSec: clusterMetrics.QueriesPerSec,
+			CacheHits:     clusterMetrics.CacheHits,
+			CacheMisses:   clusterMetrics.CacheMisses,
+			CacheHitRate:  cacheHitRate,
+			LatencyMsAvg:  clusterMetrics.LatencyMsAvg,
+			LatencyMsP99:  clusterMetrics.LatencyMsP99,
 		},
 	})
 }

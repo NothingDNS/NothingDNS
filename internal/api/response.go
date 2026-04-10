@@ -133,11 +133,24 @@ type GossipInfo struct {
 
 // ClusterStatusResponse is returned by GET /api/v1/cluster/status.
 type ClusterStatusResponse struct {
-	NodeID     string     `json:"node_id"`
-	NodeCount  int        `json:"node_count"`
-	AliveCount int        `json:"alive_count"`
-	Healthy    bool       `json:"healthy"`
-	Gossip     GossipInfo `json:"gossip"`
+	NodeID     string          `json:"node_id"`
+	NodeCount  int             `json:"node_count"`
+	AliveCount int             `json:"alive_count"`
+	Healthy    bool            `json:"healthy"`
+	Gossip     GossipInfo      `json:"gossip"`
+	// Aggregated cluster-wide metrics
+	Metrics ClusterMetricsInfo `json:"metrics"`
+}
+
+// ClusterMetricsInfo holds aggregated cluster-wide operational metrics.
+type ClusterMetricsInfo struct {
+	QueriesTotal  uint64  `json:"queries_total"`   // Total queries across all nodes
+	QueriesPerSec float64 `json:"queries_per_sec"` // Cluster-wide QPS
+	CacheHits     uint64  `json:"cache_hits"`     // Total cache hits
+	CacheMisses   uint64  `json:"cache_misses"`   // Total cache misses
+	CacheHitRate  float64 `json:"cache_hit_rate"` // Cache hit ratio (0-1)
+	LatencyMsAvg  float64 `json:"latency_avg_ms"` // Average latency across nodes
+	LatencyMsP99  float64 `json:"latency_p99_ms"` // P99 latency across nodes
 }
 
 // NodeDetail represents a cluster node in the nodes list.

@@ -32,6 +32,7 @@ const (
 	MessageTypeConfigSync  // Cluster config propagated from leader to followers
 	MessageTypeDraining    // Node entering/leaving draining state
 	MessageTypeNodeStats   // Periodic node health stats broadcast
+	MessageTypeClusterMetrics // Periodic cluster metrics aggregation
 )
 
 // Message is the envelope for all gossip messages.
@@ -162,6 +163,20 @@ type NodeStatsPayload struct {
 	Timestamp        time.Time // When these stats were collected
 }
 
+// ClusterMetricsPayload carries aggregated per-node operational metrics for
+// cluster-wide monitoring and aggregation.
+type ClusterMetricsPayload struct {
+	NodeID           string    // Node reporting metrics
+	QueriesTotal     uint64    // Total queries processed by this node
+	QueriesPerSec    float64   // Current queries per second
+	CacheHits        uint64    // Total cache hits
+	CacheMisses      uint64    // Total cache misses
+	LatencyMsAvg     float64   // Average latency in milliseconds
+	LatencyMsP99     float64   // P99 latency in milliseconds
+	UptimeSeconds    uint64    // Node uptime in seconds
+	Timestamp        time.Time // When these metrics were collected
+}
+
 // GossipProtocol implements the gossip-based membership protocol.
 type GossipProtocol struct {
 	config   GossipConfig
@@ -194,6 +209,10 @@ type GossipProtocol struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+
+	// Per-node operational metrics (keyed by node ID)
+	nodeMetricsMu sync.RWMutex
+	nodeMetrics   map[string]ClusterMetricsPayload // NodeID -> metrics
 
 	// Stats
 	messagesSent     uint64
@@ -239,10 +258,11 @@ func NewGossipProtocol(config GossipConfig, nodeList *NodeList) (*GossipProtocol
 	ctx, cancel := context.WithCancel(context.Background())
 
 	gp := &GossipProtocol{
-		config:   config,
-		nodeList: nodeList,
-		ctx:      ctx,
-		cancel:   cancel,
+		config:      config,
+		nodeList:    nodeList,
+		ctx:         ctx,
+		cancel:      cancel,
+		nodeMetrics: make(map[string]ClusterMetricsPayload),
 	}
 
 	// Initialize AES-GCM if encryption key is provided
@@ -490,6 +510,8 @@ func (gp *GossipProtocol) handleMessage(data []byte, from *net.UDPAddr) {
 		gp.handleDraining(msg, from)
 	case MessageTypeNodeStats:
 		gp.handleNodeStats(msg, from)
+	case MessageTypeClusterMetrics:
+		gp.handleClusterMetrics(msg, from)
 	}
 }
 
@@ -959,6 +981,97 @@ func (gp *GossipProtocol) BroadcastNodeStats(stats NodeHealthStats) error {
 	}
 
 	return nil
+}
+
+// handleClusterMetrics processes cluster metrics received via gossip.
+func (gp *GossipProtocol) handleClusterMetrics(msg Message, from *net.UDPAddr) {
+	var payload ClusterMetricsPayload
+	if err := decodePayload(msg.Payload, &payload); err != nil {
+		return
+	}
+
+	// Ignore messages from self
+	if payload.NodeID == gp.nodeList.GetSelf().ID {
+		return
+	}
+
+	// Store the metrics for this node
+	gp.nodeMetricsMu.Lock()
+	gp.nodeMetrics[payload.NodeID] = payload
+	gp.nodeMetricsMu.Unlock()
+}
+
+// BroadcastClusterMetrics broadcasts operational metrics to all cluster nodes.
+// This enables cluster-wide metrics aggregation via the API.
+func (gp *GossipProtocol) BroadcastClusterMetrics(metrics ClusterMetricsPayload) error {
+	metrics.NodeID = gp.nodeList.GetSelf().ID
+	metrics.Timestamp = time.Now()
+
+	payloadBytes, err := encodePayload(metrics)
+	if err != nil {
+		return err
+	}
+
+	msgBytes, err := encodeMessage(MessageTypeClusterMetrics, payloadBytes)
+	if err != nil {
+		return err
+	}
+
+	data := msgBytes
+	if gp.aead != nil {
+		data, _ = gp.encrypt(data)
+	}
+
+	for _, node := range gp.nodeList.GetAll() {
+		if node.ID == gp.nodeList.GetSelf().ID {
+			continue
+		}
+		addr := &net.UDPAddr{IP: net.ParseIP(node.Addr), Port: node.Port}
+		if _, err := gp.conn.WriteToUDP(data, addr); err != nil {
+			util.Warnf("gossip: failed to send cluster metrics to %s: %v", addr, err)
+		}
+		atomic.AddUint64(&gp.messagesSent, 1)
+	}
+
+	return nil
+}
+
+// GetClusterMetrics returns aggregated cluster-wide metrics from all known nodes.
+func (gp *GossipProtocol) GetClusterMetrics() ClusterMetricsPayload {
+	gp.nodeMetricsMu.RLock()
+	defer gp.nodeMetricsMu.RUnlock()
+
+	var total ClusterMetricsPayload
+	count := 0
+
+	for _, m := range gp.nodeMetrics {
+		total.QueriesTotal += m.QueriesTotal
+		total.CacheHits += m.CacheHits
+		total.CacheMisses += m.CacheMisses
+		total.UptimeSeconds += m.UptimeSeconds
+		// Weighted average for per-second and latency metrics
+		if m.QueriesPerSec > 0 {
+			total.QueriesPerSec += m.QueriesPerSec
+			count++
+		}
+		if m.LatencyMsAvg > 0 {
+			total.LatencyMsAvg += m.LatencyMsAvg
+		}
+		if m.LatencyMsP99 > 0 {
+			total.LatencyMsP99 += m.LatencyMsP99
+		}
+	}
+
+	// Average the per-second and latency metrics
+	if count > 0 {
+		total.QueriesPerSec /= float64(count)
+	}
+	if count > 0 {
+		total.LatencyMsAvg /= float64(count)
+		total.LatencyMsP99 /= float64(count)
+	}
+
+	return total
 }
 
 // leaderHeartbeatLoop periodically sends leader heartbeats if this node is the leader.

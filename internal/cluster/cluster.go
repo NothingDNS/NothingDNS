@@ -412,6 +412,36 @@ func (c *Cluster) GetNodesWithHealth() []Node {
 	return c.nodeList.GetAllWithHealth()
 }
 
+// BroadcastClusterMetrics broadcasts operational metrics to all cluster peers.
+// Call this periodically (e.g., every 30s) with the server's current metrics.
+func (c *Cluster) BroadcastClusterMetrics(queriesTotal, cacheHits, cacheMisses uint64, qps, latencyAvg, latencyP99 float64, uptime uint64) {
+	if c.gossip == nil || !c.started {
+		return
+	}
+
+	metrics := ClusterMetricsPayload{
+		QueriesTotal:  queriesTotal,
+		QueriesPerSec: qps,
+		CacheHits:     cacheHits,
+		CacheMisses:   cacheMisses,
+		LatencyMsAvg:  latencyAvg,
+		LatencyMsP99:  latencyP99,
+		UptimeSeconds: uptime,
+	}
+
+	if err := c.gossip.BroadcastClusterMetrics(metrics); err != nil {
+		c.logger.Warnf("Failed to broadcast cluster metrics: %v", err)
+	}
+}
+
+// GetClusterMetrics returns aggregated cluster-wide metrics from all known nodes.
+func (c *Cluster) GetClusterMetrics() ClusterMetricsPayload {
+	if c.gossip == nil {
+		return ClusterMetricsPayload{}
+	}
+	return c.gossip.GetClusterMetrics()
+}
+
 // AddEventHandler adds an event handler.
 func (c *Cluster) AddEventHandler(handler EventHandler) {
 	c.handlersMu.Lock()
