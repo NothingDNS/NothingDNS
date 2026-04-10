@@ -385,6 +385,48 @@ func TestHandleDNSSECStatus_MethodNotAllowed(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// handleDNSSECKeys
+// ---------------------------------------------------------------------------
+
+func TestHandleDNSSECKeys_NoSigners(t *testing.T) {
+	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
+	srv := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/dnssec/keys", nil)
+	rec := httptest.NewRecorder()
+	srv.handleDNSSECKeys(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	// zones may be nil or empty slice when no signers are configured
+	if zones, ok := resp["zones"].([]any); ok && zones != nil {
+		if len(zones) != 0 {
+			t.Errorf("expected 0 zones, got %d", len(zones))
+		}
+	}
+}
+
+func TestHandleDNSSECKeys_MethodNotAllowed(t *testing.T) {
+	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
+	srv := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
+		req := httptest.NewRequest(method, "/api/v1/dnssec/keys", nil)
+		rec := httptest.NewRecorder()
+		srv.handleDNSSECKeys(rec, req)
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Errorf("expected 405 for %s, got %d", method, rec.Code)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // handleReadiness
 // ---------------------------------------------------------------------------
 

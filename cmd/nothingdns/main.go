@@ -425,6 +425,7 @@ func run() error {
 		WithDashboard(dashboardServer).
 		WithMetrics(metricsCollector).
 		WithDNSSEC(validator).
+		WithZoneSigners(zoneSigners).
 		WithRPZ(rpzEngine)
 
 	// Initialize ODoH proxy (RFC 9230) if enabled

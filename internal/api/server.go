@@ -54,6 +54,7 @@ type Server struct {
 	authStore       *auth.Store
 	metrics         *metrics.MetricsCollector
 	validator       *dnssec.Validator
+	zoneSigners    map[string]*dnssec.Signer // zone name → signer
 	rpzEngine       *rpz.Engine
 	odohProxy       *odoh.ObliviousProxy // ODoH proxy (RFC 9230)
 	loginLimiter    *loginRateLimiter
@@ -394,6 +395,12 @@ func (s *Server) WithDNSSEC(v *dnssec.Validator) *Server {
 	return s
 }
 
+// WithZoneSigners sets the DNSSEC zone signers for the API server.
+func (s *Server) WithZoneSigners(m map[string]*dnssec.Signer) *Server {
+	s.zoneSigners = m
+	return s
+}
+
 // WithRPZ sets the RPZ engine for the API server.
 func (s *Server) WithRPZ(e *rpz.Engine) *Server {
 	s.rpzEngine = e
@@ -492,6 +499,7 @@ func (s *Server) Start() error {
 
 	// DNSSEC status (always registered)
 	mux.HandleFunc("/api/v1/dnssec/status", s.handleDNSSECStatus)
+	mux.HandleFunc("/api/v1/dnssec/keys", s.handleDNSSECKeys)
 
 	// Dashboard UI
 	mux.HandleFunc("/api/dashboard/stats", s.handleDashboardStats)
@@ -944,6 +952,29 @@ func (s *Server) handleDNSSECStatus(w http.ResponseWriter, r *http.Request) {
 
 	status := s.validator.DNSSECStatus()
 	s.writeJSON(w, http.StatusOK, status)
+}
+
+// handleDNSSECKeys returns DNSSEC signing keys for all zones or a specific zone.
+func (s *Server) handleDNSSECKeys(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var keys []DNSSECKeyInfo
+	for zone, signer := range s.zoneSigners {
+		for _, k := range signer.GetKeys() {
+			keys = append(keys, DNSSECKeyInfo{
+				KeyTag:    k.KeyTag,
+				Algorithm: k.DNSKEY.Algorithm,
+				Flags:     k.DNSKEY.Flags,
+				IsKSK:     k.IsKSK,
+				IsZSK:     k.IsZSK,
+				Zone:      zone,
+			})
+		}
+	}
+	s.writeJSON(w, http.StatusOK, DNSSECKeysResponse{Zones: keys})
 }
 
 // handleStatus returns server status.

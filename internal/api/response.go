@@ -305,6 +305,21 @@ type TopDomainsEntry = dashboard.TopDomainsEntry
 // DNSSECStatusResponse is returned by GET /api/v1/dnssec/status.
 type DNSSECStatusResponse = dnssec.DNSSECStatus
 
+// DNSSECKeyInfo describes a single DNSSEC signing key.
+type DNSSECKeyInfo struct {
+	KeyTag    uint16 `json:"keyTag"`
+	Algorithm uint8  `json:"algorithm"`
+	Flags     uint16 `json:"flags"`
+	IsKSK     bool   `json:"isKSK"`
+	IsZSK     bool   `json:"isZSK"`
+	Zone      string `json:"zone"`
+}
+
+// DNSSECKeysResponse is returned by GET /api/v1/dnssec/keys.
+type DNSSECKeysResponse struct {
+	Zones []DNSSECKeyInfo `json:"zones"`
+}
+
 // TopDomainsResponse is returned by GET /api/v1/topdomains.
 type TopDomainsResponse struct {
 	Domains []TopDomainsEntry `json:"domains"`
