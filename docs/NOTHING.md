@@ -396,7 +396,7 @@ WS     /ws                              — WebSocket live query stream
 | CL-01 | **Leader Election** | Gossip-based leader election. Required to determine primary authoritative node. Not Raft — lightweight election over gossip (CRDT or bully algorithm). | HIGH | LARGE | ✅ Done |
 | CL-02 | **Zone Replication** | Leader node zone update → propagate to other nodes via gossip. All nodes should be able to serve authoritative responses. | HIGH | XL | ✅ Done |
 | CL-03 | **Split-Brain Detection** | Network partition detection. Detect when nodes become isolated and ensure the largest partition remains authoritative. | HIGH | LARGE | ✅ Done |
-| CL-04 | **Node Draining** | Maintenance mode: gracefully remove a node from the cluster. Stop accepting new queries, complete in-flight queries, transfer state. | MEDIUM | MEDIUM | 🔴 Missing |
+| CL-04 | **Node Draining** | Maintenance mode: gracefully remove a node from the cluster. Stop accepting new queries, complete in-flight queries, transfer state. | MEDIUM | MEDIUM | ✅ Done |
 | CL-05 | **Rolling Upgrade** | Sequential node restart. Version mismatch detection. Backward-compatible gossip protocol versioning. | MEDIUM | MEDIUM | 🔴 Missing |
 | CL-06 | **Cluster Config Sync** | Automatic propagation of config changes (blocklist, RPZ, ACL) to all nodes. | MEDIUM | LARGE | ✅ Done |
 | CL-07 | **Health-based Query Routing** | Automatic routing away from unhealthy nodes. Client-facing anycast or internal redirect. | MEDIUM | MEDIUM | 🔴 Missing |

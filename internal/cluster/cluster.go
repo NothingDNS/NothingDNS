@@ -466,6 +466,62 @@ func (c *Cluster) DetectSplitBrain() bool {
 	return false
 }
 
+// StartDraining initiates graceful node draining.
+// The node stops accepting new queries and broadcasts its draining state to all peers.
+// Other nodes will exclude this node from query routing (via IsAlive() = false).
+// Call CompleteDraining() once all in-flight queries have finished.
+func (c *Cluster) StartDraining() error {
+	c.mu.Lock()
+	if !c.started {
+		c.mu.Unlock()
+		return fmt.Errorf("cluster not started")
+	}
+	c.mu.Unlock()
+
+	// Update local node state to draining
+	self := c.nodeList.GetSelf()
+	c.nodeList.UpdateState(self.ID, NodeStateDraining)
+
+	// Broadcast draining state to all peers
+	if c.gossip != nil {
+		if err := c.gossip.BroadcastDraining(true, 0); err != nil {
+			c.logger.Warnf("Failed to broadcast draining state: %v", err)
+		}
+	}
+
+	c.logger.Infof("Node draining initiated, cluster peers notified")
+	return nil
+}
+
+// CompleteDraining completes the draining process and optionally leaves the cluster.
+// If leaveCluster=true, the node removes itself from the cluster and can shut down.
+// If leaveCluster=false, the node exits draining state and resumes normal operation.
+func (c *Cluster) CompleteDraining(leaveCluster bool) error {
+	if leaveCluster {
+		// Broadcast that we're leaving the cluster
+		if c.gossip != nil {
+			if err := c.gossip.BroadcastDraining(false, 0); err != nil {
+				c.logger.Warnf("Failed to broadcast node leave: %v", err)
+			}
+		}
+		// Remove self from node list
+		self := c.nodeList.GetSelf()
+		c.nodeList.Remove(self.ID)
+		c.logger.Infof("Node left the cluster after draining")
+	} else {
+		// Exit draining state — back to alive
+		self := c.nodeList.GetSelf()
+		c.nodeList.UpdateState(self.ID, NodeStateAlive)
+		if c.gossip != nil {
+			if err := c.gossip.BroadcastDraining(false, 0); err != nil {
+				c.logger.Warnf("Failed to broadcast draining exit: %v", err)
+			}
+		}
+		c.logger.Infof("Node draining cancelled, back to normal operation")
+	}
+	return nil
+}
+
 // BroadcastConfigUpdate propagates a config update to all follower nodes.
 // Only the leader calls this to push config changes to followers.
 func (c *Cluster) BroadcastConfigUpdate(configSHA256 string, clusterConfig *ClusterConfigJSON) error {

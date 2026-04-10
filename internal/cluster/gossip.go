@@ -30,6 +30,7 @@ const (
 	MessageTypeHeartbeat   // Leader heartbeat to confirm leadership
 	MessageTypeZoneUpdate  // Zone data propagated from leader to followers
 	MessageTypeConfigSync  // Cluster config propagated from leader to followers
+	MessageTypeDraining    // Node entering/leaving draining state
 )
 
 // Message is the envelope for all gossip messages.
@@ -139,6 +140,14 @@ type ClusterConfigJSON struct {
 	SeedNodes    []string `json:"seed_nodes"`
 	CacheSync    bool     `json:"cache_sync"`
 	HTTPAddr     string   `json:"http_addr"`
+}
+
+// DrainingPayload is broadcast when a node enters or leaves draining state.
+type DrainingPayload struct {
+	NodeID      string    // Node entering/exiting draining
+	Draining    bool      // true = entering draining, false = exiting (back to alive)
+	Timestamp   time.Time // When the draining action was initiated
+	InFlightReq int       // Estimated number of in-flight queries (for monitoring)
 }
 
 // GossipProtocol implements the gossip-based membership protocol.
@@ -465,6 +474,8 @@ func (gp *GossipProtocol) handleMessage(data []byte, from *net.UDPAddr) {
 		gp.handleZoneUpdate(msg, from)
 	case MessageTypeConfigSync:
 		gp.handleConfigSync(msg, from)
+	case MessageTypeDraining:
+		gp.handleDraining(msg, from)
 	}
 }
 
@@ -797,6 +808,71 @@ func (gp *GossipProtocol) BroadcastConfigUpdate(payload ConfigSyncPayload) error
 		addr := &net.UDPAddr{IP: net.ParseIP(node.Addr), Port: node.Port}
 		if _, err := gp.conn.WriteToUDP(data, addr); err != nil {
 			util.Warnf("gossip: failed to send config sync to %s: %v", addr, err)
+		}
+		atomic.AddUint64(&gp.messagesSent, 1)
+	}
+
+	return nil
+}
+
+// handleDraining processes a draining state message from another node.
+func (gp *GossipProtocol) handleDraining(msg Message, from *net.UDPAddr) {
+	var payload DrainingPayload
+	if err := decodePayload(msg.Payload, &payload); err != nil {
+		return
+	}
+
+	// Ignore messages from self
+	if payload.NodeID == gp.nodeList.GetSelf().ID {
+		return
+	}
+
+	gp.nodeList.MarkSeen(payload.NodeID)
+
+	if payload.Draining {
+		// Node entering draining state — mark as draining
+		gp.nodeList.UpdateState(payload.NodeID, NodeStateDraining)
+		util.Infof("cluster: node %s entering draining state", payload.NodeID)
+	} else {
+		// Node exiting draining state — back to alive
+		gp.nodeList.UpdateState(payload.NodeID, NodeStateAlive)
+		util.Infof("cluster: node %s exiting draining state", payload.NodeID)
+	}
+}
+
+// BroadcastDraining broadcasts a draining state change to all cluster nodes.
+// When Draining=true, other nodes will stop routing new queries to this node.
+// When Draining=false, the node is back to normal operation.
+func (gp *GossipProtocol) BroadcastDraining(draining bool, inFlightReq int) error {
+	payload := DrainingPayload{
+		NodeID:      gp.nodeList.GetSelf().ID,
+		Draining:    draining,
+		Timestamp:   time.Now(),
+		InFlightReq: inFlightReq,
+	}
+
+	payloadBytes, err := encodePayload(payload)
+	if err != nil {
+		return err
+	}
+
+	msgBytes, err := encodeMessage(MessageTypeDraining, payloadBytes)
+	if err != nil {
+		return err
+	}
+
+	data := msgBytes
+	if gp.aead != nil {
+		data, _ = gp.encrypt(data)
+	}
+
+	for _, node := range gp.nodeList.GetAll() {
+		if node.ID == gp.nodeList.GetSelf().ID {
+			continue
+		}
+		addr := &net.UDPAddr{IP: net.ParseIP(node.Addr), Port: node.Port}
+		if _, err := gp.conn.WriteToUDP(data, addr); err != nil {
+			util.Warnf("gossip: failed to send draining message to %s: %v", addr, err)
 		}
 		atomic.AddUint64(&gp.messagesSent, 1)
 	}

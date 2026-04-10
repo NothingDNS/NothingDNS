@@ -18,6 +18,7 @@ const (
 	NodeStateAlive
 	NodeStateSuspect
 	NodeStateDead
+	NodeStateDraining // Node is in maintenance mode, completing in-flight queries
 )
 
 func (s NodeState) String() string {
@@ -28,6 +29,8 @@ func (s NodeState) String() string {
 		return "suspect"
 	case NodeStateDead:
 		return "dead"
+	case NodeStateDraining:
+		return "draining"
 	default:
 		return "unknown"
 	}
@@ -52,9 +55,16 @@ type NodeMeta struct {
 	HTTPAddr string
 }
 
-// IsAlive returns true if the node is alive.
+// IsAlive returns true if the node is alive and not draining.
+// Draining nodes are excluded so the cluster naturally stops routing
+// new queries to them during maintenance.
 func (n *Node) IsAlive() bool {
 	return n.State == NodeStateAlive
+}
+
+// IsDraining returns true if the node is in draining state.
+func (n *Node) IsDraining() bool {
+	return n.State == NodeStateDraining
 }
 
 // String returns a string representation of the node.
