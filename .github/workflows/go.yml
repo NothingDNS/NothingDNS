@@ -1,0 +1,29 @@
+name: Go
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: false
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build -o nothingdns ./cmd/nothingdns
+
+      - name: Test
+        run: go test ./... -count=1 -short
