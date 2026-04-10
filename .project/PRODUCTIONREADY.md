@@ -1,424 +1,261 @@
-# NothingDNS — Production Readiness Assessment
-
-> Weighted scoring across 9 critical production categories
-> Generated: 2026-04-08
-> Reference: `.project/ANALYSIS.md`, `.project/ROADMAP.md`
-
-## Scoring Methodology
-
-Each category is scored 0–10 and weighted by business importance. Weighted scores are summed to produce an overall readiness percentage.
-
-| Weight | Category |
-|--------|----------|
-| 25% | Security & Access Control |
-| 20% | Data Integrity & Durability |
-| 15% | Protocol Compliance |
-| 10% | Observability |
-| 10% | Operational Complexity |
-| 8% | Performance & Scalability |
-| 5% | Resilience & High Availability |
-| 4% | Documentation & Support |
-| 3% | Testing & QA |
-
-**Maximum Possible Score: 10.0**
-
----
-
-## 1. Security & Access Control — Weight: 25%
-
-**Score: 8.0 / 10**
-
-### Sub-factors
-
-| Factor | Score | Evidence |
-|--------|-------|----------|
-| Authentication | 9/10 | JWT Bearer tokens with HMAC-SHA256 (configurable). RBAC with 3 roles (admin/operator/viewer). Auto-generated JWT secret fallback. |
-| Authorization | 8/10 | RBAC enforced on API endpoints. ACL filtering at DNS query level. No obvious privilege escalation paths. |
-| TLS/mTLS | 8/10 | DoT, DoQ, DoH all use stdlib `tls.Config`. Min version configurable. Client certificates possible. |
-| Secrets Management | 8/10 | Environment variable expansion (`${VAR}`). JWT secret auto-gen. No hardcoded credentials. |
-| Input Validation | 9/10 | DNS message bounds checking, YAML config validation, CIDR parsing, domain name validation throughout. |
-| Attack Surface | 7/10 | Port 53 exposed, DoT/DoQ/DoH on 853/443. ACL helps but amplification attack surface is inherent to DNS. |
-| DNSSEC | 9/10 | Full signing + validation with chain of trust. ECDSA P-256/P-384, Ed25519, RSA. NSEC3 per RFC 5155. |
-
-### Findings
-
-**Strengths:**
-- Comprehensive ACL system (CIDR matching, blocklist, RPZ)
-- JWT auth with proper RBAC separation
-- No injection vulnerabilities detected
-- Structured logging for audit trail
-- Zero external dependencies (no supply chain risk)
-
-**Concerns:**
-- `internal/auth` has **zero test files** — security-critical code without test coverage
-- Some TSIG parse errors silently discarded (Roadmap Phase 1.4)
-- Amplification attack mitigation relies on RRL only
-- No rate limiting on authenticated API endpoints
-
-**Readiness Gap:** 2.0 points — primarily auth test coverage and error handling audit
-
----
-
-## 2. Data Integrity & Durability — Weight: 20%
-
-**Score: 7.0 / 10**
-
-### Sub-factors
-
-| Factor | Score | Evidence |
-|--------|-------|----------|
-| Zone Data Durability | 7/10 | Zones loaded from zone files at startup. KVPersistence wired and enabled — zone load/reload/DDNS update all trigger PersistZone to KV store. WAL provides transaction durability. |
-| Transaction Safety | 7/10 | WAL exists for storage. DDNS updates, AXFR/IXFR, TSIG all have proper transaction semantics. |
-| Cache Integrity | 7/10 | LRU cache with TTL. DNSSEC RRSIG validation. Serve-stale (RFC 8767). |
-| Serial Number Handling | 6/10 | RFC 1982 wrap-around handling exists but is complex (BUG-020 in prior audit). |
-| Crash Recovery | 7/10 | WAL replay for KV store. Zone data persisted to KV on load/reload/DDNS — crash after DDNS update won't lose the change. Zone files on disk survive crashes. |
-| Backup/Export | 7/10 | Zone transfer (AXFR) provides full zone export. API endpoints for zone listing. |
-
-### Findings
-
-**Strengths:**
-- WAL provides transaction durability for KV store
-- TSIG ensures AXFR/IXFR integrity
-- Cache TTL prevents stale data indefinite retention
-- DNSSEC signatures provide cryptographic data integrity
-- KVPersistence fully wired: PersistZone called on zone load (main.go:355), zone reload (main.go:691), and DDNS updates (transfer.go:453)
-
-**Concerns:**
-- KV persistence is write-only on restart — zones reload from zone files, not from KV store
-- IXFR journal persistence added in v0.1.0
-
-**Readiness Gap:** 2.0 points — minor, primarily serial number complexity
-
----
-
-## 3. Protocol Compliance — Weight: 15%
-
-**Score: 8.5 / 10**
-
-### Sub-factors
-
-| Factor | Score | Evidence |
-|--------|-------|----------|
-| RFC 1035 (Core DNS) | 9/10 | Complete UDP/TCP implementation. All standard RR types. Proper message parsing, truncation. |
-| RFC 6891 (EDNS0) | 8/10 | Full EDNS0 support. Bufsize handling. Multiple EDNS0 options present. |
-| RFC 4033/4034/4035 (DNSSEC) | 9/10 | Complete signing + validation. Chain of trust. NSEC/NSEC3 present. NSEC3 hardening added v0.1.0. |
-| RFC 7858 (DoT) | 9/10 | Complete TLS transport for DNS. |
-| RFC 8484 (DoH) | 9/10 | Full RFC 8484 implementation with JSON API compatibility. |
-| RFC 9250 (DoQ) | 7/10 | Hand-written QUIC implementation. Minimal but functional. |
-| RFC 7816 (QNAME Min) | 9/10 | Fully implemented in resolver. |
-| RFC 1995/1996 (IXFR/NOTIFY) | 9/10 | Complete AXFR/IXFR with NOTIFY. IXFR journal added v0.1.0. |
-| RFC 2136 (DDNS) | 9/10 | Full dynamic update with prerequisites. |
-| RFC 6147 (DNS64) | 8/10 | DNS64 synthesis present and functional. |
-| RFC 7873 (Cookie) | 8/10 | DNS cookies implemented (client + server). |
-| RFC 6672 (DNAME) | 9/10 | Full DNAME support added v0.1.0. |
-| RFC 9460 (SVCB/HTTPS) | 5/10 | RR type exists, wire parsing incomplete (Partial per ANALYSIS.md). |
-| RFC 9103 (XoT) | 9/10 | TLS transport for zone transfers added v0.1.0. |
-| RFC 8976 (ZoneMD) | 9/10 | Zone message digest implemented. |
-| RFC 5891/5895 (IDNA) | 9/10 | IDNA profiling implemented. |
-
-### Findings
-
-**Strengths:**
-- Excellent RFC coverage across all major DNS standards
-- DNSSEC implementation is comprehensive
-- DoT/DoH implementations are complete and correct
-- Recent additions (v0.1.0) closed DNAME, XoT, ZoneMD, IXFR journal gaps
-
-**Concerns:**
-- SVCB/HTTPS RR is partial (Roadmap Phase 4.1)
-- DoQ implementation is minimal — RFC 9250 edge cases may exist
-- EDNS0 Client Subnet (ECS) implementation status unclear
-
-**Readiness Gap:** 1.5 points — SVCB completeness and DoQ edge case hardening
-
----
-
-## 4. Observability — Weight: 10%
-
-**Score: 8.0 / 10**
-
-### Sub-factors
-
-| Factor | Score | Evidence |
-|--------|-------|----------|
-| Structured Logging | 9/10 | JSON + text format. Field support. DEBUG/INFO/WARN/ERROR/FATAL levels. Used throughout. |
-| Prometheus Metrics | 9/10 | Full Prometheus exporter at `:9153`. Standard DNS metrics, cache stats, cluster stats. |
-| Health Endpoints | 9/10 | `/health` endpoint present. Multiple health check goroutines in main.go. |
-| Request Tracing | 6/10 | Audit logging with query metadata. No distributed tracing (OpenTelemetry). |
-| Log Aggregation | 7/10 | JSON format compatible with ELK/Loki. No structured field standardization (no trace IDs). |
-| Dashboard | 8/10 | React 19 SPA with real-time query visualization. WebSocket for live updates. |
-
-### Findings
-
-**Strengths:**
-- Prometheus metrics are comprehensive
-- Health checks are multi-layered
-- Dashboard provides good operational visibility
-- Structured logs are JSON-compatible with standard aggregation tools
-
-**Concerns:**
-- No distributed tracing (no trace IDs through resolver chain)
-- Audit logs lack structured request IDs for cross-referencing
-- No OpenTelemetry support (but fits zero-dependency constraint)
-- `internal/audit` package is solid but query metadata could be richer
-
-**Readiness Gap:** 2.0 points — tracing enhancement (acceptable for v1.0)
-
----
-
-## 5. Operational Complexity — Weight: 10%
-
-**Score: 7.5 / 10**
-
-### Sub-factors
-
-| Factor | Score | Evidence |
-|--------|-------|----------|
-| Configuration | 8/10 | Single YAML file. Environment variable expansion. Comprehensive validation. Hot reload via SIGHUP. |
-| Deployment | 8/10 | Single binary. Docker image available. No external dependencies. |
-| Cluster Operations | 5/10 | SWIM gossip cluster exists but NOT Raft — manual intervention required for split-brain. |
-| Monitoring | 8/10 | Prometheus metrics, health endpoints, structured logs. Easy integration with standard tooling. |
-| Troubleshooting | 7/10 | Good logging. No debug mode, no query dump capability, no packet capture. |
-| Migration | 7/10 | Zone file format is standard BIND. AXFR for zone transfer. No migration tooling from other DNS servers. |
-
-### Findings
-
-**Strengths:**
-- Single binary deployment is excellent
-- Hot reload reduces operational friction
-- Docker support is present
-- No external dependencies simplifies operations
-
-**Concerns:**
-- Cluster operations are complex due to SWIM (not Raft) — no automatic leader election recovery
-- KV store fully wired for zone persistence — PersistZone on load/reload/DDNS (minor: restart reloads from files, not KV)
-- No built-in debugging tools (query traces, packet capture)
-- No Kubernetes manifests or Helm chart
-
-**Readiness Gap:** 2.5 points — cluster ops tooling and Raft would significantly improve this score
-
----
-
-## 6. Performance & Scalability — Weight: 8%
-
-**Score: 7.0 / 10**
-
-### Sub-factors
-
-| Factor | Score | Evidence |
-|--------|-------|----------|
-| Throughput | 7/10 | sync.Pool buffers, LRU cache, worker pools. No published benchmarks but architecture is sound. |
-| Latency | 7/10 | Cache hit path is zero-allocation. EDNS0 buffer sizing. QNAME minimization reduces upstream hops. |
-| Memory Efficiency | 8/10 | sync.Pool for buffers, LRU cache with TTL eviction, OOM monitor. Memory usage bounded. |
-| Connection Handling | 7/10 | UDP worker pool, TCP keepalive, connection pooling for upstream DoT/DoH. |
-| Under High Load | 6/10 | Single mutex on zone store could cause contention. No load shedding visible. RRL provides DoS protection. |
-| Cache Performance | 8/10 | LRU + TTL + negative caching + serve-stale. DNSSEC validation cache added v0.1.0. Good multi-level cache design. |
-
-### Findings
-
-**Strengths:**
-- Hot path optimizations are well implemented
-- Memory management with OOM protection
-- Connection pooling for encrypted transports
-- Response buffer pooling added v0.1.0
-
-**Concerns:**
-- No published benchmarks to validate performance claims
-- Zone store mutex could be contention point (Roadmap Phase 5.1)
-- UDP worker pool untested at very high QPS
-- Upstream DoH/DoT connection pooling needs verification
-
-**Readiness Gap:** 3.0 points — benchmarks needed, mutex sharding planned
-
----
-
-## 7. Resilience & High Availability — Weight: 5%
-
-**Score: 5.0 / 10**
-
-### Sub-factors
-
-| Factor | Score | Evidence |
-|--------|-------|----------|
-| Graceful Shutdown | 9/10 | Comprehensive shutdown: UDP, TCP, TLS, DoQ, upstream, API, cluster, audit. Full cleanup. |
-| Crash Recovery | 6/10 | WAL replay for KV store. Zone files on disk survive crashes. But in-flight queries dropped on crash. |
-| High Availability | 4/10 | SWIM cluster exists but NOT Raft — no automatic failover. Manual intervention required for leader failure. |
-| Partition Tolerance | 4/10 | Gossip provides eventual consistency for cache. But Raft consensus would provide stronger guarantees. |
-| Health Checks | 8/10 | Multi-layer health checks in main.go. |
-| Failover | 5/10 | Upstream has failover (next upstream on timeout). But zone leader failover requires manual intervention. |
-
-### Findings
-
-**Strengths:**
-- Graceful shutdown is comprehensive
-- Upstream failover is present
-- Health checks enable external orchestration
-- IXFR journal persistence added v0.1.0 helps crash recovery
-
-**Concerns:**
-- **Critical:** SWIM gossip cluster cannot guarantee consistency under network partition (spec promises Raft)
-- No automatic leader election for zone updates
-- No distributed lock manager for concurrent zone updates
-- SWIM is useful for cache sync, not true HA consensus
-
-**Readiness Gap:** 5.0 points — Raft clustering is the primary gap (Roadmap Phase 2)
-
----
-
-## 8. Documentation & Support — Weight: 4%
-
-**Score: 7.0 / 10**
-
-### Sub-factors
-
-| Factor | Score | Evidence |
-|--------|-------|----------|
-| README | 9/10 | 968 lines. Comprehensive quick start, architecture, comparison table, config examples. |
-| SPECIFICATION.md | 9/10 | 1,420 lines. Detailed RFC compliance, API endpoints, configuration spec. |
-| IMPLEMENTATION.md | 8/10 | 2,755 lines. Engineering blueprint with code structures. |
-| Code Documentation | 6/10 | Godoc on exported types/functions. Many internal functions lack explanation. |
-| API Documentation | 7/10 | Swagger UI at `/api/v1/swagger`. Interactive docs. |
-| Deployment Guides | 6/10 | Docker support documented. No Kubernetes manifests, no HA setup guide. |
-
-### Findings
-
-**Strengths:**
-- Excellent specification and implementation documentation
-- Swagger API docs are interactive
-- README is comprehensive
-- TASKS.md and CHANGELOG.md provide project tracking
-
-**Concerns:**
-- No Kubernetes Helm chart or operator
-- No migration guide from BIND/unbound
-- No production deployment runbook
-- Frontend lacks `web/README.md` for dev workflow
-
-**Readiness Gap:** 3.0 points — operational guides needed
-
----
-
-## 9. Testing & QA — Weight: 3%
-
-**Score: 7.5 / 10**
-
-### Sub-factors
-
-| Factor | Score | Evidence |
-|--------|-------|----------|
-| Unit Test Coverage | 8/10 | 17/17 packages pass. `coverage_extra*.go` files for edge cases. Table-driven tests throughout. |
-| Integration Tests | 6/10 | Integration test suite exists. 2 tests fail on Windows (port binding). |
-| Property-Based Tests | 7/10 | Config parsing has property-based tests. Protocol round-trip tests. |
-| DNSSEC Test Vectors | 7/10 | Known answer tests for DNSSEC validation. RFC 4035 test cases. |
-| Fuzz Testing | 3/10 | No fuzz testing visible. DNS parser would benefit from go-fuzz. |
-| CI/CD | 6/10 | Basic GitHub Actions (go vet + test). No coverage enforcement, no deployment automation. |
-
-### Findings
-
-**Strengths:**
-- Excellent unit test coverage across packages
-- Property-based tests for config parsing
-- DNSSEC has known-answer validation
-- 149 test files, ~3,336 test functions, 43 benchmarks
-
-**Concerns:**
-- No fuzz testing for DNS message parser (high-value for wire protocol)
-- Integration tests failing on Windows (port binding issue)
-- No coverage enforcement in CI
-- `internal/auth` has **zero test files**
-- `coverage_extra*.go` files may inflate coverage metrics
-
-**Readiness Gap:** 2.5 points — fuzz testing, Windows tests, auth tests
-
----
-
-## Overall Score Calculation
-
-| Category | Raw Score | Weight | Weighted Score |
-|----------|-----------|--------|----------------|
-| Security & Access Control | 8.0 | 25% | 2.000 |
-| Data Integrity & Durability | 7.0 | 20% | 1.400 |
-| Protocol Compliance | 8.5 | 15% | 1.275 |
-| Observability | 8.0 | 10% | 0.800 |
-| Operational Complexity | 7.5 | 10% | 0.750 |
-| Performance & Scalability | 7.0 | 8% | 0.560 |
-| Resilience & High Availability | 5.0 | 5% | 0.250 |
-| Documentation & Support | 7.0 | 4% | 0.280 |
-| Testing & QA | 7.5 | 3% | 0.225 |
-| **Total** | | **100%** | **7.54 / 10** |
-
-**Production Readiness: 75.4%**
-
----
-
-## Readiness Verdict
-
-### Current State: **PROVISIONAL PRODUCTION READY** (with caveats)
-
-NothingDNS can be deployed in production for **read-heavy, non-mission-critical** workloads with the following conditions:
-
-**MUST address before production:**
-1. Add tests for `internal/auth` (security-critical code with zero test coverage)
-2. Audit and fix silent error handling in TSIG parsing and other protocol handlers
-3. Document SWIM vs Raft deviation explicitly — operators must understand cluster guarantees
-4. Fix `go vet` unkeyed fields warning (`cmd/nothingdns/main.go:482`)
-
-**SHOULD address before production:**
-5. Wire KV store for zone persistence (currently zones are file-only)
-6. Fix Windows integration test port binding
-7. Publish performance benchmarks to validate scaling claims
-8. Add fuzz testing for DNS wire protocol parser
-
-**ACCEPTABLE for production (known limitations):**
-- DoQ implementation is minimal (RFC 9250 edge cases may exist)
-- SVCB/HTTPS RR is partial (not widely deployed yet)
-- Cluster uses SWIM instead of Raft (useful for cache sync, not true HA)
-- No distributed tracing (fits zero-dependency constraint)
-
-### Deployment Suitability Matrix
-
-| Workload Type | Readiness | Notes |
-|--------------|------------|-------|
-| Authoritative DNS (primary) | ✅ Ready | With MUST items fixed |
-| Authoritative DNS (secondary/slave) | ⚠️ Provisional | AXFR/IXFR works, zone persistence gap |
-| Recursive Resolver | ✅ Ready | Robust resolver with QNAME minimization |
-| DoT/DoH/DoQ Server | ✅ Ready | Full RFC implementations |
-| DNSSEC Validating Resolver | ✅ Ready | Full chain of trust |
-| High-Availability Cluster | ❌ Not Ready | SWIM ≠ Raft — manual failover only |
-| Multi-tenant / Shared Infrastructure | ⚠️ Provisional | RBAC present, no resource isolation |
-
----
-
-## Priority Remediation Items
-
-| # | Item | Category | Effort | Impact |
-|---|------|----------|--------|--------|
-| 1 | Add `internal/auth` tests | Testing | 2d | Security |
-| 2 | Audit silent error handling | Security | 5d | Reliability |
-| 3 | Document SWIM/Raft deviation | Operations | 0.5d | Operations |
-| 4 | Fix `go vet` warning | Hygiene | 0.5d | CI |
-| 5 | Wire KV store for zone persistence | Data Integrity | ✓ DONE (8d) | Durability |
-| 6 | Fix Windows integration tests | Testing | 2d | QA |
-| 7 | Add fuzz testing for DNS parser | Testing | 3d | Security |
-| 8 | Implement Raft clustering | Resilience | 57d | HA |
-| 9 | Zone store mutex sharding | Performance | 5d | High-QPS |
-| 10 | Publish performance benchmarks | Performance | 3d | Validation |
-
----
-
-## Appendix: Scoring Justification
-
-### Why Data Integrity is only 5.5/10
-The KV store and WAL exist and pass all tests and are **fully wired into zone management** via KVPersistence (zone_manager.go:87-88). PersistZone is called on zone load, reload, and DDNS updates. A crash after a DDNS update is now safe — the change is persisted before the response is returned. The IXFR journal persistence added in v0.1.0 provides additional durability.
-
-### Why Resilience is only 5.0/10
-Graceful shutdown is excellent (9/10) but HA cluster is weak (4/10). The SWIM gossip protocol provides cache invalidation and failure detection, but **cannot guarantee linearizability** under network partition. The spec explicitly promises Raft consensus. The gossip approach is a deliberate trade-off (simpler, faster), but it means the cluster cannot be used for truly consistent writes. **This is the single largest architectural gap.**
-
-### Why Testing is 7.5/10 despite 17/17 packages passing
-Unit test coverage is strong, but `internal/auth` has zero tests (security-critical code), fuzz testing is absent (high-value for DNS parsers), and integration tests are broken on Windows. The 149 test files and ~3,336 test functions suggest deep coverage, but the `coverage_extra*.go` files may inflate apparent coverage without testing real-world scenarios.
-
-### Why Protocol Compliance is 8.5/10
-The implementation covers all major RFCs comprehensively. The deductions are for SVCB/HTTPS (partial) and DoQ (minimal). Both are relatively new standards with limited deployment share, so the impact is moderate. The recent v0.1.0 additions (DNAME, XoT, ZoneMD, IXFR journal) significantly improved this score.
-
-### Why Security is 8.0/10 despite auth having no tests
-JWT auth with RBAC is architecturally sound, TLS implementations are correct, and there are no obvious injection or XSS vulnerabilities. The deduction is primarily the auth test gap (which is a testing concern, not a security architecture concern). The zero-dependency policy also eliminates entire classes of supply chain attacks.
+﻿# Production Readiness Assessment
+
+> Comprehensive evaluation of whether NothingDNS is ready for production deployment.
+> Assessment Date: 2026-04-10
+> Verdict: 🔴 NOT READY
+
+## Overall Verdict & Score
+
+**Production Readiness Score: 61/100**
+
+| Category | Score | Weight | Weighted Score |
+|---|---:|---:|---:|
+| Core Functionality | 7/10 | 20% | 14.0 |
+| Reliability & Error Handling | 6/10 | 15% | 9.0 |
+| Security | 5/10 | 20% | 10.0 |
+| Performance | 7/10 | 10% | 7.0 |
+| Testing | 6/10 | 15% | 9.0 |
+| Observability | 6/10 | 10% | 6.0 |
+| Documentation | 5/10 | 5% | 2.5 |
+| Deployment Readiness | 7/10 | 5% | 3.5 |
+| **TOTAL** |  | **100%** | **61/100** |
+
+## 1. Core Functionality Assessment
+
+### 1.1 Feature Completeness
+Estimated core feature completion: ~72% against documented specification set.
+
+- ✅ **Working**
+- UDP/TCP DNS serving
+- Authoritative zone parsing/serving
+- Recursive upstream resolution
+- DNSSEC validation/signing core paths
+- DoT/DoH/ODoH transports
+- REST API + dashboard serving + MCP server
+- ⚠️ **Partial**
+- DoQ maturity (custom implementation complexity)
+- Cluster consensus path (raft code exists but runtime config path is gossip-focused)
+- OpenAPI documentation coverage (subset of live endpoints)
+- ❌ **Missing**
+- gRPC inter-node implementation promised by spec/docs (`internal/api/grpc` path absent)
+- 🐛 **Buggy**
+- Full chaos test expectations currently fail in normal test run (`test/chaos`)
+
+### 1.2 Critical Path Analysis
+Can a user complete primary workflow end-to-end?
+- Yes for core DNS serve/resolve flows and basic dashboard/API interactions.
+- No for "release confidence" workflow because full test gate is red (`go test ./... -count=1` fails).
+
+Dead ends/broken flows:
+- Dashboard/auth path relies on token probe flow rather than documented login API endpoint.
+- Some API docs/routes are stale or missing in OpenAPI, creating operator confusion.
+
+Happy path reliability:
+- Good under short test profile; uncertain under sustained/chaos scenarios due failing chaos suite.
+
+### 1.3 Data Integrity
+- Data storage/retrieval: custom storage layer (`internal/storage`) with WAL and KV abstractions exists.
+- Migration scripts: not applicable in SQL sense; no migration framework found.
+- Backup/restore: indirect via zone files and transfer operations; no explicit backup runbook in root docs.
+- Transaction safety: generally handled in storage and transfer code, but should be validated with failure-injection tests.
+
+## 2. Reliability & Error Handling
+
+### 2.1 Error Handling Coverage
+- Most runtime paths return and wrap errors.
+- Mixed response style in API middleware (`writeError` vs raw `http.Error` JSON text) reduces consistency.
+- Panic recovery exists in some critical paths, but there are silent recover blocks (`internal/cluster/gossip.go`) that hide failures.
+
+Potential panic points:
+- Intentional panic on impossible entropy failure (`internal/auth/auth.go:108`) is understandable but still abrupt.
+- Multiple recover wrappers in cluster and transfer paths suggest prior panic concerns.
+
+### 2.2 Graceful Degradation
+- Upstream health/fallback behavior exists (UDP to TCP fallback patterns).
+- No circuit-breaker library (consistent with zero-dependency policy), but retry/failover logic is present in upstream/load balancer.
+- Behavior under severe chaos is currently not validated by passing tests.
+
+### 2.3 Graceful Shutdown
+- Signal-driven shutdown with timeout implemented (`cmd/nothingdns/main.go:595-664`).
+- In-flight handling is attempted via subsystem Stop calls and timeout context.
+- Shutdown timeout default is configured (`internal/config/config.go`, default `30s`).
+
+### 2.4 Recovery
+- WAL-based storage recovery primitives exist.
+- Cluster/gossip and transfer paths have explicit stop/start primitives.
+- Crash recovery confidence is moderate, but needs stronger deterministic integration tests around fail/restart cycles.
+
+## 3. Security Assessment
+
+### 3.1 Authentication & Authorization
+- [x] Authentication mechanism is implemented and secure (token + auth store)
+- [x] Session/token management is present (expiry/revoke)
+- [x] Authorization checks on protected endpoints are mostly present
+- [ ] Session/token transport is consistently secure across API and dashboard flows
+- [x] Password hashing exists (custom PBKDF2-style implementation)
+- [ ] CSRF model is not explicitly documented/tested for cookie-based flows
+- [x] Rate limiting on auth endpoint exists
+
+Key concerns:
+- Frontend login stores token in JS-managed cookie (`web/src/pages/login.tsx:18`, `internal/dashboard/static.go:141`) rather than relying on HttpOnly-only cookie issuance path.
+
+### 3.2 Input Validation & Injection
+- [x] Many inputs are validated (config, IP/domain parsing, API params)
+- [x] SQL injection protection (no SQL layer used)
+- [ ] XSS blast radius reduced but not fully hardened due token-in-js-cookie model
+- [x] Command injection vectors not observed (`os/exec` usage not found)
+- [ ] Request body hard limits / strict decoder controls are not uniformly applied
+- [ ] Path traversal protections should be reviewed around file-based zone include/import paths
+
+### 3.3 Network Security
+- [x] TLS/HTTPS support exists
+- [ ] Secure headers (HSTS, CSP, X-Frame-Options, etc.) not centrally enforced in API/dashboard response path
+- [ ] CORS configuration is internally inconsistent (`config` comments vs middleware behavior)
+- [ ] Sensitive token accepted via query parameter on WebSocket fallback path
+- [x] Secure cookie attributes used in server-side login endpoint (`HttpOnly`, `SameSite`, `Secure` when TLS)
+
+### 3.4 Secrets & Configuration
+- [x] No obvious hardcoded production secrets found in main source paths
+- [x] Environment variable pattern support exists
+- [x] `.env` patterns are in `.gitignore`
+- [ ] Docs and runtime guidance for secret handling are not fully aligned with actual auth flow
+- [ ] Sensitive values in logs require dedicated redaction review
+
+### 3.5 Security Vulnerabilities Found
+- High: stdlib vulnerabilities detected via `govulncheck` on local Go 1.26.1 (4 known vulns fixed in 1.26.2).
+- Medium: token accepted in URL query for WebSocket auth (`internal/dashboard/server.go:256-258`).
+- Medium: CORS behavior mismatch may expose wider cross-origin access than operators expect (`internal/api/server.go:572-584` vs `internal/config/config.go:420-422`).
+- Medium: frontend login token in script-readable cookie increases XSS impact.
+
+## 4. Performance Assessment
+
+### 4.1 Known Performance Issues
+- Staticcheck reports allocation/perf issues (`SA6002`) in hot network paths.
+- No evidence of SQL N+1 issues (no SQL stack).
+- Potential CPU hot area: password hashing cost and protocol encode/decode loops (expected for DNS/auth workloads).
+- Caching exists and is integrated; major strength.
+
+### 4.2 Resource Management
+- Connection pooling present for upstream TCP.
+- Graceful close methods exist in several subsystems.
+- Race test could not run in this environment due missing gcc/CGO, so concurrency leak confidence is incomplete.
+
+### 4.3 Frontend Performance
+- Bundle size (prod build): JS 383.98 kB (gzip 108.76 kB), CSS 35.42 kB (gzip 6.56 kB).
+- No clear route-level lazy loading observed.
+- Dashboard is acceptable for admin UI scale, but could improve initial load via code splitting.
+
+## 5. Testing Assessment
+
+### 5.1 Test Coverage Reality Check
+- Test volume is high (156 Go test files), but full suite health is the real gate.
+- `go test ./... -count=1` fails in `test/chaos`.
+- `go test ./... -count=1 -short` passes.
+
+Critical paths without sufficient confidence:
+- Chaos/degraded-network reliability criteria are currently not validated by passing tests.
+- Frontend behavior has no dedicated automated tests.
+
+### 5.2 Test Categories Present
+- [x] Unit tests - many packages
+- [x] Integration tests - `test/integration`
+- [x] API/endpoint tests - extensive in `internal/api/*_test.go`
+- [ ] Frontend component tests - 0
+- [ ] E2E tests - none detected
+- [x] Benchmark tests - present in multiple packages
+- [x] Fuzz tests - present (`internal/protocol/fuzz_test.go`)
+- [ ] Load tests - no dedicated load test framework detected
+
+### 5.3 Test Infrastructure
+- [x] Tests can run locally with `go test ./...` (but currently fail on chaos)
+- [x] Most tests are self-contained with mocks/helpers
+- [x] CI runs tests on PR/push (`.github/workflows/ci.yml`)
+- [ ] Results are fully reliable (full suite not green)
+- [ ] Frontend test infrastructure is absent
+
+## 6. Observability
+
+### 6.1 Logging
+- [x] Structured logging capability exists (JSON/text)
+- [x] Log levels exist
+- [ ] Request ID propagation is not clearly standardized
+- [ ] Sensitive logging redaction policy is not explicit
+- [ ] Log rotation is not an app-level feature (delegated externally)
+- [ ] Silent recover blocks reduce observability of runtime faults
+
+### 6.2 Monitoring & Metrics
+- [x] Metrics endpoint exists (`/metrics` default)
+- [x] Health/readiness/liveness endpoints exist
+- [ ] Alerting rules and SLO documentation are not part of repo defaults
+- [ ] No full monitoring stack definitions in repository root
+
+### 6.3 Tracing
+- [ ] Distributed tracing support not found
+- [ ] Correlation IDs across service boundaries not formalized
+- [ ] pprof/debug profiling endpoints not found
+
+## 7. Deployment Readiness
+
+### 7.1 Build & Package
+- [x] Reproducible build process and Makefile targets
+- [x] Multi-platform build/release config exists
+- [x] Docker multi-stage to scratch image with non-root user
+- [x] Binary version embedding support exists
+- [ ] End-to-end release gate not yet tied to all critical quality checks (full tests currently failing)
+
+### 7.2 Configuration
+- [x] Configurable via YAML and env expansion support
+- [x] Many sensible defaults and validation checks
+- [ ] Config docs and behavior mismatch for some fields (notably CORS)
+- [ ] Clear dev/stage/prod config profiles are not packaged as first-class templates
+
+### 7.3 Database & State
+- [x] Custom persistence/WAL exists
+- [ ] Explicit backup/restore operational guide is limited
+- [ ] Rollback procedures are not clearly documented in root operational docs
+
+### 7.4 Infrastructure
+- [x] CI pipeline configured
+- [x] Automated testing in pipeline configured
+- [x] Docker image build configured
+- [ ] Rollback strategy and zero-downtime deployment approach are not explicitly documented
+
+## 8. Documentation Readiness
+
+- [ ] README is comprehensive but not fully accurate for current API/spec alignment
+- [ ] Installation/setup generally works but some platform caveats are under-documented
+- [ ] API documentation exists but is incomplete versus live endpoints
+- [ ] Configuration reference exists but has behavior mismatch for CORS semantics
+- [ ] Troubleshooting guidance is partial
+- [ ] Architecture docs/spec/implementation files are not synchronized
+
+## 9. Final Verdict
+
+### 🚫 Production Blockers (MUST fix before any deployment)
+1. Full Go test pipeline fails (`go test ./... -count=1`) due chaos suite failures.
+2. Security boundary inconsistency: CORS policy mismatch between docs/config and runtime middleware.
+3. WebSocket auth accepts token query parameter and frontend stores auth token in script-accessible cookie path.
+4. Toolchain patch-level vulnerabilities reported by `govulncheck` for local Go runtime.
+
+### ⚠️ High Priority (Should fix within first week of production)
+1. Expand OpenAPI coverage to all live endpoints and normalize method constraints.
+2. Remove silent recover blocks or at least log/recount panic events.
+3. Align README/SPEC/IMPLEMENTATION/TASKS with current architecture and legal/license reality.
+
+### 💡 Recommendations (Improve over time)
+1. Add frontend unit/component tests and API E2E smoke tests.
+2. Introduce tracing/correlation IDs and optional pprof endpoints.
+3. Reduce bundle size via route-level code splitting.
+
+### Estimated Time to Production Ready
+- From current state: **4-8 weeks** of focused work
+- Minimum viable production (critical fixes only): **10-15 days**
+- Full production readiness (all categories green): **8-12 weeks**
+
+### Go/No-Go Recommendation
+**NO-GO**
+
+Justification:
+Current implementation is technically strong in scope and architecture, but it is not production-safe to ship as-is because the full backend test gate is red, and there are unresolved security boundary issues in auth/CORS behavior. The project has many mature components, yet production readiness is defined by reliability under failure and predictable security posture, not feature count alone.
+
+The minimum safe path is to first make the full test suite deterministic and green, patch the Go toolchain vulnerabilities, and close the token/CORS inconsistencies so operators can reason correctly about exposure. Once those are fixed and documented, a conditional production rollout becomes realistic.

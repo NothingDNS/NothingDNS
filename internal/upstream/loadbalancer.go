@@ -479,9 +479,17 @@ func (lb *LoadBalancer) queryUDP(address string, msg *protocol.Message) (*protoc
 	}
 
 	var buf []byte
-	if p, ok := pool.Get().([]byte); ok {
-		buf = p
-	} else {
+	if pooled := pool.Get(); pooled != nil {
+		switch p := pooled.(type) {
+		case []byte:
+			buf = p
+		case *[]byte:
+			if p != nil {
+				buf = *p
+			}
+		}
+	}
+	if buf == nil {
 		buf = make([]byte, 4096)
 	}
 	defer func() {
@@ -489,7 +497,7 @@ func (lb *LoadBalancer) queryUDP(address string, msg *protocol.Message) (*protoc
 		for i := range buf {
 			buf[i] = 0
 		}
-		pool.Put(buf)
+		pool.Put(&buf)
 	}()
 
 	n, err := msg.Pack(buf)
@@ -561,9 +569,17 @@ func (lb *LoadBalancer) queryTCP(address string, msg *protocol.Message) (*protoc
 	}
 
 	var buf []byte
-	if p, ok := pool.Get().([]byte); ok {
-		buf = p
-	} else {
+	if pooled := pool.Get(); pooled != nil {
+		switch p := pooled.(type) {
+		case []byte:
+			buf = p
+		case *[]byte:
+			if p != nil {
+				buf = *p
+			}
+		}
+	}
+	if buf == nil {
 		buf = make([]byte, 65535)
 	}
 	defer func() {
@@ -571,7 +587,7 @@ func (lb *LoadBalancer) queryTCP(address string, msg *protocol.Message) (*protoc
 		for i := range buf {
 			buf[i] = 0
 		}
-		pool.Put(buf)
+		pool.Put(&buf)
 	}()
 
 	n, err := msg.Pack(buf)

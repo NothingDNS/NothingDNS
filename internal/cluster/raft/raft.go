@@ -1013,8 +1013,7 @@ func (n *Node) AddPeer(id NodeID, addr string) error {
 	}
 
 	// Create the joint config entry directly
-	var newPeers map[NodeID]*Peer
-	newPeers = make(map[NodeID]*Peer)
+	newPeers := make(map[NodeID]*Peer)
 	for pid, p := range n.peers {
 		newPeers[pid] = p
 	}
@@ -1148,8 +1147,7 @@ func (n *Node) RemovePeer(id NodeID) error {
 	}
 
 	// Create the joint config entry
-	var newPeers map[NodeID]*Peer
-	newPeers = make(map[NodeID]*Peer)
+	newPeers := make(map[NodeID]*Peer)
 	for pid, p := range n.peers {
 		if pid != id {
 			newPeers[pid] = p

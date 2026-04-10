@@ -399,7 +399,7 @@ func TestAXFRClient_buildAXFRRequest_ValidName(t *testing.T) {
 	}
 
 	if req == nil {
-		t.Error("Expected non-nil request")
+		t.Fatal("Expected non-nil request")
 	}
 
 	if len(req.Questions) != 1 {

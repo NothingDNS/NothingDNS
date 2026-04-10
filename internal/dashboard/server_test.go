@@ -316,7 +316,7 @@ func TestGetStats(t *testing.T) {
 
 	stats := server.GetStats()
 	if stats == nil {
-		t.Error("Expected non-nil stats")
+		t.Fatal("Expected non-nil stats")
 	}
 
 	if stats.Uptime.IsZero() {
@@ -348,7 +348,7 @@ func (m *MockWebSocketConn) WriteMessage(messageType int, data []byte) error {
 }
 
 func (m *MockWebSocketConn) SetWriteDeadline(time.Time) error { return nil }
-func (m *MockWebSocketConn) SetReadDeadline(time.Time) error { return nil }
+func (m *MockWebSocketConn) SetReadDeadline(time.Time) error  { return nil }
 
 func (m *MockWebSocketConn) Close() error {
 	m.mu.Lock()
@@ -516,7 +516,7 @@ func (m *ErrorMockWebSocketConn) WriteMessage(messageType int, data []byte) erro
 }
 
 func (m *ErrorMockWebSocketConn) SetWriteDeadline(time.Time) error { return nil }
-func (m *ErrorMockWebSocketConn) SetReadDeadline(time.Time) error { return nil }
+func (m *ErrorMockWebSocketConn) SetReadDeadline(time.Time) error  { return nil }
 
 func (m *ErrorMockWebSocketConn) Close() error {
 	m.mu.Lock()
@@ -1039,7 +1039,7 @@ func (m *BlockingMockWebSocketConn) WriteMessage(messageType int, data []byte) e
 }
 
 func (m *BlockingMockWebSocketConn) SetWriteDeadline(time.Time) error { return nil }
-func (m *BlockingMockWebSocketConn) SetReadDeadline(time.Time) error { return nil }
+func (m *BlockingMockWebSocketConn) SetReadDeadline(time.Time) error  { return nil }
 
 func (m *BlockingMockWebSocketConn) Close() error {
 	m.mu.Lock()

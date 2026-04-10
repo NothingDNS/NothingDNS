@@ -1,8 +1,6 @@
 package cluster
 
 import (
-	"bytes"
-	"encoding/json"
 	"net"
 	"testing"
 	"time"
@@ -184,20 +182,10 @@ func TestEncodeMessage_JsonMarshalError(t *testing.T) {
 		t.Fatalf("encodeMessage with valid payload should succeed: %v", err)
 	}
 
-	// Now try to trigger the error path via json directly with a bad type
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	badData := make(chan int)
-	err = enc.Encode(badData)
-	if err == nil {
-		t.Error("json.Encode should fail for channel type")
-	}
-
 	// The encodeMessage function constructs a Message{Type, Timestamp, Payload}
 	// where Payload is []byte. This always encodes successfully because
 	// Message only contains encodable types (uint8, string, time.Time, []byte).
-	t.Log("encodeMessage error path (line 553-555) requires json.Marshal to fail " +
-		"on a Message struct, which only contains basic encodable types")
+	t.Log("encodeMessage error path (line 553-555) is not reachable with Message payload types")
 }
 
 // ---------------------------------------------------------------------------

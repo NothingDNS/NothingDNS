@@ -649,11 +649,23 @@ func TestClientUDPPool(t *testing.T) {
 	}
 
 	// Get buffer from pool
-	buf := client.udpPool["8.8.8.8:53"].Get().([]byte)
+	pooledUDP := client.udpPool["8.8.8.8:53"].Get()
+	var buf []byte
+	switch p := pooledUDP.(type) {
+	case []byte:
+		buf = p
+	case *[]byte:
+		if p == nil {
+			t.Fatal("expected non-nil pooled UDP buffer pointer")
+		}
+		buf = *p
+	default:
+		t.Fatalf("unexpected pooled UDP buffer type: %T", pooledUDP)
+	}
 	if len(buf) != 4096 {
 		t.Errorf("expected buffer size 4096, got %d", len(buf))
 	}
-	client.udpPool["8.8.8.8:53"].Put(buf)
+	client.udpPool["8.8.8.8:53"].Put(&buf)
 }
 
 func TestClientTCPPool(t *testing.T) {
@@ -675,11 +687,23 @@ func TestClientTCPPool(t *testing.T) {
 	}
 
 	// Get buffer from pool
-	buf := client.tcpPool["8.8.8.8:53"].Get().([]byte)
+	pooledTCP := client.tcpPool["8.8.8.8:53"].Get()
+	var buf []byte
+	switch p := pooledTCP.(type) {
+	case []byte:
+		buf = p
+	case *[]byte:
+		if p == nil {
+			t.Fatal("expected non-nil pooled TCP buffer pointer")
+		}
+		buf = *p
+	default:
+		t.Fatalf("unexpected pooled TCP buffer type: %T", pooledTCP)
+	}
 	if len(buf) != 65535 {
 		t.Errorf("expected buffer size 65535, got %d", len(buf))
 	}
-	client.tcpPool["8.8.8.8:53"].Put(buf)
+	client.tcpPool["8.8.8.8:53"].Put(&buf)
 }
 
 func TestServerHealthThreshold(t *testing.T) {
@@ -1090,7 +1114,7 @@ func TestClientSelectFastestAllUnhealthy(t *testing.T) {
 	// selectFastest should fallback to first server
 	server := client.selectFastest()
 	if server == nil {
-		t.Error("expected fallback server")
+		t.Fatal("expected fallback server")
 	}
 	if server.Address != "8.8.8.8:53" {
 		t.Errorf("expected first server as fallback, got %s", server.Address)
@@ -1141,7 +1165,7 @@ func TestClientSelectRandomFallback(t *testing.T) {
 	// selectRandom should return first server as fallback
 	server := client.selectRandom()
 	if server == nil {
-		t.Error("expected fallback server")
+		t.Fatal("expected fallback server")
 	}
 	if server.Address != "8.8.8.8:53" {
 		t.Errorf("expected first server as fallback, got %s", server.Address)

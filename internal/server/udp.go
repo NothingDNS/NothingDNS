@@ -39,10 +39,10 @@ type UDPConn interface {
 
 // UDPServer handles UDP DNS queries.
 type UDPServer struct {
-	addr     string
-	handler  Handler
-	conn     UDPConn
-	workers  int
+	addr    string
+	handler Handler
+	conn    UDPConn
+	workers int
 
 	// Context and lifecycle
 	ctx    context.Context
@@ -78,11 +78,11 @@ func NewUDPServerWithWorkers(addr string, handler Handler, workers int) *UDPServ
 	ctx, cancel := context.WithCancel(context.Background())
 
 	s := &UDPServer{
-		addr:     addr,
-		handler:  &ServeDNSWithRecovery{Handler: handler},
-		workers:  workers,
-		ctx:      ctx,
-		cancel:   cancel,
+		addr:    addr,
+		handler: &ServeDNSWithRecovery{Handler: handler},
+		workers: workers,
+		ctx:     ctx,
+		cancel:  cancel,
 		bufferPool: sync.Pool{
 			New: func() interface{} {
 				buf := make([]byte, UDPReadBufferSize)
@@ -291,15 +291,23 @@ func (w *udpResponseWriter) Write(msg *protocol.Message) (int, error) {
 	// Get a buffer from the pool (zero-alloc hot path)
 	var buf []byte
 	if w.server != nil {
-		if p, ok := w.server.responsePool.Get().([]byte); ok {
-			buf = p
-		} else {
+		if pooled := w.server.responsePool.Get(); pooled != nil {
+			switch p := pooled.(type) {
+			case []byte:
+				buf = p
+			case *[]byte:
+				if p != nil {
+					buf = *p
+				}
+			}
+		}
+		if buf == nil {
 			buf = make([]byte, MaxUDPPayloadSize)
 		}
 		if cap(buf) < MaxUDPPayloadSize {
 			buf = make([]byte, MaxUDPPayloadSize)
 		} else {
-			defer w.server.responsePool.Put(buf)
+			defer w.server.responsePool.Put(&buf)
 		}
 	}
 	if buf == nil {

@@ -211,7 +211,7 @@ func (c *Cluster) initGossip() error {
 // initRaft initializes the Raft consensus protocol.
 func (c *Cluster) initRaft() error {
 	if len(c.config.Peers) == 0 {
-		return fmt.Errorf("Raft consensus requires at least one peer in config")
+		return fmt.Errorf("raft consensus requires at least one peer in config")
 	}
 
 	// Build peer list

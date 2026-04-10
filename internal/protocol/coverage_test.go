@@ -46,7 +46,6 @@ package protocol
 
 import (
 	"bytes"
-	"fmt"
 	"strings"
 	"testing"
 )
@@ -1584,6 +1583,5 @@ func TestUnpackMessageQuestionOffsetCheck(t *testing.T) {
 // ============================================================================
 
 func TestCoverageImportCheck(t *testing.T) {
-	// This ensures the fmt import is used
-	_ = fmt.Sprintf("test")
+	_ = "test"
 }

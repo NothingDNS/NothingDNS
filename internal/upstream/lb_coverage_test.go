@@ -25,7 +25,7 @@ func TestLoadBalancer_SelectStandaloneTarget_RoundRobin(t *testing.T) {
 		},
 		strategy: RoundRobin,
 		udpPool:  make(map[string]*sync.Pool),
-		tcpPool: make(map[string]*sync.Pool),
+		tcpPool:  make(map[string]*sync.Pool),
 	}
 
 	// Multiple selections should rotate
@@ -54,10 +54,10 @@ func TestLoadBalancer_SelectStandaloneTarget_Fastest(t *testing.T) {
 	s2.latency = 1 * time.Millisecond
 
 	lb := &LoadBalancer{
-		servers: []*Server{s1, s2},
+		servers:  []*Server{s1, s2},
 		strategy: Fastest,
 		udpPool:  make(map[string]*sync.Pool),
-		tcpPool: make(map[string]*sync.Pool),
+		tcpPool:  make(map[string]*sync.Pool),
 	}
 
 	target, err := lb.selectStandaloneTarget()
@@ -82,7 +82,7 @@ func TestLoadBalancer_SelectStandaloneTarget_Fastest_AllUnhealthy(t *testing.T) 
 		servers:  []*Server{s1, s2},
 		strategy: Fastest,
 		udpPool:  make(map[string]*sync.Pool),
-		tcpPool: make(map[string]*sync.Pool),
+		tcpPool:  make(map[string]*sync.Pool),
 	}
 
 	target, err := lb.selectStandaloneTarget()
@@ -107,7 +107,7 @@ func TestLoadBalancer_SelectStandaloneTarget_Random(t *testing.T) {
 		},
 		strategy: Strategy(99),
 		udpPool:  make(map[string]*sync.Pool),
-		tcpPool: make(map[string]*sync.Pool),
+		tcpPool:  make(map[string]*sync.Pool),
 	}
 
 	target, err := lb.selectStandaloneTarget()
@@ -128,7 +128,7 @@ func TestLoadBalancer_SelectStandaloneTarget_NoHealthyServers(t *testing.T) {
 		servers:  []*Server{}, // empty servers list
 		strategy: Random,
 		udpPool:  make(map[string]*sync.Pool),
-		tcpPool: make(map[string]*sync.Pool),
+		tcpPool:  make(map[string]*sync.Pool),
 	}
 
 	_, err := lb.selectStandaloneTarget()
@@ -151,7 +151,7 @@ func TestLoadBalancer_SelectRandom_NoHealthyFallback(t *testing.T) {
 
 	selected := lb.selectRandom()
 	if selected == nil {
-		t.Error("expected fallback to first server even when all unhealthy")
+		t.Fatal("expected fallback to first server even when all unhealthy")
 	}
 	if selected.Address != "10.0.0.1:53" && selected.Address != "10.0.0.2:53" {
 		t.Errorf("unexpected server: %s", selected.Address)
@@ -204,7 +204,7 @@ func TestLoadBalancer_SelectFastest_NoHealthyWithLatency(t *testing.T) {
 
 	selected := lb.selectFastest()
 	if selected == nil {
-		t.Error("expected fallback server, got nil")
+		t.Fatal("expected fallback server, got nil")
 	}
 	if selected.Address != "10.0.0.1:53" {
 		t.Errorf("expected fallback to first server, got %s", selected.Address)
@@ -327,8 +327,8 @@ func TestLoadBalancer_CheckHealth_StandaloneServers(t *testing.T) {
 		servers: []*Server{
 			{Address: "198.51.100.1:53", healthy: true, Timeout: 200 * time.Millisecond},
 		},
-		udpPool:  make(map[string]*sync.Pool),
-		tcpPool: make(map[string]*sync.Pool),
+		udpPool:     make(map[string]*sync.Pool),
+		tcpPool:     make(map[string]*sync.Pool),
 		healthCheck: 30 * time.Second,
 	}
 
@@ -365,9 +365,9 @@ func TestLoadBalancer_CheckHealth_AnycastBackends(t *testing.T) {
 		anycastGroups: map[string]*AnycastGroup{
 			"192.0.2.1": group,
 		},
-		udpPool:      make(map[string]*sync.Pool),
-		tcpPool:      make(map[string]*sync.Pool),
-		healthCheck:  30 * time.Second,
+		udpPool:     make(map[string]*sync.Pool),
+		tcpPool:     make(map[string]*sync.Pool),
+		healthCheck: 30 * time.Second,
 	}
 
 	lb.checkHealth()
@@ -395,7 +395,7 @@ func TestLoadBalancer_QueryUDP_Success(t *testing.T) {
 		servers: []*Server{
 			{Address: addr, healthy: true, Timeout: 2 * time.Second},
 		},
-		udpPool:  make(map[string]*sync.Pool),
+		udpPool: make(map[string]*sync.Pool),
 		tcpPool: make(map[string]*sync.Pool),
 	}
 
@@ -466,7 +466,7 @@ func TestLoadBalancer_QueryTCP_Success(t *testing.T) {
 		servers: []*Server{
 			{Address: addr, healthy: true, Timeout: 2 * time.Second},
 		},
-		udpPool:  make(map[string]*sync.Pool),
+		udpPool: make(map[string]*sync.Pool),
 		tcpPool: make(map[string]*sync.Pool),
 	}
 
@@ -529,11 +529,11 @@ func TestServer_MarkFailure_Threshold(t *testing.T) {
 
 func TestLoadBalancer_HealthCheckLoop_ExitsOnCancel(t *testing.T) {
 	lb := &LoadBalancer{
-		servers:     []*Server{},
+		servers:       []*Server{},
 		anycastGroups: map[string]*AnycastGroup{},
-		udpPool:     make(map[string]*sync.Pool),
-		tcpPool:     make(map[string]*sync.Pool),
-		healthCheck: 30 * time.Second,
+		udpPool:       make(map[string]*sync.Pool),
+		tcpPool:       make(map[string]*sync.Pool),
+		healthCheck:   30 * time.Second,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -569,7 +569,7 @@ func TestWeightedSelect_AllZeroWeights(t *testing.T) {
 	}
 	result := weightedSelect(backends)
 	if result == nil {
-		t.Error("expected a backend even with all zero weights")
+		t.Fatal("expected a backend even with all zero weights")
 	}
 	if result.PhysicalIP != "10.0.0.1" && result.PhysicalIP != "10.0.0.2" {
 		t.Errorf("unexpected backend: %s", result.PhysicalIP)

@@ -2,12 +2,21 @@ package raft
 
 import (
 	"encoding/binary"
+	"encoding/gob"
 	"fmt"
 	"io"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
+)
+
+const (
+	msgTypeVoteRequest    uint8 = 1
+	msgTypeVoteResponse   uint8 = 2
+	msgTypeAppendRequest  uint8 = 3
+	msgTypeAppendResponse uint8 = 4
+	msgTypeSnapshot       uint8 = 5
 )
 
 // Transport is the network transport interface for Raft RPC.
@@ -130,25 +139,25 @@ func (s *RPCServer) handleConn(conn net.Conn) {
 		}
 
 		switch msgType {
-		case 1: // VoteRequest
+		case msgTypeVoteRequest:
 			var req VoteRequest
 			if err := s.readMessage(conn, &req); err != nil {
 				return
 			}
 			resp := s.handler.HandleVoteRequest(req)
-			if err := s.writeMessage(conn, 2, resp); err != nil { // VoteResponse = 2
+			if err := s.writeMessage(conn, msgTypeVoteResponse, resp); err != nil {
 				return
 			}
-		case 3: // AppendRequest
+		case msgTypeAppendRequest:
 			var req AppendRequest
 			if err := s.readMessage(conn, &req); err != nil {
 				return
 			}
 			resp := s.handler.HandleAppendRequest(req)
-			if err := s.writeMessage(conn, 4, resp); err != nil { // AppendResponse = 4
+			if err := s.writeMessage(conn, msgTypeAppendResponse, resp); err != nil {
 				return
 			}
-		case 5: // SnapshotRequest
+		case msgTypeSnapshot:
 			var req SnapshotRequest
 			if err := s.readMessage(conn, &req); err != nil {
 				return
@@ -159,16 +168,24 @@ func (s *RPCServer) handleConn(conn net.Conn) {
 }
 
 // writeMessage writes a message with type prefix.
-func (s *RPCServer) writeMessage(w io.Writer, msgType uint8, msg interface{}) error {
-	if err := binary.Write(w, binary.BigEndian, msgType); err != nil {
-		return err
-	}
-	return binary.Write(w, binary.BigEndian, msg)
+func (s *RPCServer) writeMessage(w io.Writer, msgType uint8, msg any) error {
+	return writeRPCMessage(w, msgType, msg)
 }
 
 // readMessage reads a message.
-func (s *RPCServer) readMessage(r io.Reader, msg interface{}) error {
-	return binary.Read(r, binary.BigEndian, msg)
+func (s *RPCServer) readMessage(r io.Reader, msg any) error {
+	return readRPCMessage(r, msg)
+}
+
+func writeRPCMessage(w io.Writer, msgType uint8, msg any) error {
+	if err := binary.Write(w, binary.BigEndian, msgType); err != nil {
+		return err
+	}
+	return gob.NewEncoder(w).Encode(msg)
+}
+
+func readRPCMessage(r io.Reader, msg any) error {
+	return gob.NewDecoder(r).Decode(msg)
 }
 
 // TCPTransport is a TCP-based Raft transport.
@@ -195,18 +212,20 @@ func (t *TCPTransport) SendRequestVote(peerID NodeID, req VoteRequest) (*VoteRes
 		return nil, err
 	}
 
-	if err := binary.Write(conn, binary.BigEndian, uint8(1)); err != nil {
-		return nil, err
-	}
-	if err := binary.Write(conn, binary.BigEndian, req); err != nil {
-		return nil, err
-	}
-	if err := conn.(*net.TCPConn).CloseWrite(); err != nil {
+	if err := writeRPCMessage(conn, msgTypeVoteRequest, req); err != nil {
 		return nil, err
 	}
 
+	var respType uint8
+	if err := binary.Read(conn, binary.BigEndian, &respType); err != nil {
+		return nil, err
+	}
+	if respType != msgTypeVoteResponse {
+		return nil, fmt.Errorf("unexpected vote response type: %d", respType)
+	}
+
 	var resp VoteResponse
-	if err := binary.Read(conn, binary.BigEndian, &resp); err != nil {
+	if err := readRPCMessage(conn, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -219,18 +238,20 @@ func (t *TCPTransport) SendAppendEntries(peerID NodeID, req AppendRequest) (*App
 		return nil, err
 	}
 
-	if err := binary.Write(conn, binary.BigEndian, uint8(3)); err != nil {
-		return nil, err
-	}
-	if err := binary.Write(conn, binary.BigEndian, req); err != nil {
-		return nil, err
-	}
-	if err := conn.(*net.TCPConn).CloseWrite(); err != nil {
+	if err := writeRPCMessage(conn, msgTypeAppendRequest, req); err != nil {
 		return nil, err
 	}
 
+	var respType uint8
+	if err := binary.Read(conn, binary.BigEndian, &respType); err != nil {
+		return nil, err
+	}
+	if respType != msgTypeAppendResponse {
+		return nil, fmt.Errorf("unexpected append response type: %d", respType)
+	}
+
 	var resp AppendResponse
-	if err := binary.Read(conn, binary.BigEndian, &resp); err != nil {
+	if err := readRPCMessage(conn, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -243,13 +264,7 @@ func (t *TCPTransport) SendSnapshot(peerID NodeID, req SnapshotRequest) error {
 		return err
 	}
 
-	if err := binary.Write(conn, binary.BigEndian, uint8(5)); err != nil {
-		return err
-	}
-	if err := binary.Write(conn, binary.BigEndian, req); err != nil {
-		return err
-	}
-	return conn.(*net.TCPConn).CloseWrite()
+	return writeRPCMessage(conn, msgTypeSnapshot, req)
 }
 
 // getConn gets or creates a connection to a peer.

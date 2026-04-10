@@ -90,12 +90,12 @@ func NewTCPServerWithWorkers(addr string, handler Handler, workers int) *TCPServ
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &TCPServer{
-		addr:    addr,
-		handler: &ServeDNSWithRecovery{Handler: handler},
-		workers: workers,
-		ctx:     ctx,
-		cancel:  cancel,
-		connSem: make(chan struct{}, TCPMaxConnections),
+		addr:        addr,
+		handler:     &ServeDNSWithRecovery{Handler: handler},
+		workers:     workers,
+		ctx:         ctx,
+		cancel:      cancel,
+		connSem:     make(chan struct{}, TCPMaxConnections),
 		ipConnCount: make(map[string]int),
 		responsePool: sync.Pool{
 			New: func() interface{} {
@@ -326,9 +326,9 @@ type tcpResponseWriter struct {
 	conn       net.Conn
 	client     *ClientInfo
 	maxSize    int
-	writeCount int          // Number of writes (for AXFR support)
-	server     *TCPServer   // Reference for metrics
-	writeMu    *sync.Mutex  // Serializes writes for pipelining safety
+	writeCount int         // Number of writes (for AXFR support)
+	server     *TCPServer  // Reference for metrics
+	writeMu    *sync.Mutex // Serializes writes for pipelining safety
 }
 
 func (w *tcpResponseWriter) ClientInfo() *ClientInfo {
@@ -352,16 +352,24 @@ func (w *tcpResponseWriter) Write(msg *protocol.Message) (int, error) {
 	// Try to get a buffer from the pool; fall back to allocation if too small
 	var buf []byte
 	if w.server != nil {
-		if p, ok := w.server.responsePool.Get().([]byte); ok {
-			buf = p
-		} else {
+		if pooled := w.server.responsePool.Get(); pooled != nil {
+			switch p := pooled.(type) {
+			case []byte:
+				buf = p
+			case *[]byte:
+				if p != nil {
+					buf = *p
+				}
+			}
+		}
+		if buf == nil {
 			buf = make([]byte, estimated)
 		}
 		if cap(buf) < estimated {
 			// Pool buffer too small — allocate fresh and don't return to pool
 			buf = make([]byte, estimated)
 		} else {
-			defer w.server.responsePool.Put(buf)
+			defer w.server.responsePool.Put(&buf)
 		}
 	} else {
 		buf = make([]byte, estimated)

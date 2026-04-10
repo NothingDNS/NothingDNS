@@ -569,19 +569,21 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
 
-		// If allowed_origins is empty, allow all (backward compatible default)
-		// If allowed_origins contains "*", allow all origins
-		// Otherwise validate against the explicit list
+		// If allowed_origins is empty, allow same-origin requests only
+		// (cross-origin requests receive no CORS allow header).
+		// If allowed_origins contains "*", allow all origins.
+		// Otherwise validate against the explicit list.
 		allowedOrigins := s.config.AllowedOrigins
 		allowOrigin := ""
-		if len(allowedOrigins) == 0 {
-			// Default: allow all when no explicit origins configured
-			// (backward compatible - sets * for browsers, origin for programmatic clients)
+		allowAllOrigins := false
+		for _, allowed := range allowedOrigins {
+			if allowed == "*" {
+				allowAllOrigins = true
+				break
+			}
+		}
+		if allowAllOrigins {
 			allowOrigin = "*"
-		} else if len(allowedOrigins) == 1 && allowedOrigins[0] == "*" {
-			// Reject wildcard - insecure when credentials are involved.
-			// No CORS header = browser blocks credentialed cross-origin requests.
-			allowOrigin = ""
 		} else if origin != "" && isOriginAllowed(origin, allowedOrigins) {
 			allowOrigin = origin
 		}
@@ -595,7 +597,7 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
 		if r.Method == "OPTIONS" {
-			if allowOrigin == "" && origin != "" && len(allowedOrigins) > 0 {
+			if allowOrigin == "" && origin != "" {
 				// Origin was present but not allowed — reject preflight
 				http.Error(w, "origin not allowed", http.StatusForbidden)
 				return

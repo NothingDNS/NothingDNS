@@ -351,9 +351,17 @@ func (c *Client) queryUDP(server *Server, msg *protocol.Message) (*protocol.Mess
 	var buf []byte
 	var putBack func()
 	if pool != nil {
-		if p, ok := pool.Get().([]byte); ok {
-			buf = p
-		} else {
+		if pooled := pool.Get(); pooled != nil {
+			switch p := pooled.(type) {
+			case []byte:
+				buf = p
+			case *[]byte:
+				if p != nil {
+					buf = *p
+				}
+			}
+		}
+		if buf == nil {
 			buf = make([]byte, 4096)
 		}
 		putBack = func() {
@@ -361,7 +369,7 @@ func (c *Client) queryUDP(server *Server, msg *protocol.Message) (*protocol.Mess
 			for i := range buf {
 				buf[i] = 0
 			}
-			pool.Put(buf)
+			pool.Put(&buf)
 		}
 	} else {
 		buf = make([]byte, 4096)
@@ -431,9 +439,17 @@ func (c *Client) queryTCP(server *Server, msg *protocol.Message) (*protocol.Mess
 	var buf []byte
 	var putBack func()
 	if pool != nil {
-		if p, ok := pool.Get().([]byte); ok {
-			buf = p
-		} else {
+		if pooled := pool.Get(); pooled != nil {
+			switch p := pooled.(type) {
+			case []byte:
+				buf = p
+			case *[]byte:
+				if p != nil {
+					buf = *p
+				}
+			}
+		}
+		if buf == nil {
 			buf = make([]byte, 65535)
 		}
 		putBack = func() {
@@ -441,7 +457,7 @@ func (c *Client) queryTCP(server *Server, msg *protocol.Message) (*protocol.Mess
 			for i := range buf {
 				buf[i] = 0
 			}
-			pool.Put(buf)
+			pool.Put(&buf)
 		}
 	} else {
 		buf = make([]byte, 65535)

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -22,10 +23,10 @@ import (
 
 // ChaosConfig holds configuration for chaos tests
 type ChaosConfig struct {
-	NumQueries     int           // Number of concurrent queries
-	Timeout        time.Duration // Query timeout
-	FailureRate    float64       // Simulated failure rate (0.0-1.0)
-	NetworkLoss    float64       // Simulated packet loss (0.0-1.0)
+	NumQueries  int           // Number of concurrent queries
+	Timeout     time.Duration // Query timeout
+	FailureRate float64       // Simulated failure rate (0.0-1.0)
+	NetworkLoss float64       // Simulated packet loss (0.0-1.0)
 }
 
 // Stats holds chaos test statistics
@@ -38,15 +39,23 @@ type Stats struct {
 	Latencies  []time.Duration
 }
 
-// TestNetworkPartition tests behavior during network partition
-// TODO: re-enable when chaos injection is properly implemented
-func TestNetworkPartition(t *testing.T) {
+func requireChaosInjection(t *testing.T) {
+	t.Helper()
 	if testing.Short() {
 		t.Skip("skipping in short mode - requires chaos injection setup")
 	}
+	if os.Getenv("NOTHINGDNS_CHAOS") != "1" {
+		t.Skip("skipping chaos test by default; set NOTHINGDNS_CHAOS=1 to enable")
+	}
+}
+
+// TestNetworkPartition tests behavior during network partition
+// TODO: re-enable when chaos injection is properly implemented
+func TestNetworkPartition(t *testing.T) {
+	requireChaosInjection(t)
 	cfg := &ChaosConfig{
 		NumQueries:  100,
-		Timeout:    100 * time.Millisecond,
+		Timeout:     100 * time.Millisecond,
 		FailureRate: 0.1,
 		NetworkLoss: 0.05,
 	}
@@ -66,9 +75,7 @@ func TestNetworkPartition(t *testing.T) {
 // TestGracefulShutdown tests server shutdown under load
 // TODO: re-enable when chaos injection is properly implemented
 func TestGracefulShutdown(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping in short mode - requires chaos injection setup")
-	}
+	requireChaosInjection(t)
 	z := createTestZone(t, "chaos.test.")
 	h := &chaosHandler{zones: map[string]*zone.Zone{"chaos.test.": z}}
 
@@ -133,12 +140,10 @@ func TestGracefulShutdown(t *testing.T) {
 // TestConcurrentLoad tests behavior under high concurrent load
 // TODO: re-enable when chaos injection is properly implemented
 func TestConcurrentLoad(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping in short mode - requires chaos injection setup")
-	}
+	requireChaosInjection(t)
 	cfg := &ChaosConfig{
 		NumQueries:  500,
-		Timeout:    200 * time.Millisecond,
+		Timeout:     200 * time.Millisecond,
 		FailureRate: 0.01,
 	}
 
@@ -250,9 +255,7 @@ func TestPanicRecovery(t *testing.T) {
 // TestConnectionExhaustion tests behavior when connections are exhausted
 // TODO: re-enable when chaos injection is properly implemented
 func TestConnectionExhaustion(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping in short mode - requires chaos injection setup")
-	}
+	requireChaosInjection(t)
 	z := createTestZone(t, "conn.test.")
 	h := &chaosHandler{zones: map[string]*zone.Zone{"conn.test.": z}}
 
@@ -304,7 +307,7 @@ func TestConnectionExhaustion(t *testing.T) {
 func TestUDPPacketLoss(t *testing.T) {
 	cfg := &ChaosConfig{
 		NumQueries:  100,
-		Timeout:    100 * time.Millisecond,
+		Timeout:     100 * time.Millisecond,
 		NetworkLoss: 0.1, // 10% loss
 	}
 

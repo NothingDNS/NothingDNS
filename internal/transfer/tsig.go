@@ -81,10 +81,10 @@ type TSIGRecord struct {
 // During rotation, both the old and new keys are valid, allowing
 // seamless transitions without downtime.
 type KeyStore struct {
-	keys       map[string]*TSIGKey // keyed by key name
-	previous   *TSIGKey            // previous key for rotation grace period
-	rotatedAt  time.Time           // when the last rotation occurred
-	mu         sync.RWMutex
+	keys      map[string]*TSIGKey // keyed by key name
+	previous  *TSIGKey            // previous key for rotation grace period
+	rotatedAt time.Time           // when the last rotation occurred
+	mu        sync.RWMutex
 }
 
 // NewKeyStore creates a new TSIG key store
@@ -258,8 +258,7 @@ func UnpackTSIGRecord(data []byte, offset int) (*TSIGRecord, int, error) {
 	if len(data) < n+6 {
 		return nil, 0, fmt.Errorf("insufficient data for time signed")
 	}
-	var timeSigned uint64
-	timeSigned = uint64(data[n])<<40 | uint64(data[n+1])<<32 |
+	timeSigned := uint64(data[n])<<40 | uint64(data[n+1])<<32 |
 		uint64(data[n+2])<<24 | uint64(data[n+3])<<16 |
 		uint64(data[n+4])<<8 | uint64(data[n+5])
 	ts.TimeSigned = time.Unix(int64(timeSigned), 0)

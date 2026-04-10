@@ -1041,10 +1041,11 @@ func TestCorsMiddleware(t *testing.T) {
 		}
 	})
 
-	t.Run("CORS headers are set", func(t *testing.T) {
+	t.Run("CORS headers are set when wildcard is configured", func(t *testing.T) {
 		cfg := config.HTTPConfig{
-			Enabled: true,
-			Bind:    "127.0.0.1:0",
+			Enabled:        true,
+			Bind:           "127.0.0.1:0",
+			AllowedOrigins: []string{"*"},
 		}
 		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
 
@@ -1067,6 +1068,73 @@ func TestCorsMiddleware(t *testing.T) {
 
 		if rec.Header().Get("Access-Control-Allow-Headers") != "Content-Type, Authorization" {
 			t.Errorf("Unexpected Access-Control-Allow-Headers: %v", rec.Header().Get("Access-Control-Allow-Headers"))
+		}
+	})
+
+	t.Run("CORS headers are not set by default", func(t *testing.T) {
+		cfg := config.HTTPConfig{
+			Enabled: true,
+			Bind:    "127.0.0.1:0",
+		}
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+
+		testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
+		req.Header.Set("Origin", "https://evil.example")
+		rec := httptest.NewRecorder()
+
+		server.corsMiddleware(testHandler).ServeHTTP(rec, req)
+
+		if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+			t.Errorf("Expected no Access-Control-Allow-Origin header, got %q", got)
+		}
+	})
+
+	t.Run("CORS allowlist reflects allowed origin", func(t *testing.T) {
+		cfg := config.HTTPConfig{
+			Enabled:        true,
+			Bind:           "127.0.0.1:0",
+			AllowedOrigins: []string{"https://app.example"},
+		}
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+
+		testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
+		req.Header.Set("Origin", "https://app.example")
+		rec := httptest.NewRecorder()
+
+		server.corsMiddleware(testHandler).ServeHTTP(rec, req)
+
+		if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "https://app.example" {
+			t.Errorf("Expected Access-Control-Allow-Origin to match request origin, got %q", got)
+		}
+	})
+
+	t.Run("Disallowed preflight request is rejected", func(t *testing.T) {
+		cfg := config.HTTPConfig{
+			Enabled: true,
+			Bind:    "127.0.0.1:0",
+		}
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+
+		testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Fatal("handler should not be called for OPTIONS preflight")
+		})
+
+		req := httptest.NewRequest(http.MethodOptions, "/api/v1/status", nil)
+		req.Header.Set("Origin", "https://evil.example")
+		rec := httptest.NewRecorder()
+
+		server.corsMiddleware(testHandler).ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("Expected status %d, got %d", http.StatusForbidden, rec.Code)
 		}
 	})
 
@@ -1311,9 +1379,10 @@ func TestStartStop(t *testing.T) {
 func TestMiddlewareChain(t *testing.T) {
 	t.Run("CORS headers present even with auth failure", func(t *testing.T) {
 		cfg := config.HTTPConfig{
-			Enabled:   true,
-			Bind:      "127.0.0.1:18094",
-			AuthToken: "secret",
+			Enabled:        true,
+			Bind:           "127.0.0.1:18094",
+			AuthToken:      "secret",
+			AllowedOrigins: []string{"*"},
 		}
 
 		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
@@ -1526,9 +1595,10 @@ func TestErrorResponseFormat(t *testing.T) {
 // TestOptionsPreflight tests CORS preflight requests
 func TestOptionsPreflight(t *testing.T) {
 	cfg := config.HTTPConfig{
-		Enabled:   true,
-		AuthToken: "test-token",
-		Bind:      "127.0.0.1:18098",
+		Enabled:        true,
+		AuthToken:      "test-token",
+		Bind:           "127.0.0.1:18098",
+		AllowedOrigins: []string{"https://console.example"},
 	}
 
 	server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
@@ -1546,6 +1616,7 @@ func TestOptionsPreflight(t *testing.T) {
 
 	for _, endpoint := range endpoints {
 		req, _ := http.NewRequest(http.MethodOptions, "http://127.0.0.1:18098"+endpoint, nil)
+		req.Header.Set("Origin", "https://console.example")
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatalf("OPTIONS request to %s failed: %v", endpoint, err)
@@ -1557,8 +1628,8 @@ func TestOptionsPreflight(t *testing.T) {
 		}
 
 		// Verify CORS headers
-		if resp.Header.Get("Access-Control-Allow-Origin") != "*" {
-			t.Errorf("Missing Access-Control-Allow-Origin for %s", endpoint)
+		if resp.Header.Get("Access-Control-Allow-Origin") != "https://console.example" {
+			t.Errorf("Unexpected Access-Control-Allow-Origin for %s: %q", endpoint, resp.Header.Get("Access-Control-Allow-Origin"))
 		}
 	}
 }

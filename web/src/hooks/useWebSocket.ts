@@ -21,9 +21,7 @@ export function useWebSocket(path: string, opts: UseWebSocketOpts = {}) {
     const connect = () => {
       if (cancelled) return;
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const token = document.cookie.match(/ndns_token=([^;]+)/)?.[1];
-      let url = `${proto}//${location.host}${path}`;
-      if (token) url += `?token=${encodeURIComponent(token)}`;
+      const url = `${proto}//${location.host}${path}`;
 
       const ws = new WebSocket(url);
       wsRef.current = ws;

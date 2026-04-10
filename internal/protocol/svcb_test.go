@@ -169,8 +169,7 @@ func TestRDataSVCBRoundTrip(t *testing.T) {
 				if unpacked.Target == nil {
 					t.Fatal("Target is nil after unpack")
 				}
-				// Compare lowercased since packing lowercases labels
-				if strings.ToLower(tt.svcb.Target.String()) != strings.ToLower(unpacked.Target.String()) {
+				if !strings.EqualFold(tt.svcb.Target.String(), unpacked.Target.String()) {
 					t.Errorf("Target mismatch: got %q, want %q", unpacked.Target.String(), tt.svcb.Target.String())
 				}
 			}
@@ -304,7 +303,7 @@ func TestRDataHTTPSRoundTrip(t *testing.T) {
 				if unpacked.Target == nil {
 					t.Fatal("Target is nil after unpack")
 				}
-				if strings.ToLower(tt.https.Target.String()) != strings.ToLower(unpacked.Target.String()) {
+				if !strings.EqualFold(tt.https.Target.String(), unpacked.Target.String()) {
 					t.Errorf("Target mismatch: got %q, want %q", unpacked.Target.String(), tt.https.Target.String())
 				}
 			}

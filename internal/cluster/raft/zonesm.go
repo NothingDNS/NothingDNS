@@ -8,20 +8,20 @@ import (
 
 // ZoneCommand represents a zone mutation command.
 type ZoneCommand struct {
-	Type      string          `json:"type"` // "add_record", "del_record", "update_record", "delete_zone"
-	Zone      string          `json:"zone"`
-	Name      string          `json:"name,omitempty"`
-	RRType    uint16          `json:"rrtype,omitempty"`
-	TTL       uint32          `json:"ttl,omitempty"`
-	RData     []string        `json:"rdata,omitempty"`
-	Priority  int             `json:"priority,omitempty"`
-	Metadata  json.RawMessage `json:"metadata,omitempty"`
+	Type     string          `json:"type"` // "add_record", "del_record", "update_record", "delete_zone"
+	Zone     string          `json:"zone"`
+	Name     string          `json:"name,omitempty"`
+	RRType   uint16          `json:"rrtype,omitempty"`
+	TTL      uint32          `json:"ttl,omitempty"`
+	RData    []string        `json:"rdata,omitempty"`
+	Priority int             `json:"priority,omitempty"`
+	Metadata json.RawMessage `json:"metadata,omitempty"`
 }
 
 // ZoneStateMachine is the state machine that applies Raft log entries to zone data.
 type ZoneStateMachine struct {
-	mu     sync.RWMutex
-	zones  map[string]*ZoneData
+	mu       sync.RWMutex
+	zones    map[string]*ZoneData
 	onUpdate func(zone string, cmd ZoneCommand)
 }
 
@@ -140,9 +140,7 @@ func (z *ZoneStateMachine) updateRecord(cmd ZoneCommand) error {
 }
 
 func (z *ZoneStateMachine) deleteZone(cmd ZoneCommand) error {
-	if _, ok := z.zones[cmd.Zone]; ok {
-		delete(z.zones, cmd.Zone)
-	}
+	delete(z.zones, cmd.Zone)
 	return nil
 }
 

@@ -28,8 +28,8 @@ type AXFRRequest struct {
 //   2. All zone records in canonical order
 //   3. SOA record (end)
 type AXFRResponse struct {
-	ZoneName string
-	Records  []*protocol.ResourceRecord
+	ZoneName  string
+	Records   []*protocol.ResourceRecord
 	SOASerial uint32
 }
 
@@ -37,10 +37,10 @@ type AXFRResponse struct {
 // RFC 5936 - DNS Zone Transfer Protocol
 // AXFR must use TCP (RFC 5936 Section 4.1)
 type AXFRServer struct {
-	zones       map[string]*zone.Zone  // zone name -> zone
-	zonesMu     *sync.RWMutex          // protects zones map (can be shared externally)
-	keyStore    *KeyStore              // TSIG keys for authentication
-	allowList   []net.IPNet            // Allowed client networks
+	zones     map[string]*zone.Zone // zone name -> zone
+	zonesMu   *sync.RWMutex         // protects zones map (can be shared externally)
+	keyStore  *KeyStore             // TSIG keys for authentication
+	allowList []net.IPNet           // Allowed client networks
 }
 
 // AXFRServerOption configures the AXFR server
@@ -109,7 +109,7 @@ func (s *AXFRServer) RemoveZone(zoneName string) {
 
 // IsAllowed checks if a client IP is allowed to request AXFR
 func (s *AXFRServer) IsAllowed(clientIP net.IP) bool {
-	if s.allowList == nil || len(s.allowList) == 0 {
+	if len(s.allowList) == 0 {
 		return true // Allow all if no list configured
 	}
 	for _, network := range s.allowList {
@@ -153,7 +153,7 @@ func (s *AXFRServer) HandleAXFR(req *protocol.Message, clientIP net.IP) ([]*prot
 	// - No allow list is configured (secure by default: require TSIG for external access)
 	// - keyStore has keys configured
 	// This ensures zone transfers are protected even without IP-based ACLs.
-	hasAllowList := s.allowList != nil && len(s.allowList) > 0
+	hasAllowList := len(s.allowList) > 0
 	var tsigKey *TSIGKey
 
 	if s.keyStore != nil && s.keyStore.HasKeys() {
@@ -307,7 +307,7 @@ func parseRData(rrtype uint16, rdataStr, origin string) (protocol.RData, error) 
 		}
 		ipv4 := ip.To4()
 		if ipv4 == nil {
-			return nil, fmt.Errorf("A record requires IPv4 address, got: %s", rdataStr)
+			return nil, fmt.Errorf("a record requires IPv4 address, got: %s", rdataStr)
 		}
 		var addr [4]byte
 		copy(addr[:], ipv4)
@@ -438,9 +438,9 @@ func canonicalName(name string) string {
 // AXFRClient represents an AXFR client
 // Can request zone transfers from remote servers
 type AXFRClient struct {
-	server    string        // Server address (host:port)
-	keyStore  *KeyStore     // TSIG keys for authentication
-	timeout   time.Duration // Connection timeout
+	server   string        // Server address (host:port)
+	keyStore *KeyStore     // TSIG keys for authentication
+	timeout  time.Duration // Connection timeout
 }
 
 // AXFROption configures the AXFR client

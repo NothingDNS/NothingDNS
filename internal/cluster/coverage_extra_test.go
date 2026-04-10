@@ -265,16 +265,9 @@ func TestGossipProtocol_Join_EncodePayloadError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestEncodeMessage_Error(t *testing.T) {
-	// Encode a message with an unencodable type by using json directly
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	ch := make(chan int)
-	err := enc.Encode(ch)
-	if err == nil {
-		t.Error("json.Encode should fail for channel type")
-	}
-
-	// Verify encodeMessage works with valid data
+	// Verify encodeMessage works with valid data.
+	// The error branch of encodeMessage is practically unreachable because
+	// Message contains only JSON-encodable fields.
 	data, err := encodeMessage(MessageTypePing, []byte("test"))
 	if err != nil {
 		t.Errorf("encodeMessage() with valid payload should succeed, got: %v", err)

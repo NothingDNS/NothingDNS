@@ -8,25 +8,25 @@ import (
 
 // ClusterIntegration integrates Raft consensus into the cluster.
 type ClusterIntegration struct {
-	node           *Node
-	stateMachine   *ZoneStateMachine
-	transport      *TCPTransport
-	rpcServer      *RPCServer
-	wal            *WAL
-	snapshotter    *Snapshotter
+	node         *Node
+	stateMachine *ZoneStateMachine
+	transport    *TCPTransport
+	rpcServer    *RPCServer
+	wal          *WAL
+	snapshotter  *Snapshotter
 
 	// Configuration
-	config         Config
-	nodeID         NodeID
-	peers          []NodeID
+	config Config
+	nodeID NodeID
+	peers  []NodeID
 
 	// Leadership tracking
-	mu            sync.RWMutex
-	isLeader      bool
-	currentTerm   Term
+	mu          sync.RWMutex
+	isLeader    bool
+	currentTerm Term
 
 	// Applied index tracking
-	appliedIndex   Index
+	appliedIndex    Index
 	lastAppliedTerm Term
 
 	stopCh chan struct{}
@@ -64,9 +64,7 @@ func NewClusterIntegration(nodeID NodeID, peers []NodeID, addr string, dataDir s
 	// Load WAL entries into node
 	if entries, err := wal.ReadAll(); err == nil && len(entries) > 0 {
 		// Replay entries into node's log
-		for _, e := range entries {
-			node.log = append(node.log, e)
-		}
+		node.log = append(node.log, entries...)
 	}
 
 	// Create snapshotter
@@ -217,23 +215,23 @@ func (ci *ClusterIntegration) Stats() ClusterStats {
 	ci.node.mu.Unlock()
 
 	return ClusterStats{
-		NodeID:      ci.nodeID,
-		State:       state.String(),
-		Term:        int64(term),
-		CommitIndex: int64(commitIdx),
+		NodeID:       ci.nodeID,
+		State:        state.String(),
+		Term:         int64(term),
+		CommitIndex:  int64(commitIdx),
 		AppliedIndex: int64(ci.appliedIndex),
-		IsLeader:    isLeader,
+		IsLeader:     isLeader,
 	}
 }
 
 // ClusterStats contains cluster statistics.
 type ClusterStats struct {
-	NodeID      NodeID
-	State       string
-	Term        int64
-	CommitIndex int64
+	NodeID       NodeID
+	State        string
+	Term         int64
+	CommitIndex  int64
 	AppliedIndex int64
-	IsLeader    bool
+	IsLeader     bool
 }
 
 // ProposeAddRecord proposes adding a record to a zone.

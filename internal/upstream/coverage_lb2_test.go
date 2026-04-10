@@ -249,7 +249,7 @@ func TestLB_QueryWithFailover_PrimaryAndFailoverBothFail(t *testing.T) {
 	// Create two servers that will fail to connect
 	s1 := &Server{Address: "127.0.0.1:1", healthy: true, Timeout: 100 * time.Millisecond}
 	s2 := &Server{Address: "127.0.0.1:2", healthy: true, Timeout: 100 * time.Millisecond}
-	s1.latency = 1 * time.Nanosecond  // Very low latency so Fastest picks s1 as failover
+	s1.latency = 1 * time.Nanosecond    // Very low latency so Fastest picks s1 as failover
 	s2.latency = 100 * time.Millisecond // Higher latency
 
 	lb := &LoadBalancer{
@@ -893,7 +893,7 @@ func TestAnycastGroup_GetActiveBackend_InvalidIndex(t *testing.T) {
 
 	result := group.GetActiveBackend()
 	if result == nil {
-		t.Error("expected non-nil backend after index reset")
+		t.Fatal("expected non-nil backend after index reset")
 	}
 	if result.PhysicalIP != "10.0.0.1" {
 		t.Errorf("expected 10.0.0.1, got %s", result.PhysicalIP)

@@ -162,9 +162,7 @@ func buildCanonicalRRset(name string, rtype uint16, rdataList [][]byte) []byte {
 // canonicalName returns the canonical wire format of a domain name.
 func canonicalName(name string) []byte {
 	// Remove trailing dot if present
-	if strings.HasSuffix(name, ".") {
-		name = name[:len(name)-1]
-	}
+	name = strings.TrimSuffix(name, ".")
 
 	var result []byte
 	labels := strings.Split(name, ".")

@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "security-check": {
+      "source": "ersinkoc/security-check",
+      "sourceType": "github",
+      "computedHash": "05dda32d4ed08648749be9aaf134e135f58e5610864c1f19491c3cdb07523f2e"
+    }
+  }
+}

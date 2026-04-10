@@ -1018,7 +1018,7 @@ func parseRDataFromZone(rrtype uint16, rdata, origin string) (protocol.RData, er
 		}
 		ipv4 := ip.To4()
 		if ipv4 == nil {
-			return nil, fmt.Errorf("A record requires IPv4 address")
+			return nil, fmt.Errorf("a record requires IPv4 address")
 		}
 		var addr [4]byte
 		copy(addr[:], ipv4)

@@ -30,7 +30,7 @@ func (w *captureWriter) Write(msg *protocol.Message) (int, error) {
 	return 0, nil
 }
 func (w *captureWriter) ClientInfo() *server.ClientInfo { return w.client }
-func (w *captureWriter) MaxSize() int                    { return 4096 }
+func (w *captureWriter) MaxSize() int                   { return 4096 }
 
 func newCaptureWriter(ip string, proto string) *captureWriter {
 	return &captureWriter{
@@ -43,11 +43,11 @@ func newCaptureWriter(ip string, proto string) *captureWriter {
 
 func newTestHandler() *integratedHandler {
 	return &integratedHandler{
-		config:   config.DefaultConfig(),
-		logger:   util.NewLogger(util.ERROR, util.TextFormat, nil),
-		cache:    cache.New(cache.Config{Capacity: 100, DefaultTTL: 60 * time.Second, MinTTL: time.Second, MaxTTL: 300 * time.Second}),
-		metrics:  metrics.New(metrics.Config{Enabled: true}),
-		zones:    make(map[string]*zone.Zone),
+		config:  config.DefaultConfig(),
+		logger:  util.NewLogger(util.ERROR, util.TextFormat, nil),
+		cache:   cache.New(cache.Config{Capacity: 100, DefaultTTL: 60 * time.Second, MinTTL: time.Second, MaxTTL: 300 * time.Second}),
+		metrics: metrics.New(metrics.Config{Enabled: true}),
+		zones:   make(map[string]*zone.Zone),
 	}
 }
 
@@ -881,7 +881,7 @@ func TestMinimizeResponse_NonAuthoritativeStripsUnrelated(t *testing.T) {
 	minimizeResponse(resp)
 
 	// No NS or SOA: entire authority section stripped.
-	if resp.Authorities != nil && len(resp.Authorities) != 0 {
+	if len(resp.Authorities) != 0 {
 		t.Fatalf("expected nil/empty authority, got %d records", len(resp.Authorities))
 	}
 }

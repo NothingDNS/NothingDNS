@@ -3,6 +3,7 @@ package raft
 import (
 	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"sync"
@@ -67,7 +68,7 @@ func (w *WAL) ReadAll() ([]entry, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	if _, err := w.logFile.Seek(0, os.SEEK_SET); err != nil {
+	if _, err := w.logFile.Seek(0, io.SeekStart); err != nil {
 		return nil, err
 	}
 

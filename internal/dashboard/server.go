@@ -253,10 +253,6 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	token := r.Header.Get("Authorization")
 	token = strings.TrimPrefix(token, "Bearer ")
 	if token == "" {
-		// Try query parameter fallback
-		token = r.URL.Query().Get("token")
-	}
-	if token == "" {
 		if c, err := r.Cookie("ndns_token"); err == nil {
 			token = c.Value
 		}
