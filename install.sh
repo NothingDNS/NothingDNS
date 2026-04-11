@@ -11,6 +11,7 @@ INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/nothingdns"
 CONFIG_FILE="${CONFIG_DIR}/config.yaml"
 BINARY_NAME="nothingdns"
+SKIP_DOWNLOAD=false
 
 # Colors
 RED='\033[0;31m'
@@ -116,8 +117,50 @@ get_latest_version() {
     info "Latest version: ${LATEST_VERSION}"
 }
 
+# Check if NothingDNS is already installed
+check_existing_install() {
+    if [ -f "${INSTALL_DIR}/${BINARY_NAME}" ]; then
+        local current_version=$("${INSTALL_DIR}/${BINARY_NAME}" --version 2>/dev/null | head -1 || echo "unknown")
+        info "NothingDNS already installed: ${current_version}"
+        info "Latest release: ${LATEST_VERSION}"
+
+        if [ "$current_version" = "v${LATEST_VERSION}" ] || [ "$current_version" = "${LATEST_VERSION}" ]; then
+            info "NothingDNS is up to date!"
+            echo ""
+            echo "  1) Reinstall anyway"
+            echo "  2) Skip download (use existing)"
+            echo "  3) Exit"
+            echo ""
+            read -p "Select [2]: " -n 1 -r; echo
+            case "$REPLY" in
+                1) info "Reinstalling..." ;;
+                3) info "Nothing to do. Exiting."; exit 0 ;;
+                *) info "Using existing installation."; SKIP_DOWNLOAD=true ;;
+            esac
+        else
+            echo ""
+            echo "A newer version is available."
+            echo "  1) Upgrade to ${LATEST_VERSION}"
+            echo "  2) Keep current version"
+            echo "  3) Exit"
+            echo ""
+            read -p "Select [1]: " -n 1 -r; echo
+            case "$REPLY" in
+                2) info "Keeping current version."; SKIP_DOWNLOAD=true ;;
+                3) info "Exiting."; exit 0 ;;
+                *) info "Upgrading to ${LATEST_VERSION}..." ;;
+            esac
+        fi
+    fi
+}
+
 # Download binary
 download_binary() {
+    if [ "${SKIP_DOWNLOAD}" = true ]; then
+        info "Skipping download (using existing installation)"
+        return
+    fi
+
     DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST_VERSION}/${BINARY_NAME}-${PLATFORM}"
     info "Downloading from ${DOWNLOAD_URL}..."
 
@@ -138,6 +181,11 @@ download_binary() {
 
 # Download dnsctl (CLI tool)
 download_dnsctl() {
+    if [ "${SKIP_DOWNLOAD}" = true ]; then
+        info "Skipping dnsctl download"
+        return
+    fi
+
     DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST_VERSION}/dnsctl-${PLATFORM}"
     info "Downloading dnsctl..."
 
