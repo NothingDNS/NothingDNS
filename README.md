@@ -4,7 +4,7 @@
   <img src="assets/banner.jpeg" alt="NothingDNS" width="100%">
 </p>
 
-[![Go Version](https://img.shields.io/badge/Go-1.23%2B-00ADD8?style=flat&logo=go)](https://golang.org)
+[![Go Version](https://img.shields.io/badge/Go-1.25%2B-00ADD8?style=flat&logo=go)](https://golang.org)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Go Report Card](https://goreportcard.com/badge/github.com/nothingdns/nothingdns)](https://goreportcard.com/report/github.com/nothingdns/nothingdns)
 
@@ -69,9 +69,31 @@ A zero-dependency DNS server written in pure Go. NothingDNS is designed to be li
 - **Audit Logging** - Structured query audit trail with client IP, latency, and cache status
 - **Management CLI** - `dnsctl` tool for zone and server management
 
-## Quick Start
+## Installation
 
-### Build
+### Quick Install
+
+```bash
+# Linux/macOS
+curl -fsSL https://raw.githubusercontent.com/NothingDNS/NothingDNS/main/install.sh | bash
+
+# Windows (PowerShell as Admin)
+irm https://raw.githubusercontent.com/NothingDNS/NothingDNS/main/install.ps1 | iex
+```
+
+### Manual Download
+
+Download binaries from the [latest release](https://github.com/NothingDNS/NothingDNS/releases/latest):
+
+| Platform | Binary |
+|----------|--------|
+| Linux amd64 | `nothingdns-linux-amd64` |
+| Linux arm64 | `nothingdns-linux-arm64` |
+| macOS amd64 | `nothingdns-darwin-amd64` |
+| macOS arm64 | `nothingdns-darwin-arm64` |
+| Windows | `nothingdns-windows-amd64.exe` |
+
+### Build from Source
 
 ```bash
 # Build the server
@@ -88,7 +110,7 @@ go build -o dnsctl ./cmd/dnsctl
 ./nothingdns
 
 # Start with custom config
-./nothingdns -config /path/to/config.yaml
+./nothingdns --config /path/to/config.yaml
 ```
 
 ### Test
