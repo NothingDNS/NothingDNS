@@ -228,9 +228,9 @@ func TestHandleZones(t *testing.T) {
 		t.Fatalf("Failed to parse response: %v", err)
 	}
 
-	// Should have at least one zone (placeholder)
-	if len(zones) < 1 {
-		t.Error("Expected at least one zone")
+	// With no zone manager set, should return empty array
+	if len(zones) != 0 {
+		t.Errorf("Expected empty zones array without zone manager, got %d zones", len(zones))
 	}
 }
 

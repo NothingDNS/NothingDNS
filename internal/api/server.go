@@ -1431,7 +1431,9 @@ func (s *Server) handleExportZone(w http.ResponseWriter, _ *http.Request, zoneNa
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.zone", strings.TrimSuffix(zoneName, ".")))
-	w.Write([]byte(content))
+	if _, err := w.Write([]byte(content)); err != nil {
+		util.Warnf("api: failed to write zone export: %v", err)
+	}
 }
 
 // handleBulkPTR handles bulk PTR record creation with CIDR pattern.

@@ -2,6 +2,7 @@
 package dashboard
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -11,18 +12,26 @@ import (
 	"github.com/nothingdns/nothingdns/internal/auth"
 	"github.com/nothingdns/nothingdns/internal/util"
 	"github.com/nothingdns/nothingdns/internal/websocket"
+	"github.com/nothingdns/nothingdns/internal/zone"
 )
 
 // Server implements the web dashboard server
 type Server struct {
-	mu             sync.RWMutex
-	clients        map[*Client]struct{}
-	broadcastChan  chan *QueryEvent
-	stats          *DashboardStats
-	enabled        bool
-	wg             sync.WaitGroup
-	allowedOrigins []string // Allowed CORS origins for WebSocket
-	authStore      *auth.Store
+	mu              sync.RWMutex
+	clients         map[*Client]struct{}
+	broadcastChan   chan *QueryEvent
+	stats           *DashboardStats
+	enabled         bool
+	wg              sync.WaitGroup
+	allowedOrigins  []string // Allowed CORS origins for WebSocket
+	authStore       *auth.Store
+	authToken       string    // Legacy token-only auth fallback
+	zoneManager     *zone.Manager
+}
+
+// secureCompare performs constant-time comparison to prevent timing attacks
+func secureCompare(a, b string) bool {
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
 // MaxWebSocketClients is the maximum number of concurrent WebSocket connections.
@@ -163,6 +172,13 @@ func NewServer() *Server {
 	return s
 }
 
+// SetZoneManager sets the zone manager for the dashboard server.
+func (s *Server) SetZoneManager(zm *zone.Manager) {
+	s.mu.Lock()
+	s.zoneManager = zm
+	s.mu.Unlock()
+}
+
 // SetAllowedOrigins sets the allowed CORS origins for WebSocket connections.
 func (s *Server) SetAllowedOrigins(origins []string) {
 	s.mu.Lock()
@@ -174,6 +190,13 @@ func (s *Server) SetAllowedOrigins(origins []string) {
 func (s *Server) SetAuthStore(store *auth.Store) {
 	s.mu.Lock()
 	s.authStore = store
+	s.mu.Unlock()
+}
+
+// SetAuthToken sets the legacy token for token-only authentication fallback.
+func (s *Server) SetAuthToken(token string) {
+	s.mu.Lock()
+	s.authToken = token
 	s.mu.Unlock()
 }
 
@@ -232,10 +255,26 @@ func (s *Server) handleQueryStream(w http.ResponseWriter, r *http.Request) {
 
 // handleZones handles zone list requests
 func (s *Server) handleZones(w http.ResponseWriter, r *http.Request) {
-	// This would typically fetch from zone manager
-	zones := []ZoneAPIEntry{
-		{Name: "example.com", Records: 15, Serial: 2024032601},
+	s.mu.RLock()
+	zm := s.zoneManager
+	s.mu.RUnlock()
+
+	zones := []ZoneAPIEntry{}
+
+	if zm != nil {
+		for name, z := range zm.List() {
+			serial := int64(0)
+			if z.SOA != nil {
+				serial = int64(z.SOA.Serial)
+			}
+			zones = append(zones, ZoneAPIEntry{
+				Name:    name,
+				Records: len(z.Records),
+				Serial:  int(serial),
+			})
+		}
 	}
+
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(zones); err != nil {
 		util.Warnf("dashboard: failed to encode zones: %v", err)
@@ -244,13 +283,6 @@ func (s *Server) handleZones(w http.ResponseWriter, r *http.Request) {
 
 // handleWebSocket handles WebSocket connections
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	// Validate authentication token before accepting WebSocket connection
-	// SECURITY: auth is required - if authStore is nil, deny the request (fail closed)
-	if s.authStore == nil {
-		http.Error(w, "authentication required: auth store not configured", http.StatusUnauthorized)
-		return
-	}
-
 	token := r.Header.Get("Authorization")
 	token = strings.TrimPrefix(token, "Bearer ")
 	if token == "" {
@@ -263,15 +295,34 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		token = r.URL.Query().Get("token")
 	}
 
+	// Validate authentication
+	s.mu.RLock()
+	authStore := s.authStore
+	authToken := s.authToken
+	s.mu.RUnlock()
+
 	if token == "" {
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
 
-	// Validate token
-	if _, err := s.authStore.ValidateToken(token); err != nil {
-		util.Warnf("dashboard: websocket auth failed: %v", err)
-		http.Error(w, "invalid token", http.StatusUnauthorized)
+	// Validate against auth store if available, otherwise use legacy token
+	if authStore != nil {
+		if _, err := authStore.ValidateToken(token); err != nil {
+			util.Warnf("dashboard: websocket auth failed: %v", err)
+			http.Error(w, "invalid token", http.StatusUnauthorized)
+			return
+		}
+	} else if authToken != "" {
+		// Legacy token-only mode: constant-time comparison
+		if !secureCompare(token, authToken) {
+			util.Warnf("dashboard: websocket auth failed: invalid legacy token")
+			http.Error(w, "invalid token", http.StatusUnauthorized)
+			return
+		}
+	} else {
+		// SECURITY: deny if neither auth store nor legacy token configured (fail closed)
+		http.Error(w, "authentication required: auth not configured", http.StatusUnauthorized)
 		return
 	}
 
