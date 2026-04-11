@@ -16,6 +16,16 @@ server:
     key_file: /etc/nothingdns/tls/server.key
     bind: ":853"
 
+  # XoT - DNS Zone Transfer over TLS (RFC 9103)
+  # Provides encrypted zone transfers between primary and secondary DNS servers
+  xot:
+    enabled: false
+    cert_file: /etc/nothingdns/tls/server.crt  # Can reuse TLS cert
+    key_file: /etc/nothingdns/tls/server.key
+    ca_file: ""  # Optional: require client certificates
+    bind: ":853"
+    min_tls_version: 12  # 12 = TLS 1.2, 13 = TLS 1.3
+
   http:
     enabled: true
     bind: ":8080"

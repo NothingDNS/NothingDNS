@@ -18,8 +18,8 @@ import (
 type ConsensusMode string
 
 const (
-	ConsensusSWIM ConsensusMode = "swim" // Gossip-based SWIM (default, existing)
-	ConsensusRaft ConsensusMode = "raft" // Raft consensus (new)
+	ConsensusSWIM ConsensusMode = "swim" // Gossip-based SWIM (default)
+	ConsensusRaft ConsensusMode = "raft" // Raft consensus (per SPEC §10)
 )
 
 // Cluster manages the DNS server cluster.

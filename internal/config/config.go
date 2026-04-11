@@ -316,6 +316,9 @@ type ServerConfig struct {
 	// QUIC configuration (DNS over QUIC, RFC 9250)
 	QUIC QUICConfig `yaml:"quic"`
 
+	// XoT configuration (DNS Zone Transfer over TLS, RFC 9103)
+	XoT XoTConfig `yaml:"xot"`
+
 	// HTTP API configuration
 	HTTP HTTPConfig `yaml:"http"`
 
@@ -358,6 +361,27 @@ type QUICConfig struct {
 
 	// Listen address (default ":853")
 	Bind string `yaml:"bind"`
+}
+
+// XoTConfig contains DNS Zone Transfer over TLS (RFC 9103) settings.
+type XoTConfig struct {
+	// Enable XoT (Zone Transfer over TLS)
+	Enabled bool `yaml:"enabled"`
+
+	// Certificate file for TLS
+	CertFile string `yaml:"cert_file"`
+
+	// Key file for TLS
+	KeyFile string `yaml:"key_file"`
+
+	// CA file for client certificate verification (optional)
+	CAFile string `yaml:"ca_file"`
+
+	// Listen address (default ":853")
+	Bind string `yaml:"bind"`
+
+	// Minimum TLS version (12 or 13, default 12)
+	MinTLSVersion int `yaml:"min_tls_version"`
 }
 
 // ClusterConfig contains cluster settings.
@@ -1070,6 +1094,15 @@ func unmarshalServer(node *Node, cfg *ServerConfig) error {
 		cfg.QUIC.CertFile = quicNode.GetString("cert_file")
 		cfg.QUIC.KeyFile = quicNode.GetString("key_file")
 		cfg.QUIC.Bind = quicNode.GetString("bind")
+	}
+
+	if xotNode := node.Get("xot"); xotNode != nil {
+		cfg.XoT.Enabled = getBool(xotNode, "enabled", cfg.XoT.Enabled)
+		cfg.XoT.CertFile = xotNode.GetString("cert_file")
+		cfg.XoT.KeyFile = xotNode.GetString("key_file")
+		cfg.XoT.CAFile = xotNode.GetString("ca_file")
+		cfg.XoT.Bind = xotNode.GetString("bind")
+		cfg.XoT.MinTLSVersion = getInt(xotNode, "min_tls_version", 12)
 	}
 
 	if httpNode := node.Get("http"); httpNode != nil {

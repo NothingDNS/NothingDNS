@@ -903,21 +903,22 @@ func TestVerifyMessage_AlgorithmMismatch(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TSIG - SignMessage with unsupported algorithm
+// TSIG - SignMessage with deprecated algorithms (MD5/SHA1 now work with warning)
 // ---------------------------------------------------------------------------
 
-func TestSignMessage_UnsupportedAlgorithm(t *testing.T) {
+func TestSignMessage_DeprecatedAlgorithms(t *testing.T) {
+	// HMAC-MD5 now works with deprecation warning for backwards compatibility
 	key := &TSIGKey{
 		Name:      "test-key.example.com.",
-		Algorithm: "hmac-md5.sig-alg.reg.int", // Unsupported
+		Algorithm: HmacMD5,
 		Secret:    []byte("test-secret"),
 	}
 	msg := &protocol.Message{
 		Header: protocol.Header{ID: 1234},
 	}
 	_, err := SignMessage(msg, key, 300)
-	if err == nil {
-		t.Error("Expected error for unsupported algorithm")
+	if err != nil {
+		t.Errorf("unexpected error for deprecated MD5: %v", err)
 	}
 }
 
@@ -933,13 +934,17 @@ func TestUnpackTSIGRecord_InsufficientData(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TSIG - calculateMAC with SHA-1 (deprecated)
+// TSIG - calculateMAC with deprecated SHA-1 (now works with warning)
 // ---------------------------------------------------------------------------
 
 func TestCalculateMAC_SHA1Deprecated(t *testing.T) {
-	_, err := calculateMAC([]byte("key"), []byte("data"), HmacSHA1)
-	if err == nil {
-		t.Error("Expected error for deprecated SHA-1")
+	// SHA-1 now works with deprecation warning for backwards compatibility
+	mac, err := calculateMAC([]byte("key"), []byte("data"), HmacSHA1)
+	if err != nil {
+		t.Errorf("unexpected error for deprecated SHA-1: %v", err)
+	}
+	if len(mac) == 0 {
+		t.Error("expected MAC output for deprecated SHA-1")
 	}
 }
 
@@ -2002,23 +2007,26 @@ func TestAXFRServer_HandleIXFR_TSIGVerificationFailure(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AXFRClient.buildAXFRRequest - signing error (SHA-1 deprecated)
+// AXFRClient.buildAXFRRequest - signing with deprecated SHA-1 (now works)
 // ---------------------------------------------------------------------------
 
-func TestAXFRClient_buildAXFRRequest_SigningError_Coverage(t *testing.T) {
+func TestAXFRClient_buildAXFRRequest_SHA1Deprecated_Coverage(t *testing.T) {
 	client := NewAXFRClient("ns1.example.com:53")
 
-	// Create a key with deprecated SHA-1 algorithm which will fail
+	// Create a key with deprecated SHA-1 algorithm (now works with warning)
 	key := &TSIGKey{
 		Name:      "test-key.example.com.",
-		Algorithm: HmacSHA1, // Deprecated, will fail in calculateMAC
+		Algorithm: HmacSHA1, // Deprecated, but works with warning for backwards compat
 		Secret:    []byte("test-secret"),
 	}
 
-	// buildAXFRRequest should return error because SignMessage fails with SHA-1
-	_, err := client.buildAXFRRequest("example.com.", key)
-	if err == nil {
-		t.Error("Expected error for SHA-1 signing failure")
+	// buildAXFRRequest now works with SHA-1 (with deprecation warning)
+	msg, err := client.buildAXFRRequest("example.com.", key)
+	if err != nil {
+		t.Errorf("unexpected error for deprecated SHA-1: %v", err)
+	}
+	if msg == nil {
+		t.Error("expected message for deprecated SHA-1")
 	}
 }
 

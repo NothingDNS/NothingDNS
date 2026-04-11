@@ -30,6 +30,7 @@ import (
 	"github.com/nothingdns/nothingdns/internal/quic"
 	"github.com/nothingdns/nothingdns/internal/resolver"
 	"github.com/nothingdns/nothingdns/internal/server"
+	"github.com/nothingdns/nothingdns/internal/transfer"
 	"github.com/nothingdns/nothingdns/internal/util"
 	"github.com/nothingdns/nothingdns/internal/zone"
 )
@@ -598,6 +599,45 @@ func run() error {
 		}
 	}
 
+	// Start XoT server (DNS Zone Transfer over TLS, RFC 9103) if enabled
+	var xotServer *transfer.XoTServer
+	if cfg.Server.XoT.Enabled {
+		xotAddr := cfg.Server.XoT.Bind
+		if xotAddr == "" {
+			xotAddr = fmt.Sprintf(":%d", 853) // XoT default port
+		}
+
+		xotConfig := &transfer.XoTConfig{
+			CertFile:      cfg.Server.XoT.CertFile,
+			KeyFile:       cfg.Server.XoT.KeyFile,
+			CAFile:        cfg.Server.XoT.CAFile,
+			ListenPort:    853,
+			MinTLSVersion: cfg.Server.XoT.MinTLSVersion,
+		}
+
+		// Reuse TLS cert if XoT cert not specifically configured
+		if xotConfig.CertFile == "" && cfg.Server.TLS.CertFile != "" {
+			xotConfig.CertFile = cfg.Server.TLS.CertFile
+			xotConfig.KeyFile = cfg.Server.TLS.KeyFile
+		}
+
+		if xotConfig.CertFile != "" && xotConfig.KeyFile != "" {
+			xotServer, err = transfer.NewXoTServer(zones, xotConfig)
+			if err != nil {
+				return fmt.Errorf("creating XoT server: %w", err)
+			}
+
+			if err := xotServer.Serve(xotAddr); err != nil {
+				return fmt.Errorf("starting XoT server: %w", err)
+			}
+
+			go xotServer.AcceptLoop()
+			logger.Infof("XoT server listening on %s (DNS Zone Transfer over TLS, RFC 9103)", xotServer.Addr())
+		} else {
+			logger.Warn("XoT enabled but no certificate configured; skipping XoT server")
+		}
+	}
+
 	// Periodically collect transport stats
 	go func() {
 		ticker := time.NewTicker(10 * time.Second)
@@ -672,6 +712,9 @@ func run() error {
 				}
 				if doqServer != nil {
 					doqServer.Stop()
+				}
+				if xotServer != nil {
+					xotServer.Close()
 				}
 
 				// Close upstream client and load balancer

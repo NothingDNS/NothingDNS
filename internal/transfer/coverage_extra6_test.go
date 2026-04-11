@@ -243,10 +243,11 @@ func TestIXFRServer_generateIncrementalIXFR_CreateSOARRError_Extra6(t *testing.T
 }
 
 // ---------------------------------------------------------------------------
-// ixfr.go:424-426 - buildIXFRRequest SignMessage error
+// ixfr.go:424-426 - buildIXFRRequest SignMessage with deprecated algorithm
+// Note: HMAC-SHA1 now works with a warning for backwards compatibility
 // ---------------------------------------------------------------------------
 
-func TestIXFRClient_buildIXFRRequest_SignMessageError_Extra6(t *testing.T) {
+func TestIXFRClient_buildIXFRRequest_DeprecatedAlgorithm_Extra6(t *testing.T) {
 	client := NewIXFRClient("ns1.example.com:53")
 
 	key := &TSIGKey{
@@ -255,12 +256,13 @@ func TestIXFRClient_buildIXFRRequest_SignMessageError_Extra6(t *testing.T) {
 		Secret:    []byte("test-secret"),
 	}
 
-	_, err := client.buildIXFRRequest("example.com.", 100, key)
-	if err == nil {
-		t.Error("expected error for SignMessage failure in buildIXFRRequest")
+	// SHA-1 now works with deprecation warning for backwards compatibility
+	msg, err := client.buildIXFRRequest("example.com.", 100, key)
+	if err != nil {
+		t.Errorf("unexpected error for deprecated algorithm: %v", err)
 	}
-	if !strings.Contains(err.Error(), "signing message") {
-		t.Errorf("expected signing message error, got: %v", err)
+	if msg == nil {
+		t.Error("expected message for deprecated algorithm")
 	}
 }
 
