@@ -102,11 +102,21 @@ run_web_checks() {
 
     cd web
 
+    # Node version check
+    local required_node=20
+    local node_version=$(node --version 2>/dev/null | cut -d. -f1 | tr -d 'v')
+    info "Node.js v${node_version} (npm $(npm --version))"
+
+    if [ "$node_version" -lt "$required_node" ]; then
+        error "Node.js $required_node+ required! Found: v$node_version"
+        cd ..
+        return 1
+    fi
+
     # npm install check
     if [ -f "package.json" ]; then
-        info "Checking npm dependencies..."
+        info "Ensuring npm dependencies are installed..."
         if [ ! -d "node_modules" ]; then
-            warn "node_modules not found, running npm install..."
             npm install 2>&1 || {
                 error "npm install failed!"
                 cd ..
@@ -114,8 +124,8 @@ run_web_checks() {
             }
         fi
 
-        # Type check
-        info "Running TypeScript check..."
+        # Type check only (skip build in pre-commit - CI does that)
+        info "Running TypeScript check (tsc --noEmit)..."
         if npx tsc --noEmit 2>&1; then
             info "TypeScript check passed"
         else
@@ -124,7 +134,7 @@ run_web_checks() {
             return 1
         fi
 
-        # Lint
+        # Lint only
         info "Running ESLint..."
         if npm run lint 2>&1; then
             info "ESLint passed"
@@ -134,15 +144,9 @@ run_web_checks() {
             return 1
         fi
 
-        # Build
-        info "Running Web build..."
-        if npm run build 2>&1; then
-            info "Web build passed"
-        else
-            error "Web build failed!"
-            cd ..
-            return 1
-        fi
+        # Skip Vite build in pre-commit - too slow and version-sensitive
+        # CI workflow handles the actual build
+        info "Skipping Vite build in pre-commit (run by CI)"
     fi
 
     cd ..
@@ -190,6 +194,19 @@ check_workflows() {
             if [ -f "$wf" ]; then
                 name=$(basename "$wf")
                 info "Found workflow: $name"
+
+                # Extract key version info
+                if [ "$name" = "go.yml" ]; then
+                    local go_ver=$(grep "go-version" "$wf" | head -1 | awk -F"'" '{print $2}' | tr -d " '" )
+                    [ -z "$go_ver" ] && go_ver=$(grep "go-version" "$wf" | head -1 | awk '{print $2}' | tr -d " '\"" )
+                    [ -n "$go_ver" ] && info "  Go version: $go_ver"
+                fi
+
+                if [ "$name" = "web.yml" ]; then
+                    local node_ver=$(grep "node-version" "$wf" | head -1 | awk -F"'" '{print $2}' | tr -d " '" )
+                    [ -z "$node_ver" ] && node_ver=$(grep "node-version" "$wf" | head -1 | awk '{print $2}' | tr -d " '\"" )
+                    [ -n "$node_ver" ] && info "  Node version: $node_ver"
+                fi
             fi
         done
     fi
