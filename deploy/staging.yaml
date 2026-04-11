@@ -1,0 +1,91 @@
+# NothingDNS Staging Environment Configuration
+# For testing and pre-production validation.
+# Usage: ./nothingdns --config deploy/staging.yaml
+
+server:
+  port: 53
+  bind:
+    - 0.0.0.0
+  udp_workers: 0   # auto
+  tcp_workers: 0   # auto
+  tls:
+    enabled: false
+  # XoT for zone transfers between staging nodes
+  xot:
+    enabled: true
+    cert_file: /etc/nothingdns/tls/staging.crt
+    key_file: /etc/nothingdns/tls/staging.key
+    ca_file: /etc/nothingdns/tls/staging-ca.crt
+    bind: ":853"
+    min_tls_version: 12
+  http:
+    enabled: true
+    bind: "0.0.0.0:8080"
+    # Staging uses dev credentials - NEVER use in production
+    auth_token: "staging-dev-token-change-me"
+    # auth_secret: "staging-256-bit-secret"
+
+cache:
+  enabled: true
+  size: 50000
+  default_ttl: 600
+  max_ttl: 86400
+  min_ttl: 10
+  negative_ttl: 120
+  prefetch: true
+  prefetch_threshold: 14400
+
+logging:
+  level: debug          # Verbose logging for debugging
+  format: json
+  output: stdout
+  query_log: true       # Log all queries in staging
+  query_log_file: /var/log/nothingdns/query.log
+
+metrics:
+  enabled: true
+  bind: ":9153"
+  path: /metrics
+
+dnssec:
+  enabled: false       # Disable DNSSEC in staging
+
+cluster:
+  enabled: true
+  node_id: "staging-node"
+  bind_addr: "0.0.0.0"
+  gossip_port: 7946
+  region: "staging"
+  zone: "staging"
+  weight: 100
+  seed_nodes: []
+  cache_sync: true
+
+# Staging upstream - use reliable public DNS
+upstream:
+  servers:
+    - 1.1.1.1:53
+    - 8.8.8.8:53
+  strategy: round_robin
+  health_check: 30s
+  failover_timeout: 5s
+
+# Staging uses development zones
+zones:
+  - /etc/nothingdns/zones/staging/example.com.zone
+
+# Relaxed ACL for testing
+acl:
+  - name: "allow-all-staging"
+    action: allow
+    networks:
+      - 0.0.0.0/0
+      - ::/0
+    types:
+      - ANY
+
+# Memory limit for staging
+memory_limit_mb: 512
+
+# Shorter shutdown timeout for faster restarts
+shutdown_timeout: 10s

@@ -1,0 +1,132 @@
+# NothingDNS Production Environment Configuration
+# For live deployment. Review all settings before deploying.
+# Usage: ./nothingdns --config deploy/production.yaml
+
+server:
+  port: 53
+  bind:
+    - 0.0.0.0
+  udp_workers: 0   # auto (NumCPU * 4)
+  tcp_workers: 0   # auto (NumCPU * 2)
+  tls:
+    enabled: true
+    cert_file: /etc/nothingdns/tls/prod.crt
+    key_file: /etc/nothingdns/tls/prod.key
+    bind: ":853"
+  # XoT for encrypted zone transfers (RFC 9103)
+  xot:
+    enabled: true
+    cert_file: /etc/nothingdns/tls/prod.crt
+    key_file: /etc/nothingdns/tls/prod.key
+    ca_file: /etc/nothingdns/tls/prod-ca.crt    # mTLS client auth
+    bind: ":853"
+    min_tls_version: 13                         # TLS 1.3 only in production
+  http:
+    enabled: true
+    bind: "127.0.0.1:8080"                       # Local only, reverse proxy handles TLS
+    # Production MUST use multi-user auth with strong credentials
+    # auth_token: ""                             # Disable token auth in favor of RBAC
+    # auth_secret: "CHANGE-THIS-TO-256-BIT-STRONG-SECRET"
+    # users:
+    #   - username: admin
+    #     password: "UNIQUE-STRONG-PASSWORD"
+    #     role: admin
+    #   - username: operator
+    #     password: "UNIQUE-STRONG-PASSWORD"
+    #     role: operator
+    #   - username: viewer
+    #     password: "UNIQUE-STRONG-PASSWORD"
+    #     role: viewer
+    doh_enabled: true
+    doh_path: /dns-query
+    dows_enabled: false
+    odoh_enabled: false
+
+# Production upstream - multiple resolvers with health checks
+upstream:
+  servers:
+    - 1.1.1.1:53
+    - 8.8.8.8:53
+    - 9.9.9.9:53
+  strategy: fastest                        # Use fastest responder
+  health_check: 15s
+  failover_timeout: 2s
+
+cache:
+  enabled: true
+  size: 1000000                             # 1M entries for production
+  default_ttl: 3600
+  max_ttl: 86400
+  min_ttl: 60
+  negative_ttl: 300
+  prefetch: true
+  prefetch_threshold: 7200                 # Prefetch if TTL < 2 hours
+
+logging:
+  level: warn                               # Minimal logging in production
+  format: json
+  output: stdout
+  query_log: false                          # Disable query logging by default
+  # query_log_file: /var/log/nothingdns/query.log  # Enable if audit required
+
+metrics:
+  enabled: true
+  bind: ":9153"
+  path: /metrics
+
+dnssec:
+  enabled: true
+  trust_anchor: "/etc/nothingdns/trust-anchors/dnssec-root.key"
+  ignore_time: false
+  require_dnssec: false                     # Enforce if all zones are signed
+
+cluster:
+  enabled: true
+  node_id: ""                               # Set via env: NOTHINGDNS_NODE_ID
+  bind_addr: ""                             # Set via env: NOTHINGDNS_BIND_ADDR
+  gossip_port: 7946
+  region: "production"
+  zone: "production"
+  weight: 100
+  seed_nodes: []                            # Set via env: NOTHINGDNS_SEED_NODES
+  cache_sync: true
+
+# Production zones
+zones:
+  - /etc/nothingdns/zones/production/example.com.zone
+
+# Strict ACL - only allow known networks
+acl:
+  - name: "production-trusted"
+    action: allow
+    networks:
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+    types:
+      - A
+      - AAAA
+      - CNAME
+      - MX
+      - TXT
+      - SRV
+      - NS
+      - SOA
+      - PTR
+      - DNSKEY
+      - DS
+      - NSEC
+      - NSEC3
+      - RRSIG
+  - name: "production-blocked"
+    action: deny
+    networks:
+      - 0.0.0.0/0
+    types:
+      - ANY
+
+# Memory limit - set based on expected load
+memory_limit_mb: 2048                       # 2GB default, adjust as needed
+
+# Graceful shutdown with generous timeout
+shutdown_timeout: 60s
