@@ -1,5 +1,5 @@
 # NothingDNS Docker Compose
-# Example configuration for a 3-node cluster with web dashboard
+# 3-node cluster with web dashboard
 #
 # Usage:
 #   docker compose up -d
@@ -13,10 +13,7 @@
 services:
   # Node 1 - Primary (seed node)
   nothingdns-1:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: nothingdns:latest
+    image: ghcr.io/nothingdns/nothingdns:latest
     container_name: nothingdns-1
     hostname: nothingdns-1
     ports:
@@ -34,7 +31,7 @@ services:
       dns-net:
         ipv4_address: 172.28.0.10
     healthcheck:
-      test: ["CMD", "/usr/local/bin/dnsctl", "-server", "http://localhost:8080", "server", "health"]
+      test: ["CMD", "/usr/local/bin/dnsctl", "server", "health"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -43,10 +40,7 @@ services:
 
   # Node 2 - Secondary
   nothingdns-2:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: nothingdns:latest
+    image: ghcr.io/nothingdns/nothingdns:latest
     container_name: nothingdns-2
     hostname: nothingdns-2
     ports:
@@ -66,7 +60,7 @@ services:
     depends_on:
       - nothingdns-1
     healthcheck:
-      test: ["CMD", "/usr/local/bin/dnsctl", "-server", "http://localhost:8080", "server", "health"]
+      test: ["CMD", "/usr/local/bin/dnsctl", "server", "health"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -75,10 +69,7 @@ services:
 
   # Node 3 - Tertiary
   nothingdns-3:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: nothingdns:latest
+    image: ghcr.io/nothingdns/nothingdns:latest
     container_name: nothingdns-3
     hostname: nothingdns-3
     ports:
@@ -98,7 +89,7 @@ services:
     depends_on:
       - nothingdns-1
     healthcheck:
-      test: ["CMD", "/usr/local/bin/dnsctl", "-server", "http://localhost:8080", "server", "health"]
+      test: ["CMD", "/usr/local/bin/dnsctl", "server", "health"]
       interval: 30s
       timeout: 5s
       retries: 3

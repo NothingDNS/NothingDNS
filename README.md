@@ -741,14 +741,18 @@ cluster:
 
 ## Docker
 
-### Quick Start with Docker
+### Quick Start with Docker (GHCR)
 
 ```bash
-# Build the image
-docker build -t nothingdns:latest .
+# Pull from GitHub Container Registry
+docker pull ghcr.io/nothingdns/nothingdns:latest
 
 # Run with default configuration
-docker run -d -p 53:53/udp -p 53:53 -p 8080:8080 nothingdns:latest
+docker run -d \
+  -p 53:53/udp \
+  -p 53:53 \
+  -p 8080:8080 \
+  ghcr.io/nothingdns/nothingdns:latest
 
 # Run with custom configuration
 docker run -d \
@@ -756,18 +760,26 @@ docker run -d \
   -p 53:53 \
   -p 8080:8080 \
   -v /etc/nothingdns:/etc/nothingdns \
-  nothingdns:latest -config /etc/nothingdns/config.yaml
+  ghcr.io/nothingdns/nothingdns:latest --config /etc/nothingdns/config.yaml
+```
+
+### Build Locally
+
+```bash
+# Build the image
+docker build -t nothingdns:latest .
+
+# Run with local build
+docker run -d -p 53:53/udp -p 53:53 -p 8080:8080 nothingdns:latest
 ```
 
 ### Docker Compose Cluster
 
 ```yaml
 # docker-compose.yml
-version: '3.8'
-
 services:
   nothingdns-1:
-    image: nothingdns:latest
+    image: ghcr.io/nothingdns/nothingdns:latest
     hostname: nothingdns-1
     ports:
       - "53:53/udp"

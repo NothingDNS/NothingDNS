@@ -204,6 +204,19 @@ main() {
     echo "  NothingDNS Install Script v1.0"
     echo "======================================"
     echo ""
+    echo "Choose installation method:"
+    echo "  1) Binary (recommended for servers)"
+    echo "  2) Docker (GHCR: ghcr.io/nothingdns/nothingdns)"
+    echo ""
+    read -p "Select [1/2]: " -n 1 -r; echo
+
+    if [[ $REPLY =~ ^[2]$ ]]; then
+        echo ""
+        echo "Docker installation selected."
+        echo "Run: docker pull ghcr.io/nothingdns/nothingdns:latest"
+        echo "Or use docker-compose.yml from the repository"
+        exit 0
+    fi
 
     # Check for required commands
     command -v curl &> /dev/null || error "curl is required but not installed"
@@ -230,6 +243,9 @@ main() {
     echo "       sudo ${INSTALL_DIR}/${BINARY_NAME} --config ${CONFIG_FILE}"
     echo ""
     echo "Dashboard: http://localhost:8080"
+    echo ""
+    echo "Docker alternative:"
+    echo "  docker pull ghcr.io/nothingdns/nothingdns:latest"
     echo "======================================"
     echo ""
 }
