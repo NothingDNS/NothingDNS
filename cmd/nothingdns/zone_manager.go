@@ -44,17 +44,34 @@ func NewZoneManager(cfg *config.Config, logger *util.Logger) (*ZoneManager, erro
 		logger.Infof("Zone file persistence enabled: %s", cfg.ZoneDir)
 	}
 
-	// Load zone files
-	for _, zoneFile := range cfg.Zones {
-		z, err := loadZoneFile(zoneFile)
-		if err != nil {
-			logger.Warnf("Failed to load zone file %s: %v", zoneFile, err)
+	// Load zone files in parallel for faster startup
+	type zoneResult struct {
+		zone     *zone.Zone
+		zoneFile string
+		err      error
+	}
+
+	zoneChans := make([]chan zoneResult, len(cfg.Zones))
+	for i, zoneFile := range cfg.Zones {
+		zoneChans[i] = make(chan zoneResult, 1)
+		go func(zf string, ch chan zoneResult) {
+			z, err := loadZoneFile(zf)
+			ch <- zoneResult{z, zf, err}
+		}(zoneFile, zoneChans[i])
+	}
+
+	for _, ch := range zoneChans {
+		result := <-ch
+		if result.err != nil {
+			logger.Warnf("Failed to load zone file %s: %v", result.zoneFile, result.err)
 			continue
 		}
-		mgr.result.Zones[z.Origin] = z
-		mgr.result.ZoneFiles[z.Origin] = zoneFile
-		zoneManager.LoadZone(z, zoneFile)
-		logger.Infof("Loaded zone %s with %d records", z.Origin, len(z.Records))
+		if result.zone != nil {
+			mgr.result.Zones[result.zone.Origin] = result.zone
+			mgr.result.ZoneFiles[result.zone.Origin] = result.zoneFile
+			zoneManager.LoadZone(result.zone, result.zoneFile)
+			logger.Infof("Loaded zone %s with %d records", result.zone.Origin, len(result.zone.Records))
+		}
 	}
 
 	// Initialize zone signers if DNSSEC signing is enabled

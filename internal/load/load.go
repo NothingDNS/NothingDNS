@@ -170,8 +170,15 @@ func (r *Runner) computeResult(total time.Duration) *Result {
 	latencies := r.latencies
 	if len(latencies) == 0 {
 		return &Result{
+			Success:       r.success,
+			Errors:        r.errors,
+			Timeouts:      r.timeouts,
 			TotalDuration: total,
-			ErrorsDetail:  map[string]int64{},
+			QPS:           0,
+			ErrorsDetail: map[string]int64{
+				"protocol": r.errors,
+				"timeout":  r.timeouts,
+			},
 		}
 	}
 
