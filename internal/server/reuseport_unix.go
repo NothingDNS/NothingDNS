@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 // listenUDPWithReusePortImpl creates a *net.UDPConn with SO_REUSEPORT set.
@@ -46,7 +48,7 @@ func reusePortControl() func(string, string, syscall.RawConn) error {
 	return func(_, _ string, c syscall.RawConn) error {
 		var opErr error
 		err := c.Control(func(fd uintptr) {
-			opErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEPORT, 1)
+			opErr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEPORT, 1)
 		})
 		if err != nil {
 			return err

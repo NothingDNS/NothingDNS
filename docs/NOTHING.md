@@ -9,12 +9,12 @@
 
 | Metric | Value |
 |--------|-------|
-| Total Go code | 140,480 lines |
-| Production code | 42,107 lines |
-| Test code | 98,373 lines |
-| Test files | 149 |
-| Internal packages | 26 |
-| WebUI (React/TS) | 827 lines, 22 files |
+| Total Go code | 164,068 lines |
+| Production code | 58,604 lines |
+| Test code | ~105,464 lines |
+| Go files | 301 |
+| Internal packages | 33 |
+| WebUI (React/TS) | ~2,590 lines, 22 files |
 | External dependencies | **0** (zero) |
 | Benchmark functions | 43 |
 | CI/CD | GitHub Actions (lint + test + build + docker) |

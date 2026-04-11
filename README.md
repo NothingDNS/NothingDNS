@@ -659,30 +659,36 @@ cluster:
 │   ├── api/            # HTTP API with OpenAPI 3.0 / Swagger
 │   │   └── mcp/        # MCP server for AI integration
 │   ├── audit/          # Structured query audit logging
+│   ├── auth/           # Authentication middleware
 │   ├── blocklist/      # Domain blocklist engine
 │   ├── cache/          # LRU cache with TTL and negative caching
+│   ├── catalog/        # Zone catalog for managing zone metadata
 │   ├── cluster/        # Gossip-based clustering with AES-256-GCM
 │   ├── config/         # Custom YAML configuration parser
-│   ├── dashboard/      # Web dashboard (React 19 SPA)
+│   ├── dashboard/      # Embedded React 19 SPA (served from internal/dashboard/static/)
 │   ├── dns64/          # DNS64/NAT64 synthesis (RFC 6147)
 │   ├── dnscookie/      # DNS Cookies (RFC 7873)
 │   ├── dnssec/         # DNSSEC validation, signing, key rollover
 │   ├── doh/            # DNS over HTTPS (RFC 8484)
-│   ├── filter/         # Split-horizon views, rate limiting
-│   ├── geodns/         # GeoIP DNS with MMDB parser
-│   ├── memory/         # Runtime memory monitoring, OOM protection
+│   ├── e2e/            # End-to-end tests
+│   ├── filter/         # Split-horizon views, rate limiting, ACL
+│   ├── geodns/         # GeoIP DNS with MMDB support
+│   ├── idna/           # Internationalized domain name validation
+│   ├── load/           # Load balancing and anycast
+│   ├── memory/         # Runtime memory monitoring and OOM protection
 │   ├── metrics/        # Prometheus metrics export
-│   ├── protocol/       # DNS wire protocol implementation
+│   ├── odoh/           # Oblivious DNS over HTTPS (RFC 9230)
+│   ├── otel/           # OpenTelemetry tracing
+│   ├── protocol/       # DNS wire protocol parser (RFC 1035)
 │   ├── quic/           # DNS over QUIC transport
-│   ├── resolver/       # Iterative recursive resolver
-│   ├── rpz/            # Response Policy Zones
-│   ├── server/         # UDP/TCP/TLS server handlers
-│   ├── storage/        # KV store with WAL
-│   ├── transfer/       # Zone transfer (AXFR/IXFR)
-│   ├── upstream/       # Upstream DNS client with load balancing
-│   ├── util/           # Logging utilities
-│   ├── websocket/      # WebSocket server for live streaming
-│   └── zone/           # Zone file parser with $GENERATE
+│   ├── resolver/       # Iterative recursive resolver with CNAME chasing
+│   ├── rpz/            # Response Policy Zones for DNS filtering
+│   ├── server/         # UDP/TCP/TLS transport handlers
+│   ├── storage/        # KV store with WAL and TLV serialization
+│   ├── transfer/       # AXFR/IXFR zone transfers
+│   ├── upstream/       # Upstream forwarding with health checks and load balancing
+│   ├── websocket/      # WebSocket server for live query streaming
+│   └── zone/           # BIND format zone file parser with $GENERATE support
 ├── docs/               # Additional documentation
 ├── Dockerfile
 ├── docker-compose.yml
