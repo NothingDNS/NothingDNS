@@ -120,7 +120,8 @@ get_latest_version() {
 # Check if NothingDNS is already installed
 check_existing_install() {
     if [ -f "${INSTALL_DIR}/${BINARY_NAME}" ]; then
-        local current_version=$("${INSTALL_DIR}/${BINARY_NAME}" --version 2>/dev/null | head -1 || echo "unknown")
+        # Extract version number from output like "NothingDNS version 0.1.0" or "v0.1.0"
+        local current_version=$("${INSTALL_DIR}/${BINARY_NAME}" --version 2>/dev/null | grep -oP 'v?\d+\.\d+\.\d+' | head -1 || echo "unknown")
         info "NothingDNS already installed: ${current_version}"
         info "Latest release: ${LATEST_VERSION}"
 
