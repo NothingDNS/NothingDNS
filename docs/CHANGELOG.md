@@ -5,6 +5,36 @@ All notable changes to NothingDNS are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] — 2026-04-12
+
+### Added
+
+#### E2E Tests
+- **DoT (DNS over TLS) Tests**: Full test suite with self-signed certificates for TLS handshake, multiple connections, connection reuse, and error handling
+- **AXFR/IXFR Zone Transfer Tests**: Comprehensive tests for full zone transfers (AXFR) and incremental zone transfers (IXFR) with real TCP streaming
+- **Real Server Tests**: UDP/TCP server tests with concurrent query handling, graceful shutdown, and panic recovery
+- **DoH (DNS over HTTPS) Tests**: HTTP-based DNS query tests with POST and GET methods
+
+#### Web UI
+- **Error Handling**: Fixed 401 API error handling with proper non-JSON response parsing
+- **WebSocket Reconnection**: Added exponential backoff with maximum 10 retry attempts
+- **Race Condition Fixes**: Fixed RAF cleanup race condition in query-log page using cancellation pattern
+- **Key Prop Issues**: Fixed React key prop warnings in dashboard and top-domains components
+
+### Fixed
+
+#### Web UI
+- `api.ts`: Fixed 401 errors not being caught properly for non-JSON responses
+- `useWebSocket.ts`: Fixed token double-encoding issue and improved reconnection logic
+- `query-log.tsx`: Fixed index-as-key warnings, fixed RAF cleanup race condition
+- `dashboard.tsx`: Fixed key prop issues
+- `blocklist.tsx`: Fixed total_rules display using `!= null` instead of `??`
+- `upstreams.tsx`: Fixed health bar to show success percentage (queries/total) instead of failure percentage
+- `zone-editor.tsx`: Fixed deleteSelected to track failures with alert, fixed deleteRecord revert on API failure
+
+### Changed
+- **Pre-commit Hook**: Improved version-sensitive checks and local CI validation
+
 ## [0.1.0] — 2026-04-05
 
 ### Added

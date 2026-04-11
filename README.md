@@ -116,7 +116,17 @@ go build -o dnsctl ./cmd/dnsctl
 ### Test
 
 ```bash
-go test ./...
+# All tests (38 packages)
+go test ./... -count=1
+
+# Short mode (skip slow tests)
+go test ./... -count=1 -short
+
+# E2E tests only
+go test ./internal/e2e/... -v
+
+# With coverage
+go test ./... -cover
 ```
 
 ## Configuration
