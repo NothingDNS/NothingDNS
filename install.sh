@@ -197,6 +197,11 @@ EOF
     fi
 }
 
+# Check if stdin is a terminal
+is_interactive() {
+    [ -t 0 ]
+}
+
 # Main installation
 main() {
     echo ""
@@ -204,13 +209,23 @@ main() {
     echo "  NothingDNS Install Script v1.0"
     echo "======================================"
     echo ""
-    echo "Choose installation method:"
-    echo "  1) Binary (recommended for servers)"
-    echo "  2) Docker (GHCR: ghcr.io/nothingdns/nothingdns)"
-    echo ""
-    read -p "Select [1/2]: " -n 1 -r; echo
 
-    if [[ $REPLY =~ ^[2]$ ]]; then
+    local install_mode=""
+
+    if is_interactive; then
+        echo "Choose installation method:"
+        echo "  1) Binary (recommended for servers)"
+        echo "  2) Docker (GHCR: ghcr.io/nothingdns/nothingdns)"
+        echo ""
+        read -p "Select [1/2]: " -n 1 -r; echo
+        install_mode="$REPLY"
+    else
+        # Non-interactive (curl | bash) - default to binary
+        info "Running in non-interactive mode, selecting binary installation..."
+        install_mode="1"
+    fi
+
+    if [[ "$install_mode" =~ ^[2]$ ]]; then
         echo ""
         echo "Docker installation selected."
         echo "Run: docker pull ghcr.io/nothingdns/nothingdns:latest"
