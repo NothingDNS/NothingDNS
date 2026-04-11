@@ -348,6 +348,7 @@ func run() error {
 	dashboardServer := dashboard.NewServer()
 	dashboardServer.SetAllowedOrigins(cfg.Server.HTTP.AllowedOrigins)
 	dashboardServer.SetAuthStore(authStore)
+	dashboardServer.SetZoneManager(zoneManagerInstance)
 	apiServer := api.NewServer(cfg.Server.HTTP, zoneManagerInstance, dnsCache, func() error {
 		logger.Info("Reloading configuration via API...")
 		now := time.Now().UTC().Format(time.RFC3339)

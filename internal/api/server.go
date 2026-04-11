@@ -503,6 +503,8 @@ func (s *Server) Start() error {
 
 	// Dashboard UI
 	mux.HandleFunc("/api/dashboard/stats", s.handleDashboardStats)
+	mux.HandleFunc("/api/dashboard/queries", s.handleDashboardQueries)
+	mux.HandleFunc("/api/dashboard/zones", s.handleDashboardZones)
 	mux.HandleFunc("/api/v1/queries", s.handleQueryLog)
 	mux.HandleFunc("/api/v1/topdomains", s.handleTopDomains)
 
@@ -839,6 +841,39 @@ func (s *Server) handleDashboardStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, http.StatusOK, resp)
+}
+
+// handleDashboardQueries returns query events for the dashboard.
+func (s *Server) handleDashboardQueries(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	if s.dashboardServer == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Dashboard not available")
+		return
+	}
+
+	stats := s.dashboardServer.GetStats()
+	queries, _ := stats.GetRecentQueries(0, 100)
+	s.writeJSON(w, http.StatusOK, queries)
+}
+
+// handleDashboardZones returns zone list for the dashboard.
+func (s *Server) handleDashboardZones(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	if s.dashboardServer == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Dashboard not available")
+		return
+	}
+
+	// Proxy to dashboard server's handleZones
+	s.dashboardServer.ServeHTTP(w, r)
 }
 
 // handleQueryLog returns a paginated query log.
