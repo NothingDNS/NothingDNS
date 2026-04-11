@@ -18,14 +18,15 @@ import (
 // XoTServer handles DNS Zone Transfer over TLS (XoT) as specified in RFC 9103.
 // XoT uses TLS 1.3 (preferred) or TLS 1.2 to encrypt zone transfer communications.
 type XoTServer struct {
-	tlsConfig *tls.Config
-	listener  net.Listener
-	zones     map[string]*zone.Zone
-	zonesMu   *sync.RWMutex
-	address   string
-	port      int
-	closed    bool
-	mu        sync.Mutex
+	tlsConfig  *tls.Config
+	listener   net.Listener
+	zones      map[string]*zone.Zone
+	zonesMu    *sync.RWMutex
+	address    string
+	port       int
+	closed     bool
+	mu         sync.Mutex
+	allowList  []net.IPNet
 }
 
 // TLSAUsage specifies how TLSA records should be used for XoT validation.
@@ -107,6 +108,14 @@ func NewXoTServer(zones map[string]*zone.Zone, config *XoTConfig) (*XoTServer, e
 	}
 	if server.port == 0 {
 		server.port = 853 // XoT default port
+	}
+
+	// Parse allowed networks from config
+	for _, cidr := range config.AllowedNetworks {
+		_, network, err := net.ParseCIDR(cidr)
+		if err == nil {
+			server.allowList = append(server.allowList, *network)
+		}
 	}
 
 	return server, nil
@@ -349,8 +358,17 @@ func (s *XoTServer) handleIXFRRequest(conn net.Conn, req *protocol.Message, clie
 }
 
 // isAllowed checks if a client IP is allowed for XoT.
+// Returns true if no allowlist is configured (allow all) or if client IP matches an allowed network.
 func (s *XoTServer) isAllowed(clientIP net.IP) bool {
-	return true // TODO: Implement allowlist check from config
+	if len(s.allowList) == 0 {
+		return true // Allow all if no list configured
+	}
+	for _, network := range s.allowList {
+		if network.Contains(clientIP) {
+			return true
+		}
+	}
+	return false
 }
 
 // generateAXFRRecords generates AXFR response records for a zone.
