@@ -1,9 +1,9 @@
-import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react';
+import { createContext, useState, useCallback, type ReactNode } from 'react';
 import { X, CheckCircle, AlertCircle, Info, AlertTriangle } from 'lucide-react';
 
-type NotificationType = 'success' | 'error' | 'info' | 'warning';
+export type NotificationType = 'success' | 'error' | 'info' | 'warning';
 
-interface Notification {
+export interface Notification {
   id: string;
   type: NotificationType;
   title: string;
@@ -41,23 +41,12 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     setNotifications([]);
   }, []);
 
-  // Set global notification function so non-React code can trigger notifications
-  useEffect(() => {
-    setGlobalNotificationFn(addNotification);
-  }, [addNotification]);
-
   return (
     <NotificationContext.Provider value={{ notifications, addNotification, removeNotification, clearNotifications }}>
       {children}
       <NotificationToast notifications={notifications} onRemove={removeNotification} />
     </NotificationContext.Provider>
   );
-}
-
-export function useNotification() {
-  const ctx = useContext(NotificationContext);
-  if (!ctx) throw new Error('useNotification must be used within NotificationProvider');
-  return ctx;
 }
 
 function NotificationToast({ notifications, onRemove }: { notifications: Notification[]; onRemove: (id: string) => void }) {
@@ -103,17 +92,4 @@ function NotificationToast({ notifications, onRemove }: { notifications: Notific
       ))}
     </div>
   );
-}
-
-// Global notification function for use outside React
-let globalAddNotif: ((type: NotificationType, title: string, message?: string) => void) | null = null;
-
-export function setGlobalNotificationFn(fn: (type: NotificationType, title: string, message?: string) => void) {
-  globalAddNotif = fn;
-}
-
-export function notify(type: NotificationType, title: string, message?: string) {
-  if (globalAddNotif) {
-    globalAddNotif(type, title, message);
-  }
 }
