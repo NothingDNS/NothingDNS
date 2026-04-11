@@ -105,60 +105,113 @@ create_config() {
 
     sudo mkdir -p "${CONFIG_DIR}"
 
-    cat > "${CONFIG_FILE}" << 'EOF'
+    # Generate a random auth secret
+    AUTH_SECRET=$(openssl rand -base64 32 2>/dev/null || head -c 32 /dev/urandom | base64)
+
+    cat > "${CONFIG_FILE}" << EOF
 # NothingDNS Configuration
 # https://github.com/NothingDNS/NothingDNS
+# Generated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
 
-# Server listen address (UDP/TCP DNS)
-listen: "0.0.0.0:53"
+server:
+  bind:
+    - 0.0.0.0
+    - "::"
+  port: 53
+  udp_workers: 0
+  tcp_workers: 0
 
-# HTTP API/Dashboard address
-http_addr: "0.0.0.0:8080"
+  tls:
+    enabled: false
+    cert_file: /etc/nothingdns/tls/server.crt
+    key_file: /etc/nothingdns/tls/server.key
+    bind: ":853"
 
-# Data directory
-data_dir: "./data"
+  xot:
+    enabled: false
+    cert_file: /etc/nothingdns/tls/server.crt
+    key_file: /etc/nothingdns/tls/server.key
+    bind: ":853"
 
-# Authentication secret (change this!)
-# Generate with: openssl rand -base64 32
-auth_secret: "CHANGE_ME_generate_with_openssl_rand_base64_32"
+  http:
+    enabled: true
+    bind: ":8080"
+    auth_secret: "${AUTH_SECRET}"
+    doh_enabled: true
+    doh_path: /dns-query
+    dows_enabled: true
+    dows_path: /dns-ws
 
-# Zones (authoritative)
-zones:
-  - name: "example.com"
-    type: "primary"
-    file: "./zones/example.com.zone"
+resolution:
+  recursive: true
+  max_depth: 10
+  timeout: 5s
+  edns0_buffer_size: 4096
 
-# Upstream resolvers (for recursion)
 upstream:
-  - "8.8.8.8:53"
-  - "8.8.4.4:53"
-  - "1.1.1.1:53"
+  servers:
+    - 8.8.8.8:53
+    - 8.8.4.4:53
+    - 1.1.1.1:53
+    - 9.9.9.9:53
+  strategy: random
+  health_check: 30s
+  failover_timeout: 5s
 
-# DNSSEC validation
+cache:
+  enabled: true
+  size: 10000
+  default_ttl: 300
+  max_ttl: 86400
+  min_ttl: 5
+  negative_ttl: 60
+  prefetch: true
+  prefetch_threshold: 60
+
+logging:
+  level: info
+  format: text
+  output: stdout
+  query_log: true
+  query_log_file: /var/log/nothingdns/query.log
+
+metrics:
+  enabled: true
+  bind: ":9153"
+  path: /metrics
+
 dnssec:
   enabled: true
-  validation: "strict"
 
-# Log level (debug, info, warn, error)
-log_level: "info"
+cluster:
+  enabled: false
+  gossip_port: 7946
+  weight: 100
+  cache_sync: true
 
-# Cache settings
-cache:
-  size: 10000
-  ttl: 300
+blocklist:
+  enabled: false
+  files: []
+  urls: []
 
-# DNSSEC signing (for primary zones)
-# signing:
-#   enabled: true
-#   key_dir: "./keys"
+zones: []
+acl: []
+slave_zones: []
 EOF
 
     info "Config created at ${CONFIG_FILE}"
-    info "Please edit ${CONFIG_FILE} and set auth_secret!"
+    info "Auth secret generated. Save this secret for API access:"
+    info "  ${AUTH_SECRET}"
 }
 
 # Setup service (systemd)
 setup_service() {
+    # Create necessary directories
+    sudo mkdir -p /etc/nothingdns/tls
+    sudo mkdir -p /var/log/nothingdns
+    sudo mkdir -p /var/lib/nothingdns/zones
+    sudo mkdir -p /etc/nothingdns/zones
+
     if command -v systemctl &> /dev/null; then
         info "Setting up systemd service..."
 
@@ -166,8 +219,9 @@ setup_service() {
 
         cat > /tmp/nothingdns.service << 'EOF'
 [Unit]
-Description=NothingDNS Authoritative DNS Server
-After=network.target
+Description=NothingDNS DNS Server
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -177,12 +231,18 @@ ExecStart=/usr/local/bin/nothingdns --config /etc/nothingdns/config.yaml
 Restart=on-failure
 RestartSec=5s
 LimitNOFILE=1048576
+TimeoutStopSec=30s
 
 # Hardening
 NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/etc/nothingdns /var/lib/nothingdns
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/etc/nothingdns /var/lib/nothingdns /var/log/nothingdns
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nothingdns
 
 [Install]
 WantedBy=multi-user.target
