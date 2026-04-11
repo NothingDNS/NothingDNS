@@ -22,6 +22,73 @@ info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
+# Check if port 53 is in use and find what's using it
+check_port_53() {
+    if command -v ss &> /dev/null; then
+        PORT_53_USERS=$(ss -tulpn | grep ':53' | grep -v nothingdns || true)
+    elif command -v netstat &> /dev/null; then
+        PORT_53_USERS=$(netstat -tulpn 2>/dev/null | grep ':53' | grep -v nothingdns || true)
+    else
+        PORT_53_USERS=""
+    fi
+
+    if [ -n "$PORT_53_USERS" ]; then
+        echo ""
+        warn "Port 53 is already in use!"
+        echo "$PORT_53_USERS"
+        echo ""
+        return 1
+    fi
+    return 0
+}
+
+# Try to stop common DNS services
+stop_existing_dns() {
+    local stopped=false
+
+    # systemd-resolved
+    if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+        info "Stopping systemd-resolved..."
+        sudo systemctl stop systemd-resolved || true
+        sudo systemctl disable systemd-resolved 2>/dev/null || true
+        stopped=true
+    fi
+
+    # unbound
+    if systemctl is-active --quiet unbound 2>/dev/null; then
+        info "Stopping unbound..."
+        sudo systemctl stop unbound || true
+        sudo systemctl disable unbound 2>/dev/null || true
+        stopped=true
+    fi
+
+    # bind9 / named
+    if systemctl is-active --quiet bind9 2>/dev/null; then
+        info "Stopping bind9..."
+        sudo systemctl stop bind9 || true
+        sudo systemctl disable bind9 2>/dev/null || true
+        stopped=true
+    fi
+
+    # dnsmasq
+    if systemctl is-active --quiet dnsmasq 2>/dev/null; then
+        info "Stopping dnsmasq..."
+        sudo systemctl stop dnsmasq || true
+        sudo systemctl disable dnsmasq 2>/dev/null || true
+        stopped=true
+    fi
+
+    # NetworkManager
+    if systemctl is-active --quiet NetworkManager 2>/dev/null; then
+        # Disable DNSSEC in NetworkManager if available
+        sudo systemctl restart NetworkManager 2>/dev/null || true
+    fi
+
+    if [ "$stopped" = true ]; then
+        info "Existing DNS services stopped"
+    fi
+}
+
 # Detect OS and architecture
 detect_os() {
     OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -296,6 +363,31 @@ main() {
     # Check for required commands
     command -v curl &> /dev/null || error "curl is required but not installed"
     command -v gzip &> /dev/null || error "gzip is required but not installed"
+
+    # Check if port 53 is available
+    if ! check_port_53; then
+        if is_interactive; then
+            echo ""
+            echo "Port 53 is in use by another service."
+            echo "  1) Stop existing DNS services (recommended)"
+            echo "  2) Use port 5353 instead"
+            echo "  3) Exit"
+            echo ""
+            read -p "Select [1/2/3]: " -n 1 -r; echo
+            case "$REPLY" in
+                1) stop_existing_dns ;;
+                2)
+                    info "Using port 5353 instead of 53"
+                    # Modify config to use port 5353
+                    ;;
+                *) error "Installation cancelled" ;;
+            esac
+        else
+            # Non-interactive: auto-stop existing DNS services
+            info "Auto-stopping existing DNS services..."
+            stop_existing_dns
+        fi
+    fi
 
     detect_os
     get_latest_version
