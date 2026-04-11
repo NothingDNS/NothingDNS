@@ -56,6 +56,108 @@ type LoadBalancer struct {
 	queriesTotal  uint64
 	queriesFailed uint64
 	failoverCount uint64
+
+	// Circuit breaker state per server address
+	circuitBreakers map[string]*circuitBreaker
+	cbMu             sync.RWMutex
+}
+
+// circuitBreaker implements the circuit breaker pattern.
+type circuitBreaker struct {
+	mu           sync.Mutex
+	state        cbState // closed, open, half-open
+	failures     int
+	failureLimit int
+	resetTimeout time.Duration
+	lastFailure  time.Time
+	backoff      time.Duration
+}
+
+type cbState int
+
+const (
+	cbClosed cbState = iota
+	cbOpen
+	cbHalfOpen
+)
+
+// shouldAllow returns true if the circuit breaker allows the request.
+func (cb *circuitBreaker) shouldAllow() bool {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	switch cb.state {
+	case cbClosed:
+		return true
+	case cbOpen:
+		// Check if reset timeout has passed
+		if time.Since(cb.lastFailure) > cb.resetTimeout {
+			cb.state = cbHalfOpen
+			return true
+		}
+		return false
+	case cbHalfOpen:
+		return true
+	default:
+		return true
+	}
+}
+
+// recordSuccess resets the circuit breaker on successful request.
+func (cb *circuitBreaker) recordSuccess() {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	cb.failures = 0
+	cb.state = cbClosed
+}
+
+// recordFailure records a failed request and potentially trips the circuit.
+func (cb *circuitBreaker) recordFailure() {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	cb.failures++
+	cb.lastFailure = time.Now()
+
+	if cb.failures >= cb.failureLimit {
+		cb.state = cbOpen
+	}
+}
+
+// getBackoff returns the exponential backoff duration for retries.
+func (cb *circuitBreaker) getBackoff(attempt int) time.Duration {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	if attempt <= 0 {
+		return 100 * time.Millisecond
+	}
+	backoff := 100 * time.Millisecond * time.Duration(1<<(attempt-1))
+	if backoff > cb.backoff {
+		return cb.backoff
+	}
+	return backoff
+}
+
+// getOrCreateCircuitBreaker returns or creates a circuit breaker for an address.
+func (lb *LoadBalancer) getOrCreateCircuitBreaker(address string) *circuitBreaker {
+	lb.cbMu.Lock()
+	defer lb.cbMu.Unlock()
+
+	if lb.circuitBreakers == nil {
+		lb.circuitBreakers = make(map[string]*circuitBreaker)
+	}
+
+	if cb, ok := lb.circuitBreakers[address]; ok {
+		return cb
+	}
+
+	cb := &circuitBreaker{
+		state:        cbClosed,
+		failureLimit:  5,
+		resetTimeout:  30 * time.Second,
+		backoff:       30 * time.Second,
+	}
+	lb.circuitBreakers[address] = cb
+	return cb
 }
 
 // LoadBalancerConfig holds load balancer configuration.
@@ -416,9 +518,18 @@ func (lb *LoadBalancer) selectFastest() *Server {
 
 // queryWithFailover performs a query with automatic failover.
 func (lb *LoadBalancer) queryWithFailover(target *Target, msg *protocol.Message) (*protocol.Message, error) {
+	cb := lb.getOrCreateCircuitBreaker(target.Address)
+
+	// Check circuit breaker before attempting request
+	if !cb.shouldAllow() {
+		atomic.AddUint64(&lb.queriesFailed, 1)
+		return nil, fmt.Errorf("circuit breaker open for %s", target.Address)
+	}
+
 	// Try UDP first
 	resp, err := lb.queryUDP(target.Address, msg)
 	if err == nil {
+		cb.recordSuccess()
 		return resp, nil
 	}
 
@@ -426,10 +537,14 @@ func (lb *LoadBalancer) queryWithFailover(target *Target, msg *protocol.Message)
 	util.Warnf("loadbalancer UDP query failed for %s: %v, trying TCP", target.Address, err)
 	resp, err = lb.queryTCP(target.Address, msg)
 	if err == nil {
+		cb.recordSuccess()
 		return resp, nil
 	}
 
-	// Mark target as failed and try failover
+	// Record failure for circuit breaker
+	cb.recordFailure()
+
+	// Mark target as failed
 	if target.Type == "standalone" && target.Server != nil {
 		target.Server.markFailure()
 	}
@@ -440,8 +555,20 @@ func (lb *LoadBalancer) queryWithFailover(target *Target, msg *protocol.Message)
 	// Select a different target
 	failoverTarget, selectErr := lb.selectTarget()
 	if selectErr != nil || failoverTarget.Address == target.Address {
+		atomic.AddUint64(&lb.queriesFailed, 1)
 		return nil, fmt.Errorf("query failed and no failover available: %w", err)
 	}
+
+	// Check circuit breaker for failover target
+	failoverCB := lb.getOrCreateCircuitBreaker(failoverTarget.Address)
+	if !failoverCB.shouldAllow() {
+		atomic.AddUint64(&lb.queriesFailed, 1)
+		return nil, fmt.Errorf("circuit breaker open for failover target %s", failoverTarget.Address)
+	}
+
+	// Exponential backoff before retry
+	backoff := cb.getBackoff(1)
+	time.Sleep(backoff)
 
 	// Retry with failover target
 	resp, retryErr := lb.queryUDP(failoverTarget.Address, msg)
@@ -451,9 +578,12 @@ func (lb *LoadBalancer) queryWithFailover(target *Target, msg *protocol.Message)
 	}
 
 	if retryErr != nil {
+		failoverCB.recordFailure()
+		atomic.AddUint64(&lb.queriesFailed, 1)
 		return nil, fmt.Errorf("query failed on primary and failover: %w", retryErr)
 	}
 
+	failoverCB.recordSuccess()
 	return resp, nil
 }
 

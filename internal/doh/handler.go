@@ -1,6 +1,7 @@
 package doh
 
 import (
+	"crypto/rand"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -16,17 +17,30 @@ const (
 	MaxDNSMessageSize = 65535
 	// ContentTypeDNSMessage is the MIME type for DNS wire format (RFC 8484)
 	ContentTypeDNSMessage = "application/dns-message"
+	// MinPaddingSize is the minimum padding size per RFC 7830
+	MinPaddingSize = 32
+	// MaxPaddingSize is the maximum padding size per RFC 7830
+	MaxPaddingSize = 512
 )
 
 // Handler handles DNS over HTTPS requests (RFC 8484).
 type Handler struct {
 	dnsHandler server.Handler
+	padding    bool // Enable RFC 7830 padding
 }
 
 // NewHandler creates a new DoH handler.
 func NewHandler(dnsHandler server.Handler) *Handler {
 	return &Handler{
 		dnsHandler: &server.ServeDNSWithRecovery{Handler: dnsHandler},
+	}
+}
+
+// NewHandlerWithPadding creates a new DoH handler with RFC 7830 padding enabled.
+func NewHandlerWithPadding(dnsHandler server.Handler) *Handler {
+	return &Handler{
+		dnsHandler: &server.ServeDNSWithRecovery{Handler: dnsHandler},
+		padding:    true,
 	}
 }
 
@@ -75,7 +89,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create DoH response writer and handle the query
-	rw := newDoHResponseWriter(w, r, query)
+	rw := newDoHResponseWriter(w, r, query, h.padding)
 	h.dnsHandler.ServeDNS(rw, query)
 }
 
@@ -243,15 +257,17 @@ type dohResponseWriter struct {
 	w       http.ResponseWriter
 	r       *http.Request
 	query   *protocol.Message
-	written bool
+	written  bool
+	padding bool
 }
 
 // newDoHResponseWriter creates a new DoH response writer.
-func newDoHResponseWriter(w http.ResponseWriter, r *http.Request, query *protocol.Message) *dohResponseWriter {
+func newDoHResponseWriter(w http.ResponseWriter, r *http.Request, query *protocol.Message, padding bool) *dohResponseWriter {
 	return &dohResponseWriter{
-		w:     w,
-		r:     r,
-		query: query,
+		w:       w,
+		r:       r,
+		query:   query,
+		padding: padding,
 	}
 }
 
@@ -277,6 +293,12 @@ func (rw *dohResponseWriter) Write(msg *protocol.Message) (int, error) {
 	if err != nil {
 		http.Error(rw.w, fmt.Sprintf("Failed to encode response: %v", err), http.StatusInternalServerError)
 		return 0, err
+	}
+
+	// Add RFC 7830 padding if enabled
+	if rw.padding {
+		buf, _ = padMessage(buf[:n])
+		n = len(buf)
 	}
 
 	// Write HTTP response
@@ -322,4 +344,32 @@ func parsePort(port string) int {
 		return 0
 	}
 	return p
+}
+
+// generatePadding generates random padding per RFC 7830.
+// Returns a byte slice of random size between MinPaddingSize and MaxPaddingSize.
+func generatePadding() ([]byte, error) {
+	// Random size between MinPaddingSize and MaxPaddingSize
+	size := make([]byte, 1)
+	if _, err := rand.Read(size); err != nil {
+		return nil, err
+	}
+	padSize := MinPaddingSize + int(size[0])%(MaxPaddingSize-MinPaddingSize+1)
+
+	// Generate random padding data
+	padding := make([]byte, padSize)
+	if _, err := rand.Read(padding); err != nil {
+		return nil, err
+	}
+	return padding, nil
+}
+
+// padMessage adds RFC 7830 padding to a DNS message wire format.
+// Padding is appended as trailing bytes to obfuscate response size.
+func padMessage(wire []byte) ([]byte, error) {
+	padding, err := generatePadding()
+	if err != nil {
+		return wire, nil // Fallback: return unpadded
+	}
+	return append(wire, padding...), nil
 }

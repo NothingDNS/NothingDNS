@@ -1,0 +1,62 @@
+# NothingDNS Helm Chart Values
+
+replicaCount: 3
+
+image:
+  repository: nothingdns/nothingdns
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  ports:
+    dns: 53
+    http: 8080
+    https: 853
+    metrics: 9153
+
+resources:
+  limits:
+    cpu: 2000m
+    memory: 2Gi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+config:
+  server:
+    port: 53
+    bind:
+      - 0.0.0.0
+  upstream:
+    servers:
+      - 1.1.1.1:53
+      - 8.8.8.8:53
+    strategy: round_robin
+  cache:
+    enabled: true
+    size: 1000000
+    default_ttl: 3600
+  logging:
+    level: info
+    format: json
+
+ingress:
+  enabled: true
+  className: nginx
+  hosts:
+    - dns.example.com
+  paths:
+    - path: /dns-query
+      port: http
+    - path: /metrics
+      port: metrics
+
+persistence:
+  enabled: true
+  size: 1Gi
+  storageClass: standard
+
+tls:
+  enabled: true
+  secretName: nothingdns-tls

@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nothingdns
+  namespace: default
+  labels:
+    app: nothingdns
+    version: v0.1.0
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nothingdns
+  template:
+    metadata:
+      labels:
+        app: nothingdns
+        version: v0.1.0
+    spec:
+      containers:
+      - name: nothingdns
+        image: nothingdns/nothingdns:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: dns-udp
+          containerPort: 53
+          protocol: UDP
+        - name: dns-tcp
+          containerPort: 53
+          protocol: TCP
+        - name: http
+          containerPort: 8080
+        - name: https
+          containerPort: 853
+        - name: metrics
+          containerPort: 9153
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 2000m
+            memory: 2Gi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+        volumeMounts:
+        - name: config
+          mountPath: /etc/nothingdns
+          readOnly: true
+        - name: zones
+          mountPath: /etc/nothingdns/zones
+          readOnly: true
+        - name: tls
+          mountPath: /etc/nothingdns/tls
+          readOnly: true
+        args:
+        - --config
+        - /etc/nothingdns/config.yaml
+        securityContext:
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+      volumes:
+      - name: config
+        configMap:
+          name: nothingdns-config
+      - name: zones
+        persistentVolumeClaim:
+          claimName: nothingdns-zones
+      - name: tls
+        secret:
+          secretName: nothingdns-tls

@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nothingdns-config
+  namespace: default
+data:
+  config.yaml: |
+    server:
+      port: 53
+      bind:
+        - 0.0.0.0
+      http:
+        enabled: true
+        bind: "0.0.0.0:8080"
+    upstream:
+      servers:
+        - 1.1.1.1:53
+        - 8.8.8.8:53
+      strategy: round_robin
+    cache:
+      enabled: true
+      size: 1000000
+      default_ttl: 3600
+      max_ttl: 86400
+    logging:
+      level: info
+      format: json
+    cluster:
+      enabled: true
+      gossip_port: 7946
+      cache_sync: true
