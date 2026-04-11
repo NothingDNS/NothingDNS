@@ -83,8 +83,8 @@ export function DashboardPage() {
         <CardContent><div ref={streamRef} className="space-y-1 max-h-[400px] overflow-y-auto font-mono text-xs">
           {queries.length === 0 ? (
             <div className="text-center py-12 text-muted-foreground"><Activity className="h-8 w-8 mx-auto mb-2 opacity-50" /><p>Waiting for DNS queries...</p><p className="text-[11px] mt-1">Queries will appear here in real-time</p></div>
-          ) : queries.map((q, i) => (
-            <div key={i} className="flex items-center gap-3 py-1.5 px-2 rounded-md hover:bg-muted/50 transition-colors">
+          ) : queries.map((q) => (
+            <div key={`${q.domain}-${q.timestamp}`} className="flex items-center gap-3 py-1.5 px-2 rounded-md hover:bg-muted/50 transition-colors">
               <span className="text-muted-foreground w-[70px] shrink-0">{new Date(q.timestamp).toLocaleTimeString()}</span>
               <Badge variant={q.responseCode === 'NOERROR' ? 'success' : q.blocked ? 'destructive' : 'warning'} className="w-[60px] justify-center text-[10px]">{q.responseCode}</Badge>
               <span className="text-muted-foreground w-[40px]">{q.queryType}</span>

@@ -87,7 +87,6 @@ export function UpstreamsPage() {
           <div className="space-y-3">
             {upstreams.map((u) => {
               const total = u.queries + u.failed;
-              const rate = total > 0 ? (u.failed / total) * 100 : 0;
               return (
                 <div key={u.address} className="space-y-1">
                   <div className="flex items-center justify-between text-xs">
@@ -97,7 +96,7 @@ export function UpstreamsPage() {
                   <div className="h-2 rounded-full bg-muted overflow-hidden">
                     <div
                       className={`h-full rounded-full transition-all ${u.healthy ? 'bg-success' : 'bg-destructive'}`}
-                      style={{ width: `${Math.max(rate, 1)}%` }}
+                      style={{ width: `${total > 0 ? Math.max((u.queries / total) * 100, 1) : 100}%` }}
                     />
                   </div>
                 </div>

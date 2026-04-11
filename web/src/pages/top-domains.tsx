@@ -45,7 +45,7 @@ export function TopDomainsPage() {
                   <div className="w-24 h-2 rounded-full bg-muted overflow-hidden">
                     <div
                       className="h-full rounded-full bg-primary transition-all"
-                      style={{ width: `${(d.count / domains[0].count) * 100}%` }}
+                      style={{ width: `${domains.length > 0 ? (d.count / domains[0].count) * 100 : 0}%` }}
                     />
                   </div>
                 </div>

@@ -13,9 +13,32 @@ export async function api<T = unknown>(method: string, path: string, body?: unkn
   const opts: RequestInit = { method, headers };
   if (body) opts.body = JSON.stringify(body);
   const resp = await fetch(`${API_BASE}${path}`, opts);
-  const data = await resp.json();
-  if (!resp.ok) throw new Error(data.error || 'Request failed');
-  return data as T;
+
+  // Handle non-JSON responses gracefully
+  const contentType = resp.headers.get('content-type');
+  if (!resp.ok) {
+    // Try to parse error from JSON response
+    if (contentType?.includes('application/json')) {
+      try {
+        const data = await resp.json();
+        throw new Error(data.error || `HTTP ${resp.status}: ${resp.statusText}`);
+      } catch (e) {
+        if (e instanceof SyntaxError) {
+          // Non-JSON error body
+          throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
+        }
+        throw e; // Re-throw if we already have a meaningful Error
+      }
+    }
+    throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
+  }
+
+  // Only parse JSON on success
+  if (contentType?.includes('application/json')) {
+    return await resp.json() as T;
+  }
+  // Return empty object for non-JSON success responses
+  return {} as T;
 }
 
 export interface DashboardStats {

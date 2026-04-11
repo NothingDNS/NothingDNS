@@ -16,8 +16,11 @@ export function LoginPage({ onSuccess }: { onSuccess: () => void }) {
     try {
       const r = await fetch('/api/v1/status', { headers: { Authorization: `Bearer ${token.trim()}` } });
       if (r.ok) { document.cookie = `ndns_token=${encodeURIComponent(token.trim())}; path=/; max-age=86400; SameSite=Strict`; onSuccess(); return; }
-      setError('Invalid token. Please try again.');
-    } catch { setError('Connection error.'); } finally { setLoading(false); }
+      // Provide specific error messages based on response
+      if (r.status === 401) setError('Invalid token. Please check your token and try again.');
+      else if (r.status === 403) setError('Access forbidden. Contact your administrator.');
+      else setError(`Connection error (${r.status}). Please try again.`);
+    } catch { setError('Connection error. Please check your network.'); } finally { setLoading(false); }
   };
 
   return (

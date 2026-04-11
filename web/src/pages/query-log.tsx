@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -13,41 +13,36 @@ export function QueryLogPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [offset, setOffset] = useState(0);
   const [filter, setFilter] = useState('');
-  const loadTriggerRef = useRef({ offset, shouldLoad: true });
+  const [error, setError] = useState<string | null>(null);
+  const currentOffsetRef = useRef(offset);
 
-  const fetchData = useCallback(async (currentOffset: number) => {
-    const result = await api<QueryLogResponse>('GET', `/api/v1/queries?offset=${currentOffset}&limit=${PAGE_SIZE}`);
-    return result;
-  }, []);
-
-  // Track offset changes and trigger load via ref
   useEffect(() => {
-    loadTriggerRef.current = { offset, shouldLoad: true };
+    currentOffsetRef.current = offset;
   }, [offset]);
 
-  // Handle loading data when trigger changes
   useEffect(() => {
-    if (!loadTriggerRef.current.shouldLoad) return;
+    let cancelled = false;
 
-    loadTriggerRef.current.shouldLoad = false;
-    const currentOffset = loadTriggerRef.current.offset;
-
-    // Use requestAnimationFrame to defer state update
-    const rafId = requestAnimationFrame(() => {
+    async function load() {
       setIsLoading(true);
-    });
-
-    fetchData(currentOffset)
-      .then(result => {
+      setError(null);
+      try {
+        const result = await api<QueryLogResponse>('GET', `/api/v1/queries?offset=${offset}&limit=${PAGE_SIZE}`);
+        // Ignore stale responses
+        if (cancelled) return;
+        if (currentOffsetRef.current !== offset) return;
         setData(result);
-        setIsLoading(false);
-      })
-      .catch(() => {
-        setIsLoading(false);
-      });
+      } catch (e) {
+        if (cancelled) return;
+        setError(e instanceof Error ? e.message : 'Failed to load queries');
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    }
 
-    return () => cancelAnimationFrame(rafId);
-  }, [fetchData, offset]);
+    load();
+    return () => { cancelled = true; };
+  }, [offset]);
 
   const total = data?.total ?? 0;
   const queries = data?.queries ?? [];
@@ -72,6 +67,10 @@ export function QueryLogPage() {
         <Badge variant="secondary">{total} total</Badge>
       </div>
 
+      {error && (
+        <div className="text-sm text-destructive bg-destructive/10 px-3 py-2 rounded-lg">{error}</div>
+      )}
+
       <Card>
         <CardContent className="p-0">
           {isLoading ? (
@@ -94,7 +93,7 @@ export function QueryLogPage() {
                 </thead>
                 <tbody>
                   {filtered.map((q, i) => (
-                    <tr key={i} className="border-b hover:bg-muted/50 transition-colors">
+                    <tr key={`${q.timestamp}-${q.domain}-${i}`} className="border-b hover:bg-muted/50 transition-colors">
                       <td className="p-3 font-mono text-xs">{new Date(q.timestamp).toLocaleTimeString()}</td>
                       <td className="p-3 font-medium truncate max-w-[200px]">{q.domain}</td>
                       <td className="p-3"><Badge variant="outline">{q.query_type}</Badge></td>

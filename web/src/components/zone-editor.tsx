@@ -71,36 +71,55 @@ export function ZoneEditor({ zoneName, initialRecords, onRefresh }: ZoneEditorPr
     const record = records[index];
     if (!record.edited) return;
     saveToHistory(`Edited ${record.name} ${record.type}`);
-    setRecords(prev => prev.map((r, i) => i === index ? { ...r, edited: false } : r));
     api('PUT', `/api/v1/zones/${encodeURIComponent(zoneName)}/records`, {
       name: record.name,
       type: record.type,
       old_data: record.original?.data || record.data,
       ttl: record.ttl,
       data: record.data
-    }).catch(console.error);
+    }).then(() => {
+      setRecords(prev => prev.map((r, i) => i === index ? { ...r, edited: false } : r));
+    }).catch(e => {
+      console.error('Failed to save record:', e);
+      // Revert the edited flag on failure
+      setRecords(prev => prev.map((r, i) => i === index ? { ...r, edited: true } : r));
+    });
   }, [records, saveToHistory, zoneName]);
 
   const deleteRecord = useCallback((record: EditableRecord) => {
     if (!confirm(`Delete ${record.type} ${record.name}?`)) return;
     saveToHistory(`Deleted ${record.name} ${record.type}`);
+    // Optimistic delete - remove first, revert on failure
+    setRecords(prev => prev.filter(r => !(r.name === record.name && r.type === record.type && r.data === record.data)));
     api('DELETE', `/api/v1/zones/${encodeURIComponent(zoneName)}/records`, {
       name: record.name,
       type: record.type,
       data: record.data
-    }).then(onRefresh).catch(console.error);
-    setRecords(prev => prev.filter(r => !(r.name === record.name && r.type === record.type && r.data === record.data)));
-  }, [saveToHistory, zoneName, onRefresh]);
+    }).catch(e => {
+      console.error('Delete failed:', e);
+      // Revert on failure
+      setRecords(prev => [record, ...prev]);
+      alert(`Failed to delete ${record.type} ${record.name}`);
+    });
+  }, [saveToHistory, zoneName]);
 
   const deleteSelected = useCallback(async () => {
     if (selectedRecords.size === 0) return;
     if (!confirm(`Delete ${selectedRecords.size} selected records?`)) return;
     saveToHistory(`Deleted ${selectedRecords.size} records`);
     const selected = records.filter((_, i) => selectedRecords.has(i));
+    const failures: string[] = [];
     for (const r of selected) {
-      await api('DELETE', `/api/v1/zones/${encodeURIComponent(zoneName)}/records`, {
-        name: r.name, type: r.type, data: r.data
-      }).catch(console.error);
+      try {
+        await api('DELETE', `/api/v1/zones/${encodeURIComponent(zoneName)}/records`, {
+          name: r.name, type: r.type, data: r.data
+        });
+      } catch {
+        failures.push(`${r.type} ${r.name}`);
+      }
+    }
+    if (failures.length > 0) {
+      alert(`Failed to delete: ${failures.join(', ')}`);
     }
     onRefresh();
     setSelectedRecords(new Set());

@@ -3,17 +3,23 @@ import type { QueryEvent } from '@/lib/api';
 
 interface UseWebSocketOpts {
   onQuery?: (event: QueryEvent) => void;
+  onError?: (error: string) => void;
   autoReconnect?: boolean;
 }
 
 export function useWebSocket(path: string, opts: UseWebSocketOpts = {}) {
-  const { onQuery, autoReconnect = true } = opts;
+  const { onQuery, onError, autoReconnect = true } = opts;
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const onQueryRef = useRef(onQuery);
+  const onErrorRef = useRef(onError);
   const [connected, setConnected] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const reconnectAttempts = useRef(0);
+  const maxReconnectAttempts = 10;
 
   useEffect(() => { onQueryRef.current = onQuery; }, [onQuery]);
+  useEffect(() => { onErrorRef.current = onError; }, [onError]);
 
   useEffect(() => {
     let cancelled = false;
@@ -24,22 +30,39 @@ export function useWebSocket(path: string, opts: UseWebSocketOpts = {}) {
       let url = `${proto}//${location.host}${path}`;
 
       // Pass auth token via query param (WebSocket can't send headers)
+      // Cookie stores token already URI-encoded, pass directly to avoid double-encoding
       const tokenMatch = document.cookie.match(/ndns_token=([^;]+)/);
       if (tokenMatch) {
-        const token = decodeURIComponent(tokenMatch[1]);
-        url += (path.includes('?') ? '&' : '?') + `token=${encodeURIComponent(token)}`;
+        url += (path.includes('?') ? '&' : '?') + `token=${tokenMatch[1]}`;
       }
 
       const ws = new WebSocket(url);
       wsRef.current = ws;
-      ws.onopen = () => { if (!cancelled) setConnected(true); };
-      ws.onclose = () => {
+      ws.onopen = () => { if (!cancelled) { setConnected(true); setError(null); reconnectAttempts.current = 0; } };
+      ws.onclose = (e) => {
         if (!cancelled) {
           setConnected(false);
-          if (autoReconnect) reconnectTimer.current = setTimeout(connect, 3000);
+          // Provide meaningful error messages
+          if (e.code === 1006) {
+            // Abnormal closure - likely auth failure
+            setError('Connection closed: authentication may have failed');
+          } else if (e.code !== 1000) {
+            setError(`Connection closed (code ${e.code})`);
+          }
+          // Reconnect with backoff, max 10 attempts
+          if (autoReconnect && reconnectAttempts.current < maxReconnectAttempts) {
+            reconnectAttempts.current++;
+            const delay = Math.min(3000 * Math.pow(1.5, reconnectAttempts.current - 1), 30000);
+            reconnectTimer.current = setTimeout(connect, delay);
+          } else if (reconnectAttempts.current >= maxReconnectAttempts) {
+            setError('Connection failed after multiple attempts. Please refresh the page.');
+          }
         }
       };
-      ws.onerror = () => ws.close();
+      ws.onerror = () => {
+        setError('WebSocket error: connection failed');
+        if (onErrorRef.current) onErrorRef.current('WebSocket connection failed');
+      };
       ws.onmessage = (e) => {
         try {
           const msg = JSON.parse(e.data);
@@ -56,5 +79,5 @@ export function useWebSocket(path: string, opts: UseWebSocketOpts = {}) {
     };
   }, [path, autoReconnect]);
 
-  return { connected };
+  return { connected, error };
 }
