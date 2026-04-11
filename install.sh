@@ -110,7 +110,8 @@ detect_os() {
 
 # Get latest release version
 get_latest_version() {
-    LATEST_VERSION=$(curl -s https://api.github.com/repos/${REPO}/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
+    # Use public DNS (8.8.8.8) since systemd-resolved may be stopped
+    LATEST_VERSION=$(curl -s --dns-servers 8.8.8.8 https://api.github.com/repos/${REPO}/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
     if [ -z "$LATEST_VERSION" ]; then
         error "Could not fetch latest release version"
     fi
@@ -167,7 +168,7 @@ download_binary() {
     TEMP_FILE=$(mktemp)
     trap "rm -f ${TEMP_FILE}" EXIT
 
-    curl -fsSL -o "${TEMP_FILE}" "${DOWNLOAD_URL}" || error "Download failed"
+    curl -fsSL --dns-servers 8.8.8.8 -o "${TEMP_FILE}" "${DOWNLOAD_URL}" || error "Download failed"
     chmod +x "${TEMP_FILE}"
 
     if [ -d "${INSTALL_DIR}" ]; then
@@ -190,7 +191,7 @@ download_dnsctl() {
     info "Downloading dnsctl..."
 
     TEMP_FILE=$(mktemp)
-    curl -fsSL -o "${TEMP_FILE}" "${DOWNLOAD_URL}" 2>/dev/null || {
+    curl -fsSL --dns-servers 8.8.8.8 -o "${TEMP_FILE}" "${DOWNLOAD_URL}" 2>/dev/null || {
         warn "dnsctl download failed, skipping..."
         return
     }
