@@ -4,9 +4,19 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
+
+// sanitizeLogField removes newlines and control characters that could
+// inject false entries into structured log files.
+func sanitizeLogField(s string) string {
+	s = strings.ReplaceAll(s, "\n", "\\n")
+	s = strings.ReplaceAll(s, "\r", "\\r")
+	s = strings.ReplaceAll(s, "\x00", "")
+	return s
+}
 
 // QueryAuditEntry represents a single query audit log entry.
 type QueryAuditEntry struct {
@@ -195,7 +205,7 @@ func formatQueryAuditLine(e QueryAuditEntry) string {
 	return fmt.Sprintf("%s client=%s query=%s type=%s rcode=%s latency=%s cache=%s upstream=%s",
 		e.Timestamp,
 		e.ClientIP,
-		e.QueryName,
+		sanitizeLogField(e.QueryName),
 		e.QueryType,
 		e.Rcode,
 		e.Latency.Round(time.Microsecond),
@@ -208,7 +218,7 @@ func formatAXFRAuditLine(e AXFRAuditEntry) string {
 	return fmt.Sprintf("%s client=%s zone=%s action=%s records=%d latency=%s",
 		e.Timestamp,
 		e.ClientIP,
-		e.Zone,
+		sanitizeLogField(e.Zone),
 		e.Action,
 		e.RecordCount,
 		e.Latency.Round(time.Millisecond),
@@ -219,7 +229,7 @@ func formatIXFRAuditLine(e IXFRAuditEntry) string {
 	return fmt.Sprintf("%s client=%s zone=%s action=%s records=%d latency=%s",
 		e.Timestamp,
 		e.ClientIP,
-		e.Zone,
+		sanitizeLogField(e.Zone),
 		e.Action,
 		e.RecordCount,
 		e.Latency.Round(time.Millisecond),
@@ -230,7 +240,7 @@ func formatNOTIFYAuditLine(e NOTIFYAuditEntry) string {
 	return fmt.Sprintf("%s client=%s zone=%s action=%s",
 		e.Timestamp,
 		e.ClientIP,
-		e.Zone,
+		sanitizeLogField(e.Zone),
 		e.Action,
 	)
 }
@@ -239,7 +249,7 @@ func formatUpdateAuditLine(e UpdateAuditEntry) string {
 	return fmt.Sprintf("%s client=%s zone=%s action=%s rcode=%s added=%d deleted=%d",
 		e.Timestamp,
 		e.ClientIP,
-		e.Zone,
+		sanitizeLogField(e.Zone),
 		e.Action,
 		e.Rcode,
 		e.Added,

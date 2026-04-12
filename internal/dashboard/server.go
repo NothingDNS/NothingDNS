@@ -309,7 +309,8 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Validate against auth store if available, otherwise use legacy token
 	if authStore != nil {
 		if _, err := authStore.ValidateToken(token); err != nil {
-			util.Warnf("dashboard: websocket auth failed: %v", err)
+			// Log without exposing internal error details to client
+			util.Warnf("dashboard: websocket auth failed: token validation error")
 			http.Error(w, "invalid token", http.StatusUnauthorized)
 			return
 		}
