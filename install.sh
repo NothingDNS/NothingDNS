@@ -129,17 +129,22 @@ check_existing_install() {
 
         if [ "$current_version" = "v${LATEST_VERSION}" ] || [ "$current_version" = "${LATEST_VERSION}" ]; then
             info "NothingDNS is up to date!"
-            echo ""
-            echo "  1) Reinstall anyway"
-            echo "  2) Skip download (use existing)"
-            echo "  3) Exit"
-            echo ""
-            read -p "Select [2]: " -n 1 -r; echo
-            case "$REPLY" in
-                1) info "Reinstalling..." ;;
-                3) info "Nothing to do. Exiting."; exit 0 ;;
-                *) info "Using existing installation."; SKIP_DOWNLOAD=true ;;
-            esac
+            if is_interactive; then
+                echo ""
+                echo "  1) Reinstall anyway"
+                echo "  2) Skip download (use existing)"
+                echo "  3) Exit"
+                echo ""
+                read -p "Select [2]: " -n 1 -r; echo
+                case "$REPLY" in
+                    1) info "Reinstalling..." ;;
+                    3) info "Nothing to do. Exiting."; exit 0 ;;
+                    *) info "Using existing installation."; SKIP_DOWNLOAD=true ;;
+                esac
+            else
+                info "Non-interactive: using existing installation."
+                SKIP_DOWNLOAD=true
+            fi
         else
             echo ""
             echo "A newer version is available."
@@ -147,12 +152,16 @@ check_existing_install() {
             echo "  2) Keep current version"
             echo "  3) Exit"
             echo ""
-            read -p "Select [1]: " -n 1 -r; echo
-            case "$REPLY" in
-                2) info "Keeping current version."; SKIP_DOWNLOAD=true ;;
-                3) info "Exiting."; exit 0 ;;
-                *) info "Upgrading to ${LATEST_VERSION}..." ;;
-            esac
+            if is_interactive; then
+                read -p "Select [1]: " -n 1 -r; echo
+                case "$REPLY" in
+                    2) info "Keeping current version."; SKIP_DOWNLOAD=true ;;
+                    3) info "Exiting."; exit 0 ;;
+                    *) info "Upgrading to ${LATEST_VERSION}..." ;;
+                esac
+            else
+                info "Non-interactive: upgrading to ${LATEST_VERSION}..."
+            fi
         fi
     fi
 }
