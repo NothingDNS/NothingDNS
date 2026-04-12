@@ -42,25 +42,32 @@ export function LoginPage() {
 
   const onSubmit = async (data: LoginValues) => {
     try {
+      // First validate the token by calling /api/v1/status
       const r = await fetch('/api/v1/status', {
         headers: { Authorization: `Bearer ${data.token}` },
       });
 
       if (r.ok) {
+        // Token is valid - set cookie and proceed
         setPendingToken(data.token);
-        // Get user info for the store
-        const userResp = await fetch('/api/v1/auth/users', {
-          headers: { Authorization: `Bearer ${data.token}` },
-        });
-        if (userResp.ok) {
-          const users = await userResp.json();
-          if (users.length > 0) {
-            setAuth(data.token, users[0].username, users[0].role);
-            return;
+
+        // Try to get user info, but don't fail login if this endpoint requires different auth
+        try {
+          const userResp = await fetch('/api/v1/auth/users', {
+            headers: { Authorization: `Bearer ${data.token}` },
+          });
+          if (userResp.ok) {
+            const users = await userResp.json();
+            if (users.length > 0) {
+              setAuth(data.token, users[0].username, users[0].role);
+              return;
+            }
           }
+        } catch {
+          // Ignore user fetch errors - token is valid
         }
-        // If no users, still authenticate with token
-        setAuth(data.token, 'admin', 'admin');
+        // Use default user info if users endpoint fails
+        setAuth(data.token, 'operator', 'operator');
       } else if (r.status === 401) {
         setError('token', { message: 'Invalid token. Please check your token and try again.' });
       } else if (r.status === 403) {

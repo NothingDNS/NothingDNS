@@ -684,9 +684,14 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 
 		// Validate token
 		if token != "" {
-			// First try old-style shared token
+			// First try old-style shared token (auth_token or auth_secret as fallback)
 			// SECURITY: Check length first to prevent timing attack via ConstantTimeCompare
-			if s.config.AuthToken != "" && len(token) == len(s.config.AuthToken) && subtle.ConstantTimeCompare([]byte(token), []byte(s.config.AuthToken)) == 1 {
+			legacyToken := s.config.AuthToken
+			if legacyToken == "" {
+				// If auth_token not set, use auth_secret as fallback (for single-token mode without users)
+				legacyToken = s.config.AuthSecret
+			}
+			if legacyToken != "" && len(token) == len(legacyToken) && subtle.ConstantTimeCompare([]byte(token), []byte(legacyToken)) == 1 {
 				// Check API rate limit for authenticated requests
 				ip := getClientIP(r)
 				if s.apiRateLimiter.checkRateLimit(ip) {
