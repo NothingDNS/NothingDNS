@@ -12,6 +12,8 @@ CONFIG_DIR="/etc/nothingdns"
 CONFIG_FILE="${CONFIG_DIR}/config.yaml"
 BINARY_NAME="nothingdns"
 SKIP_DOWNLOAD=false
+BOOTSTRAP_USER="admin"
+BOOTSTRAP_PASS=""
 
 # Colors
 RED='\033[0;31m'
@@ -320,6 +322,44 @@ EOF
     info "  ${AUTH_SECRET}"
 }
 
+# Create bootstrap user via API
+create_bootstrap_user() {
+    # Generate random password
+    BOOTSTRAP_PASS=$(openssl rand -base64 12 2>/dev/null | tr -d '/+=' | head -c 12)
+
+    # Wait for server to be ready
+    local max_attempts=10
+    local attempt=0
+
+    info "Waiting for server to start..."
+    while [ $attempt -lt $max_attempts ]; do
+        if curl -s --max-time 2 http://localhost:8080/health > /dev/null 2>&1; then
+            break
+        fi
+        attempt=$((attempt + 1))
+        sleep 1
+    done
+
+    if [ $attempt -eq $max_attempts ]; then
+        warn "Server did not start in time, skipping bootstrap user creation"
+        warn "Start server manually and run: curl -X POST http://localhost:8080/api/v1/auth/bootstrap -d '{\"username\":\"admin\",\"password\":\"<password>\"}'"
+        return
+    fi
+
+    # Create bootstrap user
+    local response
+    response=$(curl -s -X POST http://localhost:8080/api/v1/auth/bootstrap \
+        -H "Content-Type: application/json" \
+        -d "{\"username\":\"${BOOTSTRAP_USER}\",\"password\":\"${BOOTSTRAP_PASS}\"}" 2>&1)
+
+    if echo "$response" | grep -q "token"; then
+        info "Bootstrap user created successfully"
+    else
+        warn "Bootstrap response: $response"
+        warn "You may need to create user manually or server already has users"
+    fi
+}
+
 # Setup service (systemd)
 setup_service() {
     # Create necessary directories
@@ -448,20 +488,31 @@ main() {
     create_config
     setup_service
 
+    # Start the server
+    info "Starting NothingDNS..."
+    if command -v systemctl &> /dev/null; then
+        sudo systemctl start nothingdns
+        sleep 2
+    else
+        sudo ${INSTALL_DIR}/${BINARY_NAME} --config ${CONFIG_FILE} &
+        sleep 3
+    fi
+
+    # Create bootstrap user
+    create_bootstrap_user
+
     echo ""
     echo "======================================"
     echo -e "${GREEN}  Installation Complete!${NC}"
     echo "======================================"
     echo ""
-    echo "Next steps:"
-    echo "  1. Edit config: sudo nano ${CONFIG_FILE}"
-    echo "  2. Create zone files in ${CONFIG_DIR}/zones/"
-    echo "  3. Start server:"
-    echo "       sudo systemctl start nothingdns"
-    echo "     or run directly:"
-    echo "       sudo ${INSTALL_DIR}/${BINARY_NAME} --config ${CONFIG_FILE}"
-    echo ""
     echo "Dashboard: http://localhost:8080"
+    echo ""
+    echo "Login credentials:"
+    echo "  Username: ${BOOTSTRAP_USER}"
+    echo "  Password: ${BOOTSTRAP_PASS}"
+    echo ""
+    echo "Edit config: sudo nano ${CONFIG_FILE}"
     echo ""
     echo "Docker alternative:"
     echo "  docker pull ghcr.io/nothingdns/nothingdns:latest"
