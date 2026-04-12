@@ -14,6 +14,7 @@ BINARY_NAME="nothingdns"
 SKIP_DOWNLOAD=false
 BOOTSTRAP_USER="admin"
 BOOTSTRAP_PASS=""
+USE_PORT_5353=false
 
 # Colors
 RED='\033[0;31m'
@@ -219,11 +220,28 @@ download_dnsctl() {
 
 # Create default config
 create_config() {
+    local port="${1:-53}"
+
     if [ -f "${CONFIG_FILE}" ]; then
         warn "Config already exists at ${CONFIG_FILE}"
-        read -p "Overwrite config? (y/N): " -n 1 -r; echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            info "Keeping existing config"
+        if is_interactive; then
+            read -p "Overwrite config? (y/N): " -n 1 -r; echo
+            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                info "Keeping existing config"
+                # Still apply port change if needed
+                if [ "$port" != "53" ]; then
+                    info "Applying port change to ${port}..."
+                    sed -i "s/port: 53/port: ${port}/" "${CONFIG_FILE}" 2>/dev/null || true
+                fi
+                return
+            fi
+        else
+            info "Non-interactive: keeping existing config"
+            # Still apply port change if needed
+            if [ "$port" != "53" ]; then
+                info "Applying port change to ${port}..."
+                sed -i "s/port: 53/port: ${port}/" "${CONFIG_FILE}" 2>/dev/null || true
+            fi
             return
         fi
     fi
@@ -244,7 +262,7 @@ server:
   bind:
     - 0.0.0.0
     - "::"
-  port: 53
+  port: ${port}
   udp_workers: 0
   tcp_workers: 0
 
@@ -337,7 +355,7 @@ create_bootstrap_user() {
     BOOTSTRAP_PASS=$(openssl rand -base64 12 2>/dev/null | tr -d '/+=' | head -c 12)
 
     # Wait for server to be ready
-    local max_attempts=10
+    local max_attempts=15
     local attempt=0
 
     info "Waiting for server to start..."
@@ -351,21 +369,37 @@ create_bootstrap_user() {
 
     if [ $attempt -eq $max_attempts ]; then
         warn "Server did not start in time, skipping bootstrap user creation"
-        warn "Start server manually and run: curl -X POST http://localhost:8080/api/v1/auth/bootstrap -d '{\"username\":\"admin\",\"password\":\"<password>\"}'"
+        warn "Generated password (save this): ${BOOTSTRAP_PASS}"
+        warn "Start server manually and create user with:"
+        warn "curl -X POST http://localhost:8080/api/v1/auth/bootstrap -H 'Content-Type: application/json' -d '{\"username\":\"admin\",\"password\":\"${BOOTSTRAP_PASS}\"}'"
         return
     fi
 
-    # Create bootstrap user
-    local response
-    response=$(curl -s -X POST http://localhost:8080/api/v1/auth/bootstrap \
-        -H "Content-Type: application/json" \
-        -d "{\"username\":\"${BOOTSTRAP_USER}\",\"password\":\"${BOOTSTRAP_PASS}\"}" 2>&1)
+    # Check if users already exist
+    local bootstrap_needed=true
+    local users_response
+    users_response=$(curl -s -X GET http://localhost:8080/api/v1/auth/users \
+        -H "Content-Type: application/json" 2>/dev/null)
 
-    if echo "$response" | grep -q "token"; then
-        info "Bootstrap user created successfully"
-    else
-        warn "Bootstrap response: $response"
-        warn "You may need to create user manually or server already has users"
+    if echo "$users_response" | grep -q "username"; then
+        info "Users already exist, skipping bootstrap"
+        bootstrap_needed=false
+    fi
+
+    if [ "$bootstrap_needed" = true ]; then
+        # Create bootstrap user
+        local response
+        response=$(curl -s -X POST http://localhost:8080/api/v1/auth/bootstrap \
+            -H "Content-Type: application/json" \
+            -d "{\"username\":\"${BOOTSTRAP_USER}\",\"password\":\"${BOOTSTRAP_PASS}\"}" 2>&1)
+
+        if echo "$response" | grep -q "token"; then
+            info "Bootstrap user created successfully"
+        else
+            warn "Bootstrap response: $response"
+            warn "Generated password (save this): ${BOOTSTRAP_PASS}"
+            warn "If login fails, create user manually after server starts"
+        fi
     fi
 }
 
@@ -481,7 +515,7 @@ main() {
                 1) stop_existing_dns ;;
                 2)
                     info "Using port 5353 instead of 53"
-                    # Modify config to use port 5353
+                    USE_PORT_5353=true
                     ;;
                 *) error "Installation cancelled" ;;
             esac
@@ -494,7 +528,15 @@ main() {
 
     download_binary
     download_dnsctl
-    create_config
+
+    # Determine port
+    local port=53
+    if [ "$USE_PORT_5353" = true ]; then
+        port=5353
+        info "Using port 5353 instead of 53"
+    fi
+
+    create_config $port
     setup_service
 
     # Start the server
