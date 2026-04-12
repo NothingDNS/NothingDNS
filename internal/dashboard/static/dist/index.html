@@ -5,8 +5,17 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>NothingDNS Dashboard</title>
-    <script type="module" crossorigin src="/assets/index-DQo2lk3L.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-WP5cg4td.css">
+    <!-- Flash prevention: apply theme before render -->
+    <script>
+      (function() {
+        var theme = localStorage.getItem('ndns-theme') || 'system';
+        var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        var isDark = theme === 'dark' || (theme === 'system' && prefersDark);
+        if (isDark) document.documentElement.classList.add('dark');
+      })();
+    </script>
+    <script type="module" crossorigin src="/assets/index-DEeSc4wu.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-1NCZkW_z.css">
   </head>
   <body>
     <div id="root"></div>

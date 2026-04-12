@@ -1,75 +1,125 @@
 @import "tailwindcss";
+@import "@fontsource-variable/inter/index.css";
+@import "@fontsource-variable/jetbrains-mono/index.css";
 
 @custom-variant dark (&:is(.dark *));
 
+/* WEBUI.md Compliant Color System - WCAG AA */
+
 @theme {
-  --color-background: hsl(0 0% 100%);
-  --color-foreground: hsl(222.2 84% 4.9%);
-  --color-card: hsl(0 0% 100%);
-  --color-card-foreground: hsl(222.2 84% 4.9%);
-  --color-popover: hsl(0 0% 100%);
-  --color-popover-foreground: hsl(222.2 84% 4.9%);
-  --color-primary: hsl(221.2 83.2% 53.3%);
-  --color-primary-foreground: hsl(210 40% 98%);
-  --color-secondary: hsl(210 40% 96.1%);
-  --color-secondary-foreground: hsl(222.2 47.4% 11.2%);
-  --color-muted: hsl(210 40% 96.1%);
-  --color-muted-foreground: hsl(215.4 16.3% 46.9%);
-  --color-accent: hsl(210 40% 96.1%);
-  --color-accent-foreground: hsl(222.2 47.4% 11.2%);
-  --color-destructive: hsl(0 84.2% 60.2%);
-  --color-destructive-foreground: hsl(210 40% 98%);
-  --color-border: hsl(214.3 31.8% 91.4%);
-  --color-input: hsl(214.3 31.8% 91.4%);
-  --color-ring: hsl(221.2 83.2% 53.3%);
-  --color-success: hsl(142.1 76.2% 36.3%);
-  --color-warning: hsl(38 92% 50%);
-  --color-chart-1: hsl(221.2 83.2% 53.3%);
-  --color-chart-2: hsl(142.1 76.2% 36.3%);
-  --color-chart-3: hsl(38 92% 50%);
-  --color-chart-4: hsl(0 84.2% 60.2%);
-  --color-chart-5: hsl(262 83.3% 57.8%);
-  --color-sidebar: hsl(0 0% 98%);
-  --color-sidebar-foreground: hsl(222.2 84% 4.9%);
-  --color-sidebar-accent: hsl(210 40% 96.1%);
-  --color-sidebar-border: hsl(214.3 31.8% 91.4%);
-  --radius-sm: 0.25rem;
-  --radius-md: 0.375rem;
-  --radius-lg: 0.5rem;
-  --radius-xl: 0.75rem;
+  /* Light Mode - Warm, Readable */
+  --color-background: #f8f8fa;
+  --color-background-subtle: #f0f0f4;
+  --color-background-muted: #e8e8ee;
+  --color-surface: #ffffff;
+  --color-border: #d4d4dc;
+  --color-border-strong: #b0b0bc;
+  --color-foreground: #1a1a22;
+  --color-text-secondary: #55556a;
+  --color-text-muted: #8888a0;
+  --color-ring: #3b5ce4;
+
+  /* Brand / Accent */
+  --color-accent: #3b5ce4;
+  --color-accent-hover: #2d4bd6;
+  --color-accent-foreground: #ffffff;
+  --color-accent-muted: rgba(59, 92, 228, 0.1);
+
+  /* Semantic Colors */
+  --color-success: #22c55e;
+  --color-success-bg: rgba(34, 197, 94, 0.08);
+  --color-success-foreground: #ffffff;
+  --color-warning: #f59e0b;
+  --color-warning-bg: rgba(245, 158, 11, 0.08);
+  --color-warning-foreground: #ffffff;
+  --color-error: #ef4444;
+  --color-error-bg: rgba(239, 68, 68, 0.08);
+  --color-info: #3b82f6;
+  --color-info-bg: rgba(59, 130, 246, 0.08);
+
+  /* UI Colors */
+  --color-primary: #3b5ce4;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #e8e8ee;
+  --color-secondary-foreground: #1a1a22;
+  --color-muted: #e8e8ee;
+  --color-muted-foreground: #55556a;
+  --color-destructive: #ef4444;
+  --color-destructive-foreground: #ffffff;
+
+  /* Chart Colors */
+  --color-chart-1: #3b5ce4;
+  --color-chart-2: #22c55e;
+  --color-chart-3: #f59e0b;
+  --color-chart-4: #ef4444;
+  --color-chart-5: #8b5cf6;
+
+  /* Sidebar */
+  --color-sidebar: #f0f0f4;
+  --color-sidebar-foreground: #1a1a22;
+  --color-sidebar-accent: #e8e8ee;
+  --color-sidebar-border: #d4d4dc;
+
+  /* Spacing & Radius */
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.04);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.07), 0 2px 4px -2px rgb(0 0 0 / 0.05);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.08), 0 4px 6px -4px rgb(0 0 0 / 0.04);
+
+  /* Typography */
+  --font-sans: 'Inter Variable', 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', 'Fira Code', monospace;
 }
 
+/* Dark Mode - Warm Charcoal, NOT Pure Black */
 .dark {
-  --color-background: hsl(222.2 84% 4.9%);
-  --color-foreground: hsl(210 40% 98%);
-  --color-card: hsl(222.2 84% 4.9%);
-  --color-card-foreground: hsl(210 40% 98%);
-  --color-popover: hsl(222.2 84% 4.9%);
-  --color-popover-foreground: hsl(210 40% 98%);
-  --color-primary: hsl(217.2 91.2% 59.8%);
-  --color-primary-foreground: hsl(222.2 47.4% 11.2%);
-  --color-secondary: hsl(217.2 32.6% 17.5%);
-  --color-secondary-foreground: hsl(210 40% 98%);
-  --color-muted: hsl(217.2 32.6% 17.5%);
-  --color-muted-foreground: hsl(215 20.2% 65.1%);
-  --color-accent: hsl(217.2 32.6% 17.5%);
-  --color-accent-foreground: hsl(210 40% 98%);
-  --color-destructive: hsl(0 62.8% 30.6%);
-  --color-destructive-foreground: hsl(210 40% 98%);
-  --color-border: hsl(217.2 32.6% 17.5%);
-  --color-input: hsl(217.2 32.6% 17.5%);
-  --color-ring: hsl(224.3 76.3% 48%);
-  --color-success: hsl(142.1 70.6% 45.3%);
-  --color-warning: hsl(38 92% 50%);
-  --color-chart-1: hsl(217.2 91.2% 59.8%);
-  --color-chart-2: hsl(142.1 70.6% 45.3%);
-  --color-chart-3: hsl(38 92% 50%);
-  --color-chart-4: hsl(0 62.8% 50.6%);
-  --color-chart-5: hsl(262 83.3% 57.8%);
-  --color-sidebar: hsl(222.2 84% 4.9%);
-  --color-sidebar-foreground: hsl(210 40% 98%);
-  --color-sidebar-accent: hsl(217.2 32.6% 17.5%);
-  --color-sidebar-border: hsl(217.2 32.6% 17.5%);
+  --color-background: #131316;
+  --color-background-subtle: #1a1a1f;
+  --color-background-muted: #222228;
+  --color-surface: #2a2a32;
+  --color-border: #32323c;
+  --color-border-strong: #45454f;
+  --color-foreground: #ededf0;
+  --color-text-secondary: #a0a0ab;
+  --color-text-muted: #6e6e7a;
+  --color-ring: #4f6df5;
+
+  --color-accent: #4f6df5;
+  --color-accent-hover: #5c7cfa;
+  --color-accent-foreground: #ffffff;
+  --color-accent-muted: rgba(79, 109, 245, 0.15);
+
+  --color-success-bg: rgba(34, 197, 94, 0.1);
+  --color-success-foreground: #ffffff;
+  --color-warning-bg: rgba(245, 158, 11, 0.1);
+  --color-warning-foreground: #ffffff;
+  --color-error-bg: rgba(239, 68, 68, 0.1);
+  --color-info-bg: rgba(59, 130, 246, 0.1);
+
+  --color-primary: #4f6df5;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #2a2a32;
+  --color-secondary-foreground: #ededf0;
+  --color-muted: #2a2a32;
+  --color-muted-foreground: #a0a0ab;
+  --color-destructive: #ef4444;
+  --color-destructive-foreground: #ffffff;
+
+  --color-chart-1: #4f6df5;
+  --color-chart-2: #22c55e;
+  --color-chart-3: #f59e0b;
+  --color-chart-4: #ef4444;
+  --color-chart-5: #8b5cf6;
+
+  --color-sidebar: #1a1a1f;
+  --color-sidebar-foreground: #ededf0;
+  --color-sidebar-accent: #222228;
+  --color-sidebar-border: #32323c;
 }
 
 * {
@@ -80,5 +130,31 @@ body {
   margin: 0;
   background-color: var(--color-background);
   color: var(--color-foreground);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  font-family: var(--font-sans);
+  transition: background-color 150ms ease, color 150ms ease;
+}
+
+/* Focus styles for accessibility */
+:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-background);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-muted);
 }

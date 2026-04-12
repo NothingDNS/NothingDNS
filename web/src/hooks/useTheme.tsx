@@ -1,6 +1,5 @@
 import { createContext, useEffect, useState, type ReactNode } from 'react';
-
-type Theme = 'light' | 'dark' | 'system';
+import type { Theme } from '@/lib/theme';
 
 interface ThemeContextValue {
   theme: Theme;
@@ -14,29 +13,44 @@ const ThemeContext = createContext<ThemeContextValue>({
   setTheme: () => {},
 });
 
-// ThemeProvider is the only export from this file (for fast refresh)
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setThemeRaw] = useState<Theme>(() => (localStorage.getItem('ndns-theme') as Theme) || 'system');
+  const [theme, setThemeRaw] = useState<Theme>(() => {
+    if (typeof window !== 'undefined') {
+      return (localStorage.getItem('ndns-theme') as Theme) || 'system';
+    }
+    return 'system';
+  });
   const [resolved, setResolved] = useState<'light' | 'dark'>('dark');
 
   useEffect(() => {
-    const apply = (d: boolean) => {
-      document.documentElement.classList.toggle('dark', d);
-      setResolved(d ? 'dark' : 'light');
+    const apply = (isDark: boolean) => {
+      document.documentElement.classList.toggle('dark', isDark);
+      setResolved(isDark ? 'dark' : 'light');
     };
+
     if (theme === 'system') {
       const mq = matchMedia('(prefers-color-scheme: dark)');
       apply(mq.matches);
-      const h = (e: MediaQueryListEvent) => apply(e.matches);
-      mq.addEventListener('change', h);
-      return () => mq.removeEventListener('change', h);
+      const handler = (e: MediaQueryListEvent) => apply(e.matches);
+      mq.addEventListener('change', handler);
+      return () => mq.removeEventListener('change', handler);
     }
+
     apply(theme === 'dark');
   }, [theme]);
 
-  const setTheme = (t: Theme) => { setThemeRaw(t); localStorage.setItem('ndns-theme', t); };
-  return <ThemeContext.Provider value={{ theme, resolved, setTheme }}>{children}</ThemeContext.Provider>;
+  const setTheme = (t: Theme) => {
+    setThemeRaw(t);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('ndns-theme', t);
+    }
+  };
+
+  return (
+    <ThemeContext.Provider value={{ theme, resolved, setTheme }}>
+      {children}
+    </ThemeContext.Provider>
+  );
 }
 
-// Expose context for custom hooks
 export { ThemeContext };

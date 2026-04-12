@@ -1,7 +1,10 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { ThemeProvider } from '@/hooks/useTheme';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { Toaster } from 'sonner';
+import { queryClient } from '@/lib/queryClient';
+import { useAuthStore } from '@/stores/authStore';
 import { useWebSocket } from '@/hooks/useWebSocket';
-import { NotificationProvider } from '@/lib/notification';
 import { Sidebar } from '@/components/layout/sidebar';
 import { DashboardPage } from '@/pages/dashboard';
 import { ZonesPage } from '@/pages/zones';
@@ -22,31 +25,26 @@ import { ACLPage } from '@/pages/acl';
 import { GeoIPPage } from '@/pages/geoip';
 import { DNS64CookiesPage } from '@/pages/dns64-cookies';
 import { ZoneTransferPage } from '@/pages/zone-transfer';
-import { useState, useEffect } from 'react';
-
-function getToken(): string | null {
-  const match = document.cookie.match(/ndns_token=([^;]+)/);
-  return match ? decodeURIComponent(match[1]) : null;
-}
+import { useEffect } from 'react';
 
 function AppContent() {
-  const [authed, setAuthed] = useState(() => !!getToken());
+  const { isAuthenticated, token } = useAuthStore();
   const { connected } = useWebSocket('/ws');
 
   useEffect(() => {
-    const token = getToken();
-    if (token && authed) {
+    // Validate token on mount if authenticated
+    if (isAuthenticated && token) {
       fetch('/api/v1/status', { headers: { Authorization: `Bearer ${token}` } })
-        .then((r) => { if (!r.ok) setAuthed(false); })
+        .then((r) => { if (!r.ok) useAuthStore.getState().clearAuth(); })
         .catch(() => {});
     }
-  }, [authed]);
+  }, [isAuthenticated, token]);
 
-  if (!authed) return <LoginPage onSuccess={() => setAuthed(true)} />;
+  if (!isAuthenticated) return <LoginPage />;
 
   return (
     <BrowserRouter>
-      <div className="flex min-h-screen bg-background">
+      <div className="flex min-h-screen bg-background text-foreground">
         <Sidebar connected={connected} />
         <main className="flex-1 overflow-y-auto h-screen">
           <div className="p-6 max-w-6xl mx-auto">
@@ -79,10 +77,11 @@ function AppContent() {
 
 export default function App() {
   return (
-    <ThemeProvider>
-      <NotificationProvider>
+    <QueryClientProvider client={queryClient}>
+      <ThemeProvider>
         <AppContent />
-      </NotificationProvider>
-    </ThemeProvider>
+        <Toaster position="bottom-right" richColors closeButton />
+      </ThemeProvider>
+    </QueryClientProvider>
   );
 }
