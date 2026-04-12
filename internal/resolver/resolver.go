@@ -418,8 +418,13 @@ func (r *Resolver) extractDelegation(resp *protocol.Message) *delegation {
 
 // resolveNSAddresses resolves A/AAAA for NS names that lack glue.
 func (r *Resolver) resolveNSAddresses(ctx context.Context, deleg *delegation) {
+	type nsResult struct {
+		name  string
+		addrs []string
+	}
+
 	var wg sync.WaitGroup
-	var mu sync.Mutex
+	resultCh := make(chan nsResult, len(deleg.nsNames))
 
 	for _, nsName := range deleg.nsNames {
 		if len(deleg.addrs[nsName]) > 0 {
@@ -431,13 +436,18 @@ func (r *Resolver) resolveNSAddresses(ctx context.Context, deleg *delegation) {
 			defer wg.Done()
 			addrs := r.lookupNSAddresses(ctx, name)
 			if len(addrs) > 0 {
-				mu.Lock()
-				deleg.addrs[name] = addrs
-				mu.Unlock()
+				resultCh <- nsResult{name: name, addrs: addrs}
 			}
 		}(nsName)
 	}
+
+	// Wait with context cancellation support
 	wg.Wait()
+	close(resultCh)
+
+	for result := range resultCh {
+		deleg.addrs[result.name] = result.addrs
+	}
 }
 
 // lookupNSAddresses resolves A and AAAA records for an NS name using

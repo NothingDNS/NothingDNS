@@ -278,12 +278,12 @@ func UnpackName(buf []byte, offset int) (*Name, int, error) {
 
 			pointer := int(Uint16(buf[offset:]) & PointerOffsetMask)
 
-			// Validate pointer
+			// Validate pointer is within buffer bounds
 			if pointer >= len(buf) {
 				return nil, 0, ErrInvalidPointer
 			}
 
-			// Check for loops
+			// Check pointer chain depth to prevent infinite loops
 			if ptrDepth >= MaxPointerDepth {
 				return nil, 0, ErrPointerTooDeep
 			}
@@ -306,7 +306,7 @@ func UnpackName(buf []byte, offset int) (*Name, int, error) {
 		if labelLen == 0 {
 			offset++
 			if ptrOffset > 0 {
-				// We followed a pointer, return the pointer offset as bytes consumed
+				// We followed a pointer — return pointer payload size (2 bytes)
 				return &Name{Labels: labels, FQDN: true}, ptrOffset - startOffset, nil
 			}
 			return &Name{Labels: labels, FQDN: true}, offset - startOffset, nil

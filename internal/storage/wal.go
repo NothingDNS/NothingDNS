@@ -124,7 +124,7 @@ func OpenWAL(dir string, opts WALOptions) (*WAL, error) {
 	} else {
 		// Use the last segment as active, open its file for appending
 		lastPath := wal.segments[len(wal.segments)-1].Path
-		file, err := os.OpenFile(lastPath, os.O_APPEND|os.O_WRONLY, 0644)
+		file, err := os.OpenFile(lastPath, os.O_APPEND|os.O_WRONLY, 0600)
 		if err != nil {
 			return nil, fmt.Errorf("open active segment file: %w", err)
 		}
@@ -212,7 +212,7 @@ func (wal *WAL) createNewSegment() error {
 
 	// Create new segment file
 	path := filepath.Join(wal.dir, fmt.Sprintf("%s%020d%s", WALFilePrefix, id, WALFileSuffix))
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		return fmt.Errorf("create segment file: %w", err)
 	}
@@ -227,8 +227,8 @@ func (wal *WAL) createNewSegment() error {
 		if err := os.Truncate(path, 0); err != nil {
 			return fmt.Errorf("truncate segment: %w", err)
 		}
-		// Reopen with O_APPEND for writing
-		file, err = os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0644)
+		// Reopen with O_APPEND for writing — only append after successful reopen
+		file, err = os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0600)
 		if err != nil {
 			return fmt.Errorf("reopen segment: %w", err)
 		}
@@ -544,10 +544,17 @@ func (wal *WAL) Truncate(segmentID uint64) error {
 		}
 	}
 
-	// Don't remove the active segment
-	if len(keep) == 0 {
-		keep = []*WALSegment{wal.active}
-		removed = removed[:len(removed)-1]
+	// Don't remove the active segment — if active is in removed list,
+	// move it to keep so it stays in wal.segments and its file stays open.
+	// This handles the edge case where active.ID <= segmentID but other
+	// segments have ID > segmentID.
+	for i, seg := range removed {
+		if seg == wal.active {
+			// Remove from removed, add to keep
+			removed = append(removed[:i], removed[i+1:]...)
+			keep = append(keep, wal.active)
+			break
+		}
 	}
 
 	// Close and delete old segments

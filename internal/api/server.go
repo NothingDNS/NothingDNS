@@ -830,6 +830,9 @@ func (s *Server) handleSPA(spaHandler http.Handler) http.HandlerFunc {
 
 // handleDashboardStats returns stats formatted for the web dashboard.
 func (s *Server) handleDashboardStats(w http.ResponseWriter, r *http.Request) {
+	if s.requireOperator(w, r) {
+		return
+	}
 	resp := &DashboardStatsResponse{}
 
 	if s.cache != nil {
@@ -855,6 +858,10 @@ func (s *Server) handleDashboardQueries(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	if s.requireOperator(w, r) {
+		return
+	}
+
 	if s.dashboardServer == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Dashboard not available")
 		return
@@ -869,6 +876,10 @@ func (s *Server) handleDashboardQueries(w http.ResponseWriter, r *http.Request) 
 func (s *Server) handleDashboardZones(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	if s.requireOperator(w, r) {
 		return
 	}
 

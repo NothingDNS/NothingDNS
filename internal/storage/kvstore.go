@@ -113,15 +113,28 @@ func OpenKVStore(path string) (*KVStore, error) {
 	return store, nil
 }
 
-// load loads data from disk
+// load loads data from disk. It retries briefly if the file is being
+// replaced by a concurrent save() (which uses atomic rename).
 func (s *KVStore) load() error {
-	f, err := os.Open(s.dataFile)
-	if err != nil {
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		f, err := os.Open(s.dataFile)
+		if err == nil {
+			defer f.Close()
+			return s.readFrom(f)
+		}
+		if os.IsNotExist(err) {
+			lastErr = err
+			// Brief wait — a concurrent save() using rename() should complete quickly
+			continue
+		}
 		return err
 	}
-	defer f.Close()
+	return lastErr
+}
 
-	// Detect format: JSON starts with '{', GOB starts with GOB magic or type name
+// readFrom reads and decodes the store data from an open file.
+func (s *KVStore) readFrom(f *os.File) error {
 	header := make([]byte, 16)
 	n, err := f.Read(header)
 	if err != nil || n == 0 {
@@ -169,11 +182,13 @@ func (s *KVStore) save() error {
 		return fmt.Errorf("sync temp file: %w", err)
 	}
 
+	// Close before rename to release the file handle on Windows
 	if err := tmpFile.Close(); err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("close temp file: %w", err)
 	}
 
+	// Atomic rename — on Windows this also releases any file locks held by readers
 	if err := os.Rename(tmpPath, s.dataFile); err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("rename temp file: %w", err)
@@ -246,7 +261,7 @@ func (s *KVStore) View(fn func(*Tx) error) error {
 	return fn(tx)
 }
 
-// Close closes the database
+// Close closes the database and flushes any pending writes.
 func (s *KVStore) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -263,6 +278,11 @@ func (s *KVStore) Close() error {
 
 	for _, tx := range s.txs {
 		tx.closed = true
+	}
+
+	// Flush any unflushed data before closing
+	if err := s.save(); err != nil {
+		return err
 	}
 
 	return nil

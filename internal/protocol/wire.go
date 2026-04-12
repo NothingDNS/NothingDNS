@@ -303,12 +303,18 @@ func Uint32(b []byte) uint32 {
 
 // Uint48 reads a 48-bit value (6 bytes) from a byte slice.
 func Uint48(b []byte) uint64 {
+	if len(b) < 6 {
+		return 0
+	}
 	return uint64(b[0])<<40 | uint64(b[1])<<32 | uint64(b[2])<<24 |
 		uint64(b[3])<<16 | uint64(b[4])<<8 | uint64(b[5])
 }
 
 // PutUint48 writes a 48-bit value to a byte slice.
 func PutUint48(b []byte, v uint64) {
+	if len(b) < 6 {
+		return
+	}
 	b[0] = byte(v >> 40)
 	b[1] = byte(v >> 32)
 	b[2] = byte(v >> 24)
