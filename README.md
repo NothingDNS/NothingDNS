@@ -129,6 +129,51 @@ go test ./internal/e2e/... -v
 go test ./... -cover
 ```
 
+## Management
+
+### Service Control (systemd)
+
+```bash
+# Start/Stop/Restart
+sudo systemctl start nothingdns
+sudo systemctl stop nothingdns
+sudo systemctl restart nothingdns
+
+# Check status
+sudo systemctl status nothingdns
+
+# View logs
+sudo journalctl -u nothingdns -f
+sudo journalctl -u nothingdns --since '1 hour ago'
+
+# Reload config (hot reload)
+sudo systemctl reload nothingdns
+# Or send SIGHUP
+sudo killall -HUP nothingdns
+```
+
+### Update
+
+```bash
+# Update to latest version (auto-restarts)
+curl -fsSL https://raw.githubusercontent.com/NothingDNS/NothingDNS/main/update.sh | bash
+```
+
+### Uninstall
+
+```bash
+# Remove NothingDNS
+curl -fsSL https://raw.githubusercontent.com/NothingDNS/NothingDNS/main/uninstall.sh | bash
+```
+
+### Dashboard
+
+After installation, access the dashboard at `http://localhost:8080`
+
+Use the credentials shown at the end of installation:
+- Username: `admin`
+- Password: (generated password)
+
 ## Configuration
 
 Create a `nothingdns.yaml` file:
