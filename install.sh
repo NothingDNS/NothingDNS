@@ -46,6 +46,37 @@ check_port_53() {
     return 0
 }
 
+# Stop and remove existing NothingDNS installation
+stop_existing_nothingdns() {
+    info "Checking for existing NothingDNS installation..."
+
+    # Stop systemd service if exists
+    if systemctl is-active --quiet nothingdns 2>/dev/null; then
+        info "Stopping existing NothingDNS service..."
+        sudo systemctl stop nothingdns 2>/dev/null || true
+    fi
+
+    # Disable service
+    if systemctl is-enabled --quiet nothingdns 2>/dev/null; then
+        sudo systemctl disable nothingdns 2>/dev/null || true
+    fi
+
+    # Remove old binary
+    if [ -f /usr/local/bin/nothingdns ]; then
+        info "Removing old NothingDNS binary..."
+        sudo rm -f /usr/local/bin/nothingdns
+    fi
+
+    # Remove old service file
+    if [ -f /etc/systemd/system/nothingdns.service ]; then
+        info "Removing old systemd service file..."
+        sudo rm -f /etc/systemd/system/nothingdns.service
+        sudo systemctl daemon-reload
+    fi
+
+    info "Existing NothingDNS installation removed"
+}
+
 # Try to stop common DNS services
 stop_existing_dns() {
     local stopped=false
@@ -550,6 +581,9 @@ main() {
             stop_existing_dns
         fi
     fi
+
+    # Stop and remove existing NothingDNS before installing
+    stop_existing_nothingdns
 
     download_binary
     download_dnsctl
