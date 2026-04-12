@@ -221,6 +221,17 @@ download_binary() {
         sudo mv "${TEMP_FILE}" "${INSTALL_DIR}/${BINARY_NAME}" || error "Failed to install to ${INSTALL_DIR}"
         info "Installed to ${INSTALL_DIR}/${BINARY_NAME}"
     fi
+
+    # Set capability for privileged port binding (port 53)
+    if command -v setcap &> /dev/null; then
+        if [ -w /proc/sys/kernel/cap_last_cap ] && capsh --print | grep -q "cap_net_bind_service"; then
+            if setcap 'cap_net_bind_service=+ep' "${INSTALL_DIR}/${BINARY_NAME}" 2>/dev/null; then
+                info "Setcap: enabled privileged port binding (cap_net_bind_service)"
+            else
+                warn "Setcap failed - may need root or manual configuration for port 53"
+            fi
+        fi
+    fi
 }
 
 # Download dnsctl (CLI tool)
