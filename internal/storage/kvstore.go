@@ -169,30 +169,35 @@ func (s *KVStore) save() error {
 	}
 	tmpPath := tmpFile.Name()
 
+	// Only remove temp file if rename fails; on success the file is now the data file
+	renamed := false
+	defer func() {
+		if !renamed {
+			os.Remove(tmpPath)
+		}
+	}()
+
 	encoder := json.NewEncoder(tmpFile)
 	if err := encoder.Encode(s.root); err != nil {
 		tmpFile.Close()
-		os.Remove(tmpPath)
 		return fmt.Errorf("encode data: %w", err)
 	}
 
 	if err := tmpFile.Sync(); err != nil {
 		tmpFile.Close()
-		os.Remove(tmpPath)
 		return fmt.Errorf("sync temp file: %w", err)
 	}
 
 	// Close before rename to release the file handle on Windows
 	if err := tmpFile.Close(); err != nil {
-		os.Remove(tmpPath)
 		return fmt.Errorf("close temp file: %w", err)
 	}
 
 	// Atomic rename — on Windows this also releases any file locks held by readers
 	if err := os.Rename(tmpPath, s.dataFile); err != nil {
-		os.Remove(tmpPath)
 		return fmt.Errorf("rename temp file: %w", err)
 	}
+	renamed = true
 
 	return nil
 }
