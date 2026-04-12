@@ -528,11 +528,12 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/", s.handleSPA(spaHandler))
 
 	s.httpServer = &http.Server{
-		Addr:         s.config.Bind,
-		Handler:      s.corsMiddleware(s.authMiddleware(mux)),
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  120 * time.Second,
+		Addr:              s.config.Bind,
+		Handler:           s.corsMiddleware(s.authMiddleware(mux)),
+		ReadTimeout:       10 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	go func() {
