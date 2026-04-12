@@ -1,150 +1,162 @@
 #!/bin/bash
 #
 # NothingDNS Uninstall Script
-# Removes NothingDNS and optionally cleans up configuration
+# Removes NothingDNS and optionally cleans up config and data
 #
 
 set -e
 
-BINARY_NAME="nothingdns"
-DNSCTL_NAME="dnsctl"
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/nothingdns"
-DATA_DIR="/var/lib/nothingdns"
+BINARY_NAME="nothingdns"
+CONFIG_FILE="${CONFIG_DIR}/config.yaml"
 
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
 NC='\033[0m'
 
 info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
-error() { echo -e "${RED}[ERROR]${NC} $1"; }
-section() { echo -e "\n${CYAN}=== $1 ===${NC}"; }
+error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
-# Stop service
+# Check if NothingDNS is installed
+check_installed() {
+    if [ ! -f "${INSTALL_DIR}/${BINARY_NAME}" ]; then
+        error "NothingDNS is not installed at ${INSTALL_DIR}/${BINARY_NAME}"
+    fi
+    info "NothingDNS found at ${INSTALL_DIR}/${BINARY_NAME}"
+}
+
+# Stop and disable service
 stop_service() {
-    section "Stopping Service"
-
     if command -v systemctl &> /dev/null; then
         if systemctl is-active --quiet nothingdns 2>/dev/null; then
-            info "Stopping nothingdns service..."
-            sudo systemctl stop nothingdns
-            sudo systemctl disable nothingdns
+            info "Stopping NothingDNS service..."
+            sudo systemctl stop nothingdns || true
+        fi
+        if systemctl is-enabled --quiet nothingdns 2>/dev/null; then
+            info "Disabling NothingDNS service..."
+            sudo systemctl disable nothingdns || true
+        fi
+        if [ -f /etc/systemd/system/nothingdns.service ]; then
+            info "Removing systemd service file..."
             sudo rm -f /etc/systemd/system/nothingdns.service
             sudo systemctl daemon-reload
-            info "Service stopped and disabled"
         fi
-    fi
-
-    # Kill any remaining processes
-    if pgrep -f "${BINARY_NAME}" > /dev/null; then
-        warn "Killing remaining processes..."
-        sudo pkill -f "${BINARY_NAME}" || true
+    else
+        # Kill process if running
+        if pgrep -x nothingdns > /dev/null 2>&1; then
+            info "Stopping NothingDNS process..."
+            sudo pkill nothingdns || true
+        fi
     fi
 }
 
 # Remove binaries
 remove_binaries() {
-    section "Removing Binaries"
-
-    if [ -f "${INSTALL_DIR}/${BINARY_NAME}" ]; then
-        sudo rm -f "${INSTALL_DIR}/${BINARY_NAME}"
-        info "Removed ${INSTALL_DIR}/${BINARY_NAME}"
-    fi
-
-    if [ -f "${INSTALL_DIR}/${DNSCTL_NAME}" ]; then
-        sudo rm -f "${INSTALL_DIR}/${DNSCTL_NAME}"
-        info "Removed ${INSTALL_DIR}/${DNSCTL_NAME}"
-    fi
+    info "Removing binaries..."
+    sudo rm -f "${INSTALL_DIR}/${BINARY_NAME}"
+    sudo rm -f "${INSTALL_DIR}/dnsctl"
+    info "Binaries removed from ${INSTALL_DIR}"
 }
 
-# Remove config
-remove_config() {
-    section "Removing Configuration"
+# Prompt for config/data removal
+prompt_cleanup() {
+    local remove_config=false
+    local remove_data=false
 
-    if [ -d "${CONFIG_DIR}" ]; then
-        warn "Configuration directory: ${CONFIG_DIR}"
-        read -p "Remove config directory? (y/N): " -n 1 -r; echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            sudo rm -rf "${CONFIG_DIR}"
-            info "Removed ${CONFIG_DIR}"
-        else
-            info "Keeping ${CONFIG_DIR}"
+    if [ -d "${CONFIG_DIR}" ] || [ -f "${CONFIG_FILE}" ]; then
+        echo ""
+        echo "======================================"
+        echo "  Cleanup Options"
+        echo "======================================"
+        echo ""
+        echo "Config directory: ${CONFIG_DIR}"
+        ls -la "${CONFIG_DIR}" 2>/dev/null || true
+        echo ""
+
+        if is_interactive; then
+            read -p "Remove config files? (y/N): " -n 1 -r; echo
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                remove_config=true
+            fi
         fi
     fi
-}
 
-# Remove data
-remove_data() {
-    section "Removing Data"
+    if [ -d /var/lib/nothingdns ] || [ -d /var/log/nothingdns ]; then
+        echo ""
+        echo "Data directories:"
+        ls -la /var/lib/nothingdns 2>/dev/null || true
+        ls -la /var/log/nothingdns 2>/dev/null || true
+        echo ""
 
-    if [ -d "${DATA_DIR}" ]; then
-        warn "Data directory: ${DATA_DIR}"
-        read -p "Remove data directory? (y/N): " -n 1 -r; echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            sudo rm -rf "${DATA_DIR}"
-            info "Removed ${DATA_DIR}"
-        else
-            info "Keeping ${DATA_DIR}"
+        if is_interactive; then
+            read -p "Remove data and log files? (y/N): " -n 1 -r; echo
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                remove_data=true
+            fi
         fi
     fi
-}
 
-# Remove log rotation
-remove_logging() {
-    if [ -f /etc/logrotate.d/nothingdns ]; then
-        sudo rm -f /etc/logrotate.d/nothingdns
-        info "Removed log rotation config"
+    # Non-interactive: don't remove config/data by default
+    if [ "$remove_config" = true ]; then
+        info "Removing config files..."
+        sudo rm -rf "${CONFIG_DIR}"
+    else
+        info "Keeping config files (${CONFIG_DIR})"
+    fi
+
+    if [ "$remove_data" = true ]; then
+        info "Removing data and log files..."
+        sudo rm -rf /var/lib/nothingdns /var/log/nothingdns
+    else
+        info "Keeping data and log files"
     fi
 }
 
-# Remove logs
-remove_logs() {
-    if [ -d /var/log/nothingdns ]; then
-        sudo rm -rf /var/log/nothingdns
-        info "Removed logs"
-    fi
+# Check if stdin is a terminal
+is_interactive() {
+    [ -t 0 ]
 }
 
-# Main
+# Show uninstall summary
+show_summary() {
+    echo ""
+    echo "======================================"
+    echo -e "${GREEN}  NothingDNS Uninstalled${NC}"
+    echo "======================================"
+    echo ""
+    echo "Removed:"
+    echo "  - ${INSTALL_DIR}/${BINARY_NAME}"
+    echo "  - ${INSTALL_DIR}/dnsctl"
+    echo "  - systemd service (if present)"
+    echo ""
+    echo "Kept (if exists):"
+    echo "  - ${CONFIG_DIR}"
+    echo "  - /var/lib/nothingdns"
+    echo "  - /var/log/nothingdns"
+    echo ""
+    echo "To complete removal, manually run:"
+    echo "  sudo rm -rf ${CONFIG_DIR}"
+    echo "  sudo rm -rf /var/lib/nothingdns /var/log/nothingdns"
+    echo "======================================"
+}
+
+# Main uninstall
 main() {
     echo ""
     echo "======================================"
-    echo -e "  ${CYAN}NothingDNS Uninstall${NC} v1.0"
+    echo "  NothingDNS Uninstall Script v1.0"
     echo "======================================"
     echo ""
-    echo -e "${YELLOW}This will remove NothingDNS from your system.${NC}"
-    echo ""
 
-    if [ "$(id -u)" -ne 0 ]; then
-        warn "Not running as root - some operations may fail"
-    fi
-
+    check_installed
     stop_service
     remove_binaries
-    remove_logging
-
-    read -p "Remove configuration? (y/N): " -n 1 -r; echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        remove_config
-        remove_data
-        remove_logs
-    fi
-
-    section "Uninstall Complete!"
-
-    echo ""
-    echo "NothingDNS has been removed from your system."
-    echo ""
-    echo -e "${YELLOW}Note:${NC} If you want to completely remove everything including zones,"
-    echo "manually remove the following directories:"
-    echo "  ${CONFIG_DIR}"
-    echo "  ${DATA_DIR}"
-    echo "  /var/log/nothingdns"
-    echo ""
+    prompt_cleanup
+    show_summary
 }
 
 main "$@"
