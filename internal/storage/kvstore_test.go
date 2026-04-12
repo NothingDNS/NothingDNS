@@ -2,8 +2,10 @@ package storage
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -1514,5 +1516,106 @@ func TestKVStoreRollbackDiscardsChanges(t *testing.T) {
 
 	if string(value) != "original" {
 		t.Errorf("Expected 'original' after rollback, got '%s'", value)
+	}
+}
+
+func TestKVStoreConcurrentGetSet(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+
+	store, err := OpenKVStore(path)
+	if err != nil {
+		t.Fatalf("OpenKVStore failed: %v", err)
+	}
+	defer store.Close()
+
+	// Create initial bucket
+	err = store.Update(func(tx *Tx) error {
+		_, err := tx.CreateBucketIfNotExists([]byte("test"))
+		return err
+	})
+	if err != nil {
+		t.Fatalf("Update failed: %v", err)
+	}
+
+	// Run concurrent readers and writers
+	const goroutines = 10
+	const opsPerGoroutine = 50
+	var wg sync.WaitGroup
+	wg.Add(goroutines * 2) // readers + writers
+
+	for i := 0; i < goroutines; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			for j := 0; j < opsPerGoroutine; j++ {
+				_ = store.View(func(tx *Tx) error {
+					bucket := tx.Bucket([]byte("test"))
+					if bucket != nil {
+						_ = bucket.Get([]byte("key"))
+					}
+					return nil
+				})
+			}
+		}(i)
+		go func(idx int) {
+			defer wg.Done()
+			for j := 0; j < opsPerGoroutine; j++ {
+				_ = store.Update(func(tx *Tx) error {
+					bucket := tx.Bucket([]byte("test"))
+					if bucket != nil {
+						return bucket.Put([]byte("key"), []byte(fmt.Sprintf("value-%d-%d", idx, j)))
+					}
+					return nil
+				})
+			}
+		}(i)
+	}
+
+	wg.Wait()
+}
+
+// TestKVStoreSaveDataIntegrity verifies that save() does not delete the data file
+// on successful rename (the bug that was fixed).
+func TestKVStoreSaveDataIntegrity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+
+	store, err := OpenKVStore(path)
+	if err != nil {
+		t.Fatalf("OpenKVStore failed: %v", err)
+	}
+
+	// Write data
+	err = store.Update(func(tx *Tx) error {
+		bucket, err := tx.CreateBucketIfNotExists([]byte("test"))
+		if err != nil {
+			return err
+		}
+		return bucket.Put([]byte("key"), []byte("value"))
+	})
+	if err != nil {
+		t.Fatalf("Update failed: %v", err)
+	}
+	store.Close()
+
+	// Reopen and verify data survives
+	store2, err := OpenKVStore(path)
+	if err != nil {
+		t.Fatalf("Reopen failed: %v", err)
+	}
+	defer store2.Close()
+
+	var result []byte
+	err = store2.View(func(tx *Tx) error {
+		bucket := tx.Bucket([]byte("test"))
+		if bucket == nil {
+			return fmt.Errorf("bucket not found")
+		}
+		result = bucket.Get([]byte("key"))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("View failed: %v", err)
+	}
+	if string(result) != "value" {
+		t.Errorf("Data lost after save+reopen: got %q, want 'value'", result)
 	}
 }

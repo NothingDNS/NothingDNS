@@ -488,6 +488,17 @@ func TestUint48(t *testing.T) {
 	if v != 0x123456789ABC {
 		t.Errorf("Uint48 mismatch: got %x, want 0x123456789ABC", v)
 	}
+
+	// Bounds: slices shorter than 6 return 0 from Uint48
+	short := []byte{0x01, 0x02}
+	if got := Uint48(short); got != 0 {
+		t.Errorf("Uint48(short slice) = %d, want 0", got)
+	}
+	// PutUint48 with short slice is no-op (no panics)
+	PutUint48(short, 0xDEADBEEF)
+	if short[0] != 0x01 {
+		t.Errorf("PutUint48 wrote to short slice unexpectedly")
+	}
 }
 
 // TestNewHeader tests NewHeader
