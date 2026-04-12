@@ -456,6 +456,31 @@ EOF
     fi
 }
 
+# Setup log rotation
+setup_logrotate() {
+    if [ ! -f /etc/logrotate.d/nothingdns ]; then
+        info "Setting up log rotation..."
+        cat > /tmp/nothingdns.logrotate << 'EOF'
+/var/log/nothingdns/*.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 nobody nogroup
+    sharedscripts
+    postrotate
+        systemctl reload nothingdns > /dev/null 2>&1 || true
+    endscript
+}
+EOF
+        sudo mv /tmp/nothingdns.logrotate /etc/logrotate.d/nothingdns
+        sudo chown root:root /etc/logrotate.d/nothingdns
+        info "Log rotation configured"
+    fi
+}
+
 # Check if stdin is a terminal
 is_interactive() {
     [ -t 0 ]
@@ -538,6 +563,7 @@ main() {
 
     create_config $port
     setup_service
+    setup_logrotate
 
     # Start the server
     info "Starting NothingDNS..."

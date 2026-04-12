@@ -62,6 +62,14 @@ remove_binaries() {
     info "Binaries removed from ${INSTALL_DIR}"
 }
 
+# Remove log rotation
+remove_logrotate() {
+    if [ -f /etc/logrotate.d/nothingdns ]; then
+        info "Removing log rotation config..."
+        sudo rm -f /etc/logrotate.d/nothingdns
+    fi
+}
+
 # Prompt for config/data removal
 prompt_cleanup() {
     local remove_config=false
@@ -131,7 +139,8 @@ show_summary() {
     echo "Removed:"
     echo "  - ${INSTALL_DIR}/${BINARY_NAME}"
     echo "  - ${INSTALL_DIR}/dnsctl"
-    echo "  - systemd service (if present)"
+    echo "  - systemd service"
+    echo "  - log rotation config"
     echo ""
     echo "Kept (if exists):"
     echo "  - ${CONFIG_DIR}"
@@ -155,6 +164,7 @@ main() {
     check_installed
     stop_service
     remove_binaries
+    remove_logrotate
     prompt_cleanup
     show_summary
 }
