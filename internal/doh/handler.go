@@ -15,6 +15,9 @@ import (
 const (
 	// MaxDNSMessageSize is the maximum size of a DNS message (RFC 1035)
 	MaxDNSMessageSize = 65535
+	// MaxBase64DNSSize is the maximum base64url-encoded DNS query size.
+	// 65535 bytes -> ~87384 base64 characters. Limit to 90000 to allow overhead.
+	MaxBase64DNSSize = 90000
 	// ContentTypeDNSMessage is the MIME type for DNS wire format (RFC 8484)
 	ContentTypeDNSMessage = "application/dns-message"
 	// MinPaddingSize is the minimum padding size per RFC 7830
@@ -83,7 +86,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Parse the DNS query from wire format
 	query, err := protocol.UnpackMessage(queryData)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Invalid DNS message: %v", err), http.StatusBadRequest)
+		http.Error(w, "Invalid DNS message", http.StatusBadRequest)
 		return
 	}
 
@@ -126,7 +129,7 @@ func (h *Handler) serveJSON(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		ct := r.Header.Get("Content-Type")
 		if ct != ContentTypeDNSJSON {
-			http.Error(w, fmt.Sprintf("unsupported Content-Type: %s (expected %s)", ct, ContentTypeDNSJSON), http.StatusBadRequest)
+			http.Error(w, "unsupported Content-Type", http.StatusBadRequest)
 			return
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, MaxDNSMessageSize)
@@ -137,7 +140,7 @@ func (h *Handler) serveJSON(w http.ResponseWriter, r *http.Request) {
 		// limit is reached
 		data, err = io.ReadAll(io.LimitReader(r.Body, MaxDNSMessageSize))
 		if err != nil {
-			http.Error(w, fmt.Sprintf("failed to read body: %v", err), http.StatusBadRequest)
+			http.Error(w, "failed to read body", http.StatusBadRequest)
 			return
 		}
 		query, err = DecodeJSONQuery(data)
@@ -149,7 +152,7 @@ func (h *Handler) serveJSON(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "Invalid DNS query", http.StatusBadRequest)
 		return
 	}
 
@@ -169,7 +172,7 @@ func (h *Handler) serveJSON(w http.ResponseWriter, r *http.Request) {
 	// Encode the captured response as JSON
 	jsonData, err := EncodeJSON(jrw.response)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("failed to encode JSON response: %v", err), http.StatusInternalServerError)
+		http.Error(w, "failed to encode JSON response", http.StatusInternalServerError)
 		return
 	}
 
@@ -229,10 +232,16 @@ func (h *Handler) handleGET(r *http.Request) ([]byte, error) {
 		return nil, fmt.Errorf("missing 'dns' parameter")
 	}
 
+	// SECURITY: Limit base64 input size to prevent memory exhaustion.
+	// 65535 bytes DNS message -> ~87384 base64 chars. Reject oversized inputs.
+	if len(dnsParam) > MaxBase64DNSSize {
+		return nil, fmt.Errorf("dns parameter too large (max %d characters)", MaxBase64DNSSize)
+	}
+
 	// Decode base64url (RFC 8484 - no padding)
 	data, err := base64.RawURLEncoding.DecodeString(dnsParam)
 	if err != nil {
-		return nil, fmt.Errorf("invalid base64 encoding: %w", err)
+		return nil, fmt.Errorf("invalid base64 encoding")
 	}
 
 	return data, nil
@@ -242,7 +251,7 @@ func (h *Handler) handleGET(r *http.Request) ([]byte, error) {
 func (h *Handler) handlePOST(w http.ResponseWriter, r *http.Request) ([]byte, error) {
 	contentType := r.Header.Get("Content-Type")
 	if contentType != ContentTypeDNSMessage {
-		return nil, fmt.Errorf("unsupported Content-Type: %s (expected %s)", contentType, ContentTypeDNSMessage)
+		return nil, fmt.Errorf("unsupported Content-Type")
 	}
 
 	// Limit body size to prevent abuse
@@ -296,7 +305,7 @@ func (rw *dohResponseWriter) Write(msg *protocol.Message) (int, error) {
 	buf := make([]byte, msg.WireLength())
 	n, err := msg.Pack(buf)
 	if err != nil {
-		http.Error(rw.w, fmt.Sprintf("Failed to encode response: %v", err), http.StatusInternalServerError)
+		http.Error(rw.w, "Failed to encode response", http.StatusInternalServerError)
 		return 0, err
 	}
 

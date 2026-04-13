@@ -22,10 +22,10 @@ import (
 func nextSecureID() uint16 {
 	var b [2]byte
 	if _, err := cryptorand.Read(b[:]); err != nil {
-		// crypto/rand failure is extremely rare but we fallback to math/rand
-		// rather than crashing the entire DNS server
-		log.Printf("warning: crypto/rand unavailable: %v, falling back to math/rand", err)
-		return uint16(rand.Intn(65536))
+		// SECURITY: crypto/rand failure indicates a system-level issue.
+		// We panic rather than fall back to math/rand, as predictable
+		// transaction IDs enable DNS cache poisoning attacks.
+		panic("crypto/rand unavailable for DNS transaction ID generation: " + err.Error())
 	}
 	return binary.BigEndian.Uint16(b[:])
 }

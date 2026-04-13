@@ -2994,20 +2994,13 @@ func (s *Server) requireOperator(w http.ResponseWriter, r *http.Request) bool {
 }
 
 // getClientIP extracts the client IP from the request.
-// SECURITY: X-Forwarded-For is NOT trusted by default because it can be trivially spoofed.
-// An attacker can set X-Forwarded-For to any IP to bypass rate limiting.
-// If the server is behind a trusted reverse proxy, the proxy should set X-Real-IP
-// and this function will use it. Otherwise, RemoteAddr is used.
+// SECURITY: X-Forwarded-For is NOT trusted because it can be trivially spoofed.
+// X-Real-IP is only trusted when explicitly configured via TrustedProxies to
+// prevent remote attackers from bypassing rate limiting or IP-based auth checks.
 func getClientIP(r *http.Request) string {
-	// Check X-Real-IP header (set by trusted proxies, not user-supplied)
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		xri = strings.TrimSpace(xri)
-		if net.ParseIP(xri) != nil {
-			return xri
-		}
-	}
-
-	// Fall back to RemoteAddr
+	// Fall back to RemoteAddr — the only source that cannot be spoofed by clients.
+	// X-Real-IP should only be trusted when behind a known reverse proxy.
+	// To enable X-Real-IP, the proxy must be explicitly configured as trusted.
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

@@ -16,6 +16,10 @@ import (
 // ZoneWALEntryType is the entry type used for zone entries in the WAL.
 const ZoneWALEntryType byte = 'Z'
 
+// MaxWALReplayEntries limits the number of WAL entries loaded during replay
+// to prevent memory exhaustion from unbounded journal growth.
+const MaxWALReplayEntries = 100000
+
 // ZoneWALEntry represents a zone change entry in the WAL.
 type ZoneWALEntry struct {
 	Type      string // "add_record", "del_record", "update_record", "delete_zone"
@@ -82,9 +86,15 @@ func (zj *ZoneJournal) Replay() ([]ZoneWALEntry, error) {
 	}
 
 	var zoneEntries []ZoneWALEntry
+	count := 0
 	for _, e := range entries {
 		if e.Type != ZoneWALEntryType {
 			continue
+		}
+		// SECURITY: Limit replayed entries to prevent memory exhaustion
+		count++
+		if count > MaxWALReplayEntries {
+			return nil, fmt.Errorf("WAL replay exceeded %d entries — journal may be corrupted or oversized", MaxWALReplayEntries)
 		}
 		var entry ZoneWALEntry
 		if err := json.Unmarshal(e.Data, &entry); err != nil {

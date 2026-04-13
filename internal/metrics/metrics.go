@@ -2,8 +2,10 @@ package metrics
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -99,9 +101,10 @@ var latencyLabels = [numLatencyBuckets]string{
 
 // Config holds metrics configuration.
 type Config struct {
-	Enabled bool
-	Bind    string
-	Path    string
+	Enabled  bool
+	Bind     string
+	Path     string
+	AuthToken string // If set, requires ?token= on /metrics requests
 }
 
 // New creates a new metrics collector.
@@ -136,8 +139,16 @@ func (m *MetricsCollector) Start() error {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc(m.config.Path, m.handleMetrics)
-	mux.HandleFunc("/health", m.handleHealth)
+
+	// Wrap with authentication if token is configured
+	var metricsHandler http.HandlerFunc = m.handleMetrics
+	var healthHandler http.HandlerFunc = m.handleHealth
+	if m.config.AuthToken != "" {
+		metricsHandler = m.requireMetricsAuth(m.handleMetrics)
+		healthHandler = m.requireMetricsAuth(m.handleHealth)
+	}
+	mux.HandleFunc(m.config.Path, metricsHandler)
+	mux.HandleFunc("/health", healthHandler)
 
 	m.mu.Lock()
 	m.server = &http.Server{
@@ -397,6 +408,24 @@ func (m *MetricsCollector) RecordUpstreamQuery(server string) {
 	}
 
 	atomic.AddUint64(counter, 1)
+}
+
+// requireMetricsAuth wraps a handler with token-based authentication.
+// The token is accepted via the Authorization header (Bearer token) or ?token= query param.
+func (m *MetricsCollector) requireMetricsAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token := r.Header.Get("Authorization")
+		token = strings.TrimPrefix(token, "Bearer ")
+		if token == "" {
+			token = r.URL.Query().Get("token")
+		}
+		if len(token) != len(m.config.AuthToken) ||
+			subtle.ConstantTimeCompare([]byte(token), []byte(m.config.AuthToken)) != 1 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
+	}
 }
 
 // handleMetrics serves Prometheus-format metrics.

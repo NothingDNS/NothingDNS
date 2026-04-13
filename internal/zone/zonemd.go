@@ -241,9 +241,19 @@ func serializeRecordData(rec Record) []byte {
 			result = append(result, canonicalName(parts[1])...)
 		}
 	case "TXT":
-		// TXT len byte + content
-		result = append(result, byte(len(rec.RData)))
-		result = append(result, rec.RData...)
+		// TXT records are stored as length-prefixed character strings.
+		// Per RFC 1035, each string is max 255 bytes. Longer content
+		// must be split into multiple strings.
+		txtData := []byte(rec.RData)
+		for len(txtData) > 0 {
+			chunk := txtData
+			if len(chunk) > 255 {
+				chunk = chunk[:255]
+			}
+			result = append(result, byte(len(chunk)))
+			result = append(result, chunk...)
+			txtData = txtData[len(chunk):]
+		}
 	case "SPF":
 		result = append(result, byte(len(rec.RData)))
 		result = append(result, rec.RData...)

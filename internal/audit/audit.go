@@ -204,9 +204,9 @@ func formatQueryAuditLine(e QueryAuditEntry) string {
 	}
 	return fmt.Sprintf("%s client=%s query=%s type=%s rcode=%s latency=%s cache=%s upstream=%s",
 		e.Timestamp,
-		e.ClientIP,
+		sanitizeLogField(e.ClientIP),
 		sanitizeLogField(e.QueryName),
-		e.QueryType,
+		sanitizeLogField(e.QueryType),
 		e.Rcode,
 		e.Latency.Round(time.Microsecond),
 		cacheHit,
@@ -228,7 +228,7 @@ func formatAXFRAuditLine(e AXFRAuditEntry) string {
 func formatIXFRAuditLine(e IXFRAuditEntry) string {
 	return fmt.Sprintf("%s client=%s zone=%s action=%s records=%d latency=%s",
 		e.Timestamp,
-		e.ClientIP,
+		sanitizeLogField(e.ClientIP),
 		sanitizeLogField(e.Zone),
 		e.Action,
 		e.RecordCount,
@@ -239,7 +239,7 @@ func formatIXFRAuditLine(e IXFRAuditEntry) string {
 func formatNOTIFYAuditLine(e NOTIFYAuditEntry) string {
 	return fmt.Sprintf("%s client=%s zone=%s action=%s",
 		e.Timestamp,
-		e.ClientIP,
+		sanitizeLogField(e.ClientIP),
 		sanitizeLogField(e.Zone),
 		e.Action,
 	)
@@ -248,7 +248,7 @@ func formatNOTIFYAuditLine(e NOTIFYAuditEntry) string {
 func formatUpdateAuditLine(e UpdateAuditEntry) string {
 	return fmt.Sprintf("%s client=%s zone=%s action=%s rcode=%s added=%d deleted=%d",
 		e.Timestamp,
-		e.ClientIP,
+		sanitizeLogField(e.ClientIP),
 		sanitizeLogField(e.Zone),
 		e.Action,
 		e.Rcode,

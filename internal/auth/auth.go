@@ -128,7 +128,9 @@ func NewStore(cfg *Config) *Store {
 func HashPassword(password string, salt []byte) []byte {
 	if salt == nil {
 		salt = make([]byte, 32) // 256-bit salt
-		rand.Read(salt)
+		if _, err := rand.Read(salt); err != nil {
+			panic("crypto/rand failed to generate salt: " + err.Error())
+		}
 	}
 
 	// PBKDF2-HMAC-SHA512 with iterations chosen for balance of security and performance.

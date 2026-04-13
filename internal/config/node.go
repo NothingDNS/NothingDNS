@@ -79,10 +79,15 @@ func (n *Node) GetInt(key string) int {
 		return 0
 	}
 	var val int
-	// Basic parsing, ignoring errors
+	// Basic parsing with overflow protection
 	for _, c := range child.Value {
 		if c >= '0' && c <= '9' {
-			val = val*10 + int(c-'0')
+			digit := int(c - '0')
+			// Check for overflow before multiplying and adding
+			if val > (1<<31-1-digit)/10 {
+				return 0 // Overflow, return zero
+			}
+			val = val*10 + digit
 		}
 	}
 	return val

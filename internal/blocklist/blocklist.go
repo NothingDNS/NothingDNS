@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -261,11 +262,16 @@ func (bl *Blocklist) loadURL(url string) error {
 
 // loadFile loads a single blocklist file.
 func (bl *Blocklist) loadFile(path string) error {
-	// SECURITY: Check for path traversal sequences
-	if strings.Contains(path, "..") {
+	// SECURITY: Check for path traversal sequences and validate resolved path
+	cleanPath := filepath.Clean(path)
+	if strings.Contains(cleanPath, "..") {
 		return fmt.Errorf("blocklist path traversal attempt blocked: %s", path)
 	}
-	f, err := os.Open(path)
+	// Ensure the path is absolute and doesn't escape the base directory
+	if !filepath.IsAbs(cleanPath) {
+		return fmt.Errorf("blocklist path must be absolute: %s", path)
+	}
+	f, err := os.Open(cleanPath)
 	if err != nil {
 		return err
 	}
