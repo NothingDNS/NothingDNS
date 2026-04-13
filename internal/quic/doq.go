@@ -606,7 +606,10 @@ func (s *DoQServer) processDecryptedPayload(dc *doqConn, data []byte) {
 				return
 			}
 			offset += n
-			_ = dc.sc.HandleCryptoData(tls.QUICEncryptionLevelApplication, cf.Data)
+			if err := dc.sc.HandleCryptoData(tls.QUICEncryptionLevelApplication, cf.Data); err != nil {
+				atomic.AddUint64(&s.errors, 1)
+				return
+			}
 
 		case FrameTypeNewToken:
 			// New token - skip
@@ -620,7 +623,7 @@ func (s *DoQServer) processDecryptedPayload(dc *doqConn, data []byte) {
 
 		case FrameTypeStream, FrameTypeStream | 0x01, FrameTypeStream | 0x02, FrameTypeStream | 0x03,
 			FrameTypeStream | 0x04, FrameTypeStream | 0x05, FrameTypeStream | 0x06, FrameTypeStream | 0x07:
-			// STREAM frames (0x08-0x0F)
+			// STREAM frames (0x08-0x0F), variants differ by FIN/LEN/OFF bits
 			sf, n, err := ParseStreamFrame(frameType, data[offset:])
 			if err != nil {
 				atomic.AddUint64(&s.errors, 1)
@@ -634,7 +637,7 @@ func (s *DoQServer) processDecryptedPayload(dc *doqConn, data []byte) {
 			stream, err := dc.sc.AcceptStream(sf.StreamID)
 			if err != nil {
 				atomic.AddUint64(&s.errors, 1)
-				continue
+				return
 			}
 			stream.AppendReadData(sf.Data, sf.Fin)
 
