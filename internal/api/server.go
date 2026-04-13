@@ -537,8 +537,20 @@ func (s *Server) Start() error {
 	}
 
 	go func() {
-		if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			util.Warnf("API server error: %v", err)
+		// Use TLS if cert and key files are configured
+		if s.config.TLSCertFile != "" && s.config.TLSKeyFile != "" {
+			util.Infof("API server starting with TLS on %s", s.config.Bind)
+			if err := s.httpServer.ListenAndServeTLS(s.config.TLSCertFile, s.config.TLSKeyFile); err != nil && err != http.ErrServerClosed {
+				util.Warnf("API server TLS error: %v", err)
+			}
+		} else {
+			// Warn if DoH is enabled without TLS
+			if s.config.DoHEnabled {
+				util.Warnf("DoH is enabled but TLS is not configured - queries will be sent over plaintext HTTP")
+			}
+			if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				util.Warnf("API server error: %v", err)
+			}
 		}
 	}()
 

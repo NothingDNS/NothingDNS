@@ -426,6 +426,10 @@ type HTTPConfig struct {
 	// Listen address
 	Bind string `yaml:"bind"`
 
+	// TLS certificate and key for HTTPS (required for DoH)
+	TLSCertFile string `yaml:"tls_cert_file"`
+	TLSKeyFile  string `yaml:"tls_key_file"`
+
 	// Authentication token (legacy, single shared token)
 	AuthToken string `yaml:"auth_token"`
 
@@ -1108,6 +1112,8 @@ func unmarshalServer(node *Node, cfg *ServerConfig) error {
 	if httpNode := node.Get("http"); httpNode != nil {
 		cfg.HTTP.Enabled = getBool(httpNode, "enabled", cfg.HTTP.Enabled)
 		cfg.HTTP.Bind = httpNode.GetString("bind")
+		cfg.HTTP.TLSCertFile = httpNode.GetString("tls_cert_file")
+		cfg.HTTP.TLSKeyFile = httpNode.GetString("tls_key_file")
 		cfg.HTTP.AuthToken = httpNode.GetString("auth_token")
 		cfg.HTTP.AuthSecret = httpNode.GetString("auth_secret")
 		cfg.HTTP.DoHEnabled = getBool(httpNode, "doh_enabled", cfg.HTTP.DoHEnabled)
@@ -1538,6 +1544,13 @@ func (c *Config) validateServer() []string {
 		}
 		if c.Server.TLS.KeyFile == "" {
 			errors = append(errors, "server.tls: key_file is required when TLS is enabled")
+		}
+	}
+
+	// Validate HTTP TLS configuration for DoH
+	if c.Server.HTTP.Enabled && c.Server.HTTP.DoHEnabled {
+		if c.Server.HTTP.TLSCertFile == "" || c.Server.HTTP.TLSKeyFile == "" {
+			errors = append(errors, "http: tls_cert_file and tls_key_file are required when DoH is enabled (DoH must use HTTPS)")
 		}
 	}
 
