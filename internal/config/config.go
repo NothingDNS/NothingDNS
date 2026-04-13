@@ -452,6 +452,9 @@ type HTTPConfig struct {
 	// ODoH (Oblivious DNS over HTTPS, RFC 9230) settings
 	ODoHEnabled bool   `yaml:"odoh_enabled"` // Enable ODoH endpoint
 	ODoHPath    string `yaml:"odoh_path"`    // ODoH endpoint path (default: /odoh)
+	ODoHKEM     int    `yaml:"odoh_kem"`     // HPKE KEM for target (default: 4 = X25519)
+	ODoHKDF     int    `yaml:"odoh_kdf"`     // HPKE KDF for target (default: 1 = HKDF-SHA256)
+	ODoHAEAD    int    `yaml:"odoh_aead"`    // HPKE AEAD for target (default: 1 = AES-256-GCM)
 
 	// Allowed origins for CORS (empty means only same-origin requests allowed)
 	// Use "*" to allow all origins (not recommended for production)
@@ -1136,6 +1139,23 @@ func unmarshalServer(node *Node, cfg *ServerConfig) error {
 		cfg.HTTP.DoWSPath = httpNode.GetString("dows_path")
 		if cfg.HTTP.DoWSPath == "" {
 			cfg.HTTP.DoWSPath = "/dns-ws"
+		}
+		cfg.HTTP.ODoHEnabled = getBool(httpNode, "odoh_enabled", cfg.HTTP.ODoHEnabled)
+		cfg.HTTP.ODoHPath = httpNode.GetString("odoh_path")
+		if cfg.HTTP.ODoHPath == "" {
+			cfg.HTTP.ODoHPath = "/odoh"
+		}
+		cfg.HTTP.ODoHKEM = getInt(httpNode, "odoh_kem", cfg.HTTP.ODoHKEM)
+		if cfg.HTTP.ODoHKEM == 0 {
+			cfg.HTTP.ODoHKEM = 4 // X25519
+		}
+		cfg.HTTP.ODoHKDF = getInt(httpNode, "odoh_kdf", cfg.HTTP.ODoHKDF)
+		if cfg.HTTP.ODoHKDF == 0 {
+			cfg.HTTP.ODoHKDF = 1 // HKDF-SHA256
+		}
+		cfg.HTTP.ODoHAEAD = getInt(httpNode, "odoh_aead", cfg.HTTP.ODoHAEAD)
+		if cfg.HTTP.ODoHAEAD == 0 {
+			cfg.HTTP.ODoHAEAD = 1 // AES-256-GCM
 		}
 	}
 

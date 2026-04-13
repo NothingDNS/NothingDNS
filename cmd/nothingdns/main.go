@@ -432,27 +432,39 @@ func run() error {
 		WithZoneSigners(zoneSigners).
 		WithRPZ(rpzEngine)
 
-	// Initialize ODoH proxy (RFC 9230) if enabled
-	var odohProxy *odoh.ObliviousProxy
+	// Initialize ODoH (RFC 9230) if enabled
 	if cfg.Server.HTTP.ODoHEnabled {
 		odohConfig := &odoh.ODoHConfig{
-			TargetName: cfg.ODoH.TargetURL,
-			ProxyName:  cfg.ODoH.ProxyURL,
-			TargetURL:  cfg.ODoH.TargetURL,
-			ProxyURL:   cfg.ODoH.ProxyURL,
-			HPKEKEM:    cfg.ODoH.KEM,
-			HPKEKDF:    cfg.ODoH.KDF,
-			HPKEAEAD:   cfg.ODoH.AEAD,
+			TargetName: cfg.Server.HTTP.Bind,
+			ProxyName:  cfg.Server.HTTP.Bind,
+			HPKEKEM:    cfg.Server.HTTP.ODoHKEM,
+			HPKEKDF:    cfg.Server.HTTP.ODoHKDF,
+			HPKEAEAD:   cfg.Server.HTTP.ODoHAEAD,
 		}
-		odohProxy, err = odoh.NewObliviousProxy(odohConfig)
-		if err != nil {
-			logger.Warnf("Failed to create ODoH proxy: %v", err)
+
+		if cfg.ODoH.Enabled && cfg.ODoH.TargetURL != "" {
+			// Running as ODoH proxy forwarding to external target
+			odohConfig.TargetURL = cfg.ODoH.TargetURL
+			odohConfig.ProxyURL = cfg.ODoH.ProxyURL
+			odohProxy, err := odoh.NewObliviousProxy(odohConfig)
+			if err != nil {
+				logger.Warnf("Failed to create ODoH proxy: %v", err)
+			} else {
+				logger.Infof("ODoH proxy configured (target: %s)", cfg.ODoH.TargetURL)
+				apiServer = apiServer.WithODoH(odohProxy)
+			}
 		} else {
-			logger.Infof("ODoH proxy configured (target: %s)", cfg.ODoH.TargetURL)
+			// Running as ODoH target resolver with local DNS handler
+			odohTarget, err := odoh.NewObliviousTarget(odohConfig, handler)
+			if err != nil {
+				logger.Warnf("Failed to create ODoH target: %v", err)
+			} else {
+				logger.Infof("ODoH target configured (KEM=%d, KDF=%d, AEAD=%d)",
+					cfg.Server.HTTP.ODoHKEM, cfg.Server.HTTP.ODoHKDF, cfg.Server.HTTP.ODoHAEAD)
+				apiServer = apiServer.WithODoHTarget(odohTarget)
+			}
 		}
 	}
-
-	apiServer = apiServer.WithODoH(odohProxy)
 
 	if err := apiServer.Start(); err != nil {
 		logger.Warnf("Failed to start API server: %v", err)
@@ -461,7 +473,7 @@ func run() error {
 		if cfg.Server.HTTP.DoHEnabled {
 			logger.Infof("DoH endpoint enabled at %s", cfg.Server.HTTP.DoHPath)
 		}
-		if cfg.Server.HTTP.ODoHEnabled && odohProxy != nil {
+		if cfg.Server.HTTP.ODoHEnabled {
 			logger.Infof("ODoH endpoint enabled at %s", cfg.Server.HTTP.ODoHPath)
 		}
 	}

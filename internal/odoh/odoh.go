@@ -19,6 +19,9 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/nothingdns/nothingdns/internal/protocol"
+	"github.com/nothingdns/nothingdns/internal/server"
 )
 
 // ODoH (Oblivious DNS over HTTPS) implements RFC 9230.
@@ -94,9 +97,30 @@ type ObliviousProxy struct {
 
 // ObliviousTarget implements the target resolver side of ODoH.
 type ObliviousTarget struct {
-	config  *ODoHConfig
-	privKey []byte // Target's private key
-	pubKey  []byte // Target's public key
+	config   *ODoHConfig
+	privKey  []byte // Target's private key
+	pubKey   []byte // Target's public key
+	handler  server.Handler
+}
+
+// odohResponseWriter captures a DNS response message from the handler.
+// It implements server.ResponseWriter.
+type odohResponseWriter struct {
+	query    *protocol.Message
+	response *protocol.Message
+}
+
+func (rw *odohResponseWriter) Write(msg *protocol.Message) (int, error) {
+	rw.response = msg
+	return 0, nil
+}
+
+func (rw *odohResponseWriter) ClientInfo() *server.ClientInfo {
+	return &server.ClientInfo{Protocol: "odoh"}
+}
+
+func (rw *odohResponseWriter) MaxSize() int {
+	return 65535
 }
 
 // NewODoHConfig creates a default ODoH configuration.
@@ -350,7 +374,7 @@ func (p *ObliviousProxy) forwardToTarget(msg *ObliviousDNSMessage) ([]byte, erro
 }
 
 // NewObliviousTarget creates a new ODoH target resolver.
-func NewObliviousTarget(config *ODoHConfig) (*ObliviousTarget, error) {
+func NewObliviousTarget(config *ODoHConfig, handler server.Handler) (*ObliviousTarget, error) {
 	// Generate target's key pair
 	priv, pub, err := generateKeyPair(config.HPKEKEM)
 	if err != nil {
@@ -361,6 +385,7 @@ func NewObliviousTarget(config *ODoHConfig) (*ObliviousTarget, error) {
 		config:  config,
 		privKey: priv,
 		pubKey:  pub,
+		handler: handler,
 	}, nil
 }
 
@@ -391,11 +416,33 @@ func (t *ObliviousTarget) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Process DNS query (placeholder - would call actual resolver)
-	dnsResponse := t.processDNSQuery(dnsQuery)
+	// Unpack the DNS wire-format message
+	query, err := protocol.UnpackMessage(dnsQuery)
+	if err != nil {
+		http.Error(w, "Invalid DNS message", http.StatusBadRequest)
+		return
+	}
+
+	// Resolve the query through the handler
+	rw := &odohResponseWriter{query: query}
+	(&server.ServeDNSWithRecovery{Handler: t.handler}).ServeDNS(rw, query)
+
+	if rw.response == nil {
+		http.Error(w, "Failed to process query", http.StatusInternalServerError)
+		return
+	}
+
+	// Pack the response to wire format
+	respLen := rw.response.WireLength()
+	buf := make([]byte, respLen)
+	_, err = rw.response.Pack(buf)
+	if err != nil {
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
+	}
 
 	// Encrypt the DNS response back to the client
-	encryptedResponse, err := t.encapsulateResponse(dnsQuery, dnsResponse, msg)
+	encryptedResponse, err := t.encapsulateResponse(dnsQuery, buf, msg)
 	if err != nil {
 		http.Error(w, "Encryption error", http.StatusInternalServerError)
 		return
@@ -404,6 +451,11 @@ func (t *ObliviousTarget) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/dns-message")
 	w.WriteHeader(http.StatusOK)
 	w.Write(encryptedResponse)
+}
+
+// PublicKey returns the target's HPKE public key.
+func (t *ObliviousTarget) PublicKey() []byte {
+	return t.pubKey
 }
 
 // decapsulateQuery decrypts a DNS query using HPKE.
@@ -464,13 +516,6 @@ func (t *ObliviousTarget) encapsulateResponse(query, response []byte, msg *Obliv
 		Nonce:      nonce,
 		AAD:        query,
 	})
-}
-
-// processDNSQuery processes a DNS query and returns a response.
-// This is a placeholder - actual implementation would call the resolver.
-func (t *ObliviousTarget) processDNSQuery(query []byte) []byte {
-	// Placeholder - would actually resolve the DNS query
-	return query
 }
 
 // HPKE utility functions.

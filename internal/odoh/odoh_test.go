@@ -11,6 +11,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nothingdns/nothingdns/internal/protocol"
+	"github.com/nothingdns/nothingdns/internal/server"
 )
 
 func TestNewODoHConfig(t *testing.T) {
@@ -380,7 +383,7 @@ func TestNewObliviousProxy(t *testing.T) {
 
 func TestNewObliviousTarget(t *testing.T) {
 	cfg := NewODoHConfig("target.example.com", "proxy.example.com")
-	target, err := NewObliviousTarget(cfg)
+	target, err := NewObliviousTarget(cfg, nil)
 	if err != nil {
 		t.Fatalf("NewObliviousTarget failed: %v", err)
 	}
@@ -457,7 +460,7 @@ func TestObliviousTargetServeHTTPPostBadRequest(t *testing.T) {
 
 func TestTargetDecapsulateQuery(t *testing.T) {
 	cfg := NewODoHConfig("target.example.com", "proxy.example.com")
-	target, err := NewObliviousTarget(cfg)
+	target, err := NewObliviousTarget(cfg, nil)
 	if err != nil {
 		t.Fatalf("NewObliviousTarget failed: %v", err)
 	}
@@ -510,19 +513,6 @@ func TestTargetDecapsulateQuery(t *testing.T) {
 
 	if string(decrypted) != string(query) {
 		t.Errorf("decrypted = %q, want %q", string(decrypted), string(query))
-	}
-}
-
-func TestTargetProcessDNSQuery(t *testing.T) {
-	cfg := NewODoHConfig("target.example.com", "proxy.example.com")
-	target := &ObliviousTarget{config: cfg}
-
-	query := []byte("test query")
-	response := target.processDNSQuery(query)
-
-	// Placeholder implementation returns the query as response
-	if !bytes.Equal(response, query) {
-		t.Errorf("processDNSQuery = %q, want %q", response, query)
 	}
 }
 
@@ -719,3 +709,167 @@ func TestObliviousClientQuery(t *testing.T) {
 
 // Helper to suppress unused import
 var _ = io.Discard
+
+// mockHandler returns a fixed DNS response for testing.
+type mockHandler struct {
+	response *protocol.Message
+}
+
+func (h *mockHandler) ServeDNS(w server.ResponseWriter, req *protocol.Message) {
+	if h.response != nil {
+		w.Write(h.response)
+	}
+}
+
+func TestObliviousTargetServeHTTPWithHandler(t *testing.T) {
+	cfg := NewODoHConfig("target.example.com", "proxy.example.com")
+
+	// Create a mock DNS response using the protocol helpers
+	resp, err := protocol.NewQuery(1234, "example.com.", protocol.TypeA)
+	if err != nil {
+		t.Fatalf("NewQuery failed: %v", err)
+	}
+	resp.Header.Flags.QR = true
+	resp.Header.Flags.AA = true
+	resp.Header.Flags.RD = true
+	resp.Header.Flags.RA = true
+	rr, err := protocol.NewResourceRecord("example.com.", protocol.TypeA, protocol.ClassIN, 300, &protocol.RDataA{Address: [4]byte{93, 184, 216, 34}})
+	if err != nil {
+		t.Fatalf("NewResourceRecord failed: %v", err)
+	}
+	resp.Answers = append(resp.Answers, rr)
+	resp.Header.ANCount = 1
+
+	mh := &mockHandler{response: resp}
+	target, err := NewObliviousTarget(cfg, mh)
+	if err != nil {
+		t.Fatalf("NewObliviousTarget failed: %v", err)
+	}
+
+	// Pack the DNS query
+	query, err := protocol.NewQuery(1234, "example.com.", protocol.TypeA)
+	if err != nil {
+		t.Fatalf("NewQuery failed: %v", err)
+	}
+	queryBytes := make([]byte, query.WireLength())
+	_, err = query.Pack(queryBytes)
+	if err != nil {
+		t.Fatalf("Pack failed: %v", err)
+	}
+
+	// Build a valid ObliviousDNSMessage with HPKE encryption
+	ephemeralPriv, err := generateEphemeralKey(cfg.HPKEKEM)
+	if err != nil {
+		t.Fatalf("generateEphemeralKey failed: %v", err)
+	}
+	ephemeralPub := derivePublicKey(ephemeralPriv, cfg.HPKEKEM)
+
+	// Encrypt with HPKE (ephemeral private + target public key)
+	sharedSecret, err := deriveSharedSecret(ephemeralPriv, target.pubKey, cfg.HPKEKEM)
+	if err != nil {
+		t.Fatalf("deriveSharedSecret failed: %v", err)
+	}
+	kdfInfo := buildKDFInfo(cfg.TargetName)
+	keys, err := deriveKeys(sharedSecret, kdfInfo, cfg.HPKEKDF, cfg.HPKEAEAD)
+	if err != nil {
+		t.Fatalf("deriveKeys failed: %v", err)
+	}
+	nonce := make([]byte, 12)
+	// Note: parseProxyRequest doesn't preserve AAD, so encrypt with nil AAD
+	ciphertext, err := encrypt(queryBytes, nonce, keys.SealKey, nil, cfg.HPKEAEAD)
+	if err != nil {
+		t.Fatalf("encrypt failed: %v", err)
+	}
+
+	// Build the proxy request
+	msg := &ObliviousDNSMessage{
+		PublicKey:  ephemeralPub,
+		Ciphertext: ciphertext,
+		Nonce:      nonce,
+	}
+	body, err := buildProxyRequest(msg)
+	if err != nil {
+		t.Fatalf("buildProxyRequest failed: %v", err)
+	}
+
+	// Send request to target
+	req := httptest.NewRequest("POST", "http://test/", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	target.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d (body: %s)", w.Code, http.StatusOK, w.Body.String())
+	}
+}
+
+func TestObliviousTargetServeHTTPInvalidDNS(t *testing.T) {
+	cfg := NewODoHConfig("target.example.com", "proxy.example.com")
+	resp := &protocol.Message{Header: protocol.Header{ID: 1}}
+	mh := &mockHandler{response: resp}
+	target, err := NewObliviousTarget(cfg, mh)
+	if err != nil {
+		t.Fatalf("NewObliviousTarget failed: %v", err)
+	}
+
+	// Send a body that decrypts to invalid DNS (just random bytes)
+	priv, pub, err := generateKeyPair(HPKEDHX25519)
+	if err != nil {
+		t.Fatalf("generateKeyPair failed: %v", err)
+	}
+
+	// Encrypt garbage as the DNS query
+	garbage := []byte{0xff, 0xfe, 0xfd}
+	sharedSecret, err := deriveSharedSecret(priv, pub, HPKEDHX25519)
+	if err != nil {
+		t.Fatalf("deriveSharedSecret failed: %v", err)
+	}
+	kdfInfo := buildKDFInfo(cfg.TargetName)
+	keys, err := deriveKeys(sharedSecret, kdfInfo, cfg.HPKEKDF, cfg.HPKEAEAD)
+	if err != nil {
+		t.Fatalf("deriveKeys failed: %v", err)
+	}
+	nonce := make([]byte, 12)
+	ciphertext, err := encrypt(garbage, nonce, keys.SealKey, garbage, cfg.HPKEAEAD)
+	if err != nil {
+		t.Fatalf("encrypt failed: %v", err)
+	}
+
+	msg := &ObliviousDNSMessage{
+		PublicKey:  pub,
+		Ciphertext: ciphertext,
+		Nonce:      nonce,
+		AAD:        garbage,
+	}
+	body, err := buildProxyRequest(msg)
+	if err != nil {
+		t.Fatalf("buildProxyRequest failed: %v", err)
+	}
+
+	req := httptest.NewRequest("POST", "http://test/", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	target.ServeHTTP(w, req)
+
+	// Should fail because the decrypted content is not a valid DNS message
+	if w.Code == http.StatusOK {
+		t.Error("expected error status for invalid DNS message")
+	}
+}
+
+func TestObliviousTargetPublicKey(t *testing.T) {
+	cfg := NewODoHConfig("target.example.com", "proxy.example.com")
+	mh := &mockHandler{response: &protocol.Message{Header: protocol.Header{ID: 1}}}
+	target, err := NewObliviousTarget(cfg, mh)
+	if err != nil {
+		t.Fatalf("NewObliviousTarget failed: %v", err)
+	}
+
+	pubKey := target.PublicKey()
+	if len(pubKey) != 32 {
+		t.Errorf("public key length = %d, want 32", len(pubKey))
+	}
+
+	// Verify it matches the target's internal key
+	if !bytes.Equal(pubKey, target.pubKey) {
+		t.Error("PublicKey() does not match internal pubKey")
+	}
+}

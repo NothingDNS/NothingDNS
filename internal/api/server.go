@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -57,6 +58,7 @@ type Server struct {
 	zoneSigners     map[string]*dnssec.Signer // zone name → signer
 	rpzEngine       *rpz.Engine
 	odohProxy       *odoh.ObliviousProxy // ODoH proxy (RFC 9230)
+	odohTarget      *odoh.ObliviousTarget // ODoH target resolver (RFC 9230)
 	loginLimiter    *loginRateLimiter
 	apiRateLimiter  *apiRateLimiter
 	stopCh          chan struct{} // Channel to signal shutdown
@@ -416,6 +418,12 @@ func (s *Server) WithODoH(proxy *odoh.ObliviousProxy) *Server {
 	return s
 }
 
+// WithODoHTarget sets the ODoH target resolver for the API server (RFC 9230).
+func (s *Server) WithODoHTarget(target *odoh.ObliviousTarget) *Server {
+	s.odohTarget = target
+	return s
+}
+
 // Start starts the API server.
 func (s *Server) Start() error {
 	if !s.config.Enabled {
@@ -446,8 +454,13 @@ func (s *Server) Start() error {
 	}
 
 	// ODoH endpoint (RFC 9230 - Oblivious DNS over HTTPS) - no auth required
-	if s.config.ODoHEnabled && s.odohProxy != nil {
-		mux.Handle(s.config.ODoHPath, s.odohProxy)
+	if s.config.ODoHEnabled {
+		if s.odohTarget != nil {
+			mux.Handle(s.config.ODoHPath, s.odohTarget)
+			mux.HandleFunc("/.well-known/odoh-config", s.handleODoHConfig)
+		} else if s.odohProxy != nil {
+			mux.Handle(s.config.ODoHPath, s.odohProxy)
+		}
 	}
 
 	// Health and status
@@ -769,6 +782,21 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 
 		s.writeError(w, http.StatusUnauthorized, "Unauthorized")
 	})
+}
+
+// handleODoHConfig returns the ODoH target's HPKE public key configuration.
+// RFC 9230 Section 4: ODoH clients discover the target's public key via this endpoint.
+func (s *Server) handleODoHConfig(w http.ResponseWriter, r *http.Request) {
+	if s.odohTarget == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "ODoH target not available")
+		return
+	}
+	pubKey := s.odohTarget.PublicKey()
+	w.Header().Set("Content-Type", "application/odoh-config+json")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, `{"public_key":"%s","kem":%d,"kdf":%d,"aead":%d}`,
+		"base64url:"+base64.RawURLEncoding.EncodeToString(pubKey),
+		s.config.ODoHKEM, s.config.ODoHKDF, s.config.ODoHAEAD)
 }
 
 // handleHealth returns health status.
