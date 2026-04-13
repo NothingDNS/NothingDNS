@@ -662,7 +662,7 @@ func (s *DoQServer) processDecryptedPayload(dc *doqConn, data []byte) {
 
 		case FrameTypeMaxStreamData, FrameTypeStreamDataBlocked:
 			// These flow control frames have 2 varint fields: stream_id + value
-			for i := 0; i < 2; i++ {
+			for range 2 {
 				_, n := DecodeVarint(data[offset:])
 				if n == 0 {
 					atomic.AddUint64(&s.errors, 1)
@@ -755,7 +755,7 @@ func (s *DoQServer) parseAndSkipACKFrame(data []byte) int {
 	offset += n
 
 	// Additional ACK ranges
-	for i := uint64(0); i < ackRangeCount; i++ {
+	for range ackRangeCount {
 		// Gap (varint)
 		_, n = DecodeVarint(data[offset:])
 		if n == 0 {
