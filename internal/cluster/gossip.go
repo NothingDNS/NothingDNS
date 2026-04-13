@@ -431,7 +431,12 @@ func (gp *GossipProtocol) BroadcastZoneUpdate(payload ZoneUpdatePayload) error {
 
 	data := msgBytes
 	if gp.aead != nil {
-		data, _ = gp.encrypt(data)
+		var err error
+		data, err = gp.encrypt(data)
+		if err != nil {
+			util.Warnf("gossip: failed to encrypt message: %v", err)
+			return err
+		}
 	}
 
 	self := gp.nodeList.GetSelf()
@@ -839,7 +844,12 @@ func (gp *GossipProtocol) BroadcastConfigUpdate(payload ConfigSyncPayload) error
 
 	data := msgBytes
 	if gp.aead != nil {
-		data, _ = gp.encrypt(data)
+		var err error
+		data, err = gp.encrypt(data)
+		if err != nil {
+			util.Warnf("gossip: failed to encrypt message: %v", err)
+			return err
+		}
 	}
 
 	self := gp.nodeList.GetSelf()
@@ -905,7 +915,12 @@ func (gp *GossipProtocol) BroadcastDraining(draining bool, inFlightReq int) erro
 
 	data := msgBytes
 	if gp.aead != nil {
-		data, _ = gp.encrypt(data)
+		var err error
+		data, err = gp.encrypt(data)
+		if err != nil {
+			util.Warnf("gossip: failed to encrypt message: %v", err)
+			return err
+		}
 	}
 
 	for _, node := range gp.nodeList.GetAll() {
@@ -972,7 +987,12 @@ func (gp *GossipProtocol) BroadcastNodeStats(stats NodeHealthStats) error {
 
 	data := msgBytes
 	if gp.aead != nil {
-		data, _ = gp.encrypt(data)
+		var err error
+		data, err = gp.encrypt(data)
+		if err != nil {
+			util.Warnf("gossip: failed to encrypt message: %v", err)
+			return err
+		}
 	}
 
 	for _, node := range gp.nodeList.GetAll() {
@@ -1025,7 +1045,12 @@ func (gp *GossipProtocol) BroadcastClusterMetrics(metrics ClusterMetricsPayload)
 
 	data := msgBytes
 	if gp.aead != nil {
-		data, _ = gp.encrypt(data)
+		var err error
+		data, err = gp.encrypt(data)
+		if err != nil {
+			util.Warnf("gossip: failed to encrypt message: %v", err)
+			return err
+		}
 	}
 
 	for _, node := range gp.nodeList.GetAll() {
@@ -1162,7 +1187,12 @@ func (gp *GossipProtocol) muLeaderSendHeartbeat() {
 
 	data := msgBytes
 	if gp.aead != nil {
-		data, _ = gp.encrypt(data)
+		var err error
+		data, err = gp.encrypt(data)
+		if err != nil {
+			util.Warnf("gossip: failed to encrypt message: %v", err)
+			return
+		}
 	}
 
 	for _, node := range gp.nodeList.GetAll() {

@@ -480,12 +480,13 @@ func (s *DoQServer) closeConnection(dc *doqConn) {
 		dc.wg.Wait()
 		done <- struct{}{}
 	}()
+	timer := time.NewTimer(5 * time.Second)
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+		timer.Stop()
+	case <-timer.C:
 		// Log but continue — streams may be stuck on I/O; conn is already closed
 	}
-	_ = done // channel from background goroutine, never blocks
 
 	s.removeConn(dc)
 	<-s.connSem

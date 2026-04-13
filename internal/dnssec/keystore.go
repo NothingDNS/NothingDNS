@@ -25,7 +25,7 @@ type KeyStore struct {
 	// store provides bucket-based KV operations. We accept an interface
 	// to avoid a circular import with the storage package.
 	store KeyStoreBackend
-	mu    sync.Mutex
+	mu    sync.RWMutex
 }
 
 // KeyStoreBackend abstracts the KVStore operations needed by KeyStore.
@@ -110,8 +110,8 @@ func (ks *KeyStore) SaveKey(zoneName string, key *SigningKey) error {
 
 // LoadKeys loads all signing keys for a zone.
 func (ks *KeyStore) LoadKeys(zoneName string) ([]*StoredKey, error) {
-	ks.mu.Lock()
-	defer ks.mu.Unlock()
+	ks.mu.RLock()
+	defer ks.mu.RUnlock()
 
 	var keys []*StoredKey
 

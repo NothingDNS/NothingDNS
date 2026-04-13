@@ -56,6 +56,14 @@ func New(cfg Config) *Blocklist {
 	return bl
 }
 
+// Close releases resources held by the blocklist.
+func (bl *Blocklist) Close() error {
+	if bl.httpClient != nil {
+		bl.httpClient.CloseIdleConnections()
+	}
+	return nil
+}
+
 // Load loads all configured blocklist files and URLs.
 func (bl *Blocklist) Load() error {
 	if !bl.enabled {
