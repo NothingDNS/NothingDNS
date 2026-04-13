@@ -391,6 +391,17 @@ func (p *parser) handleInclude(args []string) error {
 	// Save current origin so we can restore it after the include
 	savedOrigin := p.zone.Origin
 
+	// Check for symlinks to prevent path disclosure
+	info, err := os.Lstat(includeFile)
+	if err != nil {
+		p.zone.Origin = savedOrigin
+		return fmt.Errorf("$INCLUDE %s: %w", includeFile, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		p.zone.Origin = savedOrigin
+		return fmt.Errorf("$INCLUDE %s: symlinks are not allowed", includeFile)
+	}
+
 	// If an origin override was specified, apply it for the included file
 	if len(args) >= 2 {
 		p.zone.Origin = canonicalize(args[1])

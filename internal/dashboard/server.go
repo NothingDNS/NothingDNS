@@ -290,10 +290,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			token = c.Value
 		}
 	}
-	// Also accept token from query parameter (for WebSocket auth)
-	if token == "" {
-		token = r.URL.Query().Get("token")
-	}
+	// NOTE: Query parameter token acceptance is intentionally NOT supported.
+	// Tokens in URLs are logged in access logs, proxy logs, and browser history.
+	// Use the Authorization header (Bearer token) or ndns_token cookie instead.
 
 	// Validate authentication
 	s.mu.RLock()

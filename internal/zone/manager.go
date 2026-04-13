@@ -77,6 +77,15 @@ func (m *Manager) SetZoneDir(dir string) {
 
 // Load loads a zone from a file.
 func (m *Manager) Load(name, path string) error {
+	// Check for symlinks to prevent path disclosure attacks
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("zone file %s is a symlink: symlinks are not allowed", path)
+	}
+
 	f, err := os.Open(path)
 	if err != nil {
 		return err
