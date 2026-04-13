@@ -529,7 +529,7 @@ func TestDoQServerRouteToConnectionMissing(t *testing.T) {
 
 	// Routing to a non-existent connection should not panic.
 	cid := ConnectionID{0xde, 0xad, 0xbe, 0xef}
-	srv.routeToConnection(cid)
+	srv.routeToConnection(cid, []byte{0x01, 0x02})
 }
 
 func TestDoQServerRouteToConnectionExists(t *testing.T) {
@@ -540,12 +540,14 @@ func TestDoQServerRouteToConnectionExists(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	sc := NewServerConnection(testTLSConfig(), cid, &net.UDPAddr{}, &net.UDPAddr{}, nil)
 	srv.connsMu.Lock()
-	srv.conns[toKey(cid)] = &doqConn{scID: cid, ctx: ctx, cancel: cancel}
+	srv.conns[toKey(cid)] = &doqConn{sc: sc, scID: cid, ctx: ctx, cancel: cancel}
 	srv.connsMu.Unlock()
 
 	// Should not panic; this is a routing path only.
-	srv.routeToConnection(cid)
+	// Handshake data will be fed to the connection.
+	srv.routeToConnection(cid, []byte{0x03, 0x04})
 }
 
 // =================== Connection Semaphore Tests ===================

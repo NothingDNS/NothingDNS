@@ -236,7 +236,7 @@ func (s *DoQServer) handlePacket(data []byte, remoteAddr *net.UDPAddr) {
 			// Route to existing connection for crypto data processing
 			s.handle0RTTPacket(hdr, data, remoteAddr)
 		default:
-			s.routeToConnection(hdr.DestConnID)
+			s.routeToConnection(hdr.DestConnID, hdr.Payload)
 		}
 	} else {
 		s.handleShortHeaderPacket(data)
@@ -245,6 +245,7 @@ func (s *DoQServer) handlePacket(data []byte, remoteAddr *net.UDPAddr) {
 
 // handleInitialPacket handles an Initial packet (new connection or existing).
 func (s *DoQServer) handleInitialPacket(hdr *LongHeader, data []byte, remoteAddr *net.UDPAddr) {
+	_ = data // payload accessed via hdr.Payload
 	key := toKey(hdr.DestConnID)
 
 	s.connsMu.RLock()
@@ -332,11 +333,13 @@ func (s *DoQServer) handle0RTTPacket(hdr *LongHeader, data []byte, remoteAddr *n
 		return
 	}
 
-	// Feed 0-RTT crypto data to the connection
-	// The connection will buffer this until the handshake completes
+	// Feed 0-RTT crypto data to the connection.
+	// The connection will buffer this until the handshake completes.
 	if err := dc.sc.HandleCryptoData(tls.QUICEncryptionLevelEarly, hdr.Payload); err != nil {
 		atomic.AddUint64(&s.errors, 1)
 	}
+	_ = data // payload data consumed via hdr.Payload
+	_ = remoteAddr
 }
 
 // newDoQConnection creates a new DoQ connection.
@@ -452,9 +455,17 @@ func (s *DoQServer) handleStream(dc *doqConn, streamID uint64) {
 }
 
 // routeToConnection routes a packet to an existing connection.
-func (s *DoQServer) routeToConnection(dcID ConnectionID) {
-	// Placeholder for future packet routing implementation.
-	_, _ = s, dcID
+func (s *DoQServer) routeToConnection(dcID ConnectionID, data []byte) {
+	s.connsMu.RLock()
+	dc, ok := s.conns[toKey(dcID)]
+	s.connsMu.RUnlock()
+
+	if ok && dc != nil {
+		// Route Handshake/Initial CRYPTO data to the connection.
+		if err := dc.sc.HandleCryptoData(tls.QUICEncryptionLevelHandshake, data); err != nil {
+			atomic.AddUint64(&s.errors, 1)
+		}
+	}
 }
 
 // handleShortHeaderPacket handles a short header (1-RTT) packet.
