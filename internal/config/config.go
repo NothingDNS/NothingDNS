@@ -6,6 +6,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/nothingdns/nothingdns/internal/util"
 )
 
 // Config represents the DNS server configuration.
@@ -858,13 +860,12 @@ func expandEnvVars(input string) string {
 				end := strings.Index(input[i+2:], "}")
 				if end != -1 {
 					varName := input[i+2 : i+2+end]
-					varValue := os.Getenv(varName)
-					if varValue == "" {
-						// Environment variable not set or empty - warn but continue with empty
-						result.WriteString("")
-					} else {
-						result.WriteString(varValue)
+					varValue, ok := os.LookupEnv(varName)
+					if !ok {
+						// Environment variable not set — warn to prevent silent misconfiguration
+						util.Warnf("config: environment variable ${%s} is not set, substituting empty string", varName)
 					}
+					result.WriteString(varValue)
 					i += end + 3
 					continue
 				}
@@ -877,13 +878,12 @@ func expandEnvVars(input string) string {
 			}
 			if j > i+1 {
 				varName := input[i+1 : j]
-				varValue := os.Getenv(varName)
-				if varValue == "" {
-					// Environment variable not set or empty - warn but continue with empty
-					result.WriteString("")
-				} else {
-					result.WriteString(varValue)
+				varValue, ok := os.LookupEnv(varName)
+				if !ok {
+					// Environment variable not set — warn to prevent silent misconfiguration
+					util.Warnf("config: environment variable $%s is not set, substituting empty string", varName)
 				}
+				result.WriteString(varValue)
 				i = j
 				continue
 			}

@@ -38,17 +38,22 @@ func IsWebSocketRequest(r *http.Request) bool {
 // Handshake performs the WebSocket upgrade handshake. On success the response
 // writer has been hijacked and the caller can use ReadMessage/WriteMessage.
 // If allowedOrigins is non-empty, the Origin header is validated against the list.
-// An empty allowedOrigins list skips origin validation.
+// If allowedOrigins is empty and an Origin header is present, the connection is
+// rejected to prevent cross-site WebSocket hijacking.
 func Handshake(w http.ResponseWriter, r *http.Request, allowedOrigins ...string) (*Conn, error) {
 	if !IsWebSocketRequest(r) {
 		http.Error(w, "not a websocket request", http.StatusBadRequest)
 		return nil, ErrNotWebSocket
 	}
 
-	// Validate Origin if allowedOrigins is specified
-	if len(allowedOrigins) > 0 {
-		origin := r.Header.Get("Origin")
-		if origin != "" && !isOriginAllowed(origin, allowedOrigins) {
+	// Validate Origin — fail closed: reject cross-site origins when not explicitly configured
+	origin := r.Header.Get("Origin")
+	if origin != "" {
+		if len(allowedOrigins) == 0 {
+			http.Error(w, "origin not allowed: configure allowed origins", http.StatusForbidden)
+			return nil, errors.New("websocket: origin rejected — no allowed origins configured")
+		}
+		if !isOriginAllowed(origin, allowedOrigins) {
 			http.Error(w, "origin not allowed", http.StatusForbidden)
 			return nil, errors.New("websocket: origin not allowed")
 		}

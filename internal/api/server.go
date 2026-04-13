@@ -1310,7 +1310,7 @@ func (s *Server) handleCreateZone(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.zoneManager.CreateZone(req.Name, ttl, soa, nsRecords); err != nil {
-		s.writeError(w, http.StatusConflict, err.Error())
+		s.writeError(w, http.StatusConflict, sanitizeError(err, "Failed to create zone"))
 		return
 	}
 
@@ -1326,7 +1326,7 @@ func (s *Server) handleDeleteZone(w http.ResponseWriter, r *http.Request, name s
 		return
 	}
 	if err := s.zoneManager.DeleteZone(name); err != nil {
-		s.writeError(w, http.StatusNotFound, err.Error())
+		s.writeError(w, http.StatusNotFound, sanitizeError(err, "Failed to delete zone"))
 		return
 	}
 
@@ -1341,7 +1341,7 @@ func (s *Server) handleGetRecords(w http.ResponseWriter, r *http.Request, zoneNa
 
 	records, err := s.zoneManager.GetRecords(zoneName, name)
 	if err != nil {
-		s.writeError(w, http.StatusNotFound, err.Error())
+		s.writeError(w, http.StatusNotFound, sanitizeError(err, "Not found"))
 		return
 	}
 
@@ -1409,7 +1409,7 @@ func (s *Server) handleAddRecord(w http.ResponseWriter, r *http.Request, zoneNam
 	}
 
 	if err := s.zoneManager.AddRecord(zoneName, record); err != nil {
-		s.writeError(w, http.StatusNotFound, err.Error())
+		s.writeError(w, http.StatusNotFound, sanitizeError(err, "Not found"))
 		return
 	}
 
@@ -1455,7 +1455,7 @@ func (s *Server) handleUpdateRecord(w http.ResponseWriter, r *http.Request, zone
 	}
 
 	if err := s.zoneManager.UpdateRecord(zoneName, req.Name, req.Type, req.OldData, newRecord); err != nil {
-		s.writeError(w, http.StatusNotFound, err.Error())
+		s.writeError(w, http.StatusNotFound, sanitizeError(err, "Not found"))
 		return
 	}
 
@@ -1490,7 +1490,7 @@ func (s *Server) handleDeleteRecord(w http.ResponseWriter, r *http.Request, zone
 	}
 
 	if err := s.zoneManager.DeleteRecord(zoneName, req.Name, req.Type); err != nil {
-		s.writeError(w, http.StatusNotFound, err.Error())
+		s.writeError(w, http.StatusNotFound, sanitizeError(err, "Not found"))
 		return
 	}
 
@@ -1503,7 +1503,7 @@ func (s *Server) handleDeleteRecord(w http.ResponseWriter, r *http.Request, zone
 func (s *Server) handleExportZone(w http.ResponseWriter, _ *http.Request, zoneName string) {
 	content, err := s.zoneManager.ExportZone(zoneName)
 	if err != nil {
-		s.writeError(w, http.StatusNotFound, err.Error())
+		s.writeError(w, http.StatusNotFound, sanitizeError(err, "Not found"))
 		return
 	}
 
@@ -1576,7 +1576,7 @@ func (s *Server) handleBulkPTR(w http.ResponseWriter, r *http.Request, zoneName 
 	// Validate zone/CIDR compatibility
 	zoneOrigin := z.Origin
 	if _, err := validateZoneCIDR(zoneOrigin, ones); err != nil {
-		s.writeError(w, http.StatusBadRequest, err.Error())
+		s.writeError(w, http.StatusBadRequest, sanitizeError(err, "Invalid request"))
 		return
 	}
 
@@ -2379,7 +2379,7 @@ func (s *Server) handleUpstreams(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if err := s.upstreamClient.AddServer(req.Server); err != nil {
-				s.writeError(w, http.StatusConflict, err.Error())
+				s.writeError(w, http.StatusConflict, sanitizeError(err, "Operation failed"))
 				return
 			}
 			s.writeJSON(w, http.StatusOK, &MessageResponse{Message: "Server added: " + req.Server})
@@ -2390,7 +2390,7 @@ func (s *Server) handleUpstreams(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if err := s.upstreamClient.RemoveServer(req.Server); err != nil {
-				s.writeError(w, http.StatusNotFound, err.Error())
+				s.writeError(w, http.StatusNotFound, sanitizeError(err, "Not found"))
 				return
 			}
 			s.writeJSON(w, http.StatusOK, &MessageResponse{Message: "Server removed: " + req.Server})
@@ -2457,7 +2457,7 @@ func (s *Server) handleACL(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err := s.aclChecker.UpdateRules(configRules); err != nil {
-			s.writeError(w, http.StatusBadRequest, err.Error())
+			s.writeError(w, http.StatusBadRequest, sanitizeError(err, "Invalid request"))
 			return
 		}
 		s.writeJSON(w, http.StatusOK, &MessageResponse{Message: "ACL rules updated"})
@@ -2815,14 +2815,14 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		// Users exist (from localhost) - update the existing user's password
 		user, err = s.authStore.UpdateUser(req.Username, req.Password, "")
 		if err != nil {
-			s.writeError(w, http.StatusConflict, err.Error())
+			s.writeError(w, http.StatusConflict, sanitizeError(err, "Operation failed"))
 			return
 		}
 	} else {
 		// No users - create the first admin user
 		user, err = s.authStore.CreateUser(req.Username, req.Password, auth.RoleAdmin)
 		if err != nil {
-			s.writeError(w, http.StatusConflict, err.Error())
+			s.writeError(w, http.StatusConflict, sanitizeError(err, "Operation failed"))
 			return
 		}
 	}
@@ -2924,7 +2924,7 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 
 		user, err := s.authStore.CreateUser(req.Username, req.Password, role)
 		if err != nil {
-			s.writeError(w, http.StatusConflict, err.Error())
+			s.writeError(w, http.StatusConflict, sanitizeError(err, "Operation failed"))
 			return
 		}
 
@@ -2949,7 +2949,7 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err := s.authStore.DeleteUser(username); err != nil {
-			s.writeError(w, http.StatusNotFound, err.Error())
+			s.writeError(w, http.StatusNotFound, sanitizeError(err, "Not found"))
 			return
 		}
 
@@ -3027,4 +3027,18 @@ func (s *Server) writeJSON(w http.ResponseWriter, status int, data any) {
 // writeError writes an error response.
 func (s *Server) writeError(w http.ResponseWriter, status int, message string) {
 	s.writeJSON(w, status, &ErrorResponse{Error: message})
+}
+
+// sanitizeError converts an internal error to a safe client-facing message.
+// Use this instead of err.Error() in API responses to prevent information leakage.
+func sanitizeError(err error, fallback string) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	// Strip file paths and internal details — only allow simple descriptive messages
+	if strings.Contains(msg, "/") || strings.Contains(msg, "panic") {
+		return fallback
+	}
+	return msg
 }

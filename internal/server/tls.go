@@ -125,6 +125,7 @@ func BuildTLSConfigForProfile(profile *TLSProfileConfig, certFile, keyFile strin
 		MinVersion: profile.MinimumTLSVersion,
 		MaxVersion: tls.VersionTLS13,
 		ServerName: profile.Hostname,
+		NextProtos: profile.Profile.GetNextProtos(), // Enforce ALPN protocols (RFC 7301)
 	}
 
 	// Set cipher suites per RFC 7525

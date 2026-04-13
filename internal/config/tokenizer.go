@@ -17,7 +17,15 @@ type Tokenizer struct {
 	indentStack   []int
 	atLineStart   bool
 	pendingTokens []Token // buffered DEDENT tokens for multi-level dedents
+
+	// Depth tracking for nested structures
+	depth int
+
+	// Max string size limit
+	maxStringSize int
 }
+
+const maxQuotedStringSize = 1024 * 1024 // 1MB limit for quoted strings
 
 // NewTokenizer creates a new tokenizer for the given input.
 func NewTokenizer(input string) *Tokenizer {
@@ -313,6 +321,10 @@ func (t *Tokenizer) readQuotedString() Token {
 	startLine := t.line
 	startCol := t.col
 
+	limit := t.maxStringSize
+	if limit == 0 {
+		limit = maxQuotedStringSize
+	}
 	var value strings.Builder
 	for {
 		ch := t.peek()
@@ -323,6 +335,10 @@ func (t *Tokenizer) readQuotedString() Token {
 		if ch == quote {
 			t.next()
 			break
+		}
+
+		if value.Len() >= limit {
+			return t.emit(TokenError, fmt.Sprintf("quoted string exceeds %d byte limit", limit))
 		}
 
 		if ch == '\\' && quote == '"' {

@@ -215,6 +215,11 @@ func (s *XoTServer) handleConnection(conn net.Conn) {
 
 	// Read length-prefixed DNS messages
 	for {
+		// Set read deadline to prevent slow-loris attacks
+		if err := conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+			return
+		}
+
 		lenBuf := make([]byte, 2)
 		if _, err := conn.Read(lenBuf); err != nil {
 			return
