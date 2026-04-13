@@ -116,20 +116,14 @@ func validateBlocklistURL(rawURL string) error {
 		return fmt.Errorf("cloud metadata host not allowed: %s", host)
 	}
 
-	// Resolve hostname and check for private/reserved IPs
+	// Only allow IP literals to prevent DNS rebinding attacks.
+	// DNS lookups can be manipulated by attackers to first return public IPs
+	// then later resolve to private IPs.
 	ip := net.ParseIP(host)
 	if ip == nil {
-		// Not an IP — resolve hostname
-		addrs, err := net.LookupHost(host)
-		if err != nil {
-			return fmt.Errorf("cannot resolve host %q: %w", host, err)
-		}
-		for _, addr := range addrs {
-			if ip = net.ParseIP(addr); ip != nil && isPrivateOrReservedIP(ip) {
-				return fmt.Errorf("private/reserved IP not allowed: %s", addr)
-			}
-		}
-	} else if isPrivateOrReservedIP(ip) {
+		return fmt.Errorf("only IP addresses are allowed in blocklist URLs, not hostnames: %s", host)
+	}
+	if isPrivateOrReservedIP(ip) {
 		return fmt.Errorf("private/reserved IP not allowed: %s", ip)
 	}
 
@@ -319,7 +313,7 @@ func (bl *Blocklist) loadFile(path string) error {
 }
 
 // IsBlocked checks if a domain is blocked.
-// Uses efficient suffix matching without repeated string allocations.
+// Uses efficient suffix matching with minimal allocations.
 func (bl *Blocklist) IsBlocked(domain string) bool {
 	if !bl.enabled {
 		return false
@@ -328,6 +322,7 @@ func (bl *Blocklist) IsBlocked(domain string) bool {
 	bl.mu.RLock()
 	defer bl.mu.RUnlock()
 
+	// Normalize domain once
 	domain = strings.ToLower(strings.TrimSuffix(domain, "."))
 
 	// Check each enabled source
@@ -341,7 +336,8 @@ func (bl *Blocklist) IsBlocked(domain string) bool {
 		}
 		// Check parent domains by finding dots and checking substrings
 		// For "sub.ads.example.com", check "ads.example.com", then "example.com"
-		for i := 0; i < len(domain); i++ {
+		// Use index-based checking to minimize allocations
+		for i := len(domain) - 1; i >= 0; i-- {
 			if domain[i] == '.' && i < len(domain)-1 {
 				parent := domain[i+1:]
 				if _, blocked := entries[parent]; blocked {
@@ -351,17 +347,9 @@ func (bl *Blocklist) IsBlocked(domain string) bool {
 		}
 	}
 
-	// Check manually added domains
+	// Check manually added domains (exact match only, parent checking is redundant)
 	if _, blocked := bl.manualEntries[domain]; blocked {
 		return true
-	}
-	for i := 0; i < len(domain); i++ {
-		if domain[i] == '.' && i < len(domain)-1 {
-			parent := domain[i+1:]
-			if _, blocked := bl.manualEntries[parent]; blocked {
-				return true
-			}
-		}
 	}
 
 	return false

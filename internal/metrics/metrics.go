@@ -556,7 +556,9 @@ func (m *MetricsCollector) GetHistory() MetricsHistoryResponse {
 	latencyMs := make([]int64, count)
 
 	for i := 0; i < count; i++ {
-		idx := (m.historyIndex - count + i) % m.historySize
+		// Use proper modulo arithmetic to handle wrapping
+		// Add historySize to ensure non-negative before modulo
+		idx := (m.historyIndex - 1 - i + m.historySize) % m.historySize
 		timestamps[i] = m.historyTimestamps[idx]
 		queries[i] = m.historyQueries[idx]
 		cacheHits[i] = m.historyCacheHits[idx]

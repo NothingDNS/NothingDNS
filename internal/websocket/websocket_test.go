@@ -123,7 +123,7 @@ func TestReadFrame_SmallPayload(t *testing.T) {
 	frame := buildFrame(0x1, true, true, mask, payload)
 	c := newConn(frame)
 
-	opcode, data, err := c.readFrame()
+	_, opcode, data, err := c.readFrame()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestReadFrame_EmptyPayload(t *testing.T) {
 	frame := buildFrame(0x1, true, false, nil, []byte{})
 	c := newConn(frame)
 
-	opcode, data, err := c.readFrame()
+	_, opcode, data, err := c.readFrame()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestReadFrame_MediumPayload(t *testing.T) {
 	frame := buildFrame(0x2, true, true, []byte{0xAA, 0xBB, 0xCC, 0xDD}, payload)
 	c := newConn(frame)
 
-	opcode, data, err := c.readFrame()
+	_, opcode, data, err := c.readFrame()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestReadFrame_LargePayload(t *testing.T) {
 	frame := buildFrame(0x1, true, false, nil, payload)
 	c := newConn(frame)
 
-	opcode, data, err := c.readFrame()
+	_, opcode, data, err := c.readFrame()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestReadFrame_TooLarge(t *testing.T) {
 	buf = append(buf, lenBytes...)
 
 	c := newConn(buf)
-	_, _, err := c.readFrame()
+	_, _, _, err := c.readFrame()
 	if err == nil || err.Error() != "websocket: frame too large" {
 		t.Errorf("expected frame too large error, got %v", err)
 	}
@@ -208,7 +208,7 @@ func TestReadFrame_TooLarge(t *testing.T) {
 
 func TestReadFrame_TruncatedHeader(t *testing.T) {
 	c := newConn([]byte{0x81}) // Only 1 byte, need 2
-	_, _, err := c.readFrame()
+	_, _, _, err := c.readFrame()
 	if err == nil {
 		t.Error("expected error for truncated header")
 	}
@@ -219,7 +219,7 @@ func TestReadFrame_UnmaskedPayload(t *testing.T) {
 	frame := buildFrame(0x1, true, false, nil, payload)
 	c := newConn(frame)
 
-	_, data, err := c.readFrame()
+	_, _, data, err := c.readFrame()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -425,7 +425,7 @@ func TestRoundTrip(t *testing.T) {
 	// Re-parse: skip FIN+opcode byte, check it's unmasked (server->client)
 	reader := &Conn{conn: &bufferConn{reader: bytes.NewReader(wireData), writer: &bytes.Buffer{}}}
 
-	opcode, data, err := reader.readFrame()
+	_, opcode, data, err := reader.readFrame()
 	if err != nil {
 		t.Fatalf("read error: %v", err)
 	}
@@ -449,7 +449,7 @@ func TestMasking_NonAlignedPayload(t *testing.T) {
 	frame := buildFrame(0x1, true, true, mask, payload)
 	c := newConn(frame)
 
-	_, data, err := c.readFrame()
+	_, _, data, err := c.readFrame()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

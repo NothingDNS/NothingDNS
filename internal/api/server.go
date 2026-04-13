@@ -233,6 +233,9 @@ const (
 	apiRateLimitWindowSecs  = 60  // Window size in seconds
 )
 
+// maxBodyBytes is the maximum size for request bodies to prevent OOM attacks.
+const maxBodyBytes = 64 * 1024 // 64KB
+
 // checkRateLimit checks if the IP is within rate limits.
 // Returns true if the request should be rejected.
 func (r *apiRateLimiter) checkRateLimit(ip string) bool {
@@ -2223,7 +2226,7 @@ func (s *Server) handleBlocklists(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var req BlocklistAddRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&req); err != nil {
 			s.writeError(w, http.StatusBadRequest, "Invalid request body")
 			return
 		}
@@ -2359,7 +2362,7 @@ func (s *Server) handleUpstreams(w http.ResponseWriter, r *http.Request) {
 		}
 		// Update upstream configuration (add/remove servers)
 		var req UpstreamUpdateRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&req); err != nil {
 			s.writeError(w, http.StatusBadRequest, "Invalid request body")
 			return
 		}
@@ -2436,7 +2439,7 @@ func (s *Server) handleACL(w http.ResponseWriter, r *http.Request) {
 				Redirect string   `json:"redirect,omitempty"`
 			} `json:"rules"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&req); err != nil {
 			s.writeError(w, http.StatusBadRequest, "Invalid request body")
 			return
 		}
@@ -2532,7 +2535,7 @@ func (s *Server) handleRPZRules(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var req RPZAddRuleRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&req); err != nil {
 			s.writeError(w, http.StatusBadRequest, "Invalid request body")
 			return
 		}
@@ -2700,7 +2703,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req LoginRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
@@ -2785,7 +2788,7 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req BootstrapRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
@@ -2904,7 +2907,7 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var req CreateUserRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&req); err != nil {
 			s.writeError(w, http.StatusBadRequest, "Invalid request body")
 			return
 		}

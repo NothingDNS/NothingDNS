@@ -210,12 +210,12 @@ func TestEncryptDecrypt(t *testing.T) {
 	plaintext := []byte("Hello, ODoH!")
 	aad := []byte("additional data")
 
-	ciphertext, err := encrypt(plaintext, nonce, key, aad)
+	ciphertext, err := encrypt(plaintext, nonce, key, aad, HPKEAEADAES256GCM)
 	if err != nil {
 		t.Fatalf("encrypt failed: %v", err)
 	}
 
-	decrypted, err := decrypt(ciphertext, nonce, key, aad)
+	decrypted, err := decrypt(ciphertext, nonce, key, aad, HPKEAEADAES256GCM)
 	if err != nil {
 		t.Fatalf("decrypt failed: %v", err)
 	}
@@ -230,12 +230,12 @@ func TestEncryptDecryptNoAAD(t *testing.T) {
 	nonce := make([]byte, 12)
 	plaintext := []byte("Hello, ODoH!")
 
-	ciphertext, err := encrypt(plaintext, nonce, key, nil)
+	ciphertext, err := encrypt(plaintext, nonce, key, nil, HPKEAEADAES256GCM)
 	if err != nil {
 		t.Fatalf("encrypt failed: %v", err)
 	}
 
-	decrypted, err := decrypt(ciphertext, nonce, key, nil)
+	decrypted, err := decrypt(ciphertext, nonce, key, nil, HPKEAEADAES256GCM)
 	if err != nil {
 		t.Fatalf("decrypt failed: %v", err)
 	}
@@ -250,7 +250,7 @@ func TestEncryptInvalidNonce(t *testing.T) {
 	shortNonce := make([]byte, 8) // Wrong size
 	plaintext := []byte("test")
 
-	_, err := encrypt(plaintext, shortNonce, key, nil)
+	_, err := encrypt(plaintext, shortNonce, key, nil, HPKEAEADAES256GCM)
 	if err != ErrInvalidNonce {
 		t.Errorf("encrypt with short nonce = %v, want ErrInvalidNonce", err)
 	}
@@ -261,10 +261,10 @@ func TestDecryptInvalidNonce(t *testing.T) {
 	nonce := make([]byte, 12)
 	plaintext := []byte("test")
 
-	ciphertext, _ := encrypt(plaintext, nonce, key, nil)
+	ciphertext, _ := encrypt(plaintext, nonce, key, nil, HPKEAEADAES256GCM)
 
 	shortNonce := make([]byte, 8)
-	_, err := decrypt(ciphertext, shortNonce, key, nil)
+	_, err := decrypt(ciphertext, shortNonce, key, nil, HPKEAEADAES256GCM)
 	if err != ErrInvalidNonce {
 		t.Errorf("decrypt with short nonce = %v, want ErrInvalidNonce", err)
 	}
@@ -282,10 +282,10 @@ func TestDecryptWrongKey(t *testing.T) {
 	nonce := make([]byte, 12)
 	plaintext := []byte("test")
 
-	ciphertext, _ := encrypt(plaintext, nonce, key1, nil)
+	ciphertext, _ := encrypt(plaintext, nonce, key1, nil, HPKEAEADAES256GCM)
 
 	// Decryption with different key should fail (GCM authentication)
-	_, err := decrypt(ciphertext, nonce, key2, nil)
+	_, err := decrypt(ciphertext, nonce, key2, nil, HPKEAEADAES256GCM)
 	if err == nil {
 		t.Error("decrypt with wrong key should fail")
 	}
@@ -490,7 +490,7 @@ func TestTargetDecapsulateQuery(t *testing.T) {
 
 	// Encrypt the query (same nonce derivation as encapsulateQuery)
 	nonce := make([]byte, 12)
-	ciphertext, err := encrypt(query, nonce, keys.SealKey, []byte(cfg.TargetName))
+	ciphertext, err := encrypt(query, nonce, keys.SealKey, []byte(cfg.TargetName), cfg.HPKEAEAD)
 	if err != nil {
 		t.Fatalf("encrypt failed: %v", err)
 	}
@@ -527,23 +527,39 @@ func TestTargetProcessDNSQuery(t *testing.T) {
 }
 
 func TestProxyForwardToTarget(t *testing.T) {
+	// Create a mock target server
+	targetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Echo back the request body as the response
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/dns-message")
+		w.WriteHeader(http.StatusOK)
+		w.Write(body)
+	}))
+	defer targetServer.Close()
+
 	cfg := NewODoHConfig("target.example.com", "proxy.example.com")
-	proxy := &ObliviousProxy{config: cfg}
+	cfg.TargetURL = targetServer.URL
+
+	proxy, err := NewObliviousProxy(cfg)
+	if err != nil {
+		t.Fatalf("NewObliviousProxy failed: %v", err)
+	}
 
 	msg := &ObliviousDNSMessage{
 		PublicKey:  []byte("test-pub-key"),
 		Ciphertext: []byte("test-ciphertext"),
 		Nonce:      []byte("test-nonce-12b"),
+		AAD:       []byte(cfg.TargetName),
 	}
 
-	// Placeholder forward returns the ciphertext
 	result, err := proxy.forwardToTarget(msg)
 	if err != nil {
 		t.Fatalf("forwardToTarget failed: %v", err)
 	}
 
-	if !bytes.Equal(result, msg.Ciphertext) {
-		t.Error("forwardToTarget didn't return ciphertext")
+	// Verify the response contains the echoed ciphertext
+	if !bytes.Contains(result, msg.Ciphertext) {
+		t.Errorf("forwardToTarget result = %q, want to contain %q", result, msg.Ciphertext)
 	}
 }
 

@@ -381,7 +381,9 @@ func (p *parser) handleInclude(args []string) error {
 	cleanPath := filepath.Clean(includeFile)
 	if p.filename != "" && !filepath.IsAbs(args[0]) {
 		zoneDir := filepath.Dir(p.filename)
-		if !strings.HasPrefix(cleanPath, zoneDir+string(filepath.Separator)) && cleanPath != zoneDir {
+		// Use filepath.Rel to safely check the path stays within zone directory
+		rel, err := filepath.Rel(zoneDir, cleanPath)
+		if err != nil || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
 			return fmt.Errorf("$INCLUDE path traversal attempt blocked: %s", includeFile)
 		}
 	}

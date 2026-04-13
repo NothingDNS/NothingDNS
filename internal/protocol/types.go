@@ -875,6 +875,7 @@ func (r *RDataSSHFP) Pack(buf []byte, offset int) (int, error) {
 
 // Unpack deserializes the SSHFP record.
 func (r *RDataSSHFP) Unpack(buf []byte, offset int, rdlength uint16) (int, error) {
+	startOffset := offset
 	if offset+2 > len(buf) {
 		return 0, ErrBufferTooSmall
 	}
@@ -891,7 +892,7 @@ func (r *RDataSSHFP) Unpack(buf []byte, offset int, rdlength uint16) (int, error
 	copy(r.Fingerprint, buf[offset:offset+fpLen])
 	offset += fpLen
 
-	return offset - (offset - int(rdlength)), nil
+	return offset - startOffset, nil
 }
 
 // String returns the SSHFP record data.
@@ -944,6 +945,7 @@ func (r *RDataTLSA) Pack(buf []byte, offset int) (int, error) {
 
 // Unpack deserializes the TLSA record.
 func (r *RDataTLSA) Unpack(buf []byte, offset int, rdlength uint16) (int, error) {
+	startOffset := offset
 	if offset+3 > len(buf) {
 		return 0, ErrBufferTooSmall
 	}
@@ -962,7 +964,7 @@ func (r *RDataTLSA) Unpack(buf []byte, offset int, rdlength uint16) (int, error)
 	copy(r.Certificate, buf[offset:offset+certLen])
 	offset += certLen
 
-	return offset - (offset - int(rdlength)), nil
+	return offset - startOffset, nil
 }
 
 // String returns the TLSA record data.

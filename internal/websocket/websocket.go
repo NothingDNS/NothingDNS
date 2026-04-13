@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -105,7 +106,11 @@ func isOriginAllowed(origin string, allowedOrigins []string) bool {
 
 // Conn represents a WebSocket connection.
 type Conn struct {
-	conn io.ReadWriteCloser
+	conn       io.ReadWriteCloser
+	mu         sync.Mutex   // protects fragmented state during reads
+	fragmented bool         // true if we're reading a fragmented message
+	fragType   int          // message type (1=text, 2=binary) for fragmented message
+	fragAccum  []byte       // accumulated payload for fragmented message
 }
 
 // Close closes the underlying connection.
@@ -135,24 +140,73 @@ func (c *Conn) SetWriteDeadline(t time.Time) error {
 // Returns messageType (1=text, 2=binary), payload, error.
 func (c *Conn) ReadMessage() (int, []byte, error) {
 	for {
-		opcode, payload, err := c.readFrame()
+		// Read frame (may block, so we don't hold the lock during I/O)
+		fin, opcode, payload, err := c.readFrame()
 		if err != nil {
 			return 0, nil, err
 		}
 
+		// Lock for fragmented state modification
+		c.mu.Lock()
+
 		switch opcode {
-		case 0x0: // continuation - discard (fragmented messages not supported)
-			// Fragmented messages are not expected in dashboard usage.
-			// Discard continuation frames and continue reading.
+		case 0x0: // continuation
+			if !c.fragmented {
+				c.mu.Unlock()
+				continue
+			}
+			c.fragAccum = append(c.fragAccum, payload...)
+			if fin {
+				msgType := c.fragType
+				msg := c.fragAccum
+				c.fragmented = false
+				c.fragType = 0
+				c.fragAccum = nil
+				c.mu.Unlock()
+				return msgType, msg, nil
+			}
+			c.mu.Unlock()
+
 		case 0x1: // text
-			return 1, payload, nil
+			if fin {
+				c.mu.Unlock()
+				return 1, payload, nil
+			}
+			if c.fragmented {
+				c.mu.Unlock()
+				continue
+			}
+			c.fragmented = true
+			c.fragType = 1
+			c.fragAccum = append(c.fragAccum, payload...)
+			c.mu.Unlock()
+
 		case 0x2: // binary
-			return 2, payload, nil
+			if fin {
+				c.mu.Unlock()
+				return 2, payload, nil
+			}
+			if c.fragmented {
+				c.mu.Unlock()
+				continue
+			}
+			c.fragmented = true
+			c.fragType = 2
+			c.fragAccum = append(c.fragAccum, payload...)
+			c.mu.Unlock()
+
 		case 0x8: // close
+			c.mu.Unlock()
 			return 8, payload, nil
+
 		case 0x9: // ping - respond with pong
+			// Note: WriteMessage will block, holding the lock
+			// This is intentional - we don't want concurrent writes
+			c.mu.Unlock() // Release before blocking write
 			_ = c.WriteMessage(0xA, payload)
+
 		case 0xA: // pong - ignore
+			c.mu.Unlock()
 		}
 	}
 }
@@ -185,13 +239,14 @@ func (c *Conn) WriteMessage(messageType int, data []byte) error {
 }
 
 // readFrame reads a single WebSocket frame.
-func (c *Conn) readFrame() (opcode byte, payload []byte, err error) {
+func (c *Conn) readFrame() (fin bool, opcode byte, payload []byte, err error) {
 	// Read first 2 bytes
 	header := make([]byte, 2)
 	if _, err = io.ReadFull(c.conn, header); err != nil {
-		return 0, nil, err
+		return false, 0, nil, err
 	}
 
+	fin = (header[0] & 0x80) != 0
 	opcode = header[0] & 0x0F
 	masked := (header[1] & 0x80) != 0
 	payloadLen := int(header[1] & 0x7F)
@@ -200,19 +255,19 @@ func (c *Conn) readFrame() (opcode byte, payload []byte, err error) {
 	case 126:
 		ext := make([]byte, 2)
 		if _, err = io.ReadFull(c.conn, ext); err != nil {
-			return 0, nil, err
+			return false, 0, nil, err
 		}
 		payloadLen = int(binary.BigEndian.Uint16(ext))
 	case 127:
 		ext := make([]byte, 8)
 		if _, err = io.ReadFull(c.conn, ext); err != nil {
-			return 0, nil, err
+			return false, 0, nil, err
 		}
 		payloadLen = int(binary.BigEndian.Uint64(ext))
 	}
 
 	if payloadLen > 16*1024 { // 16KB max frame (DNS messages are typically < 4KB)
-		return 0, nil, errors.New("websocket: frame too large")
+		return false, 0, nil, errors.New("websocket: frame too large")
 	}
 
 	payload = make([]byte, payloadLen)
@@ -221,11 +276,11 @@ func (c *Conn) readFrame() (opcode byte, payload []byte, err error) {
 	if masked {
 		mask := make([]byte, 4)
 		if _, err = io.ReadFull(c.conn, mask); err != nil {
-			return 0, nil, err
+			return false, 0, nil, err
 		}
 		if payloadLen > 0 {
 			if _, err = io.ReadFull(c.conn, payload); err != nil {
-				return 0, nil, err
+				return false, 0, nil, err
 			}
 			for i := range payload {
 				payload[i] ^= mask[i%4]
@@ -233,9 +288,9 @@ func (c *Conn) readFrame() (opcode byte, payload []byte, err error) {
 		}
 	} else if payloadLen > 0 {
 		if _, err = io.ReadFull(c.conn, payload); err != nil {
-			return 0, nil, err
+			return false, 0, nil, err
 		}
 	}
 
-	return opcode, payload, nil
+	return fin, opcode, payload, nil
 }

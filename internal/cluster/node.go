@@ -361,7 +361,7 @@ func (nl *NodeList) GetBest(exclude []string) *Node {
 		// All nodes have score 0 (unknown health) — fall back to uniform random
 		var b [4]byte
 		if _, err := rand.Read(b[:]); err != nil {
-			return &Node{}
+			return nil
 		}
 		idx := binary.BigEndian.Uint32(b[:]) % uint32(len(candidates))
 		cp := *candidates[idx].node
@@ -371,7 +371,7 @@ func (nl *NodeList) GetBest(exclude []string) *Node {
 	// Pick random point in [0, total)
 	var b [4]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		return &Node{}
+		return nil
 	}
 	pick := binary.BigEndian.Uint32(b[:]) % uint32(total)
 

@@ -158,7 +158,8 @@ func (m *Monitor) IsOverLimit() bool {
 	}
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
-	return ms.Sys > m.config.LimitBytes
+	// Use HeapAlloc for actual memory pressure, not Sys which is total from OS
+	return ms.HeapAlloc > m.config.LimitBytes
 }
 
 // run is the main monitoring loop.
@@ -197,9 +198,12 @@ func (m *Monitor) check() {
 		Limit:        m.config.LimitBytes,
 	}
 
-	// Determine state based on Sys (total memory from OS)
+	// Determine state based on HeapAlloc (actual memory in use)
 	var newState State
-	usagePct := float64(ms.Sys) / float64(m.config.LimitBytes) * 100
+	usagePct := 0.0
+	if m.config.LimitBytes > 0 {
+		usagePct = float64(ms.HeapAlloc) / float64(m.config.LimitBytes) * 100
+	}
 
 	switch {
 	case usagePct >= m.config.CriticalPct:

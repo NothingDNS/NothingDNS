@@ -132,9 +132,9 @@ func HashPassword(password string, salt []byte) []byte {
 	}
 
 	// PBKDF2-HMAC-SHA512 with iterations chosen for balance of security and performance.
-	// 100,000 iterations provides ~128-bit security level with reasonable performance (~500ms).
-	// This is a significant improvement over the previous 10,000 SHA-256 iterations.
-	iterations := 100000
+	// OWASP 2023 recommends 310,000 iterations for SHA-512 at 128-bit security.
+	// See: https://owasp.org/www-project-web-security-testing-guide/
+	iterations := 310000
 	keyLen := 64
 
 	h := hmac.New(sha512.New, []byte(password))

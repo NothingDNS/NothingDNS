@@ -48,6 +48,11 @@ func NewHandlerWithPadding(dnsHandler server.Handler) *Handler {
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Set security headers
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("X-XSS-Protection", "1; mode=block")
 
 	// Route to JSON API handler if the client accepts DNS JSON or uses
 	// the ?name= query parameter (Google/Cloudflare JSON API convention).

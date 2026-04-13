@@ -237,6 +237,7 @@ func (s *IXFRServer) generateIncrementalIXFR(z *zone.Zone, clientSerial uint32) 
 	}
 
 	// Find the starting point in the journal
+	// Linear comparison - entries with serial > clientSerial are newer changes
 	startIdx := -1
 	for i, entry := range journal {
 		if entry.Serial > clientSerial {

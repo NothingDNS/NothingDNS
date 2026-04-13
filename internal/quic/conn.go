@@ -38,13 +38,15 @@ func DefaultConfig() *Config {
 
 // Stream represents a QUIC stream.
 type Stream struct {
-	id      uint64
-	readBuf []byte
-	readOff int
-	finSent bool
-	finRecv bool
-	closed  bool
-	mu      sync.Mutex
+	id       uint64
+	readBuf  []byte
+	readOff  int
+	writeBuf []byte
+	writeOff int
+	finSent  bool
+	finRecv  bool
+	closed   bool
+	mu       sync.Mutex
 }
 
 // StreamID returns the stream ID.
@@ -76,7 +78,19 @@ func (s *Stream) Write(p []byte) (int, error) {
 	if s.closed || s.finSent {
 		return 0, ErrStreamClosed
 	}
+	s.writeBuf = append(s.writeBuf, p...)
 	return len(p), nil
+}
+
+// GetWrittenData returns all written data and resets the write buffer.
+// This is used by the QUIC stack to collect data to send.
+func (s *Stream) GetWrittenData() []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data := s.writeBuf
+	s.writeBuf = nil
+	s.writeOff = 0
+	return data
 }
 
 // Close closes the stream with FIN.

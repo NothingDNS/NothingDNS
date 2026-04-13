@@ -221,7 +221,7 @@ func (k *KVPersistence) storedRecordsToZone(meta storage.ZoneMeta, records map[s
 func parseSOAFromRData(rdata string) *SOARecord {
 	fields := parseRDataFields(rdata)
 	if len(fields) < 7 {
-		return &SOARecord{} // Return empty on parse failure
+		return nil // Return nil on parse failure
 	}
 
 	serial, _ := parseUint32(fields[2])

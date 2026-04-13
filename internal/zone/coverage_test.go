@@ -548,10 +548,16 @@ func TestParseSOAFromRData(t *testing.T) {
 }
 
 func TestParseSOAFromRDataWithInvalidData(t *testing.T) {
-	// Should not panic
+	// Invalid input should return nil
 	soa := parseSOAFromRData("")
-	if soa == nil {
-		t.Fatal("parseSOAFromRData should not return nil even for empty input")
+	if soa != nil {
+		t.Fatal("parseSOAFromRData should return nil for empty input")
+	}
+
+	// Short input should also return nil
+	soa = parseSOAFromRData("ns1.example.com. hostmaster.example.com. 1")
+	if soa != nil {
+		t.Fatal("parseSOAFromRData should return nil for short input")
 	}
 }
 

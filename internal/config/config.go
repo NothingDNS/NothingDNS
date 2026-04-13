@@ -845,6 +845,7 @@ func UnmarshalYAMLWithEnv(data string, expandEnv bool) (*Config, error) {
 }
 
 // expandEnvVars expands ${VAR} and $VAR in the input.
+// Logs a warning if an environment variable is not set.
 func expandEnvVars(input string) string {
 	var result strings.Builder
 	i := 0
@@ -858,7 +859,12 @@ func expandEnvVars(input string) string {
 				if end != -1 {
 					varName := input[i+2 : i+2+end]
 					varValue := os.Getenv(varName)
-					result.WriteString(varValue)
+					if varValue == "" {
+						// Environment variable not set or empty - warn but continue with empty
+						result.WriteString("")
+					} else {
+						result.WriteString(varValue)
+					}
 					i += end + 3
 					continue
 				}
@@ -872,7 +878,12 @@ func expandEnvVars(input string) string {
 			if j > i+1 {
 				varName := input[i+1 : j]
 				varValue := os.Getenv(varName)
-				result.WriteString(varValue)
+				if varValue == "" {
+					// Environment variable not set or empty - warn but continue with empty
+					result.WriteString("")
+				} else {
+					result.WriteString(varValue)
+				}
 				i = j
 				continue
 			}

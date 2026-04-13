@@ -566,9 +566,8 @@ func (lb *LoadBalancer) queryWithFailover(target *Target, msg *protocol.Message)
 		return nil, fmt.Errorf("circuit breaker open for failover target %s", failoverTarget.Address)
 	}
 
-	// Exponential backoff before retry
-	backoff := cb.getBackoff(1)
-	time.Sleep(backoff)
+	// Note: No blocking sleep here - we fail fast to the failover target
+	// The circuit breaker will prevent hammering a failing server
 
 	// Retry with failover target
 	resp, retryErr := lb.queryUDP(failoverTarget.Address, msg)

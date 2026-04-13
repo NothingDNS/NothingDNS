@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -199,7 +200,12 @@ func (l *Logger) formatText(fields Fields) string {
 	// Add other fields
 	for k, v := range fields {
 		if k != "time" && k != "level" && k != "msg" {
-			result += fmt.Sprintf(" %s=%v", k, v)
+			// Sanitize value to prevent log injection attacks
+			// Replace CR/LF with spaces to prevent fake log entries
+			val := fmt.Sprintf("%v", v)
+			val = strings.ReplaceAll(val, "\r", " ")
+			val = strings.ReplaceAll(val, "\n", " ")
+			result += fmt.Sprintf(" %s=%s", k, val)
 		}
 	}
 

@@ -84,16 +84,26 @@ type TSIGRecord struct {
 // During rotation, both the old and new keys are valid, allowing
 // seamless transitions without downtime.
 type KeyStore struct {
-	keys      map[string]*TSIGKey // keyed by key name
-	previous  *TSIGKey            // previous key for rotation grace period
-	rotatedAt time.Time           // when the last rotation occurred
-	mu        sync.RWMutex
+	keys        map[string]*TSIGKey // keyed by key name
+	previous    *TSIGKey           // previous key for rotation grace period
+	rotatedAt   time.Time          // when the last rotation occurred
+	gracePeriod time.Duration      // how long the previous key remains valid after rotation
+	mu          sync.RWMutex
 }
 
-// NewKeyStore creates a new TSIG key store
+// NewKeyStore creates a new TSIG key store with default grace period of 5 minutes
 func NewKeyStore() *KeyStore {
 	return &KeyStore{
-		keys: make(map[string]*TSIGKey),
+		keys:        make(map[string]*TSIGKey),
+		gracePeriod: 5 * time.Minute,
+	}
+}
+
+// NewKeyStoreWithGracePeriod creates a new TSIG key store with custom grace period
+func NewKeyStoreWithGracePeriod(gracePeriod time.Duration) *KeyStore {
+	return &KeyStore{
+		keys:        make(map[string]*TSIGKey),
+		gracePeriod: gracePeriod,
 	}
 }
 
@@ -153,6 +163,12 @@ func (ks *KeyStore) GetPreviousKey(name string) *TSIGKey {
 	if ks.previous == nil {
 		return nil
 	}
+
+	// Check if grace period has expired
+	if time.Since(ks.rotatedAt) > ks.gracePeriod {
+		return nil
+	}
+
 	// Only return previous key if it's the same name (same key being rotated)
 	if ks.previous.Name == name {
 		return ks.previous

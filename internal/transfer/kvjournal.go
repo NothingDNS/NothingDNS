@@ -144,15 +144,19 @@ func loadEntriesFromDir(dir string) ([]*IXFRJournalEntry, error) {
 		if err != nil {
 			continue // Skip files we can't open
 		}
-		dec := gob.NewDecoder(file)
+
+		// Use defer to ensure file is always closed, even on panic
 		var entry IXFRJournalEntry
-		if err := dec.Decode(&entry); err != nil {
-			file.Close()
-			os.Remove(filename) // Remove corrupt entries
-			continue
-		}
-		file.Close()
-		entries = append(entries, &entry)
+		func() {
+			defer file.Close()
+			dec := gob.NewDecoder(file)
+			if err := dec.Decode(&entry); err != nil {
+				// Remove corrupt entries to prevent them from causing issues later
+				os.Remove(filename)
+				return
+			}
+			entries = append(entries, &entry)
+		}()
 	}
 
 	return entries, nil

@@ -210,16 +210,38 @@ func convertAttrs(attrs []Attr) []map[string]interface{} {
 // JaegerExporter exports spans in Jaeger Thrift format.
 type JaegerExporter struct {
 	endpoint string
-	client  *http.Client
-	batch   []*Span
-	batchMu sync.Mutex
+	client   *http.Client
+	batch    []*Span
+	batchMu  sync.Mutex
+	stopCh   chan struct{}
+	ticker   *time.Ticker
+	wg       sync.WaitGroup
 }
 
-// NewJaegerExporter creates a Jaeger exporter.
+// NewJaegerExporter creates a Jaeger exporter with background flushing.
 func NewJaegerExporter(endpoint string) *JaegerExporter {
-	return &JaegerExporter{
+	e := &JaegerExporter{
 		endpoint: endpoint,
 		client:   &http.Client{Timeout: 10 * time.Second},
+		stopCh:   make(chan struct{}),
+		ticker:   time.NewTicker(5 * time.Second), // Flush every 5 seconds
+	}
+	// Start background batch flusher
+	e.wg.Add(1)
+	go e.batchFlusher()
+	return e
+}
+
+// batchFlusher periodically flushes the batch.
+func (e *JaegerExporter) batchFlusher() {
+	defer e.wg.Done()
+	for {
+		select {
+		case <-e.ticker.C:
+			e.Flush()
+		case <-e.stopCh:
+			return
+		}
 	}
 }
 
@@ -253,5 +275,7 @@ func (e *JaegerExporter) Flush() {
 
 // Close flushes and closes the exporter.
 func (e *JaegerExporter) Close() {
+	close(e.stopCh)
+	e.wg.Wait()
 	e.Flush()
 }

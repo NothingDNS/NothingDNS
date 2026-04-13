@@ -9,6 +9,38 @@ import (
 	"time"
 )
 
+// RFC 1982 serial number arithmetic constants
+const (
+	// SerialHalfRange is half of the serial number space (2^31).
+	// Serial numbers more than this apart are considered to have rolled over.
+	SerialHalfRange = uint32(1 << 31)
+)
+
+// SerialIsNewer returns true if s1 is considered newer than s2 per RFC 1982.
+// Serial numbers are 32-bit unsigned integers with special comparison rules
+// to handle wrap-around.
+func SerialIsNewer(s1, s2 uint32) bool {
+	diff := int64(s1) - int64(s2)
+	if diff > 0 {
+		// s1 > s2 and within half range
+		return diff < int64(SerialHalfRange)
+	}
+	// s1 <= s2
+	if diff < 0 {
+		// s1 < s2 but wrapped around
+		return diff > -int64(SerialHalfRange)
+	}
+	return false // s1 == s2
+}
+
+// SerialIncrement increments a serial number per RFC 1982.
+func SerialIncrement(s uint32) uint32 {
+	if s >= SerialHalfRange-1 {
+		return 0
+	}
+	return s + 1
+}
+
 // Manager manages DNS zones.
 type Manager struct {
 	mu      sync.RWMutex
@@ -446,10 +478,11 @@ func IncrementSerial(z *Zone) {
 	now := time.Now().UTC()
 	datePrefix := uint32(now.Year()*10000+int(now.Month())*100+now.Day()) * 100
 
-	if z.SOA.Serial < datePrefix {
+	// Use RFC 1982 serial arithmetic for proper wrap-around handling
+	if SerialIsNewer(datePrefix, z.SOA.Serial) {
 		z.SOA.Serial = datePrefix + 1
 	} else {
-		z.SOA.Serial++
+		z.SOA.Serial = SerialIncrement(z.SOA.Serial)
 	}
 
 	// Update the SOA record in the Records map too

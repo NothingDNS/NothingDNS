@@ -231,6 +231,10 @@ func (s *DoQServer) handlePacket(data []byte, remoteAddr *net.UDPAddr) {
 		switch hdr.Type {
 		case PacketTypeInitial:
 			s.handleInitialPacket(hdr, data, remoteAddr)
+		case PacketType0RTT:
+			// 0-RTT packets contain early data from the client
+			// Route to existing connection for crypto data processing
+			s.handle0RTTPacket(hdr, data, remoteAddr)
 		default:
 			s.routeToConnection(hdr.DestConnID)
 		}
@@ -311,6 +315,30 @@ func (s *DoQServer) handleInitialPacket(hdr *LongHeader, data []byte, remoteAddr
 	go s.handshakeConnection(dc)
 }
 
+// handle0RTTPacket handles a 0-RTT packet (early data from client).
+// 0-RTT packets can arrive before the handshake completes and contain
+// early data that should be buffered for processing after handshake.
+func (s *DoQServer) handle0RTTPacket(hdr *LongHeader, data []byte, remoteAddr *net.UDPAddr) {
+	key := toKey(hdr.DestConnID)
+
+	s.connsMu.RLock()
+	dc, exists := s.conns[key]
+	s.connsMu.RUnlock()
+
+	if !exists {
+		// No existing connection for 0-RTT data - discard
+		// 0-RTT requires an existing connection (must have done handshake first)
+		atomic.AddUint64(&s.errors, 1)
+		return
+	}
+
+	// Feed 0-RTT crypto data to the connection
+	// The connection will buffer this until the handshake completes
+	if err := dc.sc.HandleCryptoData(tls.QUICEncryptionLevelEarly, hdr.Payload); err != nil {
+		atomic.AddUint64(&s.errors, 1)
+	}
+}
+
 // newDoQConnection creates a new DoQ connection.
 func (s *DoQServer) newDoQConnection(scid ConnectionID, remoteAddr net.Addr, remoteIP string) (*doqConn, error) {
 	ctx, cancel := context.WithCancel(s.ctx)
@@ -379,6 +407,8 @@ func (s *DoQServer) handleStream(dc *doqConn, streamID uint64) {
 		if r := recover(); r != nil {
 			atomic.AddUint64(&s.errors, 1)
 		}
+		// Always clean up the stream, even on panic
+		dc.sc.DeleteStream(streamID)
 	}()
 
 	stream := dc.sc.AcceptStream(streamID)
@@ -387,13 +417,11 @@ func (s *DoQServer) handleStream(dc *doqConn, streamID uint64) {
 	query, err := io.ReadAll(io.LimitReader(stream, DoQMaxMessageSize))
 	if err != nil && !errors.Is(err, io.EOF) {
 		atomic.AddUint64(&s.errors, 1)
-		dc.sc.DeleteStream(streamID)
-		return
+		return // DeleteStream is called in the defer above
 	}
 
 	if len(query) == 0 {
-		dc.sc.DeleteStream(streamID)
-		return
+		return // DeleteStream is called in the defer above
 	}
 
 	atomic.AddUint64(&s.queriesReceived, 1)
@@ -403,7 +431,7 @@ func (s *DoQServer) handleStream(dc *doqConn, streamID uint64) {
 	atomic.AddUint64(&s.queriesResponded, 1)
 
 	stream.Close()
-	dc.sc.DeleteStream(streamID)
+	// DeleteStream is called in the defer above
 }
 
 // routeToConnection routes a packet to an existing connection.
@@ -421,10 +449,14 @@ func (s *DoQServer) handleShortHeaderPacket(data []byte) {
 		dcID := ConnectionID(data[1 : 1+cidLen])
 
 		s.connsMu.RLock()
-		_, ok := s.conns[toKey(dcID)]
+		dc, ok := s.conns[toKey(dcID)]
 		s.connsMu.RUnlock()
 
 		if ok {
+			// TODO: Route short header packet to connection for decryption
+			// and stream processing. This requires implementing the
+			// QUIC 1-RTT packet decryption and stream reassembly.
+			_ = dc
 			return
 		}
 	}

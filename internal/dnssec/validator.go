@@ -1,6 +1,7 @@
 package dnssec
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha1"
 	"crypto/sha256"
@@ -403,14 +404,18 @@ func (v *Validator) findRRSIG(answers []*protocol.ResourceRecord, name string, r
 
 // validateRRSIG validates an RRSIG over an RRSet.
 func (v *Validator) validateRRSIG(rrSet []*protocol.ResourceRecord, rrsig *protocol.RDataRRSIG, dnsKeys []*protocol.ResourceRecord) bool {
-	// Check signature timestamps
+	// Check signature timestamps with clock skew tolerance
 	if !v.config.IgnoreTime {
 		now := uint32(time.Now().Unix())
-		if rrsig.Expiration < now {
-			return false // Signature expired
+		// Convert clock skew to seconds for comparison with uint32 timestamps
+		clockSkewSec := uint32(v.config.ClockSkew.Seconds())
+		// Apply clock skew tolerance: allow signatures that expired recently
+		// or are not yet valid by up to ClockSkew (handles time sync issues)
+		if rrsig.Expiration+clockSkewSec < now {
+			return false // Signature expired (beyond clock skew tolerance)
 		}
-		if rrsig.Inception > now {
-			return false // Signature not yet valid
+		if rrsig.Inception > now+clockSkewSec {
+			return false // Signature not yet valid (beyond clock skew tolerance)
 		}
 	}
 
@@ -638,6 +643,10 @@ func (v *Validator) validateNSEC3(owner, queryName string, qtype uint16, nsec3 *
 		}
 		// Salt check: NSEC3PARAM salt should match NSEC3 salt for the zone
 		// (NSEC3 records from different salt periods have different salts)
+		// Per RFC 5155 §10.3, the salt in NSEC3 must match the zone's NSEC3PARAM
+		if !bytes.Equal(zoneLink.nsec3Param.Salt, nsec3.Salt) {
+			return false
+		}
 	}
 
 	// Hash the query name using the NSEC3 record's parameters

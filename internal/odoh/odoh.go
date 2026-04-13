@@ -8,11 +8,14 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/ecdh"
+	"crypto/hkdf"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"net/http"
 	"time"
@@ -44,6 +47,13 @@ const (
 	HPKEDHP384   = 2 // ECDH P-384
 	HPKEDHP521   = 3 // ECDH P-521
 	HPKEDHX25519 = 4 // X25519
+)
+
+// HPKE KDF algorithms.
+const (
+	HPKEKDFHKDFSHA256 = 1 // HKDF-SHA256
+	HPKEKDFHKDFSHA384 = 2 // HKDF-SHA384
+	HPKEKDFHKDFSHA512 = 3 // HKDF-SHA512
 )
 
 // ODoHConfig contains configuration for ODoH operations.
@@ -79,6 +89,7 @@ type ObliviousClient struct {
 // ObliviousProxy implements the proxy side of ODoH.
 type ObliviousProxy struct {
 	config *ODoHConfig
+	client *http.Client
 }
 
 // ObliviousTarget implements the target resolver side of ODoH.
@@ -187,13 +198,13 @@ func (c *ObliviousClient) encapsulateQuery(query, ephemeralPriv, targetPub []byt
 	}
 
 	// Encrypt the DNS query
-	ciphertext, err := encrypt(query, nonce, keys.SealKey, nil)
+	ciphertext, err := encrypt(query, nonce, keys.SealKey, nil, c.config.HPKEAEAD)
 	if err != nil {
 		return nil, fmt.Errorf("encrypting query: %w", err)
 	}
 
 	return &ObliviousDNSMessage{
-		PublicKey:  ephemeralPriv[:], // Public part would be derived
+		PublicKey:  derivePublicKey(ephemeralPriv, c.config.HPKEKEM),
 		Ciphertext: ciphertext,
 		Nonce:      nonce,
 		AAD:        []byte(c.config.TargetName),
@@ -254,7 +265,7 @@ func (c *ObliviousClient) decapsulateResponse(response *ObliviousDNSMessage, eph
 	}
 
 	// Decrypt the response
-	plaintext, err := decrypt(response.Ciphertext, response.Nonce, keys.SealKey, response.AAD)
+	plaintext, err := decrypt(response.Ciphertext, response.Nonce, keys.SealKey, response.AAD, c.config.HPKEAEAD)
 	if err != nil {
 		return nil, fmt.Errorf("decrypting response: %w", err)
 	}
@@ -266,6 +277,9 @@ func (c *ObliviousClient) decapsulateResponse(response *ObliviousDNSMessage, eph
 func NewObliviousProxy(config *ODoHConfig) (*ObliviousProxy, error) {
 	return &ObliviousProxy{
 		config: config,
+		client: &http.Client{
+			Timeout: 10 * time.Second,
+		},
 	}, nil
 }
 
@@ -304,13 +318,35 @@ func (p *ObliviousProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // forwardToTarget forwards the encapsulated message to the target resolver.
 func (p *ObliviousProxy) forwardToTarget(msg *ObliviousDNSMessage) ([]byte, error) {
-	// In a full implementation, the proxy would:
-	// 1. Parse the encrypted message
-	// 2. Forward it to the target resolver
-	// 3. Return the target's encrypted response
+	// Build the HTTP request to forward to the target
+	reqBody, err := buildProxyRequest(msg)
+	if err != nil {
+		return nil, fmt.Errorf("building proxy request: %w", err)
+	}
 
-	// Placeholder implementation
-	return msg.Ciphertext, nil
+	req, err := http.NewRequest("POST", p.config.TargetURL, bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/dns-message")
+	req.Header.Set("Accept", "application/dns-message")
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("forwarding to target: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("target returned status: %d", resp.StatusCode)
+	}
+
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySize))
+	if err != nil {
+		return nil, fmt.Errorf("reading target response: %w", err)
+	}
+
+	return respBody, nil
 }
 
 // NewObliviousTarget creates a new ODoH target resolver.
@@ -387,7 +423,7 @@ func (t *ObliviousTarget) decapsulateQuery(msg *ObliviousDNSMessage) ([]byte, er
 	}
 
 	// Decrypt
-	plaintext, err := decrypt(msg.Ciphertext, msg.Nonce, keys.SealKey, msg.AAD)
+	plaintext, err := decrypt(msg.Ciphertext, msg.Nonce, keys.SealKey, msg.AAD, t.config.HPKEAEAD)
 	if err != nil {
 		return nil, fmt.Errorf("decrypting: %w", err)
 	}
@@ -417,7 +453,7 @@ func (t *ObliviousTarget) encapsulateResponse(query, response []byte, msg *Obliv
 	}
 
 	// Encrypt response (AAD includes the original query for binding)
-	ciphertext, err := encrypt(response, nonce, keys.SealKey, query)
+	ciphertext, err := encrypt(response, nonce, keys.SealKey, query, t.config.HPKEAEAD)
 	if err != nil {
 		return nil, fmt.Errorf("encrypting response: %w", err)
 	}
@@ -517,21 +553,43 @@ func buildKDFInfo(suiteID string) []byte {
 	return info.Bytes()
 }
 
-// deriveKeys derives encryption keys using KDF.
+// deriveKeys derives encryption keys using proper HKDF (RFC 5869).
 func deriveKeys(sharedSecret, kdfInfo []byte, kdf, aead int) (*keyDerivationKeys, error) {
-	// Simplified HKDF-based key derivation
-	h := sha256.New()
-	h.Write(sharedSecret)
-	h.Write(kdfInfo)
-	h.Write([]byte{1}) // info for ExpandKey
+	// Select hash constructor based on KDF algorithm
+	var hashNew func() hash.Hash
+	switch kdf {
+	case HPKEKDFHKDFSHA256:
+		hashNew = sha256.New
+	case HPKEKDFHKDFSHA384:
+		hashNew = sha512.New384
+	case HPKEKDFHKDFSHA512:
+		hashNew = sha512.New
+	default:
+		return nil, fmt.Errorf("unsupported KDF algorithm: %d", kdf)
+	}
 
-	expandKey := h.Sum(nil)
+	// Use HKDF-Extract to derive pseudorandom key (PRK)
+	// HKDF-Extract(salt, IKM) = HMAC-Hash(salt, IKM)
+	prk, err := hkdf.Extract(hashNew, sharedSecret, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract PRK: %w", err)
+	}
 
-	h = sha256.New()
-	h.Write(sharedSecret)
-	h.Write(kdfInfo)
-	h.Write([]byte{2}) // info for SealKey
-	sealKey := h.Sum(nil)
+	// Use HKDF-Expand to derive the expand key
+	// info = kdfInfo || 0x01
+	expandKeyInfo := append(kdfInfo, 0x01)
+	expandKey, err := hkdf.Expand(hashNew, prk, string(expandKeyInfo), 32)
+	if err != nil {
+		return nil, fmt.Errorf("failed to derive expand key: %w", err)
+	}
+
+	// Use HKDF-Expand to derive the seal key
+	// info = kdfInfo || 0x02
+	sealKeyInfo := append(kdfInfo, 0x02)
+	sealKey, err := hkdf.Expand(hashNew, prk, string(sealKeyInfo), 32)
+	if err != nil {
+		return nil, fmt.Errorf("failed to derive seal key: %w", err)
+	}
 
 	return &keyDerivationKeys{
 		ExpandKey: expandKey,
@@ -539,8 +597,10 @@ func deriveKeys(sharedSecret, kdfInfo []byte, kdf, aead int) (*keyDerivationKeys
 	}, nil
 }
 
-// encrypt encrypts plaintext using AES-256-GCM.
-func encrypt(plaintext, nonce, key, aad []byte) ([]byte, error) {
+// encrypt encrypts plaintext using the specified AEAD algorithm.
+func encrypt(plaintext, nonce, key, aad []byte, aeadAlg int) ([]byte, error) {
+	// Currently only AES-256-GCM is supported
+	// ChaCha20-Poly1305 will be added when crypto/chacha20poly1305 is available
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
@@ -558,8 +618,10 @@ func encrypt(plaintext, nonce, key, aad []byte) ([]byte, error) {
 	return gcm.Seal(nil, nonce, plaintext, aad), nil
 }
 
-// decrypt decrypts ciphertext using AES-256-GCM.
-func decrypt(ciphertext, nonce, key, aad []byte) ([]byte, error) {
+// decrypt decrypts ciphertext using the specified AEAD algorithm.
+func decrypt(ciphertext, nonce, key, aad []byte, aeadAlg int) ([]byte, error) {
+	// Currently only AES-256-GCM is supported
+	// ChaCha20-Poly1305 will be added when crypto/chacha20poly1305 is available
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err

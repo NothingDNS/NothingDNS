@@ -1200,7 +1200,9 @@ func (gp *GossipProtocol) muLeaderSendHeartbeat() {
 			continue
 		}
 		addr := &net.UDPAddr{IP: net.ParseIP(node.Addr), Port: node.Port}
-		gp.conn.WriteToUDP(data, addr)
+		if _, err := gp.conn.WriteToUDP(data, addr); err != nil {
+			util.Warnf("gossip: failed to broadcast message to %s: %v", addr, err)
+		}
 	}
 }
 
@@ -1237,7 +1239,9 @@ func (gp *GossipProtocol) startElection() {
 		if gp.aead != nil {
 			data, _ = gp.encrypt(data)
 		}
-		gp.conn.WriteToUDP(data, addr)
+		if _, err := gp.conn.WriteToUDP(data, addr); err != nil {
+			util.Warnf("gossip: failed to send election message to %s: %v", addr, err)
+		}
 	}
 }
 
@@ -1277,7 +1281,9 @@ func (gp *GossipProtocol) AnnounceLeader() error {
 		if gp.aead != nil {
 			data, _ = gp.encrypt(data)
 		}
-		gp.conn.WriteToUDP(data, addr)
+		if _, err := gp.conn.WriteToUDP(data, addr); err != nil {
+			util.Warnf("gossip: failed to send leader announcement to %s: %v", addr, err)
+		}
 	}
 
 	return nil

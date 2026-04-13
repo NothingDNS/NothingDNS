@@ -243,8 +243,9 @@ func (wal *WAL) createNewSegment() error {
 		created: time.Now(),
 	}
 
-	wal.segments = append(wal.segments, segment)
+	// Set active BEFORE adding to segments list to prevent nil pointer on error
 	wal.active = segment
+	wal.segments = append(wal.segments, segment)
 
 	return nil
 }

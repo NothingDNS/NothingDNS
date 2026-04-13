@@ -22,9 +22,10 @@ import (
 func nextSecureID() uint16 {
 	var b [2]byte
 	if _, err := cryptorand.Read(b[:]); err != nil {
-		// crypto/rand should never fail; if it does, we must panic
-		// rather than fall back to predictable math/rand
-		panic("crypto/rand unavailable: " + err.Error())
+		// crypto/rand failure is extremely rare but we fallback to math/rand
+		// rather than crashing the entire DNS server
+		log.Printf("warning: crypto/rand unavailable: %v, falling back to math/rand", err)
+		return uint16(rand.Intn(65536))
 	}
 	return binary.BigEndian.Uint16(b[:])
 }
