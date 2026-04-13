@@ -978,3 +978,19 @@ func TestDoQServerSend1RTTResponseNoKeys(t *testing.T) {
 		t.Errorf("Errors = %d, want 1 (no write keys)", stats.Errors)
 	}
 }
+
+func TestDoQServerSetClientConnID(t *testing.T) {
+	cid := ConnectionID{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}
+	sc := NewServerConnection(testTLSConfig(), cid, &net.UDPAddr{}, &net.UDPAddr{}, nil)
+
+	if sc.clientConnID != nil {
+		t.Error("clientConnID should be nil initially")
+	}
+
+	clientCID := ConnectionID{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x11, 0x22}
+	sc.SetClientConnID(clientCID)
+
+	if !sc.clientConnID.Equal(clientCID) {
+		t.Errorf("clientConnID = %v, want %v", sc.clientConnID, clientCID)
+	}
+}

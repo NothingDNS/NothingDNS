@@ -175,7 +175,8 @@ func GenerateInitialConnectionID() (ConnectionID, error) {
 // ServerConnection wraps crypto/tls.QUICConn for server use.
 type ServerConnection struct {
 	tlsConn    *tls.QUICConn
-	connID     ConnectionID
+	connID     ConnectionID // Server's SCID (used as map key)
+	clientConnID ConnectionID // Client's SCID (used as DCID for outbound short header)
 	localAddr  net.Addr
 	remoteAddr net.Addr
 	config     *Config
@@ -233,6 +234,12 @@ func NewServerConnection(tlsConfig *tls.Config, connID ConnectionID, localAddr, 
 // StartTLSHandshake starts the TLS handshake.
 func (sc *ServerConnection) StartTLSHandshake(ctx context.Context) error {
 	return sc.tlsConn.Start(ctx)
+}
+
+// SetClientConnID sets the client's connection ID (SCID from Initial packet).
+// This is used as the DCID for outbound short header packets.
+func (sc *ServerConnection) SetClientConnID(cid ConnectionID) {
+	sc.clientConnID = cid
 }
 
 // RemoteAddr returns the remote network address.

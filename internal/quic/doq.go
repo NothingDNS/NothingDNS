@@ -301,6 +301,10 @@ func (s *DoQServer) handleInitialPacket(hdr *LongHeader, data []byte, remoteAddr
 		return
 	}
 
+	// Record client's connection ID (client's SCID from Initial packet).
+	// This is used as DCID for outbound short header packets.
+	dc.sc.SetClientConnID(hdr.SrcConnID)
+
 	// Feed initial crypto data
 	if err := dc.sc.HandleCryptoData(tls.QUICEncryptionLevelInitial, hdr.Payload); err != nil {
 		dc.cancel()
@@ -803,11 +807,17 @@ func (s *DoQServer) send1RTTResponse(dc *doqConn, streamID uint64, data []byte) 
 	// Determine packet number length (use 1 byte for simplicity)
 	pnLen := 1
 
-	// Build short header: first byte + DCID
+	// Build short header: first byte + DCID (client's SCID)
 	hdrLen := 1 + sc.connIDLen
 	header := make([]byte, hdrLen+pnLen)
 	header[0] = 0x40 | byte(pnLen-1) // short header form
-	copy(header[1:hdrLen], sc.connID)
+	// Use clientConnID as DCID (per QUIC: server sends client's SCID as DCID)
+	if len(sc.clientConnID) > 0 {
+		copy(header[1:hdrLen], sc.clientConnID)
+	} else {
+		// Fallback to server's SCID (shouldn't happen after handshake)
+		copy(header[1:hdrLen], sc.connID)
+	}
 
 	// Encode packet number
 	for i := pnLen - 1; i >= 0; i-- {
