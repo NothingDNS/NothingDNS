@@ -706,8 +706,8 @@ func (s *DoQServer) processDecryptedPayload(dc *doqConn, data []byte) {
 				return
 			}
 			offset += n
-			_ = ccf // connection will be cleaned up by timeout
-			dc.cancel()
+			_ = ccf // connection will be cleaned up by closeConnection
+			go s.closeConnection(dc)
 			return
 
 		case FrameTypeHandshakeDone:
