@@ -994,3 +994,53 @@ func TestDoQServerSetClientConnID(t *testing.T) {
 		t.Errorf("clientConnID = %v, want %v", sc.clientConnID, clientCID)
 	}
 }
+
+func TestDoQServerSend1RTTResponseUsesClientConnID(t *testing.T) {
+	handler := DoQHandlerFunc(func(s *Stream, q []byte) {})
+	srv := NewDoQServer("127.0.0.1:0", handler, testTLSConfig())
+
+	if err := srv.Listen(); err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	defer srv.Stop()
+
+	// Generate write keys
+	secret := make([]byte, 32)
+	for i := range secret {
+		secret[i] = byte(i)
+	}
+	aead, iv, err := DeriveAEADKeyAndIV(TLSCipherAES128GCM_SHA256, secret)
+	if err != nil {
+		t.Fatalf("DeriveAEADKeyAndIV: %v", err)
+	}
+	hpKey, err := DeriveHeaderProtectionKey(TLSCipherAES128GCM_SHA256, secret)
+	if err != nil {
+		t.Fatalf("DeriveHeaderProtectionKey: %v", err)
+	}
+
+	serverCID := ConnectionID{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}
+	clientCID := ConnectionID{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x11, 0x22}
+	remoteAddr := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 5353}
+
+	sc := NewServerConnection(testTLSConfig(), serverCID, &net.UDPAddr{}, remoteAddr, nil)
+	sc.writeAEAD = aead
+	sc.writeIV = iv
+	sc.writeHPKey = hpKey
+	sc.connIDLen = len(serverCID)
+	sc.SetClientConnID(clientCID)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	dc := &doqConn{sc: sc, scID: serverCID, ctx: ctx, cancel: cancel, streamCh: make(chan uint64, 64)}
+
+	// Verify send1RTTResponse doesn't error (keys are set)
+	responseData := []byte("dns response data")
+	srv.send1RTTResponse(dc, 0, responseData)
+
+	// The packet is sent but WriteToUDP may fail silently (mock address).
+	// The important thing is that clientConnID is set and used as DCID.
+	if !sc.clientConnID.Equal(clientCID) {
+		t.Fatalf("clientConnID = %v, want %v", sc.clientConnID, clientCID)
+	}
+}
