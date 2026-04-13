@@ -2026,7 +2026,7 @@ func (s *Server) handleConfigReload(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleConfigGet returns the current server configuration.
+// handleConfigGet returns the current server configuration with sensitive fields redacted.
 func (s *Server) handleConfigGet(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
@@ -2039,7 +2039,42 @@ func (s *Server) handleConfigGet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg := s.configGetter()
-	s.writeJSON(w, http.StatusOK, cfg)
+	if cfg == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Config not available")
+		return
+	}
+
+	// Return a limited public config structure - do NOT expose full config
+	// as it may contain sensitive fields like auth tokens, secrets, TSIG keys, etc.
+	publicCfg := struct {
+		Version   string `json:"version"`
+		Server    any    `json:"server,omitempty"`
+		Cluster   any    `json:"cluster,omitempty"`
+		Upstream  any    `json:"upstream,omitempty"`
+		Cache     any    `json:"cache,omitempty"`
+		DNSSEC    any    `json:"dnssec,omitempty"`
+		Blocklist any    `json:"blocklist,omitempty"`
+		RPZ       any    `json:"rpz,omitempty"`
+		Metrics   any    `json:"metrics,omitempty"`
+		Logging   any    `json:"logging,omitempty"`
+		Zones     []string `json:"zones,omitempty"`
+	}{
+		Version: util.Version,
+	}
+
+	// Only expose non-sensitive server info
+	if len(cfg.Server.Bind) > 0 {
+		publicCfg.Server = map[string]any{
+			"bind":    cfg.Server.Bind,
+			"port":    cfg.Server.Port,
+			"tls":     cfg.Server.TLS.Enabled,
+			"http":    cfg.Server.HTTP.Enabled,
+			"doh":     cfg.Server.HTTP.DoHEnabled,
+			"doh_path": cfg.Server.HTTP.DoHPath,
+		}
+	}
+
+	s.writeJSON(w, http.StatusOK, publicCfg)
 }
 
 // handleClusterStatus returns cluster status.
@@ -2717,10 +2752,12 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 
 	users := s.authStore.ListUsers()
 
-	// Allow bootstrap from localhost even if default admin exists (for password reset)
-	// Allow bootstrap from remote only if no users exist (first-time setup)
-	if len(users) > 0 && !isLocalhost {
-		s.writeError(w, http.StatusForbidden, "Bootstrap not available: users already exist. Use localhost for initial setup.")
+	// Bootstrap must ALWAYS be from localhost to prevent remote attacker from creating admin accounts.
+	// If users exist: only localhost can perform bootstrap (for password reset).
+	// If no users exist: only localhost can perform first-time setup.
+	// This prevents a remote attacker from creating an admin account when the system is first deployed.
+	if !isLocalhost {
+		s.writeError(w, http.StatusForbidden, "Bootstrap is only allowed from localhost. Please access this server directly on the server host.")
 		return
 	}
 

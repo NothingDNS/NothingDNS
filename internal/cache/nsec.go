@@ -45,9 +45,19 @@ func NewNSECCache(maxSize int) *NSECCache {
 	}
 }
 
-// AddFromResponse extracts NSEC records from a validated NXDOMAIN response
+// AddFromResponse extracts NSEC records from a DNSSEC-validated NXDOMAIN response
 // and caches them for future aggressive negative caching.
-func (nc *NSECCache) AddFromResponse(resp *protocol.Message) {
+// The validated parameter must be true - NSEC records from unvalidated responses
+// must not be cached as this could enable cache poisoning attacks.
+// An NXDOMAIN response is considered validated if it has the AD bit set AND
+// came from a response that passed DNSSEC validation (indicated by the validated param).
+func (nc *NSECCache) AddFromResponse(resp *protocol.Message, validated bool) {
+	// Reject unvalidated responses - caching NSEC records from unvalidated
+	// responses could enable cache poisoning attacks
+	if !validated {
+		return
+	}
+
 	if resp == nil || resp.Header.Flags.RCODE != protocol.RcodeNameError {
 		return
 	}

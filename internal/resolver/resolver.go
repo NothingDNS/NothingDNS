@@ -179,12 +179,14 @@ func (r *Resolver) resolve(ctx context.Context, name string, qtype uint16, cname
 
 		// If we sent a minimized NS query and got an answer (not a
 		// referral), it means the server is authoritative for that
-		// zone. Re-query with the full name + original type.
+		// zone. Cache the NS records and re-query with the full name + original type.
 		if r.config.QnameMinimization && qTypeToSend == protocol.TypeNS && qName != name {
 			if isAnswer(resp) || isNXDomain(resp) {
+				// Cache the response - it contains valid NS records for this zone
+				r.cacheResponse(qName, protocol.TypeNS, resp)
 				// Update the zone cut and re-query with full name
 				currentZoneCut = qName
-				continue
+				// Don't continue - fall through to query with full name
 			}
 		}
 

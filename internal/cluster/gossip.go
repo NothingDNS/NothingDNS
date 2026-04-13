@@ -1550,19 +1550,19 @@ func encodePayload(payload any) ([]byte, error) {
 }
 
 // decodeMessage decodes a message envelope, decrypting if needed.
-// If decryption fails (e.g., during rolling upgrade with mixed encrypted/unencrypted nodes),
-// falls back to parsing as unencrypted message.
+// If encryption is enabled, decryption is mandatory - unencrypted messages are rejected.
+// This prevents downgrade attacks where an attacker strips encryption.
 // If the message protocol version is incompatible, it is logged and skipped.
 func (gp *GossipProtocol) decodeMessage(data []byte, msg *Message) error {
 	// Try decryption first if encryption is enabled
 	if gp.aead != nil {
 		decrypted, err := gp.decrypt(data)
 		if err != nil {
-			// Might be unencrypted message during rolling upgrade - try unencrypted parse
-			if rawErr := decodeMessageRaw(data, msg); rawErr != nil {
-				return fmt.Errorf("gossip decrypt: %w (also failed unencrypted parse: %v)", err, rawErr)
-			}
-			return nil
+			// Encryption is enabled but decryption failed - reject the message.
+			// This prevents man-in-the-middle attacks that strip encryption.
+			// During a rolling upgrade, both sender and receiver must be upgraded
+			// before encrypted communication can begin.
+			return fmt.Errorf("gossip decrypt: message appears unencrypted but encryption is enabled: %w", err)
 		}
 		data = decrypted
 	}

@@ -569,6 +569,14 @@ func TestNewObliviousClient(t *testing.T) {
 
 func TestClientGetTargetPublicKey(t *testing.T) {
 	cfg := NewODoHConfig("target.example.com", "proxy.example.com")
+
+	// Generate a valid target public key
+	_, targetPub, err := generateKeyPair(cfg.HPKEKEM)
+	if err != nil {
+		t.Fatalf("generateKeyPair failed: %v", err)
+	}
+	cfg.TargetPublicKey = targetPub
+
 	client := &ObliviousClient{config: cfg}
 
 	pub, err := client.getTargetPublicKey()

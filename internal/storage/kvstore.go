@@ -255,15 +255,21 @@ func (s *KVStore) Update(fn func(*Tx) error) error {
 	return tx.Commit()
 }
 
-// View executes a function in a read-only transaction
+// View executes a function in a read-only transaction.
+// The lock is held for the entire duration of fn to ensure consistent reads.
 func (s *KVStore) View(fn func(*Tx) error) error {
 	tx, err := s.Begin(false)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
 
-	return fn(tx)
+	// Execute fn while holding the read lock
+	err = fn(tx)
+
+	// Rollback explicitly (not deferred) to ensure lock is held until fn completes
+	tx.Rollback()
+
+	return err
 }
 
 // Close closes the database and flushes any pending writes.

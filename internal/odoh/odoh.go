@@ -48,13 +48,14 @@ const (
 
 // ODoHConfig contains configuration for ODoH operations.
 type ODoHConfig struct {
-	TargetName string // DNS name of the target resolver (e.g., "dns.example.com")
-	ProxyName  string // DNS name of the proxy (e.g., "proxy.example.com")
-	TargetURL  string // HTTPS URL of the target
-	ProxyURL   string // HTTPS URL of the proxy
-	HPKEKEM    int    // Key Encapsulation Mechanism (KEM) algorithm
-	HPKEKDF    int    // Key Derivation Function (KDF) algorithm
-	HPKEAEAD   int    // Authenticated Encryption with Associated Data (AEAD) algorithm
+	TargetName     string // DNS name of the target resolver (e.g., "dns.example.com")
+	ProxyName      string // DNS name of the proxy (e.g., "proxy.example.com")
+	TargetURL      string // HTTPS URL of the target
+	ProxyURL       string // HTTPS URL of the proxy
+	HPKEKEM        int    // Key Encapsulation Mechanism (KEM) algorithm
+	HPKEKDF        int    // Key Derivation Function (KDF) algorithm
+	HPKEAEAD       int    // Authenticated Encryption with Associated Data (AEAD) algorithm
+	TargetPublicKey []byte // Target's HPKE public key (required for ODoH client)
 }
 
 // ObliviousDNSMessage represents an ODoH message.
@@ -147,11 +148,20 @@ func (c *ObliviousClient) Query(dnsQuery []byte) ([]byte, error) {
 }
 
 // getTargetPublicKey returns the target's public key.
-// In a full implementation, this would fetch the key via DNS or HTTPS.
+// The key must be provided via configuration or fetched securely.
+// Returns an error if no valid key is configured.
 func (c *ObliviousClient) getTargetPublicKey() ([]byte, error) {
-	// Placeholder - in reality, fetch from DNS or configuration
-	// This would typically be a DNSKEY record or fetched via HTTPS
-	return make([]byte, 32), nil // 32 bytes for X25519
+	// In a real implementation, the key would be:
+	// 1. Fetched from DNS (with DNSSEC validation)
+	// 2. Pre-configured by the operator
+	// 3. Fetched via a secure channel (HTTPS with pinned certificate)
+	//
+	// A zeroed key is cryptographically invalid and would fail
+	// key agreement - callers must provide a valid key.
+	if c.config.TargetPublicKey == nil || len(c.config.TargetPublicKey) == 0 {
+		return nil, ErrInvalidKey
+	}
+	return c.config.TargetPublicKey, nil
 }
 
 // encapsulateQuery encrypts a DNS query using HPKE.

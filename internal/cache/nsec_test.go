@@ -98,7 +98,7 @@ func TestNSECCacheAddAndLookupNXDOMAIN(t *testing.T) {
 		Authorities: []*protocol.ResourceRecord{soaRR, nsecRR},
 	}
 
-	nc.AddFromResponse(resp)
+	nc.AddFromResponse(resp, true)
 
 	if nc.Size() != 1 {
 		t.Fatalf("cache size = %d, want 1", nc.Size())
@@ -163,7 +163,7 @@ func TestNSECCacheNODATA(t *testing.T) {
 		Authorities: []*protocol.ResourceRecord{soaRR, nsecRR},
 	}
 
-	nc.AddFromResponse(resp)
+	nc.AddFromResponse(resp, true)
 
 	// Query AAAA for www.example.com. — should get NODATA (name exists, type doesn't)
 	synthResp := nc.Lookup("www.example.com.", protocol.TypeAAAA)
@@ -217,7 +217,7 @@ func TestNSECCacheExpiration(t *testing.T) {
 		Authorities: []*protocol.ResourceRecord{soaRR, nsecRR},
 	}
 
-	nc.AddFromResponse(resp)
+	nc.AddFromResponse(resp, true)
 
 	// Should match immediately
 	if nc.Lookup("m.example.com.", protocol.TypeA) == nil {
@@ -255,7 +255,7 @@ func TestNSECCacheIgnoresNonNXDOMAIN(t *testing.T) {
 		},
 	}
 
-	nc.AddFromResponse(resp)
+	nc.AddFromResponse(resp, true)
 	if nc.Size() != 0 {
 		t.Errorf("expected 0 entries for non-NXDOMAIN, got %d", nc.Size())
 	}

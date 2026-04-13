@@ -527,7 +527,18 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 			return
 		}
 
+		// Validate response ID matches query ID to prevent spoofing
+		if resp.Header.ID != r.Header.ID {
+			h.logger.Warnf("Upstream response ID mismatch for %s: got %d, want %d", qname, resp.Header.ID, r.Header.ID)
+			if h.metrics != nil {
+				h.metrics.RecordResponse(protocol.RcodeServerFailure)
+			}
+			sendErrorWithEDE(w, r, protocol.RcodeServerFailure, protocol.EDENetworkError, "invalid upstream response")
+			return
+		}
+
 		// Validate DNSSEC if enabled and response has signatures
+		dnssecValidated := false
 		if h.validator != nil && dnssec.HasSignature(resp) {
 			ctx := context.Background()
 			result, err := h.validator.ValidateResponse(ctx, resp, qname)
@@ -540,6 +551,7 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 				h.logger.Debugf("DNSSEC validation secure for %s", qname)
 				// Set AD bit if validation succeeded
 				resp.Header.Flags.AD = true
+				dnssecValidated = true
 			case dnssec.ValidationBogus:
 				h.logger.Warnf("DNSSEC validation failed (bogus) for %s", qname)
 				if h.config.DNSSEC.Enabled {
@@ -618,8 +630,9 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 			h.logger.Debugf("Cached negative response for %s (rcode=%d, negTTL=%d)", qname, resp.Header.Flags.RCODE, negTTL)
 
 			// RFC 8198: Cache NSEC records from NXDOMAIN responses for aggressive negative caching
+			// Only cache if DNSSEC validation was successful - unvalidated NSEC records could enable cache poisoning
 			if h.nsecCache != nil && resp.Header.Flags.RCODE == protocol.RcodeNameError {
-				h.nsecCache.AddFromResponse(resp)
+				h.nsecCache.AddFromResponse(resp, dnssecValidated)
 			}
 		}
 
