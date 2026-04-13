@@ -695,13 +695,13 @@ func (s *DoQServer) processDecryptedPayload(dc *doqConn, data []byte) {
 
 		case FrameTypeConnectionClose, FrameTypeConnectionCloseApp:
 			// Connection close - terminate connection
-			ccf, n, err := ParseConnectionCloseFrame(frameType, data[offset:])
+			// Parse and skip the frame to advance offset
+			_, n, err := ParseConnectionCloseFrame(frameType, data[offset:])
 			if err != nil {
 				atomic.AddUint64(&s.errors, 1)
 				return
 			}
 			offset += n
-			_ = ccf // connection will be cleaned up by closeConnection
 			go s.closeConnection(dc)
 			return
 
