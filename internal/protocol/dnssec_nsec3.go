@@ -184,6 +184,9 @@ func (r *RDataNSEC3) Unpack(buf []byte, offset int, rdlength uint16) (int, error
 
 	// Iterations
 	r.Iterations = Uint16(buf[offset:])
+	if r.Iterations > MaxIterations {
+		return 0, fmt.Errorf("NSEC3 iterations too high: %d (max %d)", r.Iterations, MaxIterations)
+	}
 	offset += 2
 
 	// Salt Length

@@ -174,11 +174,12 @@ func (s *NOTIFYSender) buildNOTIFYRequest(zoneName string, serial uint32) (*prot
 
 // NOTIFYSlaveHandler handles incoming NOTIFY requests on slave servers
 type NOTIFYSlaveHandler struct {
-	zones       map[string]*zone.Zone
-	zonesMu     sync.RWMutex
-	notifyChan  chan *NOTIFYRequest
-	serialCheck SerialChecker
-	closeOnce   sync.Once
+	zones          map[string]*zone.Zone
+	zonesMu        sync.RWMutex
+	notifyChan     chan *NOTIFYRequest
+	serialCheck    SerialChecker
+	closeOnce      sync.Once
+	notifyAllowList []net.IPNet // authorized master IPs
 }
 
 // SerialChecker is called to check if the serial has changed
@@ -190,6 +191,39 @@ func NewNOTIFYSlaveHandler(zones map[string]*zone.Zone) *NOTIFYSlaveHandler {
 		zones:      zones,
 		notifyChan: make(chan *NOTIFYRequest, 100),
 	}
+}
+
+// AddNotifyAllowed adds an authorized master IP or CIDR range.
+func (h *NOTIFYSlaveHandler) AddNotifyAllowed(cidr string) error {
+	_, ipNet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		// Try as a single IP
+		ip := net.ParseIP(cidr)
+		if ip == nil {
+			return fmt.Errorf("invalid NOTIFY allowed CIDR/IP: %s", cidr)
+		}
+		if ip.To4() != nil {
+			ipNet = &net.IPNet{IP: ip, Mask: net.CIDRMask(32, 32)}
+		} else {
+			ipNet = &net.IPNet{IP: ip, Mask: net.CIDRMask(128, 128)}
+		}
+	}
+	h.notifyAllowList = append(h.notifyAllowList, *ipNet)
+	return nil
+}
+
+// isNOTIFYAllowed checks if the given IP is authorized to send NOTIFY.
+// If no allowlist is configured, NOTIFY is denied by default (fail closed).
+func (h *NOTIFYSlaveHandler) isNOTIFYAllowed(ip net.IP) bool {
+	if len(h.notifyAllowList) == 0 {
+		return false
+	}
+	for _, allowed := range h.notifyAllowList {
+		if allowed.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // SetSerialChecker sets the function used to check serial numbers
@@ -213,6 +247,11 @@ func (h *NOTIFYSlaveHandler) GetNotifyChannel() <-chan *NOTIFYRequest {
 // HandleNOTIFY processes an incoming NOTIFY request
 // Returns the response to send back to the master
 func (h *NOTIFYSlaveHandler) HandleNOTIFY(req *protocol.Message, clientIP net.IP) (*protocol.Message, error) {
+	// Check if client IP is authorized
+	if !h.isNOTIFYAllowed(clientIP) {
+		return h.createNOTIFYResponse(req, protocol.RcodeRefused), nil
+	}
+
 	// Validate request
 	if len(req.Questions) != 1 {
 		return nil, fmt.Errorf("NOTIFY requires exactly one question")

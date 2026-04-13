@@ -26,7 +26,66 @@ const (
 
 	// UDPReadBufferSize is the size of the read buffer for UDP sockets.
 	UDPReadBufferSize = 4096
+
+	// UDPRateLimitWindow is the sliding window duration for per-IP rate limiting.
+	UDPRateLimitWindow = time.Second
+
+	// UDPRateLimitMaxQueries is the maximum queries per IP per window.
+	UDPRateLimitMaxQueries = 100
 )
+
+// rateEntry tracks query timestamps for a single IP.
+type rateEntry struct {
+	count    int
+	windowStart time.Time
+}
+
+// rateLimiter implements a sliding window per-IP rate limiter for UDP.
+type rateLimiter struct {
+	mu       sync.Mutex
+	entries  map[string]*rateEntry
+	window   time.Duration
+	maxCount int
+}
+
+func newRateLimiter(window time.Duration, maxCount int) *rateLimiter {
+	return &rateLimiter{
+		entries:  make(map[string]*rateEntry),
+		window:   window,
+		maxCount: maxCount,
+	}
+}
+
+// Allow checks if a query from the given IP is within rate limits.
+func (r *rateLimiter) Allow(ip string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	now := time.Now()
+	e, ok := r.entries[ip]
+	if !ok || now.Sub(e.windowStart) > r.window {
+		r.entries[ip] = &rateEntry{count: 1, windowStart: now}
+		return true
+	}
+	e.count++
+	if e.count > r.maxCount {
+		return false
+	}
+	return true
+}
+
+// Prune removes stale entries older than the window.
+func (r *rateLimiter) Prune() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	now := time.Now()
+	for ip, e := range r.entries {
+		if now.Sub(e.windowStart) > r.window {
+			delete(r.entries, ip)
+		}
+	}
+}
 
 // UDPConn is a wrapper around *net.UDPConn for testing/mocking.
 type UDPConn interface {
@@ -58,6 +117,8 @@ type UDPServer struct {
 	bufferPool sync.Pool
 	// Pool for response buffers (zero-alloc hot path)
 	responsePool sync.Pool
+	// Per-IP rate limiter
+	rateLimiter *rateLimiter
 }
 
 // NewUDPServer creates a new UDP DNS server.
@@ -94,6 +155,7 @@ func NewUDPServerWithWorkers(addr string, handler Handler, workers int) *UDPServ
 				return make([]byte, MaxUDPPayloadSize)
 			},
 		},
+		rateLimiter: newRateLimiter(UDPRateLimitWindow, UDPRateLimitMaxQueries),
 	}
 
 	return s
@@ -132,6 +194,10 @@ func (s *UDPServer) Serve() error {
 		go s.worker(requestChan)
 	}
 
+	// Start rate limiter pruning goroutine
+	s.wg.Add(1)
+	go s.pruner()
+
 	// Start reader goroutine with its own WaitGroup so we can wait for it
 	// to finish before closing requestChan.
 	var readerWg sync.WaitGroup
@@ -154,6 +220,22 @@ func (s *UDPServer) Serve() error {
 	s.wg.Wait()
 
 	return nil
+}
+
+// pruner periodically cleans stale rate limiter entries.
+func (s *UDPServer) pruner() {
+	defer s.wg.Done()
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-ticker.C:
+			s.rateLimiter.Prune()
+		}
+	}
 }
 
 // udpRequest represents a single UDP DNS request.
@@ -195,6 +277,12 @@ func (s *UDPServer) reader(requestChan chan<- *udpRequest, readerWg *sync.WaitGr
 		}
 
 		atomic.AddUint64(&s.packetsReceived, 1)
+
+		// Check per-IP rate limit
+		if !s.rateLimiter.Allow(addr.IP.String()) {
+			s.bufferPool.Put(bufPtr)
+			continue
+		}
 
 		// Send to workers (non-blocking with ctx check)
 		select {
@@ -402,6 +490,16 @@ func (s *UDPServer) Addr() net.Addr {
 		return nil
 	}
 	return s.conn.LocalAddr()
+}
+
+// SetRateLimit configures the per-IP rate limit. Use 0 to disable.
+// Intended for testing and operational configuration.
+func (s *UDPServer) SetRateLimit(maxQueriesPerSecond int) {
+	if maxQueriesPerSecond <= 0 {
+		s.rateLimiter = newRateLimiter(UDPRateLimitWindow, 1000000) // effectively unlimited
+		return
+	}
+	s.rateLimiter = newRateLimiter(UDPRateLimitWindow, maxQueriesPerSecond)
 }
 
 // Stats returns server statistics.

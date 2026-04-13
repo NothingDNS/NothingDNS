@@ -89,6 +89,9 @@ func (r *RDataNSEC3PARAM) Unpack(buf []byte, offset int, rdlength uint16) (int, 
 
 	// Iterations
 	r.Iterations = Uint16(buf[offset:])
+	if r.Iterations > MaxIterations {
+		return 0, fmt.Errorf("NSEC3PARAM iterations too high: %d (max %d)", r.Iterations, MaxIterations)
+	}
 	offset += 2
 
 	// Salt Length

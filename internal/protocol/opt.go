@@ -6,6 +6,9 @@ import (
 	"strings"
 )
 
+// Maximum number of EDNS0 options per OPT record to prevent memory exhaustion.
+const MaxEDNS0Options = 64
+
 // EDNS0Header contains the fixed fields from the OPT pseudo-record RData.
 // The OPT record stores this information in the "class" and "TTL" fields.
 type EDNS0Header struct {
@@ -83,6 +86,9 @@ func (r *RDataOPT) Unpack(buf []byte, offset int, rdlength uint16) (int, error) 
 		// Need at least 4 bytes for code + length
 		if offset+4 > endOffset {
 			return 0, fmt.Errorf("truncated EDNS0 option")
+		}
+		if len(r.Options) >= MaxEDNS0Options {
+			return 0, fmt.Errorf("too many EDNS0 options (max %d)", MaxEDNS0Options)
 		}
 
 		opt := EDNS0Option{}

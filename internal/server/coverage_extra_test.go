@@ -2228,7 +2228,7 @@ func TestTLSResponseWriterTruncationDirect(t *testing.T) {
 			Questions: req.Questions,
 		}
 		name := mustParseName("big.example.com.")
-		for i := 0; i < 1000; i++ {
+		for i := 0; i < 400; i++ {
 			resp.AddAnswer(&protocol.ResourceRecord{
 				Name:  name,
 				Type:  protocol.TypeA,

@@ -76,7 +76,8 @@ func TestSplitDomainReversed(t *testing.T) {
 		{"subdomain", "www.example.com.", []string{"com", "example", "www"}},
 		{"three labels", "mail.google.com.", []string{"com", "google", "mail"}},
 		{"single label", "localhost.", []string{"localhost"}},
-		{"root", ".", []string{""}},
+		{"root", ".", []string{"."}},
+		{"empty", "", []string{""}},
 	}
 
 	for _, tt := range tests {

@@ -367,6 +367,7 @@ func TestConcurrentUDPServer(t *testing.T) {
 	if err := srv.Listen(); err != nil {
 		t.Fatalf("Failed to listen: %v", err)
 	}
+	srv.SetRateLimit(0) // disable rate limiting for this test
 	defer srv.Stop()
 
 	go srv.Serve()

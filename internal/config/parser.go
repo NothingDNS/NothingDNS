@@ -4,12 +4,16 @@ import (
 	"fmt"
 )
 
+// Maximum YAML nesting depth to prevent stack overflow DoS.
+const maxYAMLDepth = 100
+
 // Parser converts YAML tokens into a tree structure.
 type Parser struct {
 	tokenizer *Tokenizer
 	current   Token
 	peekToken Token
 	hasPeek   bool
+	depth     int // current recursion depth
 }
 
 // NewParser creates a new parser for the given input.
@@ -124,6 +128,9 @@ func (p *Parser) expect(tt TokenType) error {
 
 // parseValue parses any YAML value.
 func (p *Parser) parseValue() (*Node, error) {
+	if p.depth > maxYAMLDepth {
+		return nil, fmt.Errorf("yaml nesting depth exceeds maximum (%d levels) at line %d", maxYAMLDepth, p.current.Line)
+	}
 	switch p.current.Type {
 	case TokenLBrace:
 		return p.parseFlowMapping()
@@ -157,6 +164,10 @@ func (p *Parser) parseScalar() (*Node, error) {
 
 // parseMapping parses a block mapping.
 func (p *Parser) parseMapping(indent int) (*Node, error) {
+	if p.depth > maxYAMLDepth {
+		return nil, fmt.Errorf("yaml nesting depth exceeds maximum (%d levels) at line %d", maxYAMLDepth, p.current.Line)
+	}
+	p.depth++
 	node := &Node{
 		Type: NodeMapping,
 		Line: p.current.Line,
@@ -289,6 +300,10 @@ func (p *Parser) parseMapping(indent int) (*Node, error) {
 
 // parseBlockSequence parses a block sequence (list with - items).
 func (p *Parser) parseBlockSequence(indent int) (*Node, error) {
+	if p.depth > maxYAMLDepth {
+		return nil, fmt.Errorf("yaml nesting depth exceeds maximum (%d levels) at line %d", maxYAMLDepth, p.current.Line)
+	}
+	p.depth++
 	node := &Node{
 		Type: NodeSequence,
 		Line: p.current.Line,
@@ -615,6 +630,10 @@ func (p *Parser) parseBlockSequence(indent int) (*Node, error) {
 
 // parseFlowMapping parses a flow mapping {key: value, ...}.
 func (p *Parser) parseFlowMapping() (*Node, error) {
+	if p.depth > maxYAMLDepth {
+		return nil, fmt.Errorf("yaml nesting depth exceeds maximum (%d levels) at line %d", maxYAMLDepth, p.current.Line)
+	}
+	p.depth++
 	node := &Node{
 		Type: NodeMapping,
 		Line: p.current.Line,
@@ -677,6 +696,10 @@ func (p *Parser) parseFlowMapping() (*Node, error) {
 
 // parseFlowSequence parses a flow sequence [item, ...].
 func (p *Parser) parseFlowSequence() (*Node, error) {
+	if p.depth > maxYAMLDepth {
+		return nil, fmt.Errorf("yaml nesting depth exceeds maximum (%d levels) at line %d", maxYAMLDepth, p.current.Line)
+	}
+	p.depth++
 	node := &Node{
 		Type: NodeSequence,
 		Line: p.current.Line,

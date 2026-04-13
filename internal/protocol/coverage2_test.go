@@ -755,7 +755,7 @@ func TestWireNameLengthBufferOverflow(t *testing.T) {
 // works with max counts.
 func TestValidateMessageMaxCounts(t *testing.T) {
 	header := make([]byte, 12)
-	// Set all counts to max uint16 values (which are always <= maxRecords)
+	// Set all counts to max uint16 values — should be rejected by new stricter limits
 	header[4] = 0xFF
 	header[5] = 0xFF
 	header[6] = 0xFF
@@ -764,8 +764,25 @@ func TestValidateMessageMaxCounts(t *testing.T) {
 	header[9] = 0xFF
 	header[10] = 0xFF
 	header[11] = 0xFF
+	if err := ValidateMessage(header); err == nil {
+		t.Error("ValidateMessage should reject max uint16 counts")
+	}
+}
+
+// ValidateMessage should pass with reasonable counts.
+func TestValidateMessageReasonableCounts(t *testing.T) {
+	header := make([]byte, 12)
+	// Set reasonable counts: 1 question, 2 answers, 1 authority, 3 additionals
+	header[4] = 0x00
+	header[5] = 0x01
+	header[6] = 0x00
+	header[7] = 0x02
+	header[8] = 0x00
+	header[9] = 0x01
+	header[10] = 0x00
+	header[11] = 0x03
 	if err := ValidateMessage(header); err != nil {
-		t.Errorf("ValidateMessage should pass with max uint16 counts: %v", err)
+		t.Errorf("ValidateMessage should pass with reasonable counts: %v", err)
 	}
 }
 

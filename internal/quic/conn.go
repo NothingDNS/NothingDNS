@@ -15,6 +15,7 @@ import (
 // Errors
 var (
 	ErrStreamClosed = errors.New("quic: stream closed")
+	ErrStreamLimit  = errors.New("quic: stream limit reached")
 )
 
 // Config holds QUIC connection configuration.
@@ -47,6 +48,10 @@ type Stream struct {
 	finRecv  bool
 	closed   bool
 	mu       sync.Mutex
+
+	// Deadline support
+	readDeadline  time.Time
+	writeDeadline time.Time
 }
 
 // StreamID returns the stream ID.
@@ -56,6 +61,11 @@ func (s *Stream) StreamID() uint64 { return s.id }
 func (s *Stream) Read(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Check read deadline
+	if !s.readDeadline.IsZero() && time.Now().After(s.readDeadline) {
+		return 0, errors.New("i/o timeout")
+	}
 
 	if s.closed && len(s.readBuf)-s.readOff <= 0 {
 		return 0, io.EOF
@@ -75,6 +85,12 @@ func (s *Stream) Read(p []byte) (int, error) {
 func (s *Stream) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Check write deadline
+	if !s.writeDeadline.IsZero() && time.Now().After(s.writeDeadline) {
+		return 0, errors.New("i/o timeout")
+	}
+
 	if s.closed || s.finSent {
 		return 0, ErrStreamClosed
 	}
@@ -103,13 +119,29 @@ func (s *Stream) Close() error {
 }
 
 // SetDeadline sets the read and write deadlines.
-func (s *Stream) SetDeadline(t time.Time) error { return nil }
+func (s *Stream) SetDeadline(t time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.readDeadline = t
+	s.writeDeadline = t
+	return nil
+}
 
 // SetReadDeadline sets the read deadline.
-func (s *Stream) SetReadDeadline(t time.Time) error { return nil }
+func (s *Stream) SetReadDeadline(t time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.readDeadline = t
+	return nil
+}
 
 // SetWriteDeadline sets the write deadline.
-func (s *Stream) SetWriteDeadline(t time.Time) error { return nil }
+func (s *Stream) SetWriteDeadline(t time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.writeDeadline = t
+	return nil
+}
 
 // AppendReadData appends received data to the stream's read buffer.
 func (s *Stream) AppendReadData(data []byte, fin bool) {
@@ -148,9 +180,10 @@ type ServerConnection struct {
 	config     *Config
 
 	// Streams
-	streams  map[uint64]*Stream
-	streamMu sync.RWMutex
-	nextBidi uint64 // Next server bidi stream ID (starts at 1)
+	streams    map[uint64]*Stream
+	streamMu   sync.RWMutex
+	nextBidi   uint64 // Next server bidi stream ID (starts at 1)
+	maxStreams uint64 // Maximum concurrent streams (0 = unlimited)
 
 	// Packet number tracking
 	pktNumInitial   uint64
@@ -181,6 +214,7 @@ func NewServerConnection(tlsConfig *tls.Config, connID ConnectionID, localAddr, 
 		config:     config,
 		streams:    make(map[uint64]*Stream),
 		nextBidi:   1,
+		maxStreams: config.MaxStreams,
 	}
 }
 
@@ -235,19 +269,24 @@ func (sc *ServerConnection) ConnectionState() tls.ConnectionState {
 }
 
 // AcceptStream creates/returns a stream for the given ID.
-func (sc *ServerConnection) AcceptStream(streamID uint64) *Stream {
+func (sc *ServerConnection) AcceptStream(streamID uint64) (*Stream, error) {
 	sc.streamMu.Lock()
 	defer sc.streamMu.Unlock()
 
 	if s, ok := sc.streams[streamID]; ok {
-		return s
+		return s, nil
+	}
+
+	// Check stream limit
+	if sc.maxStreams > 0 && uint64(len(sc.streams)) >= sc.maxStreams {
+		return nil, ErrStreamLimit
 	}
 
 	s := &Stream{
 		id: streamID,
 	}
 	sc.streams[streamID] = s
-	return s
+	return s, nil
 }
 
 // DeleteStream removes a stream.
@@ -258,14 +297,19 @@ func (sc *ServerConnection) DeleteStream(streamID uint64) {
 }
 
 // OpenStream opens a new bidirectional stream.
-func (sc *ServerConnection) OpenStream() *Stream {
+func (sc *ServerConnection) OpenStream() (*Stream, error) {
 	sc.streamMu.Lock()
 	defer sc.streamMu.Unlock()
+
+	// Check stream limit
+	if sc.maxStreams > 0 && uint64(len(sc.streams)) >= sc.maxStreams {
+		return nil, ErrStreamLimit
+	}
 
 	s := &Stream{id: sc.nextBidi}
 	sc.streams[sc.nextBidi] = s
 	sc.nextBidi += 4
-	return s
+	return s, nil
 }
 
 // Close closes the connection.

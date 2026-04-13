@@ -62,9 +62,12 @@ func (t *RadixTree) Find(name string) *Zone {
 }
 
 func splitDomainReversed(name string) []string {
-	name = name[:len(name)-1] // trim trailing dot
 	if name == "" {
 		return []string{""}
+	}
+	name = strings.TrimSuffix(name, ".") // trim trailing dot
+	if name == "" {
+		return []string{"."}
 	}
 	parts := strings.Split(name, ".")
 	// Reverse in-place using temp variable (parallel assignment buggy on this system)

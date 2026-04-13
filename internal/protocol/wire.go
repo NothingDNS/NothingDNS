@@ -354,11 +354,12 @@ func ValidateMessage(data []byte) error {
 	nscount := binary.BigEndian.Uint16(data[8:10])
 	arcount := binary.BigEndian.Uint16(data[10:12])
 
-	// Reasonable limits to prevent abuse
-	const maxRecords = 65535
-	if qdcount > maxRecords || ancount > maxRecords ||
-		nscount > maxRecords || arcount > maxRecords {
-		return errors.New("record count too high")
+	// Reasonable limits to prevent abuse (defense-in-depth; message.go enforces stricter caps)
+	const maxQuestions = 256
+	const maxRecordsPerSection = 512
+	if qdcount > maxQuestions || ancount > maxRecordsPerSection ||
+		nscount > maxRecordsPerSection || arcount > maxRecordsPerSection {
+		return errors.New("record count exceeds reasonable limits")
 	}
 
 	return nil

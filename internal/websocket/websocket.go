@@ -21,6 +21,14 @@ const wsGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 // ErrNotWebSocket is returned when the request is not a valid WebSocket upgrade.
 var ErrNotWebSocket = errors.New("websocket: not a websocket request")
 
+// WebSocket rate limiting defaults.
+const (
+	// DefaultWSRateLimitWindow is the sliding window for per-connection rate limiting.
+	DefaultWSRateLimitWindow = time.Second
+	// DefaultWSRateLimitMaxMessages is the maximum messages per connection per window.
+	DefaultWSRateLimitMaxMessages = 100
+)
+
 // IsWebSocketRequest checks if the request is a WebSocket upgrade.
 func IsWebSocketRequest(r *http.Request) bool {
 	return strings.EqualFold(r.Header.Get("Upgrade"), "websocket") &&
@@ -111,6 +119,12 @@ type Conn struct {
 	fragmented bool         // true if we're reading a fragmented message
 	fragType   int          // message type (1=text, 2=binary) for fragmented message
 	fragAccum  []byte       // accumulated payload for fragmented message
+
+	// Rate limiting
+	rateWindow  time.Time
+	rateCount   int
+	rateMax     int
+	rateDur     time.Duration
 }
 
 // Close closes the underlying connection.
@@ -134,6 +148,36 @@ func (c *Conn) SetWriteDeadline(t time.Time) error {
 		return nc.SetWriteDeadline(t)
 	}
 	return errors.New("websocket: underlying connection does not support deadlines")
+}
+
+// SetRateLimit configures per-connection message rate limiting.
+// Use maxMessages <= 0 to disable.
+func (c *Conn) SetRateLimit(maxMessages int, window time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if maxMessages <= 0 {
+		c.rateMax = 0 // disabled
+		return
+	}
+	c.rateMax = maxMessages
+	c.rateDur = window
+	c.rateWindow = time.Now()
+	c.rateCount = 0
+}
+
+// checkRateLimit returns true if the connection is within rate limits.
+func (c *Conn) checkRateLimit() bool {
+	if c.rateMax == 0 {
+		return true
+	}
+	now := time.Now()
+	if now.Sub(c.rateWindow) > c.rateDur {
+		c.rateWindow = now
+		c.rateCount = 1
+		return true
+	}
+	c.rateCount++
+	return c.rateCount <= c.rateMax
 }
 
 // ReadMessage reads a single text or binary message.
@@ -163,6 +207,11 @@ func (c *Conn) ReadMessage() (int, []byte, error) {
 				c.fragType = 0
 				c.fragAccum = nil
 				c.mu.Unlock()
+				// Check rate limit before returning
+				if !c.checkRateLimit() {
+					c.writeClose(1008, "rate limit exceeded")
+					return 0, nil, errors.New("websocket: rate limit exceeded")
+				}
 				return msgType, msg, nil
 			}
 			c.mu.Unlock()
@@ -170,6 +219,11 @@ func (c *Conn) ReadMessage() (int, []byte, error) {
 		case 0x1: // text
 			if fin {
 				c.mu.Unlock()
+				// Check rate limit before returning
+				if !c.checkRateLimit() {
+					c.writeClose(1008, "rate limit exceeded")
+					return 0, nil, errors.New("websocket: rate limit exceeded")
+				}
 				return 1, payload, nil
 			}
 			if c.fragmented {
@@ -184,6 +238,11 @@ func (c *Conn) ReadMessage() (int, []byte, error) {
 		case 0x2: // binary
 			if fin {
 				c.mu.Unlock()
+				// Check rate limit before returning
+				if !c.checkRateLimit() {
+					c.writeClose(1008, "rate limit exceeded")
+					return 0, nil, errors.New("websocket: rate limit exceeded")
+				}
 				return 2, payload, nil
 			}
 			if c.fragmented {
@@ -209,6 +268,26 @@ func (c *Conn) ReadMessage() (int, []byte, error) {
 			c.mu.Unlock()
 		}
 	}
+}
+
+// writeClose sends a close frame with the given code and reason.
+func (c *Conn) writeClose(code int, reason string) {
+	buf := make([]byte, 2+len(reason))
+	binary.BigEndian.PutUint16(buf[:2], uint16(code))
+	copy(buf[2:], reason)
+
+	var frame []byte
+	frame = append(frame, byte(0x80|0x8)) // FIN + close opcode
+	length := len(buf)
+	switch {
+	case length <= 125:
+		frame = append(frame, byte(length))
+	default:
+		frame = append(frame, 126)
+		frame = append(frame, byte(length>>8), byte(length))
+	}
+	frame = append(frame, buf...)
+	c.conn.Write(frame)
 }
 
 // WriteMessage writes a message to the connection.

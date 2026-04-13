@@ -118,6 +118,7 @@ func TestNOTIFYSlaveHandler_GetNotifyChannel(t *testing.T) {
 func TestNOTIFYSlaveHandler_HandleNOTIFY_NoZone(t *testing.T) {
 	zones := make(map[string]*zone.Zone)
 	handler := NewNOTIFYSlaveHandler(zones)
+	handler.AddNotifyAllowed("127.0.0.1/32")
 
 	// Create NOTIFY request for non-existent zone
 	name, _ := protocol.ParseName("nonexistent.com.")
@@ -169,6 +170,7 @@ func TestNOTIFYSlaveHandler_HandleNOTIFY_Success(t *testing.T) {
 	zones["example.com."] = z
 
 	handler := NewNOTIFYSlaveHandler(zones)
+	handler.AddNotifyAllowed("127.0.0.1/32")
 
 	// Create NOTIFY request with newer serial
 	origin, _ := protocol.ParseName("example.com.")
@@ -250,6 +252,7 @@ func TestNOTIFYSlaveHandler_HandleNOTIFY_Success(t *testing.T) {
 func TestNOTIFYSlaveHandler_HandleNOTIFY_InvalidQuestionCount(t *testing.T) {
 	zones := make(map[string]*zone.Zone)
 	handler := NewNOTIFYSlaveHandler(zones)
+	handler.AddNotifyAllowed("127.0.0.1/32")
 
 	req := &protocol.Message{
 		Header: protocol.Header{
@@ -271,6 +274,7 @@ func TestNOTIFYSlaveHandler_HandleNOTIFY_InvalidQuestionCount(t *testing.T) {
 func TestNOTIFYSlaveHandler_HandleNOTIFY_WrongQType(t *testing.T) {
 	zones := make(map[string]*zone.Zone)
 	handler := NewNOTIFYSlaveHandler(zones)
+	handler.AddNotifyAllowed("127.0.0.1/32")
 
 	name, _ := protocol.ParseName("example.com.")
 	req := &protocol.Message{
@@ -361,6 +365,7 @@ func TestIsNOTIFYResponse(t *testing.T) {
 func TestNOTIFYSlaveHandler_SetSerialChecker(t *testing.T) {
 	zones := make(map[string]*zone.Zone)
 	handler := NewNOTIFYSlaveHandler(zones)
+	handler.AddNotifyAllowed("127.0.0.1/32")
 
 	// Create a custom serial checker
 	checkerCalled := false
@@ -734,6 +739,7 @@ func TestNOTIFYSlaveHandler_HandleNOTIFY_SerialFromAuthority(t *testing.T) {
 	zones["example.com."] = z
 
 	handler := NewNOTIFYSlaveHandler(zones)
+	handler.AddNotifyAllowed("127.0.0.1/32")
 
 	origin, _ := protocol.ParseName("example.com.")
 	mname, _ := protocol.ParseName("ns1.example.com.")
@@ -797,6 +803,7 @@ func TestNOTIFYSlaveHandler_HandleNOTIFY_SerialFromLocalZone(t *testing.T) {
 	zones["example.com."] = z
 
 	handler := NewNOTIFYSlaveHandler(zones)
+	handler.AddNotifyAllowed("127.0.0.1/32")
 
 	origin, _ := protocol.ParseName("example.com.")
 
@@ -840,6 +847,7 @@ func TestNOTIFYSlaveHandler_HandleNOTIFY_SameSerial_NoUpdate(t *testing.T) {
 	zones["example.com."] = z
 
 	handler := NewNOTIFYSlaveHandler(zones)
+	handler.AddNotifyAllowed("127.0.0.1/32")
 
 	origin, _ := protocol.ParseName("example.com.")
 	mname, _ := protocol.ParseName("ns1.example.com.")
@@ -897,6 +905,7 @@ func TestNOTIFYSlaveHandler_HandleNOTIFY_ZoneWithoutSOA(t *testing.T) {
 	zones["example.com."] = z
 
 	handler := NewNOTIFYSlaveHandler(zones)
+	handler.AddNotifyAllowed("127.0.0.1/32")
 
 	origin, _ := protocol.ParseName("example.com.")
 
@@ -942,6 +951,7 @@ func TestNOTIFYSlaveHandler_HandleNOTIFY_ZoneWithoutSOA_WithSerial(t *testing.T)
 	zones["example.com."] = z
 
 	handler := NewNOTIFYSlaveHandler(zones)
+	handler.AddNotifyAllowed("127.0.0.1/32")
 
 	origin, _ := protocol.ParseName("example.com.")
 	mname, _ := protocol.ParseName("ns1.example.com.")

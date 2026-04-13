@@ -4,6 +4,17 @@ import (
 	"fmt"
 )
 
+// Maximum number of records per section to prevent memory exhaustion DoS.
+// RFC 1035 allows up to 65535 per section, but real-world DNS never exceeds ~100.
+// These limits are enforced during wire format unpacking.
+const (
+	MaxQuestions   = 256
+	MaxAnswers     = 512
+	MaxAuthorities = 512
+	MaxAdditionals = 512
+	MaxRecords     = MaxQuestions + MaxAnswers + MaxAuthorities + MaxAdditionals
+)
+
 // Message represents a complete DNS message (RFC 1035).
 type Message struct {
 	Header      Header
@@ -216,6 +227,9 @@ func UnpackMessage(buf []byte) (*Message, error) {
 	offset := HeaderLen
 
 	// Unpack questions
+	if int(msg.Header.QDCount) > MaxQuestions {
+		return nil, fmt.Errorf("too many questions: %d (max %d)", msg.Header.QDCount, MaxQuestions)
+	}
 	for i := 0; i < int(msg.Header.QDCount); i++ {
 		if offset >= len(buf) {
 			return nil, ErrBufferTooSmall
@@ -229,6 +243,9 @@ func UnpackMessage(buf []byte) (*Message, error) {
 	}
 
 	// Unpack answers
+	if int(msg.Header.ANCount) > MaxAnswers {
+		return nil, fmt.Errorf("too many answer records: %d (max %d)", msg.Header.ANCount, MaxAnswers)
+	}
 	for i := 0; i < int(msg.Header.ANCount); i++ {
 		if offset >= len(buf) {
 			return nil, ErrBufferTooSmall
@@ -242,6 +259,9 @@ func UnpackMessage(buf []byte) (*Message, error) {
 	}
 
 	// Unpack authorities
+	if int(msg.Header.NSCount) > MaxAuthorities {
+		return nil, fmt.Errorf("too many authority records: %d (max %d)", msg.Header.NSCount, MaxAuthorities)
+	}
 	for i := 0; i < int(msg.Header.NSCount); i++ {
 		if offset >= len(buf) {
 			return nil, ErrBufferTooSmall
@@ -255,6 +275,9 @@ func UnpackMessage(buf []byte) (*Message, error) {
 	}
 
 	// Unpack additionals
+	if int(msg.Header.ARCount) > MaxAdditionals {
+		return nil, fmt.Errorf("too many additional records: %d (max %d)", msg.Header.ARCount, MaxAdditionals)
+	}
 	for i := 0; i < int(msg.Header.ARCount); i++ {
 		if offset >= len(buf) {
 			return nil, ErrBufferTooSmall

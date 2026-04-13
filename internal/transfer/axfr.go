@@ -37,10 +37,11 @@ type AXFRResponse struct {
 // RFC 5936 - DNS Zone Transfer Protocol
 // AXFR must use TCP (RFC 5936 Section 4.1)
 type AXFRServer struct {
-	zones     map[string]*zone.Zone // zone name -> zone
-	zonesMu   *sync.RWMutex         // protects zones map (can be shared externally)
-	keyStore  *KeyStore             // TSIG keys for authentication
-	allowList []net.IPNet           // Allowed client networks
+	zones      map[string]*zone.Zone // zone name -> zone
+	zonesMu    *sync.RWMutex         // protects zones map (can be shared externally)
+	keyStore   *KeyStore             // TSIG keys for authentication
+	allowList  []net.IPNet           // Allowed client networks
+	requireTSIG bool                 // Always require TSIG, even with allow list
 }
 
 // AXFRServerOption configures the AXFR server
@@ -62,6 +63,15 @@ func WithAllowList(networks []string) AXFRServerOption {
 				s.allowList = append(s.allowList, *network)
 			}
 		}
+	}
+}
+
+// WithRequireTSIG enforces TSIG authentication for all AXFR requests,
+// even when an IP allow list is configured. This provides defense in depth
+// against unauthorized zone transfers from compromised hosts on the same network.
+func WithRequireTSIG() AXFRServerOption {
+	return func(s *AXFRServer) {
+		s.requireTSIG = true
 	}
 }
 
@@ -150,14 +160,15 @@ func (s *AXFRServer) HandleAXFR(req *protocol.Message, clientIP net.IP) ([]*prot
 	}
 
 	// Verify TSIG — TSIG is required when:
+	// - requireTSIG is set (explicit enforcement regardless of other config)
 	// - No allow list is configured (secure by default: require TSIG for external access)
 	// - keyStore has keys configured
 	// This ensures zone transfers are protected even without IP-based ACLs.
 	hasAllowList := len(s.allowList) > 0
 	var tsigKey *TSIGKey
 
-	if s.keyStore != nil && s.keyStore.HasKeys() {
-		// TSIG keys configured — require TSIG authentication
+	if s.requireTSIG || (s.keyStore != nil && s.keyStore.HasKeys()) {
+		// TSIG required — authenticate
 		if !hasTSIG(req) {
 			return nil, nil, fmt.Errorf("TSIG authentication required for AXFR")
 		}

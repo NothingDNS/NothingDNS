@@ -154,6 +154,7 @@ func TestHandleNOTIFY_NotifyChannelSend_Observable(t *testing.T) {
 	handler.SetSerialChecker(func(zoneName string, serial uint32) bool {
 		return true // always needs update
 	})
+	handler.AddNotifyAllowed("192.168.1.1/32")
 
 	name, _ := protocol.ParseName("example.com.")
 	soaName, _ := protocol.ParseName("ns1.example.com.")
@@ -225,6 +226,7 @@ func TestHandleNOTIFY_NotifyChannelFull_Observable(t *testing.T) {
 	handler.SetSerialChecker(func(zoneName string, serial uint32) bool {
 		return true
 	})
+	handler.AddNotifyAllowed("127.0.0.1/32")
 
 	// Fill the channel
 	for i := 0; i < 100; i++ {
@@ -291,6 +293,7 @@ func TestHandleNOTIFY_SerialFromAuthority(t *testing.T) {
 	handler.SetSerialChecker(func(zoneName string, serial uint32) bool {
 		return true
 	})
+	handler.AddNotifyAllowed("192.168.1.1/32")
 
 	name, _ := protocol.ParseName("example.com.")
 	soaName, _ := protocol.ParseName("ns1.example.com.")
