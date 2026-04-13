@@ -424,8 +424,8 @@ func (s *DoQServer) handleStream(dc *doqConn, streamID uint64) {
 		return
 	}
 
-	// Set stream deadline to prevent slow clients from holding resources
-	_ = stream.SetReadDeadline(time.Now().Add(DoQStreamIdleTimeout))
+	// Set stream deadline to prevent slow clients from holding resources.
+	stream.SetReadDeadline(time.Now().Add(DoQStreamIdleTimeout))
 
 	// Limit read to prevent unbounded memory allocation
 	query, err := io.ReadAll(io.LimitReader(stream, DoQMaxMessageSize))
@@ -440,8 +440,8 @@ func (s *DoQServer) handleStream(dc *doqConn, streamID uint64) {
 
 	atomic.AddUint64(&s.queriesReceived, 1)
 
-	// Reset deadline before writing
-	_ = stream.SetWriteDeadline(time.Now().Add(DoQStreamIdleTimeout))
+	// Reset deadline before writing.
+	stream.SetWriteDeadline(time.Now().Add(DoQStreamIdleTimeout))
 
 	s.handler.ServeDoQ(stream, query)
 
