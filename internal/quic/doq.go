@@ -851,7 +851,9 @@ func (s *DoQServer) send1RTTResponse(dc *doqConn, streamID uint64, data []byte) 
 		return
 	}
 
-	s.conn.WriteToUDP(pkt, addr)
+	if _, err := s.conn.WriteToUDP(pkt, addr); err != nil {
+		atomic.AddUint64(&s.errors, 1)
+	}
 }
 
 // sendCryptoPacket sends a CRYPTO/Handshake packet to the client.
@@ -880,6 +882,7 @@ func (s *DoQServer) sendCryptoPacket(dc *doqConn, level tls.QUICEncryptionLevel,
 
 	pkt, err := BuildLongHeader(hdr, 0, 1)
 	if err != nil {
+		atomic.AddUint64(&s.errors, 1)
 		return
 	}
 
@@ -888,7 +891,9 @@ func (s *DoQServer) sendCryptoPacket(dc *doqConn, level tls.QUICEncryptionLevel,
 		return
 	}
 
-	s.conn.WriteToUDP(pkt, addr)
+	if _, err := s.conn.WriteToUDP(pkt, addr); err != nil {
+		atomic.AddUint64(&s.errors, 1)
+	}
 }
 
 // closeConnection closes and removes a DoQ connection.
