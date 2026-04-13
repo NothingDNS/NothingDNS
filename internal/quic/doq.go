@@ -648,8 +648,6 @@ func (s *DoQServer) processDecryptedPayload(dc *doqConn, data []byte) {
 				// Channel full - stream will be processed when space is available
 			}
 
-			atomic.AddUint64(&s.queriesReceived, 1)
-
 		case FrameTypeMaxData, FrameTypeMaxStreamsBidir, FrameTypeMaxStreamsUnidir,
 			FrameTypeDataBlocked, FrameTypeStreamsBlockedBidir, FrameTypeStreamsBlockedUnidir:
 			// These flow control frames have exactly 1 varint field — skip it

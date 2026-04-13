@@ -729,7 +729,7 @@ func TestDoQServerInitialPacketConnectionLimit(t *testing.T) {
 	defer srv.Stop()
 
 	// Exhaust the connection semaphore.
-	for i := 0; i < DoQMaxConnections; i++ {
+	for range DoQMaxConnections {
 		srv.connSem <- struct{}{}
 	}
 
@@ -755,7 +755,7 @@ func TestDoQServerInitialPacketConnectionLimit(t *testing.T) {
 	}
 
 	// Drain the semaphore to clean up.
-	for i := 0; i < DoQMaxConnections; i++ {
+	for range DoQMaxConnections {
 		<-srv.connSem
 	}
 }
@@ -934,12 +934,6 @@ func TestDoQServerProcess1RTTPacketWithKeys(t *testing.T) {
 		}
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("stream was not signaled on streamCh")
-	}
-
-	// Verify queriesReceived was incremented
-	qr := atomic.LoadUint64(&srv.queriesReceived)
-	if qr != 1 {
-		t.Errorf("queriesReceived = %d, want 1", qr)
 	}
 
 	// Verify data was delivered to the stream

@@ -14,7 +14,6 @@ const (
 
 	// Fixed bit patterns
 	longHeaderFixedBit  = 0x80
-	shortHeaderFixedBit = 0x40
 
 	// Packet types
 	PacketTypeInitial   = 0x0
@@ -481,7 +480,7 @@ func BuildStreamFrame(sf *StreamFrame, withOffset, withLength bool) []byte {
 	buf := []byte{frameType}
 	buf = AppendVarint(buf, sf.StreamID)
 
-	if withOffset && sf.Offset > 0 {
+	if withOffset {
 		buf = AppendVarint(buf, sf.Offset)
 	}
 
