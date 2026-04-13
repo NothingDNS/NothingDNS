@@ -230,11 +230,11 @@ func (s *DoQServer) handlePacket(data []byte, remoteAddr *net.UDPAddr) {
 
 		switch hdr.Type {
 		case PacketTypeInitial:
-			s.handleInitialPacket(hdr, data, remoteAddr)
+			s.handleInitialPacket(hdr, remoteAddr)
 		case PacketType0RTT:
 			// 0-RTT packets contain early data from the client
 			// Route to existing connection for crypto data processing
-			s.handle0RTTPacket(hdr, data, remoteAddr)
+			s.handle0RTTPacket(hdr)
 		default:
 			s.routeToConnection(hdr.DestConnID, hdr.Payload)
 		}
@@ -244,8 +244,7 @@ func (s *DoQServer) handlePacket(data []byte, remoteAddr *net.UDPAddr) {
 }
 
 // handleInitialPacket handles an Initial packet (new connection or existing).
-func (s *DoQServer) handleInitialPacket(hdr *LongHeader, data []byte, remoteAddr *net.UDPAddr) {
-	_ = data // payload accessed via hdr.Payload
+func (s *DoQServer) handleInitialPacket(hdr *LongHeader, remoteAddr *net.UDPAddr) {
 	key := toKey(hdr.DestConnID)
 
 	s.connsMu.RLock()
@@ -323,7 +322,7 @@ func (s *DoQServer) handleInitialPacket(hdr *LongHeader, data []byte, remoteAddr
 // handle0RTTPacket handles a 0-RTT packet (early data from client).
 // 0-RTT packets can arrive before the handshake completes and contain
 // early data that should be buffered for processing after handshake.
-func (s *DoQServer) handle0RTTPacket(hdr *LongHeader, data []byte, remoteAddr *net.UDPAddr) {
+func (s *DoQServer) handle0RTTPacket(hdr *LongHeader) {
 	key := toKey(hdr.DestConnID)
 
 	s.connsMu.RLock()
@@ -342,8 +341,6 @@ func (s *DoQServer) handle0RTTPacket(hdr *LongHeader, data []byte, remoteAddr *n
 	if err := dc.sc.HandleCryptoData(tls.QUICEncryptionLevelEarly, hdr.Payload); err != nil {
 		atomic.AddUint64(&s.errors, 1)
 	}
-	_ = data // payload data consumed via hdr.Payload
-	_ = remoteAddr
 }
 
 // newDoQConnection creates a new DoQ connection.

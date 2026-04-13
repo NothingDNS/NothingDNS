@@ -744,7 +744,7 @@ func TestDoQServerInitialPacketConnectionLimit(t *testing.T) {
 	}
 
 	// handleInitialPacket should fail to acquire the semaphore and bump errors.
-	srv.handleInitialPacket(hdr, nil, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345})
+	srv.handleInitialPacket(hdr, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345})
 
 	stats := srv.Stats()
 	if stats.Errors != 1 {
