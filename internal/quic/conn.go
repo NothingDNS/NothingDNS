@@ -262,15 +262,33 @@ func (sc *ServerConnection) ProcessTLSEvents(sendFn func(tls.QUICEncryptionLevel
 		case tls.QUICSetReadSecret:
 			// Capture 1-RTT read secret for packet decryption
 			if event.Level == tls.QUICEncryptionLevelApplication {
-				sc.readAEAD, sc.readIV, _ = DeriveAEADKeyAndIV(event.Suite, event.Data)
-				sc.readHPKey, _ = DeriveHeaderProtectionKey(event.Suite, event.Data)
+				aead, iv, err := DeriveAEADKeyAndIV(event.Suite, event.Data)
+				if err != nil {
+					return fmt.Errorf("quic: derive read AEAD key: %w", err)
+				}
+				hpKey, err := DeriveHeaderProtectionKey(event.Suite, event.Data)
+				if err != nil {
+					return fmt.Errorf("quic: derive read HP key: %w", err)
+				}
+				sc.readAEAD = aead
+				sc.readIV = iv
+				sc.readHPKey = hpKey
 				sc.expectedPN = 0
 			}
 		case tls.QUICSetWriteSecret:
 			// Capture 1-RTT write secret for packet encryption
 			if event.Level == tls.QUICEncryptionLevelApplication {
-				sc.writeAEAD, sc.writeIV, _ = DeriveAEADKeyAndIV(event.Suite, event.Data)
-				sc.writeHPKey, _ = DeriveHeaderProtectionKey(event.Suite, event.Data)
+				aead, iv, err := DeriveAEADKeyAndIV(event.Suite, event.Data)
+				if err != nil {
+					return fmt.Errorf("quic: derive write AEAD key: %w", err)
+				}
+				hpKey, err := DeriveHeaderProtectionKey(event.Suite, event.Data)
+				if err != nil {
+					return fmt.Errorf("quic: derive write HP key: %w", err)
+				}
+				sc.writeAEAD = aead
+				sc.writeIV = iv
+				sc.writeHPKey = hpKey
 			}
 		case tls.QUICWriteData:
 			if sendFn != nil {
