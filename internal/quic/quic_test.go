@@ -201,7 +201,7 @@ func TestParseLongHeader(t *testing.T) {
 		0xAA, // payload byte
 	}
 
-	hdr, consumed, err := ParseLongHeader(data)
+	hdr, _, err := ParseLongHeader(data)
 	if err != nil {
 		t.Fatalf("ParseLongHeader: %v", err)
 	}
@@ -218,7 +218,6 @@ func TestParseLongHeader(t *testing.T) {
 	if len(hdr.SrcConnID) != 0 {
 		t.Errorf("SrcConnID len = %d, want 0", len(hdr.SrcConnID))
 	}
-	_ = consumed
 }
 
 func TestParseLongHeaderTooShort(t *testing.T) {
@@ -523,7 +522,7 @@ func TestBuildAndParseStreamFrame(t *testing.T) {
 
 	// First byte is the frame type
 	frameType := encoded[0]
-	parsed, consumed, err := ParseStreamFrame(frameType, encoded[1:])
+	parsed, _, err := ParseStreamFrame(frameType, encoded[1:])
 	if err != nil {
 		t.Fatalf("ParseStreamFrame: %v", err)
 	}
@@ -537,7 +536,6 @@ func TestBuildAndParseStreamFrame(t *testing.T) {
 	if !parsed.Fin {
 		t.Error("Fin should be true")
 	}
-	_ = consumed
 }
 
 func TestBuildAndParseStreamFrameWithOffset(t *testing.T) {
@@ -566,7 +564,7 @@ func TestBuildAndParseCryptoFrame(t *testing.T) {
 	}
 
 	encoded := BuildCryptoFrame(cf)
-	parsed, consumed, err := ParseCryptoFrame(encoded[1:]) // skip frame type byte
+	parsed, _, err := ParseCryptoFrame(encoded[1:]) // skip frame type byte
 	if err != nil {
 		t.Fatalf("ParseCryptoFrame: %v", err)
 	}
@@ -576,7 +574,6 @@ func TestBuildAndParseCryptoFrame(t *testing.T) {
 	if !bytes.Equal(parsed.Data, cf.Data) {
 		t.Errorf("Data = %v, want %v", parsed.Data, cf.Data)
 	}
-	_ = consumed
 }
 
 // =================== PacketNumberLen Tests ===================

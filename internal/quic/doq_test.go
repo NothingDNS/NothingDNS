@@ -158,7 +158,7 @@ func TestDoQServerStopIdempotent(t *testing.T) {
 
 	// Second stop should not panic. The underlying conn is already closed,
 	// so an error is acceptable but a panic is not.
-	_ = srv.Stop()
+	srv.Stop() // intentionally ignore error - testing double-stop safety
 }
 
 func TestDoQServerStopWithoutListen(t *testing.T) {
