@@ -809,3 +809,170 @@ func TestDoQServerNewDoQConnection(t *testing.T) {
 		t.Errorf("connectionsAccepted = %d, want 1", accepted)
 	}
 }
+
+// =================== 1-RTT Packet Processing Tests ===================
+
+func TestDoQServerProcess1RTTPacketNoKeys(t *testing.T) {
+	handler := DoQHandlerFunc(func(s *Stream, q []byte) {})
+	srv := NewDoQServer("127.0.0.1:0", handler, testTLSConfig())
+
+	cid := ConnectionID{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sc := NewServerConnection(testTLSConfig(), cid, &net.UDPAddr{}, &net.UDPAddr{}, nil)
+	// 1-RTT keys are NOT set (handshake not completed)
+	dc := &doqConn{sc: sc, scID: cid, ctx: ctx, cancel: cancel, streamCh: make(chan uint64, 64)}
+
+	// Build a valid short header packet
+	data := make([]byte, 30)
+	data[0] = 0x40 // short header, pnLen=1
+	copy(data[1:9], cid)
+	data[9] = 0x01
+	for i := 10; i < 30; i++ {
+		data[i] = byte(i)
+	}
+
+	srv.process1RTTPacket(dc, data, len(cid))
+
+	// Should have bumped error counter (no keys)
+	stats := srv.Stats()
+	if stats.Errors != 1 {
+		t.Errorf("Errors = %d, want 1 (no keys available)", stats.Errors)
+	}
+}
+
+func TestDoQServerProcess1RTTPacketWithKeys(t *testing.T) {
+	handler := DoQHandlerFunc(func(s *Stream, q []byte) {})
+	srv := NewDoQServer("127.0.0.1:0", handler, testTLSConfig())
+
+	// Generate 1-RTT keys
+	secret := make([]byte, 32)
+	for i := range secret {
+		secret[i] = byte(i)
+	}
+
+	aead, iv, err := DeriveAEADKeyAndIV(TLSCipherAES128GCM_SHA256, secret)
+	if err != nil {
+		t.Fatalf("DeriveAEADKeyAndIV: %v", err)
+	}
+	hpKey, err := DeriveHeaderProtectionKey(TLSCipherAES128GCM_SHA256, secret)
+	if err != nil {
+		t.Fatalf("DeriveHeaderProtectionKey: %v", err)
+	}
+
+	cid := ConnectionID{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sc := NewServerConnection(testTLSConfig(), cid, &net.UDPAddr{}, &net.UDPAddr{}, nil)
+	sc.readAEAD = aead
+	sc.readIV = iv
+	sc.readHPKey = hpKey
+	sc.connIDLen = len(cid)
+
+	streamCh := make(chan uint64, 64)
+	dc := &doqConn{sc: sc, scID: cid, ctx: ctx, cancel: cancel, streamCh: streamCh}
+
+	// Build a STREAM frame carrying a DNS query
+	streamID := uint64(0) // client-initiated bidi stream
+	dnsQuery := []byte{0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+	sf := &StreamFrame{
+		StreamID: streamID,
+		Data:     dnsQuery,
+		Fin:      true,
+	}
+	frameData := BuildStreamFrame(sf, false, true)
+	pn := uint64(0)
+
+	// Build header: first byte + DCID + PN
+	pnLen := 1
+	hdrLen := 1 + len(cid) + pnLen
+	header := make([]byte, hdrLen)
+	header[0] = 0x40 | byte(pnLen-1)
+	copy(header[1:1+len(cid)], cid)
+	header[1+len(cid)] = byte(pn)
+
+	// Build full packet: header + plaintext frame (will encrypt)
+	pkt := make([]byte, len(header)+len(frameData))
+	copy(pkt, header)
+	copy(pkt[len(header):], frameData)
+
+	// Encrypt payload
+	ciphertext, err := Encrypt1RTTPacket(aead, iv, pn, pkt[:hdrLen], pkt[hdrLen:])
+	if err != nil {
+		t.Fatalf("Encrypt1RTTPacket: %v", err)
+	}
+
+	// Rebuild packet
+	pkt = make([]byte, hdrLen+len(ciphertext))
+	copy(pkt, header)
+	copy(pkt[hdrLen:], ciphertext)
+
+	// Apply header protection
+	err = ApplyHeaderProtection(hpKey, pkt, len(cid), pnLen)
+	if err != nil {
+		t.Fatalf("ApplyHeaderProtection: %v", err)
+	}
+
+	// Process the packet
+	srv.process1RTTPacket(dc, pkt, len(cid))
+
+	// Check no errors
+	stats := srv.Stats()
+	if stats.Errors != 0 {
+		t.Fatalf("Errors = %d, want 0", stats.Errors)
+	}
+
+	// Verify stream was signaled
+	select {
+	case signaledStreamID := <-streamCh:
+		if signaledStreamID != streamID {
+			t.Errorf("streamCh got ID=%d, want %d", signaledStreamID, streamID)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("stream was not signaled on streamCh")
+	}
+
+	// Verify queriesReceived was incremented
+	qr := atomic.LoadUint64(&srv.queriesReceived)
+	if qr != 1 {
+		t.Errorf("queriesReceived = %d, want 1", qr)
+	}
+
+	// Verify data was delivered to the stream
+	stream, err := sc.AcceptStream(streamID)
+	if err != nil {
+		t.Fatalf("AcceptStream: %v", err)
+	}
+
+	buf := make([]byte, 1024)
+	n, err := stream.Read(buf)
+	if err != nil {
+		t.Fatalf("stream.Read: %v", err)
+	}
+	if string(buf[:n]) != string(dnsQuery) {
+		t.Errorf("stream data = %v, want %v", buf[:n], dnsQuery)
+	}
+}
+
+func TestDoQServerSend1RTTResponseNoKeys(t *testing.T) {
+	handler := DoQHandlerFunc(func(s *Stream, q []byte) {})
+	srv := NewDoQServer("127.0.0.1:0", handler, testTLSConfig())
+
+	cid := ConnectionID{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sc := NewServerConnection(testTLSConfig(), cid, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9999}, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9999}, nil)
+	// 1-RTT write keys NOT set
+	dc := &doqConn{sc: sc, scID: cid, ctx: ctx, cancel: cancel, streamCh: make(chan uint64, 64)}
+
+	// Should bump error counter and return
+	srv.send1RTTResponse(dc, 0, []byte{0x00, 0x01})
+
+	stats := srv.Stats()
+	if stats.Errors != 1 {
+		t.Errorf("Errors = %d, want 1 (no write keys)", stats.Errors)
+	}
+}

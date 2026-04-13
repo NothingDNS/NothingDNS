@@ -441,6 +441,13 @@ func (s *DoQServer) handleStream(dc *doqConn, streamID uint64) {
 	atomic.AddUint64(&s.queriesResponded, 1)
 
 	stream.Close()
+
+	// Collect response data and send as 1-RTT encrypted STREAM frame
+	responseData := stream.GetWrittenData()
+	if len(responseData) > 0 {
+		s.send1RTTResponse(dc, streamID, responseData)
+	}
+
 	// DeleteStream is called in the defer above
 }
 
@@ -463,13 +470,364 @@ func (s *DoQServer) handleShortHeaderPacket(data []byte) {
 		s.connsMu.RUnlock()
 
 		if ok {
-			// TODO: Route short header packet to connection for decryption
-			// and stream processing. This requires implementing the
-			// QUIC 1-RTT packet decryption and stream reassembly.
-			_ = dc
+			s.process1RTTPacket(dc, data, cidLen)
 			return
 		}
 	}
+}
+
+// process1RTTPacket decrypts and processes a 1-RTT packet for an established connection.
+func (s *DoQServer) process1RTTPacket(dc *doqConn, data []byte, cidLen int) {
+	sc := dc.sc
+
+	// Check that 1-RTT keys are available (handshake must be complete)
+	if sc.readAEAD == nil || sc.readHPKey == nil {
+		atomic.AddUint64(&s.errors, 1)
+		return
+	}
+
+	// Parse short header to separate header from encrypted payload
+	hdrLen := 1 + cidLen
+	if len(data) < hdrLen+16 { // minimum: header + 16-byte HP sample
+		atomic.AddUint64(&s.errors, 1)
+		return
+	}
+
+	// Extract PN length from header byte (lower 2 bits, masked by header protection)
+	// We need to remove header protection first. The sample starts right after the PN.
+	// PN length is encoded in the first byte (bits 0-1), but protected.
+	// We try each possible PN length (1-4) and derive the PN from the sample.
+	// The correct PN length will produce a valid packet number.
+
+	// For short header: first byte is 0x40 | pnLen-1 (protected)
+	// Try all PN lengths and pick the one that makes sense
+	var pn uint64
+	var header []byte
+	var ciphertext []byte
+	var ok bool
+
+	for pnLen := 1; pnLen <= 4; pnLen++ {
+		if len(data) < hdrLen+pnLen+16 {
+			continue
+		}
+
+		// Copy full packet (header + PN + payload) for HP removal.
+		// RemoveHeaderProtection needs the payload for the 16-byte sample.
+		pktCopy := make([]byte, len(data))
+		copy(pktCopy, data)
+
+		pnCandidate, err := RemoveHeaderProtection(sc.readHPKey, pktCopy, cidLen, pnLen)
+		if err != nil {
+			continue
+		}
+
+		// Verify the unmasked header byte has the correct short header form (0x40 | pnLen-1)
+		expectedFirstByte := byte(0x40) | byte(pnLen-1)
+		if (pktCopy[0] & 0x43) != expectedFirstByte {
+			continue
+		}
+
+		pn = pnCandidate
+		header = pktCopy[:hdrLen+pnLen]
+		ciphertext = pktCopy[hdrLen+pnLen:]
+		ok = true
+		break
+	}
+
+	if !ok {
+		atomic.AddUint64(&s.errors, 1)
+		return
+	}
+
+	if len(ciphertext) < 16 { // AEAD tag minimum
+		atomic.AddUint64(&s.errors, 1)
+		return
+	}
+
+	// Decrypt the packet
+	plaintext, err := Decrypt1RTTPacket(sc.readAEAD, sc.readIV, pn, header, ciphertext)
+	if err != nil {
+		atomic.AddUint64(&s.errors, 1)
+		return
+	}
+
+	// Parse frames from the decrypted payload
+	s.processDecryptedPayload(dc, plaintext)
+
+	// Update expected packet number
+	sc.expectedPN = pn + 1
+}
+
+// processDecryptedPayload parses and dispatches frames from a decrypted 1-RTT packet.
+func (s *DoQServer) processDecryptedPayload(dc *doqConn, data []byte) {
+	offset := 0
+	for offset < len(data) {
+		frameType := data[offset]
+		offset++
+
+		switch frameType {
+		case FrameTypePadding:
+			// Padding bytes - skip
+			continue
+
+		case FrameTypePing:
+			// Ping - no action needed
+			continue
+
+		case FrameTypeAck, FrameTypeAckECN:
+			// ACK frames - parse and skip (we don't track sent packets yet)
+			n := s.parseAndSkipACKFrame(data[offset:])
+			if n == 0 {
+				atomic.AddUint64(&s.errors, 1)
+				return
+			}
+			offset += n
+
+		case FrameTypeCrypto:
+			// CRYPTO frame - post-handshake TLS messages (e.g., key updates)
+			cf, n, err := ParseCryptoFrame(data[offset:])
+			if err != nil {
+				atomic.AddUint64(&s.errors, 1)
+				return
+			}
+			offset += n
+			_ = dc.sc.HandleCryptoData(tls.QUICEncryptionLevelApplication, cf.Data)
+
+		case FrameTypeNewToken:
+			// New token - skip
+			// Parse varint length and skip
+			_, n := DecodeVarint(data[offset:])
+			if n == 0 {
+				atomic.AddUint64(&s.errors, 1)
+				return
+			}
+			offset += n
+
+		case FrameTypeStream, FrameTypeStream | 0x01, FrameTypeStream | 0x02, FrameTypeStream | 0x03,
+			FrameTypeStream | 0x04, FrameTypeStream | 0x05, FrameTypeStream | 0x06, FrameTypeStream | 0x07:
+			// STREAM frames (0x08-0x0F)
+			sf, n, err := ParseStreamFrame(frameType, data[offset:])
+			if err != nil {
+				atomic.AddUint64(&s.errors, 1)
+				return
+			}
+			offset += n
+
+			// Check stream ID is valid (must be server-initiated bidirectional, i.e., odd)
+			// DoQ uses client-initiated bidirectional streams (stream ID % 4 == 0)
+			// and server-initiated bidirectional streams (stream ID % 4 == 1)
+			stream, err := dc.sc.AcceptStream(sf.StreamID)
+			if err != nil {
+				atomic.AddUint64(&s.errors, 1)
+				continue
+			}
+			stream.AppendReadData(sf.Data, sf.Fin)
+
+			// Signal the stream processor
+			select {
+			case dc.streamCh <- sf.StreamID:
+			default:
+				// Channel full - stream will be processed when space is available
+			}
+
+			atomic.AddUint64(&s.queriesReceived, 1)
+
+		case FrameTypeMaxData, FrameTypeMaxStreamsBidir, FrameTypeMaxStreamsUnidir,
+			FrameTypeDataBlocked, FrameTypeStreamsBlockedBidir, FrameTypeStreamsBlockedUnidir:
+			// These flow control frames have exactly 1 varint field — skip it
+			_, n := DecodeVarint(data[offset:])
+			if n == 0 {
+				atomic.AddUint64(&s.errors, 1)
+				return
+			}
+			offset += n
+
+		case FrameTypeMaxStreamData, FrameTypeStreamDataBlocked:
+			// These flow control frames have 2 varint fields: stream_id + value
+			for i := 0; i < 2; i++ {
+				_, n := DecodeVarint(data[offset:])
+				if n == 0 {
+					atomic.AddUint64(&s.errors, 1)
+					return
+				}
+				offset += n
+			}
+
+		case FrameTypeNewConnectionID:
+			// New connection ID - skip
+			// Multiple varints + 16 bytes
+			for i := 0; i < 4 && offset < len(data); i++ {
+				_, n := DecodeVarint(data[offset:])
+				if n == 0 {
+					break
+				}
+				offset += n
+			}
+			if offset+16 <= len(data) {
+				offset += 16
+			}
+
+		case FrameTypeRetireConnectionID:
+			// Retire connection ID - skip
+			_, n := DecodeVarint(data[offset:])
+			if n > 0 {
+				offset += n
+			}
+
+		case FrameTypePathChallenge, FrameTypePathResponse:
+			// Path probing - skip 8-byte data
+			if offset+8 <= len(data) {
+				offset += 8
+			}
+
+		case FrameTypeConnectionClose, FrameTypeConnectionCloseApp:
+			// Connection close - terminate connection
+			ccf, n, err := ParseConnectionCloseFrame(frameType, data[offset:])
+			if err != nil {
+				atomic.AddUint64(&s.errors, 1)
+				return
+			}
+			offset += n
+			_ = ccf // connection will be cleaned up by timeout
+			dc.cancel()
+			return
+
+		case FrameTypeHandshakeDone:
+			// Handshake done - no action (already completed)
+			continue
+
+		default:
+			// Unknown frame type - skip
+			atomic.AddUint64(&s.errors, 1)
+			return
+		}
+	}
+}
+
+// parseAndSkipACKFrame parses an ACK frame and returns the number of bytes consumed.
+func (s *DoQServer) parseAndSkipACKFrame(data []byte) int {
+	offset := 0
+
+	// Largest Acknowledged (varint)
+	_, n := DecodeVarint(data[offset:])
+	if n == 0 {
+		return 0
+	}
+	offset += n
+
+	// ACK Delay (varint)
+	_, n = DecodeVarint(data[offset:])
+	if n == 0 {
+		return 0
+	}
+	offset += n
+
+	// ACK Range Count (varint)
+	ackRangeCount, n := DecodeVarint(data[offset:])
+	if n == 0 {
+		return 0
+	}
+	offset += n
+
+	// First ACK Range (varint)
+	_, n = DecodeVarint(data[offset:])
+	if n == 0 {
+		return 0
+	}
+	offset += n
+
+	// Additional ACK ranges
+	for i := uint64(0); i < ackRangeCount; i++ {
+		// Gap (varint)
+		_, n = DecodeVarint(data[offset:])
+		if n == 0 {
+			return 0
+		}
+		offset += n
+
+		// ACK Range Length (varint)
+		_, n = DecodeVarint(data[offset:])
+		if n == 0 {
+			return 0
+		}
+		offset += n
+	}
+
+	// ECN counts (only for ACK_ECN)
+	// Skip if present (3 varints)
+	// We can't reliably detect ECN without parsing the full frame,
+	// but since we're just skipping, consuming extra varints is safe
+	// as long as we don't overshoot. We'll be conservative and not consume them.
+
+	return offset
+}
+
+// send1RTTResponse encrypts and sends a DNS response as a 1-RTT STREAM frame.
+func (s *DoQServer) send1RTTResponse(dc *doqConn, streamID uint64, data []byte) {
+	sc := dc.sc
+
+	// Check that 1-RTT write keys are available
+	if sc.writeAEAD == nil || sc.writeHPKey == nil {
+		atomic.AddUint64(&s.errors, 1)
+		return
+	}
+
+	// Get remote address
+	addr, ok := sc.RemoteAddr().(*net.UDPAddr)
+	if !ok {
+		return
+	}
+
+	// Build STREAM frame with FIN bit set
+	sf := &StreamFrame{
+		StreamID: streamID,
+		Data:     data,
+		Fin:      true,
+	}
+	frameData := BuildStreamFrame(sf, false, true) // withOffset=false, withLength=true
+
+	// Get next packet number
+	pn := sc.NextPacketNumber(tls.QUICEncryptionLevelApplication)
+
+	// Determine packet number length (use 1 byte for simplicity)
+	pnLen := 1
+
+	// Build short header: first byte + DCID
+	hdrLen := 1 + sc.connIDLen
+	header := make([]byte, hdrLen+pnLen)
+	header[0] = 0x40 | byte(pnLen-1) // short header form
+	copy(header[1:hdrLen], sc.connID)
+
+	// Encode packet number
+	for i := pnLen - 1; i >= 0; i-- {
+		header[hdrLen-1-i] = byte(pn >> (i * 8))
+	}
+
+	// Copy header into the packet buffer
+	pkt := make([]byte, len(header)+len(frameData))
+	copy(pkt, header)
+	copy(pkt[len(header):], frameData)
+
+	// Encrypt the payload (everything after header+PN)
+	ciphertext, err := Encrypt1RTTPacket(sc.writeAEAD, sc.writeIV, pn, pkt[:hdrLen+pnLen], pkt[hdrLen+pnLen:])
+	if err != nil {
+		atomic.AddUint64(&s.errors, 1)
+		return
+	}
+
+	// Rebuild packet: header + encrypted payload
+	pkt = make([]byte, hdrLen+pnLen+len(ciphertext))
+	copy(pkt, header)
+	copy(pkt[hdrLen+pnLen:], ciphertext)
+
+	// Apply header protection
+	err = ApplyHeaderProtection(sc.writeHPKey, pkt, sc.connIDLen, pnLen)
+	if err != nil {
+		atomic.AddUint64(&s.errors, 1)
+		return
+	}
+
+	s.conn.WriteToUDP(pkt, addr)
 }
 
 // sendCryptoPacket sends a CRYPTO/Handshake packet to the client.

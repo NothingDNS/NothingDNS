@@ -2,6 +2,7 @@ package quic
 
 import (
 	"context"
+	"crypto/cipher"
 	"crypto/rand"
 	"crypto/tls"
 	"errors"
@@ -191,6 +192,16 @@ type ServerConnection struct {
 	pktNumApp       uint64
 	pktNumMu        sync.Mutex
 
+	// 1-RTT key material (populated from TLS events)
+	readAEAD  cipher.AEAD // AEAD cipher for decrypting inbound 1-RTT packets
+	readIV    []byte      // 12-byte IV for decryption nonce
+	readHPKey []byte      // header protection key
+	expectedPN uint64    // expected inbound packet number
+	writeAEAD cipher.AEAD // AEAD cipher for encrypting outbound 1-RTT packets
+	writeIV   []byte      // 12-byte IV for encryption nonce
+	writeHPKey []byte     // header protection key
+	connIDLen int         // connection ID length (for short header parsing)
+
 	// State
 	closed bool
 	mu     sync.Mutex
@@ -209,6 +220,7 @@ func NewServerConnection(tlsConfig *tls.Config, connID ConnectionID, localAddr, 
 	return &ServerConnection{
 		tlsConn:    tls.QUICServer(quicConfig),
 		connID:     connID,
+		connIDLen:  len(connID),
 		localAddr:  localAddr,
 		remoteAddr: remoteAddr,
 		config:     config,
@@ -241,9 +253,18 @@ func (sc *ServerConnection) ProcessTLSEvents(sendFn func(tls.QUICEncryptionLevel
 		case tls.QUICNoEvent:
 			return nil
 		case tls.QUICSetReadSecret:
-			// New read key available
+			// Capture 1-RTT read secret for packet decryption
+			if event.Level == tls.QUICEncryptionLevelApplication {
+				sc.readAEAD, sc.readIV, _ = DeriveAEADKeyAndIV(event.Suite, event.Data)
+				sc.readHPKey, _ = DeriveHeaderProtectionKey(event.Suite, event.Data)
+				sc.expectedPN = 0
+			}
 		case tls.QUICSetWriteSecret:
-			// New write key available
+			// Capture 1-RTT write secret for packet encryption
+			if event.Level == tls.QUICEncryptionLevelApplication {
+				sc.writeAEAD, sc.writeIV, _ = DeriveAEADKeyAndIV(event.Suite, event.Data)
+				sc.writeHPKey, _ = DeriveHeaderProtectionKey(event.Suite, event.Data)
+			}
 		case tls.QUICWriteData:
 			if sendFn != nil {
 				sendFn(event.Level, event.Data)
