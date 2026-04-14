@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -318,6 +319,7 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 		name string
 		z    *zone.Zone
 	}
+	seenZones := make(map[string]struct{})
 	// Fast path: use radix tree for O(log n) best-match lookup
 	if tree != nil {
 		if best := tree.Find(qname); best != nil {
@@ -325,37 +327,52 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 				name string
 				z    *zone.Zone
 			}{best.Origin, best})
+			seenZones[best.Origin] = struct{}{}
 		}
-	} else {
-		// Fallback: iterate all zones
-		for origin, z := range h.zones {
-			if isSubdomain(qname, origin) {
+	}
+	// Include zones from the static map and runtime zone manager.
+	// Runtime-created zones (API, DDNS) may not be in the radix tree.
+	for origin, z := range h.zones {
+		if isSubdomain(qname, origin) {
+			if _, seen := seenZones[origin]; !seen {
 				matchedZones = append(matchedZones, struct {
 					name string
 					z    *zone.Zone
 				}{origin, z})
+				seenZones[origin] = struct{}{}
 			}
 		}
-		if h.kvPersistence != nil {
-			for name, z := range h.kvPersistence.Manager().List() {
-				if isSubdomain(qname, name) {
+	}
+	if h.kvPersistence != nil {
+		for name, z := range h.kvPersistence.Manager().List() {
+			if isSubdomain(qname, name) {
+				if _, seen := seenZones[name]; !seen {
 					matchedZones = append(matchedZones, struct {
 						name string
 						z    *zone.Zone
 					}{name, z})
-				}
-			}
-		} else if h.zoneManager != nil {
-			for name, z := range h.zoneManager.List() {
-				if isSubdomain(qname, name) {
-					matchedZones = append(matchedZones, struct {
-						name string
-						z    *zone.Zone
-					}{name, z})
+					seenZones[name] = struct{}{}
 				}
 			}
 		}
 	}
+	if h.zoneManager != nil {
+		for name, z := range h.zoneManager.List() {
+			if isSubdomain(qname, name) {
+				if _, seen := seenZones[name]; !seen {
+					matchedZones = append(matchedZones, struct {
+						name string
+						z    *zone.Zone
+					}{name, z})
+					seenZones[name] = struct{}{}
+				}
+			}
+		}
+	}
+	// Sort by origin length descending so the most specific zone is checked first
+	sort.Slice(matchedZones, func(i, j int) bool {
+		return len(matchedZones[i].name) > len(matchedZones[j].name)
+	})
 	h.zonesMu.RUnlock()
 
 	var matchedZone bool
