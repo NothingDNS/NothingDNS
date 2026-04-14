@@ -51,6 +51,7 @@ type integratedHandler struct {
 	metrics       *metrics.MetricsCollector
 	validator     *dnssec.Validator
 	zoneSigners   map[string]*dnssec.Signer
+	zoneSignersMu sync.RWMutex
 	zoneTree      *zone.RadixTree // Radix tree for O(log n) zone matching
 	cluster       *cluster.Cluster
 	axfrServer    *transfer.AXFRServer

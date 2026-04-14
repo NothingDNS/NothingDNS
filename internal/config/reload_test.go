@@ -528,12 +528,30 @@ func TestReloadBlocklistNoBlocklist(t *testing.T) {
 }
 
 func TestTLSReloaderWithFiles(t *testing.T) {
-	// Create temp files for cert and key
+	// Create temp files for cert and key with valid PEM data
+	certPEM := `-----BEGIN CERTIFICATE-----
+MIIBSjCB8KADAgECAgEBMAoGCCqGSM49BAMCMA8xDTALBgNVBAoTBFRlc3QwHhcN
+MjYwNDE0MDcwMjQ0WhcNMjYwNDE0MDgwMjQ0WjAPMQ0wCwYDVQQKEwRUZXN0MFkw
+EwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE6QJRIirmN49OSQ8HTI27IgPHzFshCE1Y
+vlcdyN42xxGwiYPY/UFu37mVb1C1CXNlrNytcDQJPlXhrb+yqaYqOaM9MDswDgYD
+VR0PAQH/BAQDAgWgMBMGA1UdJQQMMAoGCCsGAQUFBwMBMBQGA1UdEQQNMAuCCWxv
+Y2FsaG9zdDAKBggqhkjOPQQDAgNJADBGAiEAweBvLxh8ifw8pEq+zeloNc+nntJ6
+Pg8IXeSHJpOedDsCIQC4HUm4rKMAiRXjcwPVm5HvyKkwmLJWYw5RxpWR55WbNQ==
+-----END CERTIFICATE-----`
+	keyPEM := `-----BEGIN EC PRIVATE KEY-----
+MHcCAQEEIMCG/ZoQ4oO4QuaeZuzrP3rvkJts0cFxXuAQBbjlFmMKoAoGCCqGSM49
+AwEHoUQDQgAE6QJRIirmN49OSQ8HTI27IgPHzFshCE1YvlcdyN42xxGwiYPY/UFu
+37mVb1C1CXNlrNytcDQJPlXhrb+yqaYqOQ==
+-----END EC PRIVATE KEY-----`
+
 	certFile, err := os.CreateTemp("", "cert-*.pem")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer os.Remove(certFile.Name())
+	if _, err := certFile.WriteString(certPEM); err != nil {
+		t.Fatal(err)
+	}
 	certFile.Close()
 
 	keyFile, err := os.CreateTemp("", "key-*.pem")
@@ -541,6 +559,9 @@ func TestTLSReloaderWithFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer os.Remove(keyFile.Name())
+	if _, err := keyFile.WriteString(keyPEM); err != nil {
+		t.Fatal(err)
+	}
 	keyFile.Close()
 
 	logger := &MockLogger{}
@@ -556,10 +577,17 @@ func TestTLSReloaderWithFiles(t *testing.T) {
 }
 
 func TestTLSReloaderNonexistentCert(t *testing.T) {
-	logger := &MockLogger{}
-	reloader := NewTLSReloader("/nonexistent/cert.pem", "", logger)
+	keyFile, err := os.CreateTemp("", "key-*.pem")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(keyFile.Name())
+	keyFile.Close()
 
-	err := reloader.Reload()
+	logger := &MockLogger{}
+	reloader := NewTLSReloader("/nonexistent/cert.pem", keyFile.Name(), logger)
+
+	err = reloader.Reload()
 	if err == nil {
 		t.Error("Expected error for nonexistent cert file")
 	}

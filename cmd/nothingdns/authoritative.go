@@ -63,7 +63,10 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 	records := z.Lookup(qname, typeToString(qtype))
 	if len(records) > 0 {
 		var resp *protocol.Message
-		if signer, ok := h.zoneSigners[z.Origin]; ok && wantsDNSSEC {
+		h.zoneSignersMu.RLock()
+		signer, ok := h.zoneSigners[z.Origin]
+		h.zoneSignersMu.RUnlock()
+		if ok && wantsDNSSEC {
 			resp = h.buildSignedResponse(r, records, signer, true)
 		} else {
 			resp = h.buildResponse(r, records)
@@ -105,7 +108,10 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 					synthRecords[i].Name = qname
 				}
 				var resp *protocol.Message
-				if signer, ok := h.zoneSigners[z.Origin]; ok && wantsDNSSEC {
+				h.zoneSignersMu.RLock()
+				signer, ok := h.zoneSigners[z.Origin]
+				h.zoneSignersMu.RUnlock()
+				if ok && wantsDNSSEC {
 					resp = h.buildSignedResponse(r, synthRecords, signer, true)
 				} else {
 					resp = h.buildResponse(r, synthRecords)

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"crypto/tls"
 	"fmt"
 	"os"
 	"os/signal"
@@ -306,16 +307,14 @@ func NewTLSReloader(certFile, keyFile string, logger Logger) *TLSReloader {
 
 // Reload reloads TLS certificates
 func (r *TLSReloader) Reload() error {
-	// Verify files exist and are readable
-	if r.certFile != "" {
-		if _, err := os.Stat(r.certFile); err != nil {
-			return err
-		}
+	if r.certFile == "" && r.keyFile == "" {
+		return nil
 	}
-	if r.keyFile != "" {
-		if _, err := os.Stat(r.keyFile); err != nil {
-			return err
-		}
+	if r.certFile == "" || r.keyFile == "" {
+		return fmt.Errorf("both certificate and key files are required")
+	}
+	if _, err := tls.LoadX509KeyPair(r.certFile, r.keyFile); err != nil {
+		return err
 	}
 
 	if r.logger != nil {

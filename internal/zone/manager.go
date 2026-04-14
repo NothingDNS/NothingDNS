@@ -243,7 +243,7 @@ func (m *Manager) CreateZone(origin string, defaultTTL uint32, soa *SOARecord, n
 
 	// Write zone file if zoneDir is set
 	if m.zoneDir != "" {
-		path := filepath.Join(m.zoneDir, strings.TrimSuffix(origin, ".")+".zone")
+		path := filepath.Join(m.zoneDir, sanitizeZoneFileName(origin)+".zone")
 		if err := m.writeZoneFile(z, path); err != nil {
 			// Zone is loaded in memory; log the error but don't fail the operation
 			if m.logger != nil {
@@ -464,6 +464,18 @@ func (m *Manager) ExportZone(name string) (string, error) {
 	return WriteZone(z)
 }
 
+// sanitizeZoneFileName removes path traversal characters from a zone name
+// to ensure it is safe to use as a file name.
+func sanitizeZoneFileName(name string) string {
+	name = strings.TrimSpace(name)
+	name = strings.TrimSuffix(name, ".")
+	// Remove any path separators or parent-directory references
+	name = strings.ReplaceAll(name, "/", "_")
+	name = strings.ReplaceAll(name, "\\", "_")
+	name = strings.ReplaceAll(name, "..", "_")
+	return name
+}
+
 // normalizeZoneName ensures a zone name is lowercase with a trailing dot.
 func normalizeZoneName(name string) string {
 	name = strings.TrimSpace(name)
@@ -537,7 +549,7 @@ func (m *Manager) PersistZone(zoneName string) error {
 
 	// If no existing file path, construct one from zoneDir
 	if path == "" {
-		path = filepath.Join(dir, zoneName+".zone")
+		path = filepath.Join(dir, sanitizeZoneFileName(zoneName)+".zone")
 		m.mu.Lock()
 		m.files[zoneName] = path
 		m.mu.Unlock()
