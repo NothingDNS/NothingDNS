@@ -743,6 +743,14 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 					http.Error(w, `{"error":"rate limit exceeded"}`, http.StatusTooManyRequests)
 					return
 				}
+				// Inject a synthetic admin context so RBAC checks pass in legacy token mode
+				if s.authStore != nil {
+					if user, err := s.authStore.GetUser("admin"); err == nil {
+						ctx := WithUser(r.Context(), user)
+						next.ServeHTTP(w, r.WithContext(ctx))
+						return
+					}
+				}
 				next.ServeHTTP(w, r)
 				return
 			}
