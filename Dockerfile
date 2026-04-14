@@ -58,10 +58,6 @@ USER 1000
 # 9153/tcp - Prometheus metrics
 EXPOSE 53/udp 53/tcp 853/tcp 443/tcp 8080/tcp 9153/tcp
 
-# Health check - probe /health endpoint
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD wget -qO- http://localhost:8080/health || exit 1
-
 # Set working directory
 WORKDIR /data
 
