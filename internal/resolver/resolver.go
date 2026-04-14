@@ -711,7 +711,7 @@ func (t *StdioTransport) QueryContext(ctx context.Context, msg *protocol.Message
 }
 
 func (t *StdioTransport) queryUDP(ctx context.Context, msg *protocol.Message, addr string) (*protocol.Message, error) {
-	buf := make([]byte, 0, 512)
+	buf := make([]byte, 512)
 	n, err := msg.Pack(buf)
 	if err != nil {
 		return nil, fmt.Errorf("resolver: pack UDP: %w", err)
@@ -755,7 +755,7 @@ func (t *StdioTransport) queryUDP(ctx context.Context, msg *protocol.Message, ad
 }
 
 func (t *StdioTransport) queryTCP(ctx context.Context, msg *protocol.Message, addr string) (*protocol.Message, error) {
-	buf := make([]byte, 0, 65535)
+	buf := make([]byte, 65535)
 	n, err := msg.Pack(buf)
 	if err != nil {
 		return nil, fmt.Errorf("resolver: pack TCP: %w", err)
