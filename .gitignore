@@ -66,6 +66,7 @@ go.work
 
 # Test run configs (local)
 configs/test-run.yaml
+local-test.yaml
 
 # Temporary files
 /tmp/
