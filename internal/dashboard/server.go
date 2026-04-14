@@ -290,9 +290,10 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			token = c.Value
 		}
 	}
-	// NOTE: Query parameter token acceptance is intentionally NOT supported.
-	// Tokens in URLs are logged in access logs, proxy logs, and browser history.
-	// Use the Authorization header (Bearer token) or ndns_token cookie instead.
+	// WebSocket fallback: query parameter (browser WebSocket API cannot send custom headers)
+	if token == "" {
+		token = r.URL.Query().Get("token")
+	}
 
 	// Validate authentication
 	s.mu.RLock()
@@ -305,24 +306,21 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate against auth store if available, otherwise use legacy token
-	if authStore != nil {
-		if _, err := authStore.ValidateToken(token); err != nil {
-			// Log without exposing internal error details to client
-			util.Warnf("dashboard: websocket auth failed: token validation error")
-			http.Error(w, "invalid token", http.StatusUnauthorized)
-			return
+	// Validate token: check legacy token first, then JWT (matches auth middleware behavior)
+	valid := false
+	if authToken != "" && len(token) == len(authToken) {
+		if subtle.ConstantTimeCompare([]byte(token), []byte(authToken)) == 1 {
+			valid = true
 		}
-	} else if authToken != "" {
-		// Legacy token-only mode: constant-time comparison
-		if !secureCompare(token, authToken) {
-			util.Warnf("dashboard: websocket auth failed: invalid legacy token")
-			http.Error(w, "invalid token", http.StatusUnauthorized)
-			return
+	}
+	if !valid && authStore != nil {
+		if _, err := authStore.ValidateToken(token); err == nil {
+			valid = true
 		}
-	} else {
-		// SECURITY: deny if neither auth store nor legacy token configured (fail closed)
-		http.Error(w, "authentication required: auth not configured", http.StatusUnauthorized)
+	}
+	if !valid {
+		util.Warnf("dashboard: websocket auth failed: invalid token")
+		http.Error(w, "invalid token", http.StatusUnauthorized)
 		return
 	}
 

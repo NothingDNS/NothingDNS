@@ -725,6 +725,11 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			}
 		}
 
+		// WebSocket fallback: query parameter (browser WebSocket API cannot send headers)
+		if token == "" && r.URL.Path == "/ws" {
+			token = r.URL.Query().Get("token")
+		}
+
 		// Validate token
 		if token != "" {
 			// First try old-style shared token (auth_token or auth_secret as fallback)

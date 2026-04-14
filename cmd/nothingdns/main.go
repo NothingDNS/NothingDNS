@@ -351,7 +351,13 @@ func run() error {
 	dashboardServer := dashboard.NewServer()
 	dashboardServer.SetAllowedOrigins(cfg.Server.HTTP.AllowedOrigins)
 	dashboardServer.SetAuthStore(authStore)
-	dashboardServer.SetAuthToken(cfg.Server.HTTP.AuthSecret)
+	// Dashboard server uses the same legacy token resolution as the auth middleware:
+	// explicit auth_token takes precedence, then auth_secret as fallback.
+	legacyToken := cfg.Server.HTTP.AuthToken
+	if legacyToken == "" {
+		legacyToken = cfg.Server.HTTP.AuthSecret
+	}
+	dashboardServer.SetAuthToken(legacyToken)
 	dashboardServer.SetZoneManager(zoneManagerInstance)
 	apiServer := api.NewServer(cfg.Server.HTTP, zoneManagerInstance, dnsCache, func() error {
 		logger.Info("Reloading configuration via API...")
