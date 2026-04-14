@@ -484,16 +484,6 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 
 	// Forward to upstream only if configured (authoritative-only mode skips this)
 	if h.upstream != nil || h.loadBalancer != nil {
-		// Authoritative-only mode: if no resolver and no zone match, return NXDOMAIN
-		if h.resolver == nil && !matchedZone {
-			h.logger.Debugf("Authoritative-only mode: %s not in any zone, returning NXDOMAIN", qname)
-			if h.metrics != nil {
-				h.metrics.RecordResponse(protocol.RcodeNameError)
-			}
-			sendError(w, r, protocol.RcodeNameError)
-			return
-		}
-
 		h.logger.Debugf("Forwarding query for %s to upstream", qname)
 		if h.metrics != nil {
 			if len(h.config.Upstream.Servers) > 0 {
