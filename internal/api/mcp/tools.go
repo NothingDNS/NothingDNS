@@ -4,7 +4,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/nothingdns/nothingdns/internal/auth"
 )
+
+// AuthProvider validates tokens and checks roles for MCP tool calls.
+type AuthProvider interface {
+	ValidateToken(token string) (*auth.User, error)
+	HasRole(username string, required auth.Role) bool
+}
 
 // DNSToolsHandler implements the Handler interface for DNS operations
 type DNSToolsHandler struct {
@@ -13,6 +21,7 @@ type DNSToolsHandler struct {
 	dnsResolver   DNSResolver
 	blocklist     BlocklistManager
 	statsProvider StatsProvider
+	authProvider  AuthProvider
 }
 
 // ZoneManager interface for zone operations
@@ -111,6 +120,32 @@ func NewDNSToolsHandler(zm ZoneManager, cache CacheManager, resolver DNSResolver
 		blocklist:     bl,
 		statsProvider: stats,
 	}
+}
+
+// WithAuth sets the authentication provider for the handler.
+func (h *DNSToolsHandler) WithAuth(authProvider AuthProvider) *DNSToolsHandler {
+	h.authProvider = authProvider
+	return h
+}
+
+// requireAuth checks that the caller has provided a valid token with at least the required role.
+// If no auth provider is configured, the check is skipped (backward compatible).
+func (h *DNSToolsHandler) requireAuth(args map[string]interface{}, requiredRole auth.Role) error {
+	if h.authProvider == nil {
+		return nil
+	}
+	token := getString(args, "auth_token")
+	if token == "" {
+		return fmt.Errorf("auth_token required for this operation")
+	}
+	user, err := h.authProvider.ValidateToken(token)
+	if err != nil {
+		return fmt.Errorf("invalid auth_token")
+	}
+	if !h.authProvider.HasRole(user.Username, requiredRole) {
+		return fmt.Errorf("insufficient privileges")
+	}
+	return nil
 }
 
 // ListTools returns the list of available tools
@@ -259,7 +294,7 @@ func (h *DNSToolsHandler) CallTool(name string, args map[string]interface{}) (*T
 	case "cache_stats":
 		return h.callCacheStats()
 	case "cache_flush":
-		return h.callCacheFlush()
+		return h.callCacheFlush(args)
 	case "blocklist_check":
 		return h.callBlocklistCheck(args)
 	case "server_stats":
@@ -321,6 +356,10 @@ func (h *DNSToolsHandler) callZoneGet(args map[string]interface{}) (*ToolResult,
 }
 
 func (h *DNSToolsHandler) callZoneCreate(args map[string]interface{}) (*ToolResult, error) {
+	if err := h.requireAuth(args, auth.RoleOperator); err != nil {
+		return errorResult(err.Error()), nil
+	}
+
 	name := getString(args, "name")
 	if name == "" {
 		return nil, fmt.Errorf("name is required")
@@ -343,6 +382,10 @@ func (h *DNSToolsHandler) callZoneCreate(args map[string]interface{}) (*ToolResu
 }
 
 func (h *DNSToolsHandler) callZoneDelete(args map[string]interface{}) (*ToolResult, error) {
+	if err := h.requireAuth(args, auth.RoleOperator); err != nil {
+		return errorResult(err.Error()), nil
+	}
+
 	name := getString(args, "name")
 	if name == "" {
 		return nil, fmt.Errorf("name is required")
@@ -360,6 +403,10 @@ func (h *DNSToolsHandler) callZoneDelete(args map[string]interface{}) (*ToolResu
 }
 
 func (h *DNSToolsHandler) callRecordAdd(args map[string]interface{}) (*ToolResult, error) {
+	if err := h.requireAuth(args, auth.RoleOperator); err != nil {
+		return errorResult(err.Error()), nil
+	}
+
 	zone := getString(args, "zone")
 	name := getString(args, "name")
 	rtype := getString(args, "type")
@@ -382,6 +429,10 @@ func (h *DNSToolsHandler) callRecordAdd(args map[string]interface{}) (*ToolResul
 }
 
 func (h *DNSToolsHandler) callRecordDelete(args map[string]interface{}) (*ToolResult, error) {
+	if err := h.requireAuth(args, auth.RoleOperator); err != nil {
+		return errorResult(err.Error()), nil
+	}
+
 	zone := getString(args, "zone")
 	name := getString(args, "name")
 	rtype := getString(args, "type")
@@ -430,7 +481,11 @@ func (h *DNSToolsHandler) callCacheStats() (*ToolResult, error) {
 	return jsonResult(stats), nil
 }
 
-func (h *DNSToolsHandler) callCacheFlush() (*ToolResult, error) {
+func (h *DNSToolsHandler) callCacheFlush(args map[string]interface{}) (*ToolResult, error) {
+	if err := h.requireAuth(args, auth.RoleOperator); err != nil {
+		return errorResult(err.Error()), nil
+	}
+
 	if h.cache == nil {
 		return errorResult("Cache not configured"), nil
 	}

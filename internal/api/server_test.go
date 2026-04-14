@@ -130,11 +130,12 @@ func TestAPICacheFlush(t *testing.T) {
 	c := cache.New(cacheCfg)
 
 	server := NewServer(cfg, nil, c, nil, nil, nil, nil)
+	token := attachTestAuth(server)
 	server.Start()
 	time.Sleep(100 * time.Millisecond)
 
 	req, _ := http.NewRequest("POST", "http://127.0.0.1:18082/api/v1/cache/flush", nil)
-	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("Failed to flush cache: %v", err)

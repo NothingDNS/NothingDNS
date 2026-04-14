@@ -65,7 +65,7 @@ func TestVerifyPassword(t *testing.T) {
 }
 
 func TestGenerateToken(t *testing.T) {
-	store := NewStore(&Config{
+	store, _ := NewStore(&Config{
 		Secret: "test-secret-key-32-bytes-long!!!",
 		Users: []User{
 			{Username: "admin", Password: "adminpass", Role: RoleAdmin},
@@ -109,7 +109,7 @@ func TestGenerateToken(t *testing.T) {
 }
 
 func TestValidateToken(t *testing.T) {
-	store := NewStore(&Config{
+	store, _ := NewStore(&Config{
 		Secret: "test-secret-key-32-bytes-long!!!",
 		Users: []User{
 			{Username: "admin", Password: "adminpass", Role: RoleAdmin},
@@ -154,7 +154,7 @@ func TestValidateToken(t *testing.T) {
 }
 
 func TestRevokeToken(t *testing.T) {
-	store := NewStore(&Config{
+	store, _ := NewStore(&Config{
 		Secret:      "test-secret",
 		Users:       []User{{Username: "admin", Password: "pass", Role: RoleAdmin}},
 		TokenExpiry: Duration{Duration: 24 * time.Hour},
@@ -179,7 +179,7 @@ func TestRevokeToken(t *testing.T) {
 }
 
 func TestRevokeAllTokens(t *testing.T) {
-	store := NewStore(&Config{
+	store, _ := NewStore(&Config{
 		Secret:      "test-secret",
 		Users:       []User{{Username: "admin", Password: "pass", Role: RoleAdmin}},
 		TokenExpiry: Duration{Duration: 24 * time.Hour},
@@ -210,7 +210,7 @@ func TestRevokeAllTokens(t *testing.T) {
 }
 
 func TestCreateUser(t *testing.T) {
-	store := NewStore(&Config{
+	store, _ := NewStore(&Config{
 		Secret:      "test-secret",
 		Users:       []User{{Username: "admin", Password: "pass", Role: RoleAdmin}},
 		TokenExpiry: Duration{Duration: 24 * time.Hour},
@@ -251,7 +251,7 @@ func TestCreateUser(t *testing.T) {
 }
 
 func TestUpdateUser(t *testing.T) {
-	store := NewStore(&Config{
+	store, _ := NewStore(&Config{
 		Secret:      "test-secret",
 		Users:       []User{{Username: "admin", Password: "adminpass", Role: RoleAdmin}},
 		TokenExpiry: Duration{Duration: 24 * time.Hour},
@@ -292,7 +292,7 @@ func TestUpdateUser(t *testing.T) {
 }
 
 func TestDeleteUser(t *testing.T) {
-	store := NewStore(&Config{
+	store, _ := NewStore(&Config{
 		Secret: "test-secret",
 		Users: []User{
 			{Username: "admin", Password: "pass", Role: RoleAdmin},
@@ -321,7 +321,7 @@ func TestDeleteUser(t *testing.T) {
 }
 
 func TestListUsers(t *testing.T) {
-	store := NewStore(&Config{
+	store, _ := NewStore(&Config{
 		Secret: "test-secret",
 		Users: []User{
 			{Username: "admin", Password: "pass", Role: RoleAdmin},
@@ -348,7 +348,7 @@ func TestListUsers(t *testing.T) {
 }
 
 func TestGetUser(t *testing.T) {
-	store := NewStore(&Config{
+	store, _ := NewStore(&Config{
 		Secret:      "test-secret",
 		Users:       []User{{Username: "admin", Password: "pass", Role: RoleAdmin}},
 		TokenExpiry: Duration{Duration: 24 * time.Hour},
@@ -376,7 +376,7 @@ func TestGetUser(t *testing.T) {
 }
 
 func TestHasRole(t *testing.T) {
-	store := NewStore(&Config{
+	store, _ := NewStore(&Config{
 		Secret: "test-secret",
 		Users: []User{
 			{Username: "admin", Password: "pass", Role: RoleAdmin},
@@ -418,7 +418,7 @@ func TestSaveLoad(t *testing.T) {
 	adminHash := HashPassword("adminpass", nil)
 	operatorHash := HashPassword("oppass", nil)
 
-	store := NewStore(&Config{
+	store, _ := NewStore(&Config{
 		Secret: "test-secret",
 		Users: []User{
 			{Username: "admin", Hash: adminHash, Role: RoleAdmin},
@@ -437,7 +437,7 @@ func TestSaveLoad(t *testing.T) {
 	}
 
 	// Load into new store
-	store2 := NewStore(&Config{
+	store2, _ := NewStore(&Config{
 		Secret:      "test-secret",
 		TokenExpiry: Duration{Duration: 24 * time.Hour},
 	})
@@ -468,7 +468,7 @@ func TestSaveLoad(t *testing.T) {
 }
 
 func TestSaveLoadMissingFile(t *testing.T) {
-	store := NewStore(&Config{
+	store, _ := NewStore(&Config{
 		Secret:      "test-secret",
 		TokenExpiry: Duration{Duration: 24 * time.Hour},
 	})
@@ -544,7 +544,10 @@ func TestVerifyTokenSignature(t *testing.T) {
 }
 
 func TestDefaultConfig(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg, err := DefaultConfig()
+	if err != nil {
+		t.Fatalf("DefaultConfig() error = %v", err)
+	}
 	if cfg.Secret == "" {
 		t.Errorf("DefaultConfig() returned empty secret")
 	}
@@ -563,7 +566,7 @@ func TestDuration(t *testing.T) {
 
 func TestStoreNoUsers(t *testing.T) {
 	// Store with no users should create default admin
-	store := NewStore(&Config{
+	store, _ := NewStore(&Config{
 		Secret:      "test-secret",
 		Users:       nil,
 		TokenExpiry: Duration{Duration: 24 * time.Hour},
@@ -584,7 +587,7 @@ func TestStoreNoUsers(t *testing.T) {
 }
 
 func TestTokenExpiry(t *testing.T) {
-	store := NewStore(&Config{
+	store, _ := NewStore(&Config{
 		Secret:      "test-secret",
 		Users:       []User{{Username: "admin", Password: "pass", Role: RoleAdmin}},
 		TokenExpiry: Duration{Duration: 1 * time.Millisecond}, // Very short for testing
@@ -633,7 +636,7 @@ func TestPasswordHashSaltIndependence(t *testing.T) {
 }
 
 func TestStoreConcurrentAccess(t *testing.T) {
-	store := NewStore(&Config{
+	store, _ := NewStore(&Config{
 		Secret:      "test-secret",
 		Users:       []User{{Username: "admin", Password: "pass", Role: RoleAdmin}},
 		TokenExpiry: Duration{Duration: 24 * time.Hour},

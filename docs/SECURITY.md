@@ -51,6 +51,14 @@ NothingDNS has **zero external dependencies**. This minimizes the attack surface
 - IP-based access control for queries and management
 - Rate limiting (RRL) for query amplification prevention
 
+## Authorization Model
+
+### RBAC and Zone Access
+
+NothingDNS uses role-based access control with three levels: `admin`, `operator`, and `viewer`.
+
+**Important**: All authenticated operators have **global access** to all zones. There is no per-zone ownership, multi-tenant isolation, or object-level authorization. If you require strict separation between zones, run separate NothingDNS instances.
+
 ## Known Limitations
 
 - DNSSEC signing is performed on-the-fly (not pre-signed). High-QPS DNSSEC-signed zones may experience elevated CPU usage.

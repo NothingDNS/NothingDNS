@@ -65,21 +65,28 @@ type Duration struct {
 }
 
 // DefaultConfig returns a default auth configuration.
-func DefaultConfig() *Config {
-	return &Config{
-		Secret:      generateSecret(32),
-		TokenExpiry: Duration{24 * time.Hour},
+func DefaultConfig() (*Config, error) {
+	secret, err := generateSecret(32)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate auth secret: %w", err)
 	}
+	return &Config{
+		Secret:      secret,
+		TokenExpiry: Duration{24 * time.Hour},
+	}, nil
 }
 
 // NewStore creates a new auth store.
-func NewStore(cfg *Config) *Store {
+func NewStore(cfg *Config) (*Store, error) {
 	var secret []byte
 	if cfg.Secret == "" {
 		// Generate a random secret for this run. This is cryptographically weak
 		// (secret is not persisted) but prevents token forgery until a proper
 		// auth_secret is configured. Tokens will be invalidated on server restart.
-		generated := generateSecret(32)
+		generated, err := generateSecret(32)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate auth secret: %w", err)
+		}
 		secret = []byte(generated)
 		util.Warnf("AUTH: No auth_secret configured. Generated temporary secret for this run. " +
 			"Set auth_secret in config for production deployments to ensure token persistence across restarts.")
@@ -118,7 +125,7 @@ func NewStore(cfg *Config) *Store {
 		util.Warnf("No users configured. Default admin account created. Set password via dashboard or API before use.")
 	}
 
-	return s
+	return s, nil
 }
 
 // HashPassword hashes a password with a random salt using PBKDF2-HMAC-SHA512.
@@ -574,8 +581,10 @@ func (s *Store) SetTokenFilePath(path string) {
 }
 
 // generateSecret generates a random secret for HMAC signing.
-func generateSecret(n int) string {
+func generateSecret(n int) (string, error) {
 	b := make([]byte, n)
-	rand.Read(b)
-	return base64.URLEncoding.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.URLEncoding.EncodeToString(b), nil
 }

@@ -20,6 +20,46 @@ import (
 	"github.com/nothingdns/nothingdns/internal/zone"
 )
 
+// newTestServerWithAuth creates a server with a test auth store and returns a valid admin token.
+func newTestServerWithAuth(t *testing.T, cfg config.HTTPConfig, zm *zone.Manager, c *cache.Cache) (*Server, string) {
+	authCfg := &auth.Config{
+		Secret:      "test-secret-for-tests",
+		Users:       []auth.User{{Username: "testadmin", Password: "testpass", Role: auth.RoleAdmin}},
+		TokenExpiry: auth.Duration{Duration: 24 * time.Hour},
+	}
+	store, _ := auth.NewStore(authCfg)
+	srv := NewServer(cfg, zm, c, nil, nil, nil, nil).WithAuth(store)
+	token, err := store.GenerateToken("testadmin", 24*time.Hour)
+	if err != nil {
+		t.Fatalf("failed to generate test token: %v", err)
+	}
+	return srv, token.Token
+}
+
+// withTestAdminAuth injects the admin user into the request context and sets the Bearer token.
+func withTestAdminAuth(req *http.Request, token string) *http.Request {
+	req.Header.Set("Authorization", "Bearer "+token)
+	user := &auth.User{Username: "testadmin", Role: auth.RoleAdmin}
+	req = req.WithContext(WithUser(req.Context(), user))
+	return req
+}
+
+// attachTestAuth adds a test auth store to an existing server and returns a valid admin token.
+func attachTestAuth(s *Server) string {
+	authCfg := &auth.Config{
+		Secret:      "test-secret-for-tests",
+		Users:       []auth.User{{Username: "testadmin", Password: "testpass", Role: auth.RoleAdmin}},
+		TokenExpiry: auth.Duration{Duration: 24 * time.Hour},
+	}
+	store, _ := auth.NewStore(authCfg)
+	s.WithAuth(store)
+	token, err := store.GenerateToken("testadmin", 24*time.Hour)
+	if err != nil {
+		panic(err)
+	}
+	return token.Token
+}
+
 // ---------------------------------------------------------------------------
 // handleStatus: cover the s.cluster != nil branch (lines 170-178)
 // ---------------------------------------------------------------------------
@@ -215,9 +255,9 @@ $TTL 3600
 	}
 
 	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
-	srv := NewServer(cfg, zm, nil, nil, nil, nil, nil)
+	srv, token := newTestServerWithAuth(t, cfg, zm, nil)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/zones/reload?zone=testzone.com.", nil)
+	req := withTestAdminAuth(httptest.NewRequest(http.MethodPost, "/api/v1/zones/reload?zone=testzone.com.", nil), token)
 	rec := httptest.NewRecorder()
 	srv.handleZoneReload(rec, req)
 
@@ -268,9 +308,9 @@ func TestHandleZoneReload_DeleteMethodNotAllowed(t *testing.T) {
 
 func TestHandleServerConfig(t *testing.T) {
 	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
-	srv := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+	srv, token := newTestServerWithAuth(t, cfg, nil, nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/server/config", nil)
+	req := withTestAdminAuth(httptest.NewRequest(http.MethodGet, "/api/v1/server/config", nil), token)
 	rec := httptest.NewRecorder()
 	srv.handleServerConfig(rec, req)
 
@@ -311,9 +351,9 @@ func TestHandleDashboardStats(t *testing.T) {
 	c := cache.New(cacheCfg)
 
 	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
-	srv := NewServer(cfg, nil, c, nil, nil, nil, nil)
+	srv, token := newTestServerWithAuth(t, cfg, nil, c)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/dashboard/stats", nil)
+	req := withTestAdminAuth(httptest.NewRequest(http.MethodGet, "/api/dashboard/stats", nil), token)
 	rec := httptest.NewRecorder()
 	srv.handleDashboardStats(rec, req)
 
@@ -333,9 +373,9 @@ func TestHandleDashboardStats(t *testing.T) {
 
 func TestHandleDashboardStats_NoCache(t *testing.T) {
 	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
-	srv := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+	srv, token := newTestServerWithAuth(t, cfg, nil, nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/dashboard/stats", nil)
+	req := withTestAdminAuth(httptest.NewRequest(http.MethodGet, "/api/dashboard/stats", nil), token)
 	rec := httptest.NewRecorder()
 	srv.handleDashboardStats(rec, req)
 
@@ -350,9 +390,9 @@ func TestHandleDashboardStats_NoCache(t *testing.T) {
 
 func TestHandleDNSSECStatus_Disabled(t *testing.T) {
 	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
-	srv := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+	srv, token := newTestServerWithAuth(t, cfg, nil, nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/dnssec/status", nil)
+	req := withTestAdminAuth(httptest.NewRequest(http.MethodGet, "/api/v1/dnssec/status", nil), token)
 	rec := httptest.NewRecorder()
 	srv.handleDNSSECStatus(rec, req)
 
@@ -390,9 +430,9 @@ func TestHandleDNSSECStatus_MethodNotAllowed(t *testing.T) {
 
 func TestHandleDNSSECKeys_NoSigners(t *testing.T) {
 	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
-	srv := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+	srv, token := newTestServerWithAuth(t, cfg, nil, nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/dnssec/keys", nil)
+	req := withTestAdminAuth(httptest.NewRequest(http.MethodGet, "/api/v1/dnssec/keys", nil), token)
 	rec := httptest.NewRecorder()
 	srv.handleDNSSECKeys(rec, req)
 
@@ -551,9 +591,9 @@ func TestHandleListZones_WithZones(t *testing.T) {
 	zm.LoadZone(testZone, "")
 
 	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
-	srv := NewServer(cfg, zm, nil, nil, nil, nil, nil)
+	srv, token := newTestServerWithAuth(t, cfg, zm, nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil)
+	req := withTestAdminAuth(httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil), token)
 	rec := httptest.NewRecorder()
 	srv.handleZones(rec, req)
 
@@ -596,9 +636,9 @@ func TestHandleGetZone(t *testing.T) {
 	zm.LoadZone(testZone, "")
 
 	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
-	srv := NewServer(cfg, zm, nil, nil, nil, nil, nil)
+	srv, token := newTestServerWithAuth(t, cfg, zm, nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/zones/example.com.", nil)
+	req := withTestAdminAuth(httptest.NewRequest(http.MethodGet, "/api/v1/zones/example.com.", nil), token)
 	rec := httptest.NewRecorder()
 	srv.handleZoneActions(rec, req)
 
@@ -619,9 +659,9 @@ func TestHandleGetZone(t *testing.T) {
 func TestHandleGetZone_NotFound(t *testing.T) {
 	zm := zone.NewManager()
 	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
-	srv := NewServer(cfg, zm, nil, nil, nil, nil, nil)
+	srv, token := newTestServerWithAuth(t, cfg, zm, nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/zones/nonexistent.com.", nil)
+	req := withTestAdminAuth(httptest.NewRequest(http.MethodGet, "/api/v1/zones/nonexistent.com.", nil), token)
 	rec := httptest.NewRecorder()
 	srv.handleZoneActions(rec, req)
 
@@ -644,9 +684,9 @@ func TestHandleDeleteZone(t *testing.T) {
 	zm.LoadZone(testZone, "")
 
 	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
-	srv := NewServer(cfg, zm, nil, nil, nil, nil, nil)
+	srv, token := newTestServerWithAuth(t, cfg, zm, nil)
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/zones/delete.me.", nil)
+	req := withTestAdminAuth(httptest.NewRequest(http.MethodDelete, "/api/v1/zones/delete.me.", nil), token)
 	rec := httptest.NewRecorder()
 	srv.handleZoneActions(rec, req)
 
@@ -663,9 +703,9 @@ func TestHandleDeleteZone(t *testing.T) {
 func TestHandleDeleteZone_NotFound(t *testing.T) {
 	zm := zone.NewManager()
 	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
-	srv := NewServer(cfg, zm, nil, nil, nil, nil, nil)
+	srv, token := newTestServerWithAuth(t, cfg, zm, nil)
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/zones/nonexistent.com.", nil)
+	req := withTestAdminAuth(httptest.NewRequest(http.MethodDelete, "/api/v1/zones/nonexistent.com.", nil), token)
 	rec := httptest.NewRecorder()
 	srv.handleZoneActions(rec, req)
 
@@ -690,9 +730,9 @@ func TestHandleExportZone(t *testing.T) {
 	zm.LoadZone(testZone, "")
 
 	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
-	srv := NewServer(cfg, zm, nil, nil, nil, nil, nil)
+	srv, token := newTestServerWithAuth(t, cfg, zm, nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/zones/export.com./export", nil)
+	req := withTestAdminAuth(httptest.NewRequest(http.MethodGet, "/api/v1/zones/export.com./export", nil), token)
 	rec := httptest.NewRecorder()
 	srv.handleZoneActions(rec, req)
 
@@ -708,9 +748,9 @@ func TestHandleExportZone(t *testing.T) {
 func TestHandleExportZone_NotFound(t *testing.T) {
 	zm := zone.NewManager()
 	cfg := config.HTTPConfig{Enabled: true, Bind: "127.0.0.1:0"}
-	srv := NewServer(cfg, zm, nil, nil, nil, nil, nil)
+	srv, token := newTestServerWithAuth(t, cfg, zm, nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/zones/nonexistent.com./export", nil)
+	req := withTestAdminAuth(httptest.NewRequest(http.MethodGet, "/api/v1/zones/nonexistent.com./export", nil), token)
 	rec := httptest.NewRecorder()
 	srv.handleZoneActions(rec, req)
 
@@ -728,10 +768,10 @@ func TestHandleConfigGet(t *testing.T) {
 	getter := func() *config.Config {
 		return &config.Config{}
 	}
-	srv := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+	srv, token := newTestServerWithAuth(t, cfg, nil, nil)
 	srv.WithConfigGetter(getter)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/config", nil)
+	req := withTestAdminAuth(httptest.NewRequest(http.MethodGet, "/api/v1/config", nil), token)
 	rec := httptest.NewRecorder()
 	srv.handleConfigGet(rec, req)
 
@@ -777,9 +817,9 @@ func TestHandleZoneActions_SubpathNotFound(t *testing.T) {
 	testZone.SOA = &zone.SOARecord{}
 	zm.LoadZone(testZone, "")
 
-	srv := NewServer(cfg, zm, nil, nil, nil, nil, nil)
+	srv, token := newTestServerWithAuth(t, cfg, zm, nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/zones/test.com./invalid-subpath", nil)
+	req := withTestAdminAuth(httptest.NewRequest(http.MethodGet, "/api/v1/zones/test.com./invalid-subpath", nil), token)
 	rec := httptest.NewRecorder()
 	srv.handleZoneActions(rec, req)
 

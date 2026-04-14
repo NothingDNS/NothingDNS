@@ -150,8 +150,9 @@ func TestHandleZones(t *testing.T) {
 			Bind:    "127.0.0.1:0",
 		}
 		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+		token := attachTestAuth(server)
 
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil)
+		req := withTestAdminAuth(httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil), token)
 		rec := httptest.NewRecorder()
 
 		server.handleZones(rec, req)
@@ -194,8 +195,9 @@ func TestHandleZones(t *testing.T) {
 		zm.LoadZone(testZone, "")
 
 		server := NewServer(cfg, zm, nil, nil, nil, nil, nil)
+		token := attachTestAuth(server)
 
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil)
+		req := withTestAdminAuth(httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil), token)
 		rec := httptest.NewRecorder()
 
 		server.handleZones(rec, req)
@@ -224,8 +226,9 @@ func TestHandleZones(t *testing.T) {
 			Bind:    "127.0.0.1:0",
 		}
 		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+		token := attachTestAuth(server)
 
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/zones", strings.NewReader(`{"name":"test.com."}`))
+		req := withTestAdminAuth(httptest.NewRequest(http.MethodPost, "/api/v1/zones", strings.NewReader(`{"name":"test.com."}`)), token)
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
 
@@ -251,8 +254,9 @@ func TestHandleZones(t *testing.T) {
 			Bind:    "127.0.0.1:0",
 		}
 		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+		token := attachTestAuth(server)
 
-		req := httptest.NewRequest(http.MethodPut, "/api/v1/zones", nil)
+		req := withTestAdminAuth(httptest.NewRequest(http.MethodPut, "/api/v1/zones", nil), token)
 		rec := httptest.NewRecorder()
 
 		server.handleZones(rec, req)
@@ -268,8 +272,9 @@ func TestHandleZones(t *testing.T) {
 			Bind:    "127.0.0.1:0",
 		}
 		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+		token := attachTestAuth(server)
 
-		req := httptest.NewRequest(http.MethodDelete, "/api/v1/zones", nil)
+		req := withTestAdminAuth(httptest.NewRequest(http.MethodDelete, "/api/v1/zones", nil), token)
 		rec := httptest.NewRecorder()
 
 		server.handleZones(rec, req)
@@ -288,8 +293,9 @@ func TestHandleZoneReload(t *testing.T) {
 			Bind:    "127.0.0.1:0",
 		}
 		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+		token := attachTestAuth(server)
 
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/zones/reload", nil)
+		req := withTestAdminAuth(httptest.NewRequest(http.MethodPost, "/api/v1/zones/reload", nil), token)
 		rec := httptest.NewRecorder()
 
 		server.handleZoneReload(rec, req)
@@ -314,8 +320,9 @@ func TestHandleZoneReload(t *testing.T) {
 			Bind:    "127.0.0.1:0",
 		}
 		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+		token := attachTestAuth(server)
 
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/zones/reload?zone=example.com.", nil)
+		req := withTestAdminAuth(httptest.NewRequest(http.MethodPost, "/api/v1/zones/reload?zone=example.com.", nil), token)
 		rec := httptest.NewRecorder()
 
 		server.handleZoneReload(rec, req)
@@ -341,8 +348,9 @@ func TestHandleZoneReload(t *testing.T) {
 		}
 		zm := zone.NewManager()
 		server := NewServer(cfg, zm, nil, nil, nil, nil, nil)
+		token := attachTestAuth(server)
 
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/zones/reload?zone=nonexistent.com.", nil)
+		req := withTestAdminAuth(httptest.NewRequest(http.MethodPost, "/api/v1/zones/reload?zone=nonexistent.com.", nil), token)
 		rec := httptest.NewRecorder()
 
 		server.handleZoneReload(rec, req)
@@ -387,8 +395,9 @@ func TestHandleCacheStats(t *testing.T) {
 			Bind:    "127.0.0.1:0",
 		}
 		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+		token := attachTestAuth(server)
 
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/cache/stats", nil)
+		req := withTestAdminAuth(httptest.NewRequest(http.MethodGet, "/api/v1/cache/stats", nil), token)
 		rec := httptest.NewRecorder()
 
 		server.handleCacheStats(rec, req)
@@ -421,8 +430,9 @@ func TestHandleCacheStats(t *testing.T) {
 		c := cache.New(cacheCfg)
 
 		server := NewServer(cfg, nil, c, nil, nil, nil, nil)
+		token := attachTestAuth(server)
 
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/cache/stats", nil)
+		req := withTestAdminAuth(httptest.NewRequest(http.MethodGet, "/api/v1/cache/stats", nil), token)
 		rec := httptest.NewRecorder()
 
 		server.handleCacheStats(rec, req)
@@ -475,8 +485,9 @@ func TestHandleCacheFlush(t *testing.T) {
 			Bind:    "127.0.0.1:0",
 		}
 		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+		token := attachTestAuth(server)
 
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/cache/flush", nil)
+		req := withTestAdminAuth(httptest.NewRequest(http.MethodPost, "/api/v1/cache/flush", nil), token)
 		rec := httptest.NewRecorder()
 
 		server.handleCacheFlush(rec, req)
@@ -509,8 +520,9 @@ func TestHandleCacheFlush(t *testing.T) {
 		c := cache.New(cacheCfg)
 
 		server := NewServer(cfg, nil, c, nil, nil, nil, nil)
+		token := attachTestAuth(server)
 
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/cache/flush", nil)
+		req := withTestAdminAuth(httptest.NewRequest(http.MethodPost, "/api/v1/cache/flush", nil), token)
 		rec := httptest.NewRecorder()
 
 		server.handleCacheFlush(rec, req)
@@ -563,8 +575,9 @@ func TestHandleConfigReload(t *testing.T) {
 			Bind:    "127.0.0.1:0",
 		}
 		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+		token := attachTestAuth(server)
 
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/config/reload", nil)
+		req := withTestAdminAuth(httptest.NewRequest(http.MethodPost, "/api/v1/config/reload", nil), token)
 		rec := httptest.NewRecorder()
 
 		server.handleConfigReload(rec, req)
@@ -592,8 +605,9 @@ func TestHandleConfigReload(t *testing.T) {
 			return nil
 		}
 		server := NewServer(cfg, nil, nil, reloadFunc, nil, nil, nil)
+		token := attachTestAuth(server)
 
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/config/reload", nil)
+		req := withTestAdminAuth(httptest.NewRequest(http.MethodPost, "/api/v1/config/reload", nil), token)
 		rec := httptest.NewRecorder()
 
 		server.handleConfigReload(rec, req)
@@ -621,8 +635,9 @@ func TestHandleConfigReload(t *testing.T) {
 			return fmt.Errorf("config file not found")
 		}
 		server := NewServer(cfg, nil, nil, reloadFunc, nil, nil, nil)
+		token := attachTestAuth(server)
 
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/config/reload", nil)
+		req := withTestAdminAuth(httptest.NewRequest(http.MethodPost, "/api/v1/config/reload", nil), token)
 		rec := httptest.NewRecorder()
 
 		server.handleConfigReload(rec, req)
@@ -667,8 +682,10 @@ func TestHandleClusterStatus(t *testing.T) {
 			Bind:    "127.0.0.1:0",
 		}
 		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+		token := attachTestAuth(server)
 
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/cluster/status", nil)
+		req = withTestAdminAuth(req, token)
 		rec := httptest.NewRecorder()
 
 		server.handleClusterStatus(rec, req)
@@ -708,8 +725,10 @@ func TestHandleClusterStatus(t *testing.T) {
 		}
 
 		server := NewServer(cfg, nil, nil, nil, nil, c, nil)
+		token := attachTestAuth(server)
 
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/cluster/status", nil)
+		req = withTestAdminAuth(req, token)
 		rec := httptest.NewRecorder()
 
 		server.handleClusterStatus(rec, req)
@@ -754,8 +773,10 @@ func TestHandleClusterNodes(t *testing.T) {
 			Bind:    "127.0.0.1:0",
 		}
 		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+		token := attachTestAuth(server)
 
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/cluster/nodes", nil)
+		req = withTestAdminAuth(req, token)
 		rec := httptest.NewRecorder()
 
 		server.handleClusterNodes(rec, req)
@@ -792,8 +813,10 @@ func TestHandleClusterNodes(t *testing.T) {
 		}
 
 		server := NewServer(cfg, nil, nil, nil, nil, c, nil)
+		token := attachTestAuth(server)
 
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/cluster/nodes", nil)
+		req = withTestAdminAuth(req, token)
 		rec := httptest.NewRecorder()
 
 		server.handleClusterNodes(rec, req)
@@ -1433,6 +1456,7 @@ func TestIntegration(t *testing.T) {
 		}
 
 		server := NewServer(cfg, nil, c, reloadFunc, nil, nil, nil)
+		token := attachTestAuth(server)
 		server.Start()
 		time.Sleep(50 * time.Millisecond)
 		defer server.Stop()
@@ -1440,7 +1464,7 @@ func TestIntegration(t *testing.T) {
 		// Helper function for authenticated requests
 		doRequest := func(method, path string, body io.Reader) *http.Response {
 			req, _ := http.NewRequest(method, "http://127.0.0.1:18095"+path, body)
-			req.Header.Set("Authorization", "Bearer test-api-key")
+			req.Header.Set("Authorization", "Bearer "+token)
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
 				t.Fatalf("Request failed: %v", err)
@@ -1539,6 +1563,7 @@ func TestErrorResponseFormat(t *testing.T) {
 	c := cache.New(cacheCfg)
 
 	server := NewServer(cfg, nil, c, nil, nil, nil, nil)
+	token := attachTestAuth(server)
 	server.Start()
 	time.Sleep(50 * time.Millisecond)
 	defer server.Stop()
@@ -1564,7 +1589,7 @@ func TestErrorResponseFormat(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req, _ := http.NewRequest(tt.method, "http://127.0.0.1:18097"+tt.path, nil)
 			if tt.useAuth {
-				req.Header.Set("Authorization", "Bearer test-token")
+				req.Header.Set("Authorization", "Bearer "+token)
 			}
 
 			resp, err := http.DefaultClient.Do(req)

@@ -249,8 +249,9 @@ type UserResponse struct {
 
 // BootstrapRequest is the request body for POST /api/v1/auth/bootstrap.
 type BootstrapRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Username     string `json:"username"`
+	Password     string `json:"password"`
+	OldPassword  string `json:"old_password,omitempty"`
 }
 
 // BootstrapResponse is returned by POST /api/v1/auth/bootstrap.

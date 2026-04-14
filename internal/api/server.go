@@ -54,9 +54,10 @@ type Server struct {
 	aclChecker      *filter.ACLChecker
 	authStore       *auth.Store
 	metrics         *metrics.MetricsCollector
-	validator       *dnssec.Validator
-	zoneSigners     map[string]*dnssec.Signer // zone name → signer
-	rpzEngine       *rpz.Engine
+	validator        *dnssec.Validator
+	zoneSigners      map[string]*dnssec.Signer // zone name → signer
+	zoneSignersMu    sync.RWMutex
+	rpzEngine        *rpz.Engine
 	odohProxy       *odoh.ObliviousProxy // ODoH proxy (RFC 9230)
 	odohTarget      *odoh.ObliviousTarget // ODoH target resolver (RFC 9230)
 	loginLimiter    *loginRateLimiter
@@ -402,7 +403,9 @@ func (s *Server) WithDNSSEC(v *dnssec.Validator) *Server {
 
 // WithZoneSigners sets the DNSSEC zone signers for the API server.
 func (s *Server) WithZoneSigners(m map[string]*dnssec.Signer) *Server {
+	s.zoneSignersMu.Lock()
 	s.zoneSigners = m
+	s.zoneSignersMu.Unlock()
 	return s
 }
 
@@ -953,6 +956,9 @@ func (s *Server) handleQueryLog(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
+	if s.requireOperator(w, r) {
+		return
+	}
 
 	if s.dashboardServer == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Dashboard not available")
@@ -1004,6 +1010,9 @@ func (s *Server) handleTopDomains(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
+	if s.requireOperator(w, r) {
+		return
+	}
 
 	if s.dashboardServer == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Dashboard not available")
@@ -1032,6 +1041,9 @@ func (s *Server) handleMetricsHistory(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
+	if s.requireOperator(w, r) {
+		return
+	}
 
 	if s.metrics == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Metrics not available")
@@ -1046,6 +1058,9 @@ func (s *Server) handleMetricsHistory(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDNSSECStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	if s.requireOperator(w, r) {
 		return
 	}
 
@@ -1066,8 +1081,12 @@ func (s *Server) handleDNSSECKeys(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
+	if s.requireOperator(w, r) {
+		return
+	}
 
 	var keys []DNSSECKeyInfo
+	s.zoneSignersMu.RLock()
 	for zone, signer := range s.zoneSigners {
 		for _, k := range signer.GetKeys() {
 			keys = append(keys, DNSSECKeyInfo{
@@ -1080,6 +1099,7 @@ func (s *Server) handleDNSSECKeys(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
+	s.zoneSignersMu.RUnlock()
 	s.writeJSON(w, http.StatusOK, DNSSECKeysResponse{Zones: keys})
 }
 
@@ -1120,6 +1140,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 // handleZones handles GET (list zones) and POST (create zone).
 func (s *Server) handleZones(w http.ResponseWriter, r *http.Request) {
+	if s.requireOperator(w, r) {
+		return
+	}
 	switch r.Method {
 	case http.MethodGet:
 		s.handleListZones(w, r)
@@ -1164,7 +1187,13 @@ func (s *Server) handleListZones(w http.ResponseWriter, _ *http.Request) {
 //	PUT    /api/v1/zones/{name}/records
 //	DELETE /api/v1/zones/{name}/records
 //	GET    /api/v1/zones/{name}/export
+//
+// SECURITY: All authenticated operators have global access to all zones.
+// There is no per-zone or multi-tenant isolation. This is by design.
 func (s *Server) handleZoneActions(w http.ResponseWriter, r *http.Request) {
+	if s.requireOperator(w, r) {
+		return
+	}
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/zones/")
 
 	// Decode URL-encoded zone name (e.g., "example.com." from "example.com.")
@@ -1544,6 +1573,10 @@ func (s *Server) handleExportZone(w http.ResponseWriter, _ *http.Request, zoneNa
 
 // handleBulkPTR handles bulk PTR record creation with CIDR pattern.
 func (s *Server) handleBulkPTR(w http.ResponseWriter, r *http.Request, zoneName string) {
+	if s.requireOperator(w, r) {
+		return
+	}
+
 	body, err := io.ReadAll(io.LimitReader(r.Body, 65536))
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "Failed to read request body")
@@ -2018,6 +2051,9 @@ func (s *Server) handleCacheStats(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
+	if s.requireOperator(w, r) {
+		return
+	}
 
 	if s.cache == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Cache not available")
@@ -2086,6 +2122,9 @@ func (s *Server) handleConfigGet(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
+	if s.requireOperator(w, r) {
+		return
+	}
 
 	if s.configGetter == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Config not available")
@@ -2135,6 +2174,9 @@ func (s *Server) handleConfigGet(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleClusterStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	if s.requireOperator(w, r) {
 		return
 	}
 
@@ -2192,6 +2234,9 @@ func (s *Server) handleClusterNodes(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
+	if s.requireOperator(w, r) {
+		return
+	}
 
 	if s.cluster == nil {
 		s.writeJSON(w, http.StatusOK, &ClusterNodesResponse{Nodes: []NodeDetail{}})
@@ -2227,6 +2272,9 @@ func (s *Server) handleClusterNodes(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleBlocklists(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodPost {
 		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	if s.requireOperator(w, r) {
 		return
 	}
 
@@ -2278,6 +2326,9 @@ func (s *Server) handleBlocklists(w http.ResponseWriter, r *http.Request) {
 
 // handleBlocklistActions handles toggle and file-based removal.
 func (s *Server) handleBlocklistActions(w http.ResponseWriter, r *http.Request) {
+	if s.requireOperator(w, r) {
+		return
+	}
 	if s.blocklist == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Blocklist not available")
 		return
@@ -2360,6 +2411,9 @@ func (s *Server) handleUpstreams(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
+	if s.requireOperator(w, r) {
+		return
+	}
 
 	switch r.Method {
 	case http.MethodGet:
@@ -2435,6 +2489,9 @@ func (s *Server) handleACL(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
+	if s.requireOperator(w, r) {
+		return
+	}
 
 	if s.aclChecker == nil {
 		s.writeJSON(w, http.StatusOK, &ACLResponse{Rules: []ACLRuleResponse{}})
@@ -2498,6 +2555,9 @@ func (s *Server) handleRPZ(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
+	if s.requireOperator(w, r) {
+		return
+	}
 
 	if s.rpzEngine == nil {
 		s.writeJSON(w, http.StatusOK, &RPZStatsResponse{
@@ -2535,6 +2595,9 @@ func (s *Server) handleRPZ(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRPZRules(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodPost && r.Method != http.MethodDelete {
 		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	if s.requireOperator(w, r) {
 		return
 	}
 
@@ -2620,6 +2683,9 @@ func (s *Server) handleRPZActions(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleServerConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	if s.requireOperator(w, r) {
 		return
 	}
 
@@ -2761,6 +2827,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// Successful login - clear rate limit state
 	s.loginLimiter.recordSuccess(ip, req.Username)
 
+	// Revoke all existing tokens to prevent session fixation
+	s.authStore.RevokeAllTokens(req.Username)
+
 	// Generate token
 	token, err := s.authStore.GenerateToken(req.Username, 24*time.Hour)
 	if err != nil {
@@ -2840,7 +2909,15 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 	var err error
 
 	if len(users) > 0 {
-		// Users exist (from localhost) - update the existing user's password
+		// Users exist (from localhost) - require old password for password reset
+		if req.OldPassword == "" {
+			s.writeError(w, http.StatusBadRequest, "Old password required")
+			return
+		}
+		if !s.authStore.VerifyUserPassword(req.Username, req.OldPassword) {
+			s.writeError(w, http.StatusUnauthorized, "Invalid old password")
+			return
+		}
 		user, err = s.authStore.UpdateUser(req.Username, req.Password, "")
 		if err != nil {
 			s.writeError(w, http.StatusConflict, sanitizeError(err, "Operation failed"))
@@ -2892,6 +2969,11 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 	if token != "" && s.authStore != nil {
 		s.authStore.RevokeToken(token)
+	}
+
+	// Also revoke cookie token
+	if cookie, err := r.Cookie("ndns_token"); err == nil && cookie.Value != "" && s.authStore != nil {
+		s.authStore.RevokeToken(cookie.Value)
 	}
 
 	// Clear cookie
@@ -2947,7 +3029,13 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 
 		role := auth.RoleViewer
 		if req.Role != "" {
-			role = auth.Role(req.Role)
+			switch auth.Role(req.Role) {
+			case auth.RoleViewer, auth.RoleOperator, auth.RoleAdmin:
+				role = auth.Role(req.Role)
+			default:
+				s.writeError(w, http.StatusBadRequest, "Invalid role")
+				return
+			}
 		}
 
 		user, err := s.authStore.CreateUser(req.Username, req.Password, role)
@@ -3008,11 +3096,9 @@ func hasRole(ctx context.Context, store *auth.Store, required auth.Role) bool {
 // requireOperator checks if the request has operator role.
 // Writes error and returns true if access denied.
 func (s *Server) requireOperator(w http.ResponseWriter, r *http.Request) bool {
-	// If authStore is nil, RBAC checks cannot be performed.
-	// This happens in legacy single-token auth mode (auth_token without multi-user auth).
-	// In this case, allow through - the auth middleware already validated the token.
 	if s.authStore == nil {
-		return false
+		s.writeError(w, http.StatusServiceUnavailable, "Auth not configured")
+		return true
 	}
 	if !hasRole(r.Context(), s.authStore, auth.RoleOperator) {
 		s.writeError(w, http.StatusForbidden, "Operator role required")

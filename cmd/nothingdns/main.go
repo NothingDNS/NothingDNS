@@ -188,11 +188,14 @@ func run() error {
 			Role:     auth.Role(u.Role),
 		}
 	}
-	authStore := auth.NewStore(&auth.Config{
+	authStore, err := auth.NewStore(&auth.Config{
 		Secret:      cfg.Server.HTTP.AuthSecret,
 		Users:       authUsers,
 		TokenExpiry: auth.Duration{Duration: 24 * time.Hour},
 	})
+	if err != nil {
+		logger.Fatalf("Failed to initialize auth store: %v", err)
+	}
 	logger.Infof("Auth store initialized with %d users", len(cfg.Server.HTTP.Users))
 
 	// Warn if using legacy single-token auth without multi-user auth
