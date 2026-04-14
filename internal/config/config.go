@@ -1130,6 +1130,7 @@ func unmarshalServer(node *Node, cfg *ServerConfig) error {
 		cfg.HTTP.TLSKeyFile = httpNode.GetString("tls_key_file")
 		cfg.HTTP.AuthToken = httpNode.GetString("auth_token")
 		cfg.HTTP.AuthSecret = httpNode.GetString("auth_secret")
+		cfg.HTTP.AllowedOrigins = getStringSlice(httpNode, "allowed_origins", cfg.HTTP.AllowedOrigins)
 		cfg.HTTP.DoHEnabled = getBool(httpNode, "doh_enabled", cfg.HTTP.DoHEnabled)
 		cfg.HTTP.DoHPath = httpNode.GetString("doh_path")
 		if cfg.HTTP.DoHPath == "" {
