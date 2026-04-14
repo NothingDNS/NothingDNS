@@ -79,6 +79,22 @@ __debug_bin
 
 # Security scan artifacts
 security-report/
+"D\357\200\272CODEBOXPROJECTSNothingDNSsecurity-report/"
+
+# Playwright MCP artifacts
+.playwright-mcp/
+
+# Runtime cache files
+cache.json
+
+# IXFR journal files
+ixfr-journals/
+
+# Web coverage output
+web/coverage.out
+
+# Binary backups
+*.exe~
 
 # OS specific files
 Thumbs.db
