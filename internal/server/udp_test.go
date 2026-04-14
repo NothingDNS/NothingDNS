@@ -523,6 +523,7 @@ func TestUDPResponseWriterDoubleWrite(t *testing.T) {
 	client.SetReadDeadline(time.Now().Add(time.Second))
 	respBuf := make([]byte, 512)
 	client.Read(respBuf)
+	time.Sleep(50 * time.Millisecond)
 
 	if called.Load() != 1 {
 		t.Errorf("Handler called %d times, want 1", called.Load())
@@ -572,6 +573,7 @@ func TestUDPServerStats(t *testing.T) {
 	client.SetReadDeadline(time.Now().Add(time.Second))
 	respBuf := make([]byte, 512)
 	client.Read(respBuf)
+	time.Sleep(50 * time.Millisecond)
 
 	// Check stats after query
 	stats = server.Stats()
