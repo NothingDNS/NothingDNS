@@ -352,10 +352,12 @@ func (tx *Tx) Rollback() error {
 		return ErrTxClosed
 	}
 
-	// Read-only transactions: lock already released by Begin, just clean up.
+	// Read-only transactions: acquire lock to safely mutate txs slice.
 	if !tx.writable {
+		tx.store.mu.Lock()
 		tx.closed = true
 		tx.store.removeTx(tx)
+		tx.store.mu.Unlock()
 		atomic.AddInt64(&tx.store.stats.OpenTxCount, -1)
 		return nil
 	}
