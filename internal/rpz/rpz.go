@@ -428,7 +428,23 @@ func (e *Engine) QNAMEPolicy(qname string) *Rule {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	qname = strings.ToLower(strings.TrimSuffix(qname, "."))
+	// Trim trailing dot - DNS names from the protocol layer are already
+	// lowercase, but callers may pass mixed case, so lower only if needed
+	if len(qname) > 0 && qname[len(qname)-1] == '.' {
+		qname = qname[:len(qname)-1]
+	}
+	// Fast check: if the string is already lowercase (common path from
+	// protocol layer), skip the allocation. Only call ToLower if needed.
+	needsLower := false
+	for i := 0; i < len(qname); i++ {
+		if qname[i] >= 'A' && qname[i] <= 'Z' {
+			needsLower = true
+			break
+		}
+	}
+	if needsLower {
+		qname = strings.ToLower(qname)
+	}
 
 	// Exact match
 	if rule, ok := e.qnameRules[qname]; ok {
