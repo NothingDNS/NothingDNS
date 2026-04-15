@@ -27,6 +27,7 @@ import (
 	"github.com/nothingdns/nothingdns/internal/geodns"
 	"github.com/nothingdns/nothingdns/internal/metrics"
 	"github.com/nothingdns/nothingdns/internal/odoh"
+	"github.com/nothingdns/nothingdns/internal/otel"
 	"github.com/nothingdns/nothingdns/internal/rpz"
 	"github.com/nothingdns/nothingdns/internal/server"
 	"github.com/nothingdns/nothingdns/internal/transfer"
@@ -63,6 +64,7 @@ type Server struct {
 	odohTarget      *odoh.ObliviousTarget // ODoH target resolver (RFC 9230)
 	loginLimiter    *loginRateLimiter
 	apiRateLimiter  *apiRateLimiter
+	tracer          *otel.Tracer // OpenTelemetry tracing
 	stopCh          chan struct{} // Channel to signal shutdown
 	stopOnce        sync.Once     // Ensure Stop is idempotent
 
@@ -446,6 +448,12 @@ func (s *Server) WithODoHTarget(target *odoh.ObliviousTarget) *Server {
 	return s
 }
 
+// WithTracer sets the OpenTelemetry tracer for API request spans.
+func (s *Server) WithTracer(t *otel.Tracer) *Server {
+	s.tracer = t
+	return s
+}
+
 // Start starts the API server.
 func (s *Server) Start() error {
 	if !s.config.Enabled {
@@ -574,9 +582,15 @@ func (s *Server) Start() error {
 	// SPA fallback: serve index.html for all non-API routes
 	mux.HandleFunc("/", s.handleSPA(spaHandler))
 
+	var handler http.Handler = mux
+	if s.tracer != nil {
+		handler = otel.Middleware(s.tracer)(handler)
+	}
+	handler = securityHeadersMiddleware(s.corsMiddleware(s.authMiddleware(handler)))
+
 	s.httpServer = &http.Server{
 		Addr:              s.config.Bind,
-		Handler:           securityHeadersMiddleware(s.corsMiddleware(s.authMiddleware(mux))),
+		Handler:           handler,
 		ReadTimeout:       10 * time.Second,
 		ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout:      10 * time.Second,

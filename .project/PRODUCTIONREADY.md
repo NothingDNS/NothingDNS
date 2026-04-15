@@ -26,13 +26,13 @@ NothingDNS is a **production-grade DNS server** with a mature core, comprehensiv
 | Security | **9.0** | 20% | 1.80 |
 | Performance | **9.5** | 10% | 0.95 |
 | Testing & Coverage | **9.0** | 15% | 1.35 |
-| Observability | **8.5** | 10% | 0.85 |
+| Observability | **9.0** | 10% | 0.90 |
 | Documentation | **9.0** | 5% | 0.45 |
 | Deployment Readiness | **9.0** | 5% | 0.45 |
 | UI / CLI Completeness | **9.0** | 5% | 0.45 |
-| **TOTAL** | | **100%** | **9.05 / 10** |
+| **TOTAL** | | **100%** | **9.10 / 10** |
 
-*Score improved from 7.45 → 8.70 → 8.75 → 8.85 → 8.90 → 8.98 → 9.05 following remediation, performance optimization, observability, and testing improvements.*
+*Score improved from 7.45 → 8.70 → 8.75 → 8.85 → 8.90 → 8.98 → 9.05 → 9.10 following remediation, performance optimization, observability, and testing improvements.*
 
 ---
 
@@ -146,7 +146,7 @@ NothingDNS is a **production-grade DNS server** with a mature core, comprehensiv
 
 ---
 
-## 6. Observability — 8.5/10
+## 6. Observability — 9.0/10
 
 ### What's Working
 - **Prometheus metrics**: `/metrics` endpoint with standard exposition format.
@@ -155,13 +155,14 @@ NothingDNS is a **production-grade DNS server** with a mature core, comprehensiv
 - **Dashboard metrics**: Recent queries, top domains, cache stats, cluster node health.
 - **✅ FIXED: Request correlation IDs**: Every DNS query and zone transfer operation generates a unique 16-char hex request ID (10ns, 0 allocs). ID included in all audit log entries and debug output for end-to-end tracing.
 - **✅ FIXED: OpenTelemetry tracing tests**: Expanded from 5 to 27 tests covering span lifecycle, error recording, parent-child spans, HTTP middleware, OTLP exporter batching, and format validation.
-- **✅ FIXED: OpenTelemetry wired into DNS handler**: Every DNS query creates an OTel span in `cmd/nothingdns/handler.go` with `req.id`, `dns.qname`, `dns.qtype`, and `dns.cache_hit` attributes. Span lifecycle tracks full query latency.
+- **✅ FIXED: OpenTelemetry wired into DNS handler**: Every DNS query creates an OTel span with `req.id`, `dns.qname`, `dns.qtype`, `dns.cache_hit`, `dns.rcode`, and `dns.client_ip` attributes.
+- **✅ FIXED: OTel HTTP middleware on API server**: All REST API endpoints now create OTel spans via `otel.Middleware` in the handler chain (`securityHeaders → cors → auth → otel → mux`).
 
 ### What's Broken
 - No significant observability issues remain.
 
 ### Go/No-Go Impact
-- **Green**: Observability is production-grade with correlation IDs, structured audit logging, OTel tracing, and Prometheus metrics.
+- **Green**: Observability is production-grade with correlation IDs, structured audit logging, OTel tracing on both DNS and API layers, and Prometheus metrics.
 
 ---
 

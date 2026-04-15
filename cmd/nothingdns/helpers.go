@@ -40,6 +40,26 @@ func typeToString(qtype uint16) string {
 	return protocol.TypeString(qtype)
 }
 
+// rcodeToString converts a DNS response code to a human-readable string.
+func rcodeToString(rcode uint8) string {
+	switch rcode {
+	case 0:
+		return "NOERROR"
+	case 1:
+		return "FORMERR"
+	case 2:
+		return "SERVFAIL"
+	case 3:
+		return "NXDOMAIN"
+	case 4:
+		return "NOTIMP"
+	case 5:
+		return "REFUSED"
+	default:
+		return fmt.Sprintf("RCODE%d", rcode)
+	}
+}
+
 // stringToType converts a type string to DNS type number.
 func stringToType(s string) uint16 {
 	if t, ok := protocol.StringToType[strings.ToUpper(s)]; ok {

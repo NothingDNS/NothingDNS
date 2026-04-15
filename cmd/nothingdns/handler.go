@@ -96,6 +96,12 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 	start := time.Now()
 	reqID := util.GenerateRequestID()
 
+	// Track response code for tracing and observability
+	var rcodeStr string
+	recordRcode := func(code uint8) {
+		rcodeStr = rcodeToString(code)
+	}
+
 	// OpenTelemetry tracing: create a span for this DNS query
 	var span *otel.Span
 	if h.tracer != nil {
@@ -136,6 +142,16 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 					otel.Attr{Key: "dns.qtype", Value: qtypeStr},
 					otel.Attr{Key: "dns.cache_hit", Value: cacheHit},
 				)
+				if rcodeStr != "" {
+					span.Attrs = append(span.Attrs,
+						otel.Attr{Key: "dns.rcode", Value: rcodeStr},
+					)
+				}
+				if ci := w.ClientInfo(); ci != nil && ci.IP() != nil {
+					span.Attrs = append(span.Attrs,
+						otel.Attr{Key: "dns.client_ip", Value: ci.IP().String()},
+					)
+				}
 			}
 			h.tracer.EndSpan(span, nil)
 		}
@@ -456,6 +472,7 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 			if h.metrics != nil {
 				h.metrics.RecordResponse(protocol.RcodeSuccess)
 			}
+			recordRcode(resp.Header.Flags.RCODE)
 			reply(w, r, resp)
 			return
 		}
@@ -522,6 +539,7 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 		if h.metrics != nil {
 			h.metrics.RecordResponse(resp.Header.Flags.RCODE)
 		}
+		recordRcode(resp.Header.Flags.RCODE)
 		reply(w, r, resp)
 		return
 	}
@@ -674,6 +692,7 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 		if h.metrics != nil {
 			h.metrics.RecordResponse(resp.Header.Flags.RCODE)
 		}
+		recordRcode(resp.Header.Flags.RCODE)
 		reply(w, r, resp)
 		return
 	}
@@ -683,6 +702,7 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 	if h.metrics != nil {
 		h.metrics.RecordResponse(protocol.RcodeNameError)
 	}
+		recordRcode(protocol.RcodeNameError)
 	sendErrorWithEDE(w, r, protocol.RcodeNameError, protocol.EDENotAuthoritative, "no upstream configured")
 }
 
