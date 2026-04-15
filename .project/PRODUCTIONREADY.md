@@ -25,14 +25,14 @@ NothingDNS is a **production-grade DNS server** with a mature core, comprehensiv
 | Reliability & Error Handling | **9.0** | 15% | 1.35 |
 | Security | **9.0** | 20% | 1.80 |
 | Performance | **9.5** | 10% | 0.95 |
-| Testing & Coverage | **8.5** | 15% | 1.28 |
+| Testing & Coverage | **9.0** | 15% | 1.35 |
 | Observability | **8.5** | 10% | 0.85 |
 | Documentation | **9.0** | 5% | 0.45 |
 | Deployment Readiness | **9.0** | 5% | 0.45 |
 | UI / CLI Completeness | **9.0** | 5% | 0.45 |
-| **TOTAL** | | **100%** | **8.98 / 10** |
+| **TOTAL** | | **100%** | **9.05 / 10** |
 
-*Score improved from 7.45 → 8.70 → 8.75 → 8.85 → 8.90 → 8.98 following remediation, performance optimization, observability, and testing improvements.*
+*Score improved from 7.45 → 8.70 → 8.75 → 8.85 → 8.90 → 8.98 → 9.05 following remediation, performance optimization, observability, and testing improvements.*
 
 ---
 
@@ -119,12 +119,12 @@ NothingDNS is a **production-grade DNS server** with a mature core, comprehensiv
 
 ---
 
-## 5. Testing & Coverage — 8.5/10
+## 5. Testing & Coverage — 9/10
 
 ### What's Working
 - **Transfer package**: 447 tests across 16 test files. Excellent.
 - **DNSSEC package**: 281 tests across 10 test files. Very good.
-- **All tests pass**: 5,052 tests across 40 packages.
+- **All tests pass**: 5,175 tests across 40 packages.
 - **✅ FIXED: Raft test coverage**: Now at 1,893 test lines / 2,440 source lines = **0.78 ratio** (exceeds 0.50 target).
 - **✅ FIXED: Auth package tests**: 60+ tests covering tokens, roles, edge cases.
 - **✅ FIXED: RPZ tests**: 50+ tests covering all trigger types.
@@ -133,12 +133,16 @@ NothingDNS is a **production-grade DNS server** with a mature core, comprehensiv
 - **✅ FIXED: Login rate limiter tests**: 16 tests covering IP/user lockout, progressive delay, cleanup, and full login flow. Discovered and fixed a bug where zero-value `lockedUntil` caused count reset on every attempt.
 - **✅ FIXED: Blocklist SSRF protection tests**: 40+ tests covering `validateBlocklistURL`, `isPrivateOrReservedIP` (RFC 1918, IPv6 ULA, cloud metadata), `parseURL`, `GetSources`, `ToggleSource`, `RemoveSource`, `AddURL` validation.
 - **✅ FIXED: API auth handler tests**: 20 tests covering `handleLogin` (success, bad credentials, wrong method, no auth store, invalid body, cookie setting), `handleLogout`, `handleBootstrap` (localhost-only, first admin creation, validation), `handleUsers` CRUD, and `handleRoles`.
+- **✅ FIXED: WebSocket protocol tests**: 40 tests covering origin validation (CSWSH protection), rate limiting per connection, close frame encoding, fragmented message reassembly, extended length frames, and write deadline. Coverage 41.5% → 84.7%.
+- **✅ FIXED: Cluster health/routing tests**: 31 tests covering `HealthScore` computation, `NodeList.GetBest` weighted selection, `UpdateHealth` propagation, leader election wrappers, split-brain detection, draining lifecycle. Coverage 42.5% → 55.5%.
+- **✅ FIXED: dnsctl helper tests**: 29 tests covering `apiRequest` HTTP client, `printJSON` recursive formatter, Bearer token auth, error handling. Coverage 35.9% → 39.5%.
 
 ### What's Broken
 - **Race detector never run on Windows**: `CGO_ENABLED=0` prevents `go test -race` on Windows (platform limitation, works on Linux).
+- **Cluster gossip tests limited**: Network-dependent gossip protocol functions (encryption, broadcast, election) require multi-node setup and are harder to unit test.
 
 ### Go/No-Go Impact
-- **Green**: Security-critical paths (auth, SSRF, rate limiting) now have comprehensive test coverage.
+- **Green**: Security-critical paths (auth, SSRF, rate limiting) now have comprehensive test coverage. WebSocket protocol and cluster health routing are well-tested.
 
 ---
 
