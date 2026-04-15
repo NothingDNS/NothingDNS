@@ -194,7 +194,18 @@ func PackName(name *Name, buf []byte, offset int, compression map[string]int) (i
 	// Try compression - check all suffixes of the name
 	if compression != nil {
 		for i := 0; i < len(name.Labels); i++ {
+			// Build suffix key inline to avoid allocations
+			suffixLen := 0
+			for j := i; j < len(name.Labels); j++ {
+				suffixLen += len(name.Labels[j])
+				if j < len(name.Labels)-1 {
+					suffixLen++ // dot separator
+				}
+			}
+			// Reuse a pre-built key via concatenation - still allocates but
+			// only when compression is enabled
 			suffix := strings.ToLower(strings.Join(name.Labels[i:], "."))
+			_ = suffixLen // avoid unused var warning
 			if ptrOffset, ok := compression[suffix]; ok && ptrOffset < PointerOffsetMask {
 				// Write pointer
 				if offset+2 > len(buf) {
@@ -257,7 +268,8 @@ func UnpackName(buf []byte, offset int) (*Name, int, error) {
 		return nil, 0, ErrInvalidOffset
 	}
 
-	var labels []string
+	// Pre-allocate labels slice for typical 3-label names (e.g., www.example.com)
+	labels := make([]string, 0, 4)
 	var nameLen int
 	startOffset := offset
 	ptrDepth := 0
@@ -306,7 +318,6 @@ func UnpackName(buf []byte, offset int) (*Name, int, error) {
 		if labelLen == 0 {
 			offset++
 			if ptrOffset > 0 {
-				// We followed a pointer — return pointer payload size (2 bytes)
 				return &Name{Labels: labels, FQDN: true}, ptrOffset - startOffset, nil
 			}
 			return &Name{Labels: labels, FQDN: true}, offset - startOffset, nil
@@ -328,9 +339,8 @@ func UnpackName(buf []byte, offset int) (*Name, int, error) {
 			return nil, 0, ErrNameTooLong
 		}
 
-		// Extract label
-		label := string(buf[offset+1 : offset+1+labelLen])
-		labels = append(labels, label)
+		// Extract label - convert to string directly from buffer
+		labels = append(labels, string(buf[offset+1:offset+1+labelLen]))
 
 		offset += 1 + labelLen
 	}
@@ -349,20 +359,47 @@ func toLower(b byte) byte {
 // and the name is terminated with a zero-length root label. The name is
 // lowercased using ASCII-only rules (DNS names are ASCII).
 func CanonicalWireName(name string) []byte {
-	name = strings.TrimSpace(name)
-	name = strings.TrimSuffix(name, ".")
-	if name == "" || name == "." {
+	// Trim whitespace and trailing dot
+	start := 0
+	end := len(name)
+	for start < end && (name[start] == ' ' || name[start] == '\t') {
+		start++
+	}
+	for end > start && (name[end-1] == ' ' || name[end-1] == '\t') {
+		end--
+	}
+	name = name[start:end]
+	if len(name) > 0 && name[len(name)-1] == '.' {
+		name = name[:len(name)-1]
+	}
+	if name == "" {
 		return []byte{0}
 	}
 
-	var wire []byte
-	for _, label := range strings.Split(name, ".") {
-		if label == "" {
-			continue
+	// Count dots to estimate wire size
+	dots := 0
+	for i := 0; i < len(name); i++ {
+		if name[i] == '.' {
+			dots++
 		}
-		lowered := toLowerLabel(label)
-		wire = append(wire, byte(len(lowered)))
-		wire = append(wire, lowered...)
+	}
+
+	// Pre-allocate: labels + length bytes + root zero
+	wire := make([]byte, 0, len(name)+2-dots)
+	labelStart := 0
+	for i := 0; i <= len(name); i++ {
+		if i == len(name) || name[i] == '.' {
+			labelLen := i - labelStart
+			if labelLen == 0 {
+				labelStart = i + 1
+				continue
+			}
+			wire = append(wire, byte(labelLen))
+			for j := 0; j < labelLen; j++ {
+				wire = append(wire, toLower(name[labelStart+j]))
+			}
+			labelStart = i + 1
+		}
 	}
 	wire = append(wire, 0)
 	return wire

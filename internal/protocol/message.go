@@ -226,6 +226,20 @@ func UnpackMessage(buf []byte) (*Message, error) {
 	}
 	offset := HeaderLen
 
+	// Pre-allocate slices based on header counts to reduce append growth
+	if msg.Header.QDCount > 0 {
+		msg.Questions = make([]*Question, 0, msg.Header.QDCount)
+	}
+	if msg.Header.ANCount > 0 {
+		msg.Answers = make([]*ResourceRecord, 0, msg.Header.ANCount)
+	}
+	if msg.Header.NSCount > 0 {
+		msg.Authorities = make([]*ResourceRecord, 0, msg.Header.NSCount)
+	}
+	if msg.Header.ARCount > 0 {
+		msg.Additionals = make([]*ResourceRecord, 0, msg.Header.ARCount)
+	}
+
 	// Unpack questions
 	if int(msg.Header.QDCount) > MaxQuestions {
 		return nil, fmt.Errorf("too many questions: %d (max %d)", msg.Header.QDCount, MaxQuestions)
