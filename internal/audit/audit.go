@@ -20,6 +20,7 @@ func sanitizeLogField(s string) string {
 
 // QueryAuditEntry represents a single query audit log entry.
 type QueryAuditEntry struct {
+	RequestID string // Unique correlation ID for end-to-end tracing
 	Timestamp string
 	ClientIP  string
 	QueryName string
@@ -32,6 +33,7 @@ type QueryAuditEntry struct {
 
 // AXFRAuditEntry represents an AXFR (full zone transfer) audit log entry.
 type AXFRAuditEntry struct {
+	RequestID   string
 	Timestamp   string
 	ClientIP    string
 	Zone        string
@@ -42,6 +44,7 @@ type AXFRAuditEntry struct {
 
 // IXFRAuditEntry represents an IXFR (incremental zone transfer) audit log entry.
 type IXFRAuditEntry struct {
+	RequestID   string
 	Timestamp   string
 	ClientIP    string
 	Zone        string
@@ -52,6 +55,7 @@ type IXFRAuditEntry struct {
 
 // NOTIFYAuditEntry represents a NOTIFY (zone update notification) audit log entry.
 type NOTIFYAuditEntry struct {
+	RequestID string
 	Timestamp string
 	ClientIP  string // the notifying server
 	Zone      string
@@ -60,6 +64,7 @@ type NOTIFYAuditEntry struct {
 
 // UpdateAuditEntry represents a DDNS UPDATE (RFC 2136) audit log entry.
 type UpdateAuditEntry struct {
+	RequestID string
 	Timestamp string
 	ClientIP  string
 	Zone      string
@@ -202,8 +207,13 @@ func formatQueryAuditLine(e QueryAuditEntry) string {
 	if e.Upstream != "" {
 		upstream = e.Upstream
 	}
-	return fmt.Sprintf("%s client=%s query=%s type=%s rcode=%s latency=%s cache=%s upstream=%s",
+	reqID := "-"
+	if e.RequestID != "" {
+		reqID = e.RequestID
+	}
+	return fmt.Sprintf("%s req=%s client=%s query=%s type=%s rcode=%s latency=%s cache=%s upstream=%s",
 		e.Timestamp,
+		reqID,
 		sanitizeLogField(e.ClientIP),
 		sanitizeLogField(e.QueryName),
 		sanitizeLogField(e.QueryType),
@@ -215,8 +225,13 @@ func formatQueryAuditLine(e QueryAuditEntry) string {
 }
 
 func formatAXFRAuditLine(e AXFRAuditEntry) string {
-	return fmt.Sprintf("%s client=%s zone=%s action=%s records=%d latency=%s",
+	reqID := "-"
+	if e.RequestID != "" {
+		reqID = e.RequestID
+	}
+	return fmt.Sprintf("%s req=%s client=%s zone=%s action=%s records=%d latency=%s",
 		e.Timestamp,
+		reqID,
 		e.ClientIP,
 		sanitizeLogField(e.Zone),
 		e.Action,
@@ -226,8 +241,13 @@ func formatAXFRAuditLine(e AXFRAuditEntry) string {
 }
 
 func formatIXFRAuditLine(e IXFRAuditEntry) string {
-	return fmt.Sprintf("%s client=%s zone=%s action=%s records=%d latency=%s",
+	reqID := "-"
+	if e.RequestID != "" {
+		reqID = e.RequestID
+	}
+	return fmt.Sprintf("%s req=%s client=%s zone=%s action=%s records=%d latency=%s",
 		e.Timestamp,
+		reqID,
 		sanitizeLogField(e.ClientIP),
 		sanitizeLogField(e.Zone),
 		e.Action,
@@ -237,8 +257,13 @@ func formatIXFRAuditLine(e IXFRAuditEntry) string {
 }
 
 func formatNOTIFYAuditLine(e NOTIFYAuditEntry) string {
-	return fmt.Sprintf("%s client=%s zone=%s action=%s",
+	reqID := "-"
+	if e.RequestID != "" {
+		reqID = e.RequestID
+	}
+	return fmt.Sprintf("%s req=%s client=%s zone=%s action=%s",
 		e.Timestamp,
+		reqID,
 		sanitizeLogField(e.ClientIP),
 		sanitizeLogField(e.Zone),
 		e.Action,
@@ -246,8 +271,13 @@ func formatNOTIFYAuditLine(e NOTIFYAuditEntry) string {
 }
 
 func formatUpdateAuditLine(e UpdateAuditEntry) string {
-	return fmt.Sprintf("%s client=%s zone=%s action=%s rcode=%s added=%d deleted=%d",
+	reqID := "-"
+	if e.RequestID != "" {
+		reqID = e.RequestID
+	}
+	return fmt.Sprintf("%s req=%s client=%s zone=%s action=%s rcode=%s added=%d deleted=%d",
 		e.Timestamp,
+		reqID,
 		sanitizeLogField(e.ClientIP),
 		sanitizeLogField(e.Zone),
 		e.Action,

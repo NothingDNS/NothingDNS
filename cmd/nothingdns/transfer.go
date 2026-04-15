@@ -11,6 +11,7 @@ import (
 	"github.com/nothingdns/nothingdns/internal/protocol"
 	"github.com/nothingdns/nothingdns/internal/server"
 	"github.com/nothingdns/nothingdns/internal/transfer"
+	"github.com/nothingdns/nothingdns/internal/util"
 	"github.com/nothingdns/nothingdns/internal/zone"
 )
 
@@ -18,10 +19,11 @@ import (
 // AXFR must use TCP (RFC 5936 Section 4.1).
 func (h *integratedHandler) handleAXFR(w server.ResponseWriter, r *protocol.Message, q *protocol.Question) {
 	clientInfo := w.ClientInfo()
+	reqID := util.GenerateRequestID()
 
 	// AXFR requires TCP per RFC 5936
 	if clientInfo.Protocol != "tcp" {
-		h.logger.Warnf("AXFR request over UDP from %s - refusing", clientInfo.String())
+		h.logger.Warnf("[%s] AXFR request over UDP from %s - refusing", reqID, clientInfo.String())
 		sendError(w, r, protocol.RcodeRefused)
 		return
 	}
@@ -34,9 +36,10 @@ func (h *integratedHandler) handleAXFR(w server.ResponseWriter, r *protocol.Mess
 		cipStr = clientIP.String()
 	}
 
-	h.logger.Infof("AXFR request for %s from %s", qname, clientInfo.String())
+	h.logger.Infof("[%s] AXFR request for %s from %s", reqID, qname, clientInfo.String())
 	if h.auditLogger != nil {
 		h.auditLogger.LogAXFR(audit.AXFRAuditEntry{
+			RequestID: reqID,
 			Timestamp: start.UTC().Format(time.RFC3339),
 			ClientIP:  cipStr,
 			Zone:      qname,
@@ -48,9 +51,10 @@ func (h *integratedHandler) handleAXFR(w server.ResponseWriter, r *protocol.Mess
 	// Handle AXFR using the AXFR server
 	records, tsigKey, err := h.axfrServer.HandleAXFR(r, clientIP)
 	if err != nil {
-		h.logger.Warnf("AXFR failed for %s: %v", qname, err)
+		h.logger.Warnf("[%s] AXFR failed for %s: %v", reqID, qname, err)
 		if h.auditLogger != nil {
 			h.auditLogger.LogAXFR(audit.AXFRAuditEntry{
+				RequestID: reqID,
 				Timestamp: time.Now().UTC().Format(time.RFC3339),
 				ClientIP:  cipStr,
 				Zone:      qname,
@@ -81,9 +85,10 @@ func (h *integratedHandler) handleAXFR(w server.ResponseWriter, r *protocol.Mess
 		if tsigKey != nil && (i == 0 || i == len(records)-1) {
 			tsigRR, signErr := transfer.SignMessage(resp, tsigKey, 300)
 			if signErr != nil {
-				h.logger.Warnf("Failed to sign AXFR response: %v", signErr)
+				h.logger.Warnf("[%s] Failed to sign AXFR response: %v", reqID, signErr)
 				if h.auditLogger != nil {
 					h.auditLogger.LogAXFR(audit.AXFRAuditEntry{
+						RequestID: reqID,
 						Timestamp: time.Now().UTC().Format(time.RFC3339),
 						ClientIP:  cipStr,
 						Zone:      qname,
@@ -98,9 +103,10 @@ func (h *integratedHandler) handleAXFR(w server.ResponseWriter, r *protocol.Mess
 		}
 
 		if _, err := w.Write(resp); err != nil {
-			h.logger.Warnf("Failed to write AXFR response: %v", err)
+			h.logger.Warnf("[%s] Failed to write AXFR response: %v", reqID, err)
 			if h.auditLogger != nil {
 				h.auditLogger.LogAXFR(audit.AXFRAuditEntry{
+					RequestID: reqID,
 					Timestamp: time.Now().UTC().Format(time.RFC3339),
 					ClientIP:  cipStr,
 					Zone:      qname,
@@ -112,9 +118,10 @@ func (h *integratedHandler) handleAXFR(w server.ResponseWriter, r *protocol.Mess
 		}
 	}
 
-	h.logger.Infof("AXFR completed for %s - sent %d records", qname, len(records))
+	h.logger.Infof("[%s] AXFR completed for %s - sent %d records", reqID, qname, len(records))
 	if h.auditLogger != nil {
 		h.auditLogger.LogAXFR(audit.AXFRAuditEntry{
+			RequestID:   reqID,
 			Timestamp:   time.Now().UTC().Format(time.RFC3339),
 			ClientIP:    cipStr,
 			Zone:        qname,
@@ -133,10 +140,11 @@ func (h *integratedHandler) handleAXFR(w server.ResponseWriter, r *protocol.Mess
 // IXFR must use TCP (RFC 1995).
 func (h *integratedHandler) handleIXFR(w server.ResponseWriter, r *protocol.Message, q *protocol.Question) {
 	clientInfo := w.ClientInfo()
+	reqID := util.GenerateRequestID()
 
 	// IXFR requires TCP per RFC 1995
 	if clientInfo.Protocol != "tcp" {
-		h.logger.Warnf("IXFR request over UDP from %s - refusing", clientInfo.String())
+		h.logger.Warnf("[%s] IXFR request over UDP from %s - refusing", reqID, clientInfo.String())
 		sendError(w, r, protocol.RcodeRefused)
 		return
 	}
@@ -149,9 +157,10 @@ func (h *integratedHandler) handleIXFR(w server.ResponseWriter, r *protocol.Mess
 		cipStr = clientIP.String()
 	}
 
-	h.logger.Infof("IXFR request for %s from %s", qname, clientInfo.String())
+	h.logger.Infof("[%s] IXFR request for %s from %s", reqID, qname, clientInfo.String())
 	if h.auditLogger != nil {
 		h.auditLogger.LogIXFR(audit.IXFRAuditEntry{
+			RequestID: reqID,
 			Timestamp: start.UTC().Format(time.RFC3339),
 			ClientIP:  cipStr,
 			Zone:      qname,
@@ -162,15 +171,16 @@ func (h *integratedHandler) handleIXFR(w server.ResponseWriter, r *protocol.Mess
 	// Handle IXFR using the IXFR server
 	records, err := h.ixfrServer.HandleIXFR(r, clientIP)
 	if err != nil {
-		h.logger.Warnf("IXFR failed for %s: %v", qname, err)
+		h.logger.Warnf("[%s] IXFR failed for %s: %v", reqID, qname, err)
 		// Check if the error indicates AXFR fallback is needed
 		if errors.Is(err, transfer.ErrNoJournal) || errors.Is(err, transfer.ErrSerialNotInRange) {
-			h.logger.Infof("Falling back to AXFR for %s", qname)
+			h.logger.Infof("[%s] Falling back to AXFR for %s", reqID, qname)
 			h.handleAXFR(w, r, q)
 			return
 		}
 		if h.auditLogger != nil {
 			h.auditLogger.LogIXFR(audit.IXFRAuditEntry{
+				RequestID: reqID,
 				Timestamp: time.Now().UTC().Format(time.RFC3339),
 				ClientIP:  cipStr,
 				Zone:      qname,
@@ -195,9 +205,10 @@ func (h *integratedHandler) handleIXFR(w server.ResponseWriter, r *protocol.Mess
 		}
 
 		if _, err := w.Write(resp); err != nil {
-			h.logger.Warnf("Failed to write IXFR response: %v", err)
+			h.logger.Warnf("[%s] Failed to write IXFR response: %v", reqID, err)
 			if h.auditLogger != nil {
 				h.auditLogger.LogIXFR(audit.IXFRAuditEntry{
+					RequestID: reqID,
 					Timestamp: time.Now().UTC().Format(time.RFC3339),
 					ClientIP:  cipStr,
 					Zone:      qname,
@@ -209,9 +220,10 @@ func (h *integratedHandler) handleIXFR(w server.ResponseWriter, r *protocol.Mess
 		}
 	}
 
-	h.logger.Infof("IXFR completed for %s - sent %d records", qname, len(records))
+	h.logger.Infof("[%s] IXFR completed for %s - sent %d records", reqID, qname, len(records))
 	if h.auditLogger != nil {
 		h.auditLogger.LogIXFR(audit.IXFRAuditEntry{
+			RequestID:   reqID,
 			Timestamp:   time.Now().UTC().Format(time.RFC3339),
 			ClientIP:    cipStr,
 			Zone:        qname,
@@ -229,6 +241,7 @@ func (h *integratedHandler) handleIXFR(w server.ResponseWriter, r *protocol.Mess
 // handleNOTIFY handles NOTIFY requests from master servers (RFC 1996).
 // NOTIFY informs slave servers that a zone has changed and should be refreshed.
 func (h *integratedHandler) handleNOTIFY(w server.ResponseWriter, r *protocol.Message, q *protocol.Question) {
+	reqID := util.GenerateRequestID()
 	clientInfo := w.ClientInfo()
 	clientIP := clientInfo.IP()
 	cipStr := "-"
@@ -238,9 +251,10 @@ func (h *integratedHandler) handleNOTIFY(w server.ResponseWriter, r *protocol.Me
 	zoneName := q.Name.String()
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	h.logger.Infof("NOTIFY request for %s from %s", zoneName, clientInfo.String())
+	h.logger.Infof("[%s] NOTIFY request for %s from %s", reqID, zoneName, clientInfo.String())
 	if h.auditLogger != nil {
 		h.auditLogger.LogNOTIFY(audit.NOTIFYAuditEntry{
+			RequestID: reqID,
 			Timestamp: now,
 			ClientIP:  cipStr,
 			Zone:      zoneName,
@@ -251,9 +265,10 @@ func (h *integratedHandler) handleNOTIFY(w server.ResponseWriter, r *protocol.Me
 	// Handle NOTIFY using the NOTIFY handler
 	resp, err := h.notifyHandler.HandleNOTIFY(r, clientIP)
 	if err != nil {
-		h.logger.Warnf("NOTIFY handling failed for %s: %v", zoneName, err)
+		h.logger.Warnf("[%s] NOTIFY handling failed for %s: %v", reqID, zoneName, err)
 		if h.auditLogger != nil {
 			h.auditLogger.LogNOTIFY(audit.NOTIFYAuditEntry{
+				RequestID: reqID,
 				Timestamp: now,
 				ClientIP:  cipStr,
 				Zone:      zoneName,
@@ -266,13 +281,14 @@ func (h *integratedHandler) handleNOTIFY(w server.ResponseWriter, r *protocol.Me
 
 	// Send NOTIFY response
 	if _, err := w.Write(resp); err != nil {
-		h.logger.Warnf("Failed to write NOTIFY response: %v", err)
+		h.logger.Warnf("[%s] Failed to write NOTIFY response: %v", reqID, err)
 		return
 	}
 
-	h.logger.Infof("NOTIFY response sent for %s", zoneName)
+	h.logger.Infof("[%s] NOTIFY response sent for %s", reqID, zoneName)
 	if h.auditLogger != nil {
 		h.auditLogger.LogNOTIFY(audit.NOTIFYAuditEntry{
+			RequestID: reqID,
 			Timestamp: time.Now().UTC().Format(time.RFC3339),
 			ClientIP:  cipStr,
 			Zone:      zoneName,
@@ -309,6 +325,7 @@ func (h *integratedHandler) processNotifyEvents() {
 // handleUPDATE handles Dynamic DNS UPDATE requests (RFC 2136).
 // UPDATE allows authenticated clients to dynamically modify DNS records.
 func (h *integratedHandler) handleUPDATE(w server.ResponseWriter, r *protocol.Message, q *protocol.Question) {
+	reqID := util.GenerateRequestID()
 	clientInfo := w.ClientInfo()
 	clientIP := clientInfo.IP()
 	cipStr := "-"
@@ -318,9 +335,10 @@ func (h *integratedHandler) handleUPDATE(w server.ResponseWriter, r *protocol.Me
 	zoneName := q.Name.String()
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	h.logger.Infof("UPDATE request for %s from %s", zoneName, clientInfo.String())
+	h.logger.Infof("[%s] UPDATE request for %s from %s", reqID, zoneName, clientInfo.String())
 	if h.auditLogger != nil {
 		h.auditLogger.LogUpdate(audit.UpdateAuditEntry{
+			RequestID: reqID,
 			Timestamp: now,
 			ClientIP:  cipStr,
 			Zone:      zoneName,
@@ -331,9 +349,10 @@ func (h *integratedHandler) handleUPDATE(w server.ResponseWriter, r *protocol.Me
 	// Handle UPDATE using the Dynamic DNS handler
 	resp, err := h.ddnsHandler.HandleUpdate(r, clientIP)
 	if err != nil {
-		h.logger.Warnf("UPDATE handling failed for %s: %v", zoneName, err)
+		h.logger.Warnf("[%s] UPDATE handling failed for %s: %v", reqID, zoneName, err)
 		if h.auditLogger != nil {
 			h.auditLogger.LogUpdate(audit.UpdateAuditEntry{
+				RequestID: reqID,
 				Timestamp: now,
 				ClientIP:  cipStr,
 				Zone:      zoneName,
@@ -347,20 +366,21 @@ func (h *integratedHandler) handleUPDATE(w server.ResponseWriter, r *protocol.Me
 
 	// Send UPDATE response
 	if _, err := w.Write(resp); err != nil {
-		h.logger.Warnf("Failed to write UPDATE response: %v", err)
+		h.logger.Warnf("[%s] Failed to write UPDATE response: %v", reqID, err)
 		return
 	}
 
 	action := "failure"
 	if resp.Header.Flags.RCODE == protocol.RcodeSuccess {
-		h.logger.Infof("UPDATE successful for %s", zoneName)
+		h.logger.Infof("[%s] UPDATE successful for %s", reqID, zoneName)
 		action = "success"
 	} else {
-		h.logger.Warnf("UPDATE failed for %s with rcode %d", zoneName, resp.Header.Flags.RCODE)
+		h.logger.Warnf("[%s] UPDATE failed for %s with rcode %d", reqID, zoneName, resp.Header.Flags.RCODE)
 		action = "failure"
 	}
 	if h.auditLogger != nil {
 		h.auditLogger.LogUpdate(audit.UpdateAuditEntry{
+			RequestID: reqID,
 			Timestamp: time.Now().UTC().Format(time.RFC3339),
 			ClientIP:  cipStr,
 			Zone:      zoneName,

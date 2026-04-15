@@ -92,6 +92,7 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 	}()
 
 	start := time.Now()
+	reqID := util.GenerateRequestID()
 
 	// Defer latency recording and audit logging
 	var qtypeStr string
@@ -108,6 +109,7 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 				clientIP = ci.IP().String()
 			}
 			h.auditLogger.LogQuery(audit.QueryAuditEntry{
+				RequestID: reqID,
 				Timestamp: start.UTC().Format(time.RFC3339),
 				ClientIP:  clientIP,
 				QueryName: qnameAudit,
@@ -131,7 +133,7 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 	qtypeStr = typeToString(qtype)
 	qnameAudit = qname
 
-	h.logger.Debugf("Query: %s %s", qname, typeToString(qtype))
+	h.logger.Debugf("[%s] Query: %s %s", reqID, qname, typeToString(qtype))
 
 	// RFC 5891: Validate IDNA (internationalized domain names)
 	if h.idnaEnabled {
