@@ -1,11 +1,11 @@
 package cache
 
 import (
-	"container/list"
 	"fmt"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
@@ -34,8 +34,9 @@ type Entry struct {
 	IsNegative bool // True for NXDOMAIN/NODATA entries
 	IsStale    bool // True when serving a stale entry (RFC 8767)
 
-	// Access tracking for LRU
-	element *list.Element // Position in LRU list
+	// Intrusive LRU list pointers (front = most recent, back = least recent)
+	prev *Entry
+	next *Entry
 }
 
 // IsExpired returns true if the entry has expired.
@@ -63,7 +64,7 @@ func (e *Entry) RemainingTTL(now time.Time) uint32 {
 	return uint32(remaining.Seconds())
 }
 
-// Stats tracks cache statistics.
+// Stats tracks cache statistics. Numeric counters are accessed atomically.
 type Stats struct {
 	Hits        uint64
 	Misses      uint64
@@ -100,16 +101,19 @@ type Cache struct {
 	prefetchThreshold time.Duration
 
 	// Serve-stale (RFC 8767) configuration
-	serveStale  bool
-	staleGrace  time.Duration // How long past expiry to serve stale entries
-	staleServed uint64        // Count of stale entries served
+	serveStale bool
+	staleGrace time.Duration // How long past expiry to serve stale entries
 
 	// Storage
 	mu      sync.RWMutex
 	entries map[string]*Entry
-	lruList *list.List // Front = most recently used, Back = least recently used
 
-	// Statistics
+	// Intrusive LRU list: lruFront = most recently used, lruBack = least recently used.
+	// An entry is in the list when entry.prev != nil || entry == lruFront.
+	lruFront *Entry
+	lruBack  *Entry
+
+	// Statistics (atomically accessed for reads)
 	stats Stats
 
 	// Prefetch callback
@@ -160,7 +164,6 @@ func New(config Config) *Cache {
 		serveStale:        config.ServeStale,
 		staleGrace:        config.StaleGrace,
 		entries:           make(map[string]*Entry, config.Capacity),
-		lruList:           list.New(),
 		stats:             Stats{Capacity: config.Capacity},
 	}
 }
@@ -201,40 +204,49 @@ func crc32Hash(s string) uint64 {
 
 // Get retrieves an entry from the cache.
 // Returns nil if not found or expired.
-// When serve-stale is enabled, expired entries are kept in the cache
-// but not returned by Get — use GetStale to retrieve them.
+// Uses RLock for the read-only fast path, promoting to Lock only for
+// LRU promotion or expired entry removal.
 func (c *Cache) Get(key string) *Entry {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
+	// Fast path: read-only lookup under RLock.
+	c.mu.RLock()
 	entry, exists := c.entries[key]
 	if !exists {
-		c.stats.Misses++
+		c.mu.RUnlock()
+		atomic.AddUint64(&c.stats.Misses, 1)
 		return nil
 	}
 
 	now := time.Now()
 	if entry.IsExpired(now) {
-		if c.serveStale {
-			// Keep the entry for stale serving but don't return it
-			// from a normal Get — the caller should use GetStale
-			// after upstream failure.
-			staleDeadline := entry.ExpireTime.Add(c.staleGrace)
-			if now.After(staleDeadline) {
-				// Past stale grace period — truly remove it
+		c.mu.RUnlock()
+		// Slow path: remove expired entry under exclusive lock.
+		c.mu.Lock()
+		// Re-verify the same entry is still there (may have changed).
+		if e, ok := c.entries[key]; ok && e == entry {
+			if c.serveStale {
+				staleDeadline := entry.ExpireTime.Add(c.staleGrace)
+				if now.After(staleDeadline) {
+					c.removeEntry(entry)
+				}
+			} else {
 				c.removeEntry(entry)
 			}
-		} else {
-			c.removeEntry(entry)
+			atomic.AddUint64(&c.stats.Expirations, 1)
 		}
-		c.stats.Expirations++
-		c.stats.Misses++
+		atomic.AddUint64(&c.stats.Misses, 1)
+		c.mu.Unlock()
 		return nil
 	}
 
-	// Move to front (most recently used)
-	c.lruList.MoveToFront(entry.element)
-	c.stats.Hits++
+	// Entry is valid. Promote in LRU under exclusive lock.
+	c.mu.RUnlock()
+	c.mu.Lock()
+	// Verify entry is still in the map (could have been evicted).
+	if _, ok := c.entries[key]; ok {
+		c.moveToFront(entry)
+	}
+	atomic.AddUint64(&c.stats.Hits, 1)
+	c.mu.Unlock()
 
 	return entry
 }
@@ -271,8 +283,8 @@ func (c *Cache) GetStale(key string) *Entry {
 	}
 
 	// Serve the stale entry with a short TTL (RFC 8767 §4 recommends 30s)
-	c.lruList.MoveToFront(entry.element)
-	c.staleServed++
+	c.moveToFront(entry)
+	atomic.AddUint64(&c.stats.StaleServed, 1)
 
 	staleEntry := &Entry{
 		Key:        entry.Key,
@@ -288,9 +300,7 @@ func (c *Cache) GetStale(key string) *Entry {
 
 // StaleServed returns the count of stale entries served.
 func (c *Cache) StaleServed() uint64 {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.staleServed
+	return atomic.LoadUint64(&c.stats.StaleServed)
 }
 
 // Set adds or updates an entry in the cache.
@@ -370,8 +380,7 @@ func (c *Cache) setInternal(key string, msg *protocol.Message, ttl uint32, isPre
 func (c *Cache) addEntry(key string, entry *Entry) {
 	// Check if key already exists
 	if oldEntry, exists := c.entries[key]; exists {
-		// Remove old entry from LRU list
-		c.lruList.Remove(oldEntry.element)
+		c.intrusiveRemove(oldEntry)
 	}
 
 	// Evict oldest entries if at capacity
@@ -380,29 +389,63 @@ func (c *Cache) addEntry(key string, entry *Entry) {
 	}
 
 	// Add to map and LRU list
-	element := c.lruList.PushFront(entry)
-	entry.element = element
+	c.pushFront(entry)
 	c.entries[key] = entry
-	c.stats.Size = len(c.entries)
+	c.entries[key] = entry
 }
 
 // removeEntry removes an entry from the cache.
 func (c *Cache) removeEntry(entry *Entry) {
-	c.lruList.Remove(entry.element)
+	c.intrusiveRemove(entry)
 	delete(c.entries, entry.Key)
-	c.stats.Size = len(c.entries)
 }
 
 // evictOldest removes the least recently used entry.
 func (c *Cache) evictOldest() {
-	element := c.lruList.Back()
-	if element == nil {
+	if c.lruBack == nil {
 		return
 	}
-
-	entry := element.Value.(*Entry)
+	entry := c.lruBack
 	c.removeEntry(entry)
-	c.stats.Evictions++
+	atomic.AddUint64(&c.stats.Evictions, 1)
+}
+
+// pushFront inserts entry at the front of the LRU list (most recently used).
+func (c *Cache) pushFront(entry *Entry) {
+	entry.prev = nil
+	entry.next = c.lruFront
+	if c.lruFront != nil {
+		c.lruFront.prev = entry
+	}
+	c.lruFront = entry
+	if c.lruBack == nil {
+		c.lruBack = entry
+	}
+}
+
+// moveToFront moves an existing entry to the front of the LRU list.
+func (c *Cache) moveToFront(entry *Entry) {
+	if entry == c.lruFront {
+		return // already at front
+	}
+	c.intrusiveRemove(entry)
+	c.pushFront(entry)
+}
+
+// intrusiveRemove removes an entry from the intrusive LRU list.
+func (c *Cache) intrusiveRemove(entry *Entry) {
+	if entry.prev != nil {
+		entry.prev.next = entry.next
+	} else {
+		c.lruFront = entry.next
+	}
+	if entry.next != nil {
+		entry.next.prev = entry.prev
+	} else {
+		c.lruBack = entry.prev
+	}
+	entry.prev = nil
+	entry.next = nil
 }
 
 // EvictPercent removes approximately percent of entries from the cache,
@@ -421,13 +464,11 @@ func (c *Cache) EvictPercent(percent int) {
 	}
 
 	for i := 0; i < count; i++ {
-		element := c.lruList.Back()
-		if element == nil {
+		if c.lruBack == nil {
 			break
 		}
-		entry := element.Value.(*Entry)
-		c.removeEntry(entry)
-		c.stats.Evictions++
+		c.removeEntry(c.lruBack)
+		atomic.AddUint64(&c.stats.Evictions, 1)
 	}
 }
 
@@ -462,9 +503,16 @@ func (c *Cache) Clear() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// Unlink all entries for GC
+	for e := c.lruFront; e != nil; {
+		next := e.next
+		e.prev = nil
+		e.next = nil
+		e = next
+	}
 	c.entries = make(map[string]*Entry, c.capacity)
-	c.lruList.Init()
-	c.stats.Size = 0
+	c.lruFront = nil
+	c.lruBack = nil
 }
 
 // Flush is an alias for Clear.
@@ -521,16 +569,21 @@ func (c *Cache) Stats() Stats {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	s := c.stats
-	s.StaleServed = c.staleServed
-	return s
+	return Stats{
+		Hits:        atomic.LoadUint64(&c.stats.Hits),
+		Misses:      atomic.LoadUint64(&c.stats.Misses),
+		Evictions:   atomic.LoadUint64(&c.stats.Evictions),
+		Expirations: atomic.LoadUint64(&c.stats.Expirations),
+		StaleServed: atomic.LoadUint64(&c.stats.StaleServed),
+		Size:        len(c.entries),
+		Capacity:    c.stats.Capacity,
+	}
 }
 
 // Size returns the current number of entries in the cache.
 func (c *Cache) Size() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-
 	return len(c.entries)
 }
 
