@@ -81,16 +81,16 @@ func TestAXFRServer_IsAllowed(t *testing.T) {
 		wantAllowed bool
 	}{
 		{
-			name:        "no allowlist allows all",
+			name:        "no allowlist denies by default",
 			allowList:   nil,
 			clientIP:    "192.168.1.1",
-			wantAllowed: true,
+			wantAllowed: false,
 		},
 		{
-			name:        "empty allowlist allows all",
+			name:        "empty allowlist denies by default",
 			allowList:   []string{},
 			clientIP:    "192.168.1.1",
-			wantAllowed: true,
+			wantAllowed: false,
 		},
 		{
 			name:        "allowed IP in network",

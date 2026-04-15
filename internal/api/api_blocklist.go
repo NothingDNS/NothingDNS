@@ -47,7 +47,7 @@ func (s *Server) handleBlocklists(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.File != "" {
 			if err := s.blocklist.AddFile(req.File); err != nil {
-				s.writeError(w, http.StatusBadRequest, fmt.Sprintf("Failed to load blocklist file: %v", err))
+				s.writeError(w, http.StatusBadRequest, sanitizeError(err, "Failed to load blocklist file"))
 				return
 			}
 			s.writeJSON(w, http.StatusCreated, &MessageResponse{Message: "Blocklist file added"})

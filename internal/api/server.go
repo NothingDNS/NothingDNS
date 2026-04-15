@@ -67,6 +67,7 @@ type Server struct {
 	tracer          *otel.Tracer // OpenTelemetry tracing
 	stopCh          chan struct{} // Channel to signal shutdown
 	stopOnce        sync.Once     // Ensure Stop is idempotent
+	bootstrapMu     sync.Mutex    // Serialize bootstrap to prevent TOCTOU race
 
 	// Goroutine leak detection baseline
 	goroutineBaseline int64
@@ -608,6 +609,10 @@ func (s *Server) Start() error {
 			// Warn if DoH is enabled without TLS
 			if s.config.DoHEnabled {
 				util.Warnf("DoH is enabled but TLS is not configured - queries will be sent over plaintext HTTP")
+			}
+			// Warn loudly if auth is enabled without TLS - tokens transmitted in clear
+			if s.authStore != nil {
+				util.Warnf("AUTHENTICATION IS ENABLED BUT TLS IS NOT CONFIGURED - auth tokens will be transmitted over plaintext HTTP. This is a security risk.")
 			}
 			if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				util.Warnf("API server error: %v", err)

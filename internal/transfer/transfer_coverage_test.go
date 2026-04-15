@@ -907,7 +907,7 @@ func TestVerifyMessage_AlgorithmMismatch(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSignMessage_DeprecatedAlgorithms(t *testing.T) {
-	// HMAC-MD5 now works with deprecation warning for backwards compatibility
+	// HMAC-MD5 is no longer supported - verify it returns an error
 	key := &TSIGKey{
 		Name:      "test-key.example.com.",
 		Algorithm: HmacMD5,
@@ -917,8 +917,8 @@ func TestSignMessage_DeprecatedAlgorithms(t *testing.T) {
 		Header: protocol.Header{ID: 1234},
 	}
 	_, err := SignMessage(msg, key, 300)
-	if err != nil {
-		t.Errorf("unexpected error for deprecated MD5: %v", err)
+	if err == nil {
+		t.Error("expected error for unsupported HMAC-MD5")
 	}
 }
 

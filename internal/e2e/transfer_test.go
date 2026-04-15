@@ -196,7 +196,7 @@ func TestIXFRServerWithTCPServer(t *testing.T) {
 	}
 
 	zones := map[string]*zone.Zone{"ixfr.test.": z}
-	axfrServer := transfer.NewAXFRServer(zones)
+	axfrServer := transfer.NewAXFRServer(zones, transfer.WithAllowList([]string{"127.0.0.0/8"}))
 	ixfrHandler := transfer.NewIXFRServer(axfrServer)
 
 	handler := server.HandlerFunc(func(w server.ResponseWriter, req *protocol.Message) {

@@ -12,7 +12,7 @@ import (
 )
 
 func TestNewIXFRServer(t *testing.T) {
-	axfrServer := NewAXFRServer(make(map[string]*zone.Zone))
+	axfrServer := NewAXFRServer(make(map[string]*zone.Zone), WithAllowList([]string{"127.0.0.0/8"}))
 	server := NewIXFRServer(axfrServer)
 
 	if server == nil {
@@ -33,7 +33,7 @@ func TestNewIXFRServer(t *testing.T) {
 }
 
 func TestIXFRServer_SetMaxJournalSize(t *testing.T) {
-	axfrServer := NewAXFRServer(make(map[string]*zone.Zone))
+	axfrServer := NewAXFRServer(make(map[string]*zone.Zone), WithAllowList([]string{"127.0.0.0/8"}))
 	server := NewIXFRServer(axfrServer)
 
 	server.SetMaxJournalSize(50)
@@ -44,7 +44,7 @@ func TestIXFRServer_SetMaxJournalSize(t *testing.T) {
 }
 
 func TestIXFRServer_RecordChange(t *testing.T) {
-	axfrServer := NewAXFRServer(make(map[string]*zone.Zone))
+	axfrServer := NewAXFRServer(make(map[string]*zone.Zone), WithAllowList([]string{"127.0.0.0/8"}))
 	server := NewIXFRServer(axfrServer)
 	server.SetMaxJournalSize(3)
 
@@ -83,7 +83,7 @@ func TestIXFRServer_RecordChange(t *testing.T) {
 }
 
 func TestIXFRServer_extractClientSerial(t *testing.T) {
-	axfrServer := NewAXFRServer(make(map[string]*zone.Zone))
+	axfrServer := NewAXFRServer(make(map[string]*zone.Zone), WithAllowList([]string{"127.0.0.0/8"}))
 	server := NewIXFRServer(axfrServer)
 
 	// Create IXFR request with SOA in Authority section
@@ -130,7 +130,7 @@ func TestIXFRServer_extractClientSerial(t *testing.T) {
 }
 
 func TestIXFRServer_generateSingleSOA(t *testing.T) {
-	axfrServer := NewAXFRServer(make(map[string]*zone.Zone))
+	axfrServer := NewAXFRServer(make(map[string]*zone.Zone), WithAllowList([]string{"127.0.0.0/8"}))
 	server := NewIXFRServer(axfrServer)
 
 	z := zone.NewZone("example.com.")
@@ -167,7 +167,7 @@ func TestIXFRServer_generateSingleSOA(t *testing.T) {
 }
 
 func TestIXFRServer_createSOAWithSerial(t *testing.T) {
-	axfrServer := NewAXFRServer(make(map[string]*zone.Zone))
+	axfrServer := NewAXFRServer(make(map[string]*zone.Zone), WithAllowList([]string{"127.0.0.0/8"}))
 	server := NewIXFRServer(axfrServer)
 
 	origin, _ := protocol.ParseName("example.com.")
@@ -201,7 +201,7 @@ func TestIXFRServer_createSOAWithSerial(t *testing.T) {
 }
 
 func TestIXFRServer_changeToRR(t *testing.T) {
-	axfrServer := NewAXFRServer(make(map[string]*zone.Zone))
+	axfrServer := NewAXFRServer(make(map[string]*zone.Zone), WithAllowList([]string{"127.0.0.0/8"}))
 	server := NewIXFRServer(axfrServer)
 
 	change := zone.RecordChange{
@@ -239,7 +239,7 @@ func TestIXFRServer_changeToRR(t *testing.T) {
 }
 
 func TestIXFRServer_generateIncrementalIXFR(t *testing.T) {
-	axfrServer := NewAXFRServer(make(map[string]*zone.Zone))
+	axfrServer := NewAXFRServer(make(map[string]*zone.Zone), WithAllowList([]string{"127.0.0.0/8"}))
 	server := NewIXFRServer(axfrServer)
 
 	// Create zone
@@ -421,7 +421,7 @@ func TestIXFRClient_ParseIXFRResponse(t *testing.T) {
 }
 
 func TestIXFRServer_HandleIXFR_NoZone(t *testing.T) {
-	axfrServer := NewAXFRServer(make(map[string]*zone.Zone))
+	axfrServer := NewAXFRServer(make(map[string]*zone.Zone), WithAllowList([]string{"127.0.0.0/8"}))
 	server := NewIXFRServer(axfrServer)
 
 	// Create IXFR request
@@ -626,7 +626,7 @@ func TestIXFRServer_HandleIXFR_TSIGVerification(t *testing.T) {
 	}
 	ks.AddKey(key)
 
-	axfrServer := NewAXFRServer(zones, WithKeyStore(ks))
+	axfrServer := NewAXFRServer(zones, WithKeyStore(ks), WithAllowList([]string{"127.0.0.0/8"}))
 	server := NewIXFRServer(axfrServer)
 
 	// Create zone
@@ -703,7 +703,7 @@ func TestIXFRServer_HandleIXFR_TSIGVerification(t *testing.T) {
 }
 
 func TestIXFRServer_generateIncrementalIXFR_NoJournal(t *testing.T) {
-	axfrServer := NewAXFRServer(make(map[string]*zone.Zone))
+	axfrServer := NewAXFRServer(make(map[string]*zone.Zone), WithAllowList([]string{"127.0.0.0/8"}))
 	server := NewIXFRServer(axfrServer)
 
 	z := zone.NewZone("example.com.")
@@ -722,7 +722,7 @@ func TestIXFRServer_generateIncrementalIXFR_NoJournal(t *testing.T) {
 }
 
 func TestIXFRServer_generateIncrementalIXFR_SerialNotInRange(t *testing.T) {
-	axfrServer := NewAXFRServer(make(map[string]*zone.Zone))
+	axfrServer := NewAXFRServer(make(map[string]*zone.Zone), WithAllowList([]string{"127.0.0.0/8"}))
 	server := NewIXFRServer(axfrServer)
 
 	z := zone.NewZone("example.com.")
@@ -742,7 +742,7 @@ func TestIXFRServer_generateIncrementalIXFR_SerialNotInRange(t *testing.T) {
 }
 
 func TestIXFRServer_generateIncrementalIXFR_Success(t *testing.T) {
-	axfrServer := NewAXFRServer(make(map[string]*zone.Zone))
+	axfrServer := NewAXFRServer(make(map[string]*zone.Zone), WithAllowList([]string{"127.0.0.0/8"}))
 	server := NewIXFRServer(axfrServer)
 
 	z := zone.NewZone("example.com.")
@@ -783,7 +783,7 @@ func TestIXFRServer_generateIncrementalIXFR_Success(t *testing.T) {
 }
 
 func TestIXFRServer_changeToRR_InvalidRData(t *testing.T) {
-	axfrServer := NewAXFRServer(make(map[string]*zone.Zone))
+	axfrServer := NewAXFRServer(make(map[string]*zone.Zone), WithAllowList([]string{"127.0.0.0/8"}))
 	server := NewIXFRServer(axfrServer)
 
 	change := zone.RecordChange{

@@ -133,7 +133,7 @@ func (s *AXFRServer) RemoveZone(zoneName string) {
 // IsAllowed checks if a client IP is allowed to request AXFR
 func (s *AXFRServer) IsAllowed(clientIP net.IP) bool {
 	if len(s.allowList) == 0 {
-		return true // Allow all if no list configured
+		return false // Deny by default — require explicit allow-list configuration
 	}
 	for _, network := range s.allowList {
 		if network.Contains(clientIP) {

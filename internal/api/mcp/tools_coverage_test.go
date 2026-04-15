@@ -132,10 +132,11 @@ func TestCallZoneGet_GetZoneError(t *testing.T) {
 // TestCallZoneCreate_WithDefaultTTL covers zone create with default TTL.
 func TestCallZoneCreate_WithDefaultTTL(t *testing.T) {
 	zm := &MockZoneManager{}
-	handler := NewDNSToolsHandler(zm, nil, nil, nil, nil)
+	handler := NewDNSToolsHandler(zm, nil, nil, nil, nil).WithAuth(&MockAuthProvider{})
 
 	result, err := handler.CallTool("zone_create", map[string]interface{}{
-		"name": "newzone.com",
+		"name":       "newzone.com",
+		"auth_token": "test-token",
 		// No ttl provided - should use default 3600
 	})
 	if err != nil {
@@ -150,13 +151,14 @@ func TestCallZoneCreate_WithDefaultTTL(t *testing.T) {
 // TestCallRecordAdd_WithDefaultTTL covers record add with default TTL.
 func TestCallRecordAdd_WithDefaultTTL(t *testing.T) {
 	zm := &MockZoneManager{}
-	handler := NewDNSToolsHandler(zm, nil, nil, nil, nil)
+	handler := NewDNSToolsHandler(zm, nil, nil, nil, nil).WithAuth(&MockAuthProvider{})
 
 	result, err := handler.CallTool("record_add", map[string]interface{}{
-		"zone":  "example.com",
-		"name":  "www",
-		"type":  "A",
-		"value": "192.0.2.1",
+		"zone":       "example.com",
+		"name":       "www",
+		"type":       "A",
+		"value":      "192.0.2.1",
+		"auth_token": "test-token",
 		// No ttl provided - should use default 3600
 	})
 	if err != nil {

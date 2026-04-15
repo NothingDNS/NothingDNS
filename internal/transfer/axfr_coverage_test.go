@@ -265,7 +265,7 @@ func TestAXFRServer_HandleAXFR_MultipleQuestions(t *testing.T) {
 func TestAXFRServer_HandleAXFR_TSIGKeyNotFound(t *testing.T) {
 	zones := make(map[string]*zone.Zone)
 	ks := NewKeyStore()
-	server := NewAXFRServer(zones, WithKeyStore(ks))
+	server := NewAXFRServer(zones, WithKeyStore(ks), WithAllowList([]string{"127.0.0.0/8"}))
 
 	z := zone.NewZone("example.com.")
 	z.SOA = &zone.SOARecord{
@@ -316,7 +316,7 @@ func TestAXFRServer_HandleAXFR_WithTSIG(t *testing.T) {
 	}
 	ks.AddKey(key)
 
-	server := NewAXFRServer(zones, WithKeyStore(ks))
+	server := NewAXFRServer(zones, WithKeyStore(ks), WithAllowList([]string{"127.0.0.0/8"}))
 
 	z := zone.NewZone("example.com.")
 	z.SOA = &zone.SOARecord{
@@ -445,7 +445,7 @@ func TestAXFRServer_HandleAXFR_TSIGVerificationFailure(t *testing.T) {
 	}
 	ks.AddKey(key)
 
-	server := NewAXFRServer(zones, WithKeyStore(ks))
+	server := NewAXFRServer(zones, WithKeyStore(ks), WithAllowList([]string{"127.0.0.0/8"}))
 
 	z := zone.NewZone("example.com.")
 	z.SOA = &zone.SOARecord{
@@ -497,7 +497,7 @@ func TestAXFRServer_HandleAXFR_TSIGVerificationFailure(t *testing.T) {
 func TestAXFRServer_HandleAXFR_GetTSIGKeyNameError(t *testing.T) {
 	zones := make(map[string]*zone.Zone)
 	ks := NewKeyStore()
-	server := NewAXFRServer(zones, WithKeyStore(ks))
+	server := NewAXFRServer(zones, WithKeyStore(ks), WithAllowList([]string{"127.0.0.0/8"}))
 
 	z := zone.NewZone("example.com.")
 	z.SOA = &zone.SOARecord{

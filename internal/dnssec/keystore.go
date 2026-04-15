@@ -6,9 +6,12 @@
 package dnssec
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/binary"
@@ -21,11 +24,14 @@ import (
 )
 
 // KeyStore provides persistent storage for DNSSEC signing keys.
+// When an encryption key is provided, private key material is encrypted at rest
+// using AES-256-GCM. Public key data is stored unencrypted.
 type KeyStore struct {
 	// store provides bucket-based KV operations. We accept an interface
 	// to avoid a circular import with the storage package.
-	store KeyStoreBackend
-	mu    sync.RWMutex
+	store         KeyStoreBackend
+	mu            sync.RWMutex
+	encryptionKey []byte // AES-256 key for encrypting private keys at rest
 }
 
 // KeyStoreBackend abstracts the KVStore operations needed by KeyStore.
@@ -80,6 +86,68 @@ func NewKeyStore(store KeyStoreBackend) *KeyStore {
 	return &KeyStore{store: store}
 }
 
+// NewKeyStoreWithEncryption creates a KeyStore that encrypts private key material at rest.
+// The encryptionKey must be exactly 32 bytes (AES-256).
+func NewKeyStoreWithEncryption(store KeyStoreBackend, encryptionKey []byte) (*KeyStore, error) {
+	if len(encryptionKey) != 32 {
+		return nil, fmt.Errorf("encryption key must be 32 bytes for AES-256, got %d", len(encryptionKey))
+	}
+	return &KeyStore{store: store, encryptionKey: make([]byte, len(encryptionKey))}, nil
+}
+
+// SetEncryptionKey enables or changes the encryption key for private keys at rest.
+func (ks *KeyStore) SetEncryptionKey(key []byte) {
+	ks.mu.Lock()
+	defer ks.mu.Unlock()
+	ks.encryptionKey = make([]byte, len(key))
+	copy(ks.encryptionKey, key)
+}
+
+// encryptPrivateKey encrypts private key data using AES-256-GCM.
+// Format: nonce(12) + ciphertext+tag.
+// Returns plaintext unchanged if no encryption key is set.
+func (ks *KeyStore) encryptPrivateKey(plaintext []byte) ([]byte, error) {
+	if len(ks.encryptionKey) == 0 {
+		return plaintext, nil
+	}
+	block, err := aes.NewCipher(ks.encryptionKey)
+	if err != nil {
+		return nil, fmt.Errorf("aes cipher: %w", err)
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("gcm: %w", err)
+	}
+	nonce := make([]byte, aead.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, fmt.Errorf("nonce: %w", err)
+	}
+	// Prepend nonce to ciphertext
+	return append(nonce, aead.Seal(nil, nonce, plaintext, nil)...), nil
+}
+
+// decryptPrivateKey decrypts private key data encrypted with AES-256-GCM.
+// Returns ciphertext unchanged if no encryption key is set.
+func (ks *KeyStore) decryptPrivateKey(ciphertext []byte) ([]byte, error) {
+	if len(ks.encryptionKey) == 0 {
+		return ciphertext, nil
+	}
+	block, err := aes.NewCipher(ks.encryptionKey)
+	if err != nil {
+		return nil, fmt.Errorf("aes cipher: %w", err)
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("gcm: %w", err)
+	}
+	nonceSize := aead.NonceSize()
+	if len(ciphertext) < nonceSize+aead.Overhead() {
+		return nil, fmt.Errorf("ciphertext too short")
+	}
+	nonce, ct := ciphertext[:nonceSize], ciphertext[nonceSize:]
+	return aead.Open(nil, nonce, ct, nil)
+}
+
 // SaveKey persists a signing key for the given zone.
 func (ks *KeyStore) SaveKey(zoneName string, key *SigningKey) error {
 	ks.mu.Lock()
@@ -88,6 +156,15 @@ func (ks *KeyStore) SaveKey(zoneName string, key *SigningKey) error {
 	stored, err := serializeSigningKey(key)
 	if err != nil {
 		return fmt.Errorf("serialize key: %w", err)
+	}
+
+	// Encrypt private key data at rest
+	if len(ks.encryptionKey) > 0 {
+		encrypted, encErr := ks.encryptPrivateKey(stored.PrivateKeyData)
+		if encErr != nil {
+			return fmt.Errorf("encrypt private key: %w", encErr)
+		}
+		stored.PrivateKeyData = encrypted
 	}
 
 	encoded := encodeStoredKey(stored)
@@ -129,6 +206,14 @@ func (ks *KeyStore) LoadKeys(zoneName string) ([]*StoredKey, error) {
 			stored, err := decodeStoredKey(v)
 			if err != nil {
 				return fmt.Errorf("decode key %x: %w", k, err)
+			}
+			// Decrypt private key data if encryption is enabled
+			if len(ks.encryptionKey) > 0 {
+				decrypted, decErr := ks.decryptPrivateKey(stored.PrivateKeyData)
+				if decErr != nil {
+					return fmt.Errorf("decrypt key %x: %w", k, decErr)
+				}
+				stored.PrivateKeyData = decrypted
 			}
 			keys = append(keys, stored)
 			return nil

@@ -449,7 +449,7 @@ func TestSlaveManager_RemoveSlaveZone_Nonexistent(t *testing.T) {
 func TestAXFRServer_generateAXFRRecords_NoSOA(t *testing.T) {
 	z := zone.NewZone("nosoa.example.com.")
 	// No SOA set
-	s := NewAXFRServer(map[string]*zone.Zone{"nosoa.example.com.": z})
+	s := NewAXFRServer(map[string]*zone.Zone{"nosoa.example.com.": z}, WithAllowList([]string{"127.0.0.0/8"}))
 	_, err := s.generateAXFRRecords(z)
 	if err == nil {
 		t.Error("expected error for zone without SOA")
@@ -469,7 +469,7 @@ func TestAXFRServer_generateAXFRRecords_WithRecords(t *testing.T) {
 	z.Records["withrecs.example.com."] = []zone.Record{
 		{Name: "withrecs.example.com.", Type: "A", TTL: 300, RData: "1.2.3.4"},
 	}
-	s := NewAXFRServer(map[string]*zone.Zone{"withrecs.example.com.": z})
+	s := NewAXFRServer(map[string]*zone.Zone{"withrecs.example.com.": z}, WithAllowList([]string{"127.0.0.0/8"}))
 	records, err := s.generateAXFRRecords(z)
 	if err != nil {
 		t.Fatalf("generateAXFRRecords: %v", err)
@@ -523,7 +523,7 @@ func TestIXFRServer_HandleIXFR_TSIGKeyNotFound_Extra(t *testing.T) {
 	z.SOA = &zone.SOARecord{
 		MName: "ns1.example.com.", RName: "admin.example.com.", Serial: 1,
 	}
-	axfrServer := NewAXFRServer(map[string]*zone.Zone{"tsig.example.com.": z})
+	axfrServer := NewAXFRServer(map[string]*zone.Zone{"tsig.example.com.": z}, WithAllowList([]string{"127.0.0.0/8"}))
 	ks := NewKeyStore()
 	axfrServer.keyStore = ks
 
@@ -561,7 +561,7 @@ func TestIXFRServer_generateSingleSOA_ValidZone_Extra(t *testing.T) {
 		MName: "ns1.example.com.", RName: "admin.example.com.",
 		Serial: 10, TTL: 3600,
 	}
-	axfrServer := NewAXFRServer(map[string]*zone.Zone{"singleSOA.example.com.": z})
+	axfrServer := NewAXFRServer(map[string]*zone.Zone{"singleSOA.example.com.": z}, WithAllowList([]string{"127.0.0.0/8"}))
 	ixfrServer := NewIXFRServer(axfrServer)
 
 	records, err := ixfrServer.generateSingleSOA(z)
@@ -586,7 +586,7 @@ func TestIXFRServer_HandleIXFR_ClientUpToDate_Extra(t *testing.T) {
 		MName: "ns1.example.com.", RName: "admin.example.com.",
 		Serial: 100, TTL: 3600,
 	}
-	axfrServer := NewAXFRServer(map[string]*zone.Zone{"uptodate.example.com.": z})
+	axfrServer := NewAXFRServer(map[string]*zone.Zone{"uptodate.example.com.": z}, WithAllowList([]string{"127.0.0.0/8"}))
 	ixfrServer := NewIXFRServer(axfrServer)
 
 	name, _ := protocol.ParseName("uptodate.example.com.")
@@ -655,7 +655,7 @@ func TestIXFRServer_HandleIXFR_TSIGVerificationFail_Extra(t *testing.T) {
 	z.SOA = &zone.SOARecord{
 		MName: "ns1.example.com.", RName: "admin.example.com.", Serial: 1,
 	}
-	axfrServer := NewAXFRServer(map[string]*zone.Zone{"tsigfail.example.com.": z})
+	axfrServer := NewAXFRServer(map[string]*zone.Zone{"tsigfail.example.com.": z}, WithAllowList([]string{"127.0.0.0/8"}))
 	ks := NewKeyStore()
 	ks.AddKey(&TSIGKey{
 		Name:      "testkey.",

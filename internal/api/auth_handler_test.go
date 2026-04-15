@@ -339,6 +339,9 @@ func TestHandleUsers_ListUsers(t *testing.T) {
 	s := newServerWithAuth(store)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
+	// Set authenticated user context with operator role
+	ctx := WithUser(req.Context(), &auth.User{Username: "admin", Role: auth.RoleAdmin})
+	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
 
 	s.handleUsers(rec, req)

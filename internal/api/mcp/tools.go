@@ -129,10 +129,10 @@ func (h *DNSToolsHandler) WithAuth(authProvider AuthProvider) *DNSToolsHandler {
 }
 
 // requireAuth checks that the caller has provided a valid token with at least the required role.
-// If no auth provider is configured, the check is skipped (backward compatible).
+// If no auth provider is configured, destructive operations are denied.
 func (h *DNSToolsHandler) requireAuth(args map[string]interface{}, requiredRole auth.Role) error {
 	if h.authProvider == nil {
-		return nil
+		return fmt.Errorf("authentication is not configured — destructive operations require an auth provider")
 	}
 	token := getString(args, "auth_token")
 	if token == "" {

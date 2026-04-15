@@ -2,7 +2,12 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
+	"strings"
+
+	"github.com/nothingdns/nothingdns/internal/util"
 )
 
 func (s *Server) handleUpstreams(w http.ResponseWriter, r *http.Request) {
@@ -59,6 +64,11 @@ func (s *Server) handleUpstreams(w http.ResponseWriter, r *http.Request) {
 				s.writeError(w, http.StatusBadRequest, "Server address required")
 				return
 			}
+			// Validate upstream server is not a private/internal IP (SSRF protection)
+			if err := validateUpstreamAddress(req.Server); err != nil {
+				s.writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
 			if err := s.upstreamClient.AddServer(req.Server); err != nil {
 				s.writeError(w, http.StatusConflict, sanitizeError(err, "Operation failed"))
 				return
@@ -80,6 +90,37 @@ func (s *Server) handleUpstreams(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusBadRequest, "Invalid action: must be 'add' or 'remove'")
 		}
 	}
+}
+
+// validateUpstreamAddress checks that an upstream server address does not resolve
+// to a private/internal IP address, preventing SSRF attacks.
+func validateUpstreamAddress(addr string) error {
+	host := addr
+	if h, _, err := net.SplitHostPort(addr); err == nil {
+		host = h
+	}
+	// Strip brackets from IPv6 addresses
+	host = strings.TrimPrefix(host, "[")
+	host = strings.TrimSuffix(host, "]")
+	// Check if it's an IP literal
+	if ip := net.ParseIP(host); ip != nil {
+		if util.IsPrivateIP(ip) {
+			return fmt.Errorf("upstream server must not use a private/internal IP address")
+		}
+		return nil
+	}
+	// Resolve hostname and check all resulting IPs
+	ips, err := net.LookupHost(host)
+	if err != nil {
+		// Allow unresolvable hostnames — they'll fail at connection time
+		return nil
+	}
+	for _, ipStr := range ips {
+		if ip := net.ParseIP(ipStr); ip != nil && util.IsPrivateIP(ip) {
+			return fmt.Errorf("upstream server hostname resolves to private/internal IP %s", ipStr)
+		}
+	}
+	return nil
 }
 
 // handleACL returns ACL rules or updates them.

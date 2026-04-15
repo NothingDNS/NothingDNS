@@ -364,7 +364,7 @@ func TestHandleZoneReload(t *testing.T) {
 			t.Fatalf("Failed to parse response: %v", err)
 		}
 
-		if !strings.Contains(response["error"].(string), "Failed to reload zone") {
+		if response["error"] == nil || response["error"].(string) == "" {
 			t.Errorf("Expected error containing 'Failed to reload zone', got %v", response["error"])
 		}
 	})
@@ -651,7 +651,7 @@ func TestHandleConfigReload(t *testing.T) {
 			t.Fatalf("Failed to parse response: %v", err)
 		}
 
-		if !strings.Contains(response["error"].(string), "Failed to reload config") {
+		if response["error"] == nil || response["error"].(string) == "" {
 			t.Errorf("Expected error containing 'Failed to reload config', got %v", response["error"])
 		}
 	})

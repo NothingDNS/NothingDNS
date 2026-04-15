@@ -277,6 +277,8 @@ func NewGossipProtocol(config GossipConfig, nodeList *NodeList) (*GossipProtocol
 			cancel()
 			return nil, fmt.Errorf("init encryption: %w", err)
 		}
+	} else {
+		util.Warnf("Cluster gossip encryption is not configured - all cluster communication is transmitted in plaintext. Configure encryption_key for production deployments.")
 	}
 
 	return gp, nil

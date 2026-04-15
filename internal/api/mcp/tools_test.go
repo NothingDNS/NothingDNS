@@ -3,6 +3,8 @@ package mcp
 import (
 	"errors"
 	"testing"
+
+	"github.com/nothingdns/nothingdns/internal/auth"
 )
 
 // Mock implementations for testing
@@ -128,6 +130,17 @@ type MockStatsProvider struct {
 
 func (m *MockStatsProvider) GetStats() ServerStats {
 	return m.stats
+}
+
+// MockAuthProvider implements AuthProvider for testing.
+type MockAuthProvider struct{}
+
+func (m *MockAuthProvider) ValidateToken(token string) (*auth.User, error) {
+	return &auth.User{Username: "testuser", Role: auth.RoleAdmin}, nil
+}
+
+func (m *MockAuthProvider) HasRole(username string, required auth.Role) bool {
+	return true // Grant all roles in tests
 }
 
 // Tests
@@ -340,12 +353,13 @@ func TestCallZoneGetNotFound(t *testing.T) {
 
 func TestCallZoneCreate(t *testing.T) {
 	zm := &MockZoneManager{}
-	handler := NewDNSToolsHandler(zm, nil, nil, nil, nil)
+	handler := NewDNSToolsHandler(zm, nil, nil, nil, nil).WithAuth(&MockAuthProvider{})
 
 	result, err := handler.CallTool("zone_create", map[string]interface{}{
 		"name":        "newzone.com",
 		"ttl":         3600,
 		"admin_email": "admin@newzone.com",
+		"auth_token":  "test-token",
 	})
 	if err != nil {
 		t.Fatalf("CallTool failed: %v", err)
@@ -357,9 +371,11 @@ func TestCallZoneCreate(t *testing.T) {
 }
 
 func TestCallZoneCreateMissingName(t *testing.T) {
-	handler := NewDNSToolsHandler(nil, nil, nil, nil, nil)
+	handler := NewDNSToolsHandler(nil, nil, nil, nil, nil).WithAuth(&MockAuthProvider{})
 
-	_, err := handler.CallTool("zone_create", map[string]interface{}{})
+	_, err := handler.CallTool("zone_create", map[string]interface{}{
+		"auth_token": "test-token",
+	})
 	if err == nil {
 		t.Error("Expected error for missing name")
 	}
@@ -367,10 +383,11 @@ func TestCallZoneCreateMissingName(t *testing.T) {
 
 func TestCallZoneCreateError(t *testing.T) {
 	zm := &MockZoneManager{createErr: errors.New("create failed")}
-	handler := NewDNSToolsHandler(zm, nil, nil, nil, nil)
+	handler := NewDNSToolsHandler(zm, nil, nil, nil, nil).WithAuth(&MockAuthProvider{})
 
 	result, err := handler.CallTool("zone_create", map[string]interface{}{
-		"name": "newzone.com",
+		"name":       "newzone.com",
+		"auth_token": "test-token",
 	})
 	if err != nil {
 		t.Fatalf("CallTool failed: %v", err)
@@ -383,10 +400,11 @@ func TestCallZoneCreateError(t *testing.T) {
 
 func TestCallZoneDelete(t *testing.T) {
 	zm := &MockZoneManager{}
-	handler := NewDNSToolsHandler(zm, nil, nil, nil, nil)
+	handler := NewDNSToolsHandler(zm, nil, nil, nil, nil).WithAuth(&MockAuthProvider{})
 
 	result, err := handler.CallTool("zone_delete", map[string]interface{}{
-		"name": "example.com",
+		"name":       "example.com",
+		"auth_token": "test-token",
 	})
 	if err != nil {
 		t.Fatalf("CallTool failed: %v", err)
@@ -398,9 +416,11 @@ func TestCallZoneDelete(t *testing.T) {
 }
 
 func TestCallZoneDeleteMissingName(t *testing.T) {
-	handler := NewDNSToolsHandler(nil, nil, nil, nil, nil)
+	handler := NewDNSToolsHandler(nil, nil, nil, nil, nil).WithAuth(&MockAuthProvider{})
 
-	_, err := handler.CallTool("zone_delete", map[string]interface{}{})
+	_, err := handler.CallTool("zone_delete", map[string]interface{}{
+		"auth_token": "test-token",
+	})
 	if err == nil {
 		t.Error("Expected error for missing name")
 	}
@@ -408,10 +428,11 @@ func TestCallZoneDeleteMissingName(t *testing.T) {
 
 func TestCallZoneDeleteError(t *testing.T) {
 	zm := &MockZoneManager{deleteErr: errors.New("delete failed")}
-	handler := NewDNSToolsHandler(zm, nil, nil, nil, nil)
+	handler := NewDNSToolsHandler(zm, nil, nil, nil, nil).WithAuth(&MockAuthProvider{})
 
 	result, err := handler.CallTool("zone_delete", map[string]interface{}{
-		"name": "example.com",
+		"name":       "example.com",
+		"auth_token": "test-token",
 	})
 	if err != nil {
 		t.Fatalf("CallTool failed: %v", err)
@@ -424,14 +445,15 @@ func TestCallZoneDeleteError(t *testing.T) {
 
 func TestCallRecordAdd(t *testing.T) {
 	zm := &MockZoneManager{}
-	handler := NewDNSToolsHandler(zm, nil, nil, nil, nil)
+	handler := NewDNSToolsHandler(zm, nil, nil, nil, nil).WithAuth(&MockAuthProvider{})
 
 	result, err := handler.CallTool("record_add", map[string]interface{}{
-		"zone":  "example.com",
-		"name":  "www",
-		"type":  "A",
-		"value": "192.0.2.1",
-		"ttl":   3600,
+		"zone":       "example.com",
+		"name":       "www",
+		"type":       "A",
+		"value":      "192.0.2.1",
+		"ttl":        3600,
+		"auth_token": "test-token",
 	})
 	if err != nil {
 		t.Fatalf("CallTool failed: %v", err)
@@ -443,16 +465,16 @@ func TestCallRecordAdd(t *testing.T) {
 }
 
 func TestCallRecordAddMissingFields(t *testing.T) {
-	handler := NewDNSToolsHandler(nil, nil, nil, nil, nil)
+	handler := NewDNSToolsHandler(nil, nil, nil, nil, nil).WithAuth(&MockAuthProvider{})
 
 	tests := []struct {
 		name string
 		args map[string]interface{}
 	}{
-		{"missing zone", map[string]interface{}{"name": "www", "type": "A", "value": "1.2.3.4"}},
-		{"missing name", map[string]interface{}{"zone": "example.com", "type": "A", "value": "1.2.3.4"}},
-		{"missing type", map[string]interface{}{"zone": "example.com", "name": "www", "value": "1.2.3.4"}},
-		{"missing value", map[string]interface{}{"zone": "example.com", "name": "www", "type": "A"}},
+		{"missing zone", map[string]interface{}{"name": "www", "type": "A", "value": "1.2.3.4", "auth_token": "t"}},
+		{"missing name", map[string]interface{}{"zone": "example.com", "type": "A", "value": "1.2.3.4", "auth_token": "t"}},
+		{"missing type", map[string]interface{}{"zone": "example.com", "name": "www", "value": "1.2.3.4", "auth_token": "t"}},
+		{"missing value", map[string]interface{}{"zone": "example.com", "name": "www", "type": "A", "auth_token": "t"}},
 	}
 
 	for _, tc := range tests {
@@ -467,13 +489,14 @@ func TestCallRecordAddMissingFields(t *testing.T) {
 
 func TestCallRecordAddError(t *testing.T) {
 	zm := &MockZoneManager{addRecErr: errors.New("add failed")}
-	handler := NewDNSToolsHandler(zm, nil, nil, nil, nil)
+	handler := NewDNSToolsHandler(zm, nil, nil, nil, nil).WithAuth(&MockAuthProvider{})
 
 	result, err := handler.CallTool("record_add", map[string]interface{}{
-		"zone":  "example.com",
-		"name":  "www",
-		"type":  "A",
-		"value": "192.0.2.1",
+		"zone":       "example.com",
+		"name":       "www",
+		"type":       "A",
+		"value":      "192.0.2.1",
+		"auth_token": "test-token",
 	})
 	if err != nil {
 		t.Fatalf("CallTool failed: %v", err)
@@ -486,12 +509,13 @@ func TestCallRecordAddError(t *testing.T) {
 
 func TestCallRecordDelete(t *testing.T) {
 	zm := &MockZoneManager{}
-	handler := NewDNSToolsHandler(zm, nil, nil, nil, nil)
+	handler := NewDNSToolsHandler(zm, nil, nil, nil, nil).WithAuth(&MockAuthProvider{})
 
 	result, err := handler.CallTool("record_delete", map[string]interface{}{
-		"zone": "example.com",
-		"name": "www",
-		"type": "A",
+		"zone":       "example.com",
+		"name":       "www",
+		"type":       "A",
+		"auth_token": "test-token",
 	})
 	if err != nil {
 		t.Fatalf("CallTool failed: %v", err)
@@ -503,15 +527,15 @@ func TestCallRecordDelete(t *testing.T) {
 }
 
 func TestCallRecordDeleteMissingFields(t *testing.T) {
-	handler := NewDNSToolsHandler(nil, nil, nil, nil, nil)
+	handler := NewDNSToolsHandler(nil, nil, nil, nil, nil).WithAuth(&MockAuthProvider{})
 
 	tests := []struct {
 		name string
 		args map[string]interface{}
 	}{
-		{"missing zone", map[string]interface{}{"name": "www", "type": "A"}},
-		{"missing name", map[string]interface{}{"zone": "example.com", "type": "A"}},
-		{"missing type", map[string]interface{}{"zone": "example.com", "name": "www"}},
+		{"missing zone", map[string]interface{}{"name": "www", "type": "A", "auth_token": "t"}},
+		{"missing name", map[string]interface{}{"zone": "example.com", "type": "A", "auth_token": "t"}},
+		{"missing type", map[string]interface{}{"zone": "example.com", "name": "www", "auth_token": "t"}},
 	}
 
 	for _, tc := range tests {
@@ -526,12 +550,13 @@ func TestCallRecordDeleteMissingFields(t *testing.T) {
 
 func TestCallRecordDeleteError(t *testing.T) {
 	zm := &MockZoneManager{delRecErr: errors.New("delete failed")}
-	handler := NewDNSToolsHandler(zm, nil, nil, nil, nil)
+	handler := NewDNSToolsHandler(zm, nil, nil, nil, nil).WithAuth(&MockAuthProvider{})
 
 	result, err := handler.CallTool("record_delete", map[string]interface{}{
-		"zone": "example.com",
-		"name": "www",
-		"type": "A",
+		"zone":       "example.com",
+		"name":       "www",
+		"type":       "A",
+		"auth_token": "test-token",
 	})
 	if err != nil {
 		t.Fatalf("CallTool failed: %v", err)
@@ -619,9 +644,11 @@ func TestCallCacheStatsNoCache(t *testing.T) {
 
 func TestCallCacheFlush(t *testing.T) {
 	cache := &MockCacheManager{}
-	handler := NewDNSToolsHandler(nil, cache, nil, nil, nil)
+	handler := NewDNSToolsHandler(nil, cache, nil, nil, nil).WithAuth(&MockAuthProvider{})
 
-	result, err := handler.CallTool("cache_flush", nil)
+	result, err := handler.CallTool("cache_flush", map[string]interface{}{
+		"auth_token": "test-token",
+	})
 	if err != nil {
 		t.Fatalf("CallTool failed: %v", err)
 	}
@@ -632,7 +659,7 @@ func TestCallCacheFlush(t *testing.T) {
 }
 
 func TestCallCacheFlushNoCache(t *testing.T) {
-	handler := NewDNSToolsHandler(nil, nil, nil, nil, nil)
+	handler := NewDNSToolsHandler(nil, nil, nil, nil, nil).WithAuth(&MockAuthProvider{})
 
 	result, err := handler.CallTool("cache_flush", nil)
 	if err != nil {

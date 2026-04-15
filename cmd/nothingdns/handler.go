@@ -481,7 +481,11 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 	// Use iterative recursive resolver if enabled
 	if h.resolver != nil {
 		h.logger.Debugf("Resolving %s iteratively", qname)
-		resp, err := h.resolver.Resolve(context.Background(), qname, qtype)
+		resp, err := func() (*protocol.Message, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			return h.resolver.Resolve(ctx, qname, qtype)
+		}()
 		if err != nil {
 			h.logger.Warnf("Iterative resolution failed for %s: %v", qname, err)
 			// RFC 8767: Try serve-stale when resolution fails

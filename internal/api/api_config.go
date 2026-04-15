@@ -2,7 +2,6 @@ package api
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -26,7 +25,7 @@ func (s *Server) handleConfigReload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.reloadFunc(); err != nil {
-		s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to reload config: %v", err))
+		s.writeError(w, http.StatusInternalServerError, sanitizeError(err, "Failed to reload config"))
 		return
 	}
 
@@ -74,6 +73,7 @@ func (s *Server) handleConfigGet(w http.ResponseWriter, r *http.Request) {
 	if server, ok := publicCfg["Server"].(map[string]any); ok {
 		if httpCfg, ok := server["HTTP"].(map[string]any); ok {
 			httpCfg["AuthToken"] = ""
+			httpCfg["AuthSecret"] = ""
 		}
 	}
 	if cluster, ok := publicCfg["Cluster"].(map[string]any); ok {

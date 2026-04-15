@@ -32,6 +32,10 @@ const (
 
 	// UDPRateLimitMaxQueries is the maximum queries per IP per window.
 	UDPRateLimitMaxQueries = 100
+
+	// UDPRateLimitMaxEntries caps the rate limiter map size to prevent memory exhaustion
+	// from spoofed-source DoS attacks between prune cycles.
+	UDPRateLimitMaxEntries = 50000
 )
 
 // rateEntry tracks query timestamps for a single IP.
@@ -42,17 +46,19 @@ type rateEntry struct {
 
 // rateLimiter implements a sliding window per-IP rate limiter for UDP.
 type rateLimiter struct {
-	mu       sync.Mutex
-	entries  map[string]*rateEntry
-	window   time.Duration
-	maxCount int
+	mu         sync.Mutex
+	entries    map[string]*rateEntry
+	window     time.Duration
+	maxCount   int
+	maxEntries int
 }
 
 func newRateLimiter(window time.Duration, maxCount int) *rateLimiter {
 	return &rateLimiter{
-		entries:  make(map[string]*rateEntry),
-		window:   window,
-		maxCount: maxCount,
+		entries:    make(map[string]*rateEntry),
+		window:     window,
+		maxCount:   maxCount,
+		maxEntries: UDPRateLimitMaxEntries,
 	}
 }
 
@@ -64,6 +70,10 @@ func (r *rateLimiter) Allow(ip string) bool {
 	now := time.Now()
 	e, ok := r.entries[ip]
 	if !ok || now.Sub(e.windowStart) > r.window {
+		// Cap map size to prevent memory exhaustion from spoofed sources
+		if !ok && len(r.entries) >= r.maxEntries {
+			return false
+		}
 		r.entries[ip] = &rateEntry{count: 1, windowStart: now}
 		return true
 	}

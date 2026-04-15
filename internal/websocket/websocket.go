@@ -27,6 +27,9 @@ const (
 	DefaultWSRateLimitWindow = time.Second
 	// DefaultWSRateLimitMaxMessages is the maximum messages per connection per window.
 	DefaultWSRateLimitMaxMessages = 100
+	// MaxFragmentationSize is the maximum size of a reassembled fragmented message.
+	// DNS messages are at most 65535 bytes; 64KB provides ample room.
+	MaxFragmentationSize = 65536
 )
 
 // IsWebSocketRequest checks if the request is a WebSocket upgrade.
@@ -204,8 +207,15 @@ func (c *Conn) ReadMessage() (int, []byte, error) {
 				c.mu.Unlock()
 				continue
 			}
-			c.fragAccum = append(c.fragAccum, payload...)
-			if fin {
+			if len(c.fragAccum)+len(payload) > MaxFragmentationSize {
+					c.fragmented = false
+					c.fragAccum = nil
+					c.mu.Unlock()
+					c.writeClose(1009, "message too large")
+					return 0, nil, errors.New("websocket: fragmented message exceeds size limit")
+				}
+				c.fragAccum = append(c.fragAccum, payload...)
+				if fin {
 				msgType := c.fragType
 				msg := c.fragAccum
 				c.fragmented = false
@@ -237,6 +247,13 @@ func (c *Conn) ReadMessage() (int, []byte, error) {
 			}
 			c.fragmented = true
 			c.fragType = 1
+			if len(payload) > MaxFragmentationSize {
+				c.fragmented = false
+				c.fragAccum = nil
+				c.mu.Unlock()
+				c.writeClose(1009, "message too large")
+				return 0, nil, errors.New("websocket: fragmented message exceeds size limit")
+			}
 			c.fragAccum = append(c.fragAccum, payload...)
 			c.mu.Unlock()
 
@@ -256,6 +273,13 @@ func (c *Conn) ReadMessage() (int, []byte, error) {
 			}
 			c.fragmented = true
 			c.fragType = 2
+			if len(payload) > MaxFragmentationSize {
+				c.fragmented = false
+				c.fragAccum = nil
+				c.mu.Unlock()
+				c.writeClose(1009, "message too large")
+				return 0, nil, errors.New("websocket: fragmented message exceeds size limit")
+			}
 			c.fragAccum = append(c.fragAccum, payload...)
 			c.mu.Unlock()
 

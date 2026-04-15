@@ -97,6 +97,10 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Serialize bootstrap to prevent TOCTOU race between ListUsers and CreateUser
+	s.bootstrapMu.Lock()
+	defer s.bootstrapMu.Unlock()
+
 	if s.authStore == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Auth not configured")
 		return
@@ -230,6 +234,10 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
+		if !hasRole(r.Context(), s.authStore, auth.RoleOperator) {
+			s.writeError(w, http.StatusForbidden, "Operator role required")
+			return
+		}
 		users := s.authStore.ListUsers()
 		resp := make([]UserResponse, 0, len(users))
 		for _, u := range users {

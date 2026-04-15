@@ -781,7 +781,7 @@ func (s *Server) handleZoneReload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.zoneManager.Reload(zoneName); err != nil {
-		s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to reload zone: %v", err))
+		s.writeError(w, http.StatusInternalServerError, sanitizeError(err, "Failed to reload zone"))
 		return
 	}
 

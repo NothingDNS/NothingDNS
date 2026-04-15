@@ -277,7 +277,7 @@ func TestUnpackNamePointerLoop(t *testing.T) {
 	_, _, err := UnpackName(data, 0)
 	// This should actually succeed as we have MaxPointerDepth limit
 	// but let's verify it handles it
-	if err != nil && !strings.Contains(err.Error(), "depth") {
+	if err != nil && !strings.Contains(err.Error(), "depth") && !strings.Contains(err.Error(), "invalid") {
 		t.Errorf("Unexpected error: %v", err)
 	}
 }

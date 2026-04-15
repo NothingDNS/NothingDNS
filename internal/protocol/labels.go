@@ -305,8 +305,11 @@ func UnpackName(buf []byte, offset int) (*Name, int, error) {
 
 			pointer := int(Uint16(buf[offset:]) & PointerOffsetMask)
 
-			// Validate pointer is within buffer bounds
+			// Validate pointer is within buffer bounds and points backward (RFC 1035)
 			if pointer >= len(buf) {
+				return nil, 0, ErrInvalidPointer
+			}
+			if pointer >= offset {
 				return nil, 0, ErrInvalidPointer
 			}
 
