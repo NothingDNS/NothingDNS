@@ -26,6 +26,7 @@ import (
 	"github.com/nothingdns/nothingdns/internal/idna"
 	"github.com/nothingdns/nothingdns/internal/mdns"
 	"github.com/nothingdns/nothingdns/internal/metrics"
+	"github.com/nothingdns/nothingdns/internal/otel"
 	"github.com/nothingdns/nothingdns/internal/protocol"
 	"github.com/nothingdns/nothingdns/internal/resolver"
 	"github.com/nothingdns/nothingdns/internal/rpz"
@@ -67,6 +68,7 @@ type integratedHandler struct {
 	splitHorizon  *filter.SplitHorizon
 	viewZones     map[string]map[string]*zone.Zone // view name -> origin -> Zone
 	auditLogger   *audit.AuditLogger
+	tracer        *otel.Tracer
 	nsecCache     *cache.NSECCache // RFC 8198 aggressive NSEC caching
 	dns64Synth    *dns64.Synthesizer
 	cookieJar     *dnscookie.CookieJar
@@ -94,6 +96,14 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 	start := time.Now()
 	reqID := util.GenerateRequestID()
 
+	// OpenTelemetry tracing: create a span for this DNS query
+	var span *otel.Span
+	if h.tracer != nil {
+		_, span = h.tracer.StartSpan(context.Background(), "dns.query",
+			otel.WithAttr("req.id", reqID),
+		)
+	}
+
 	// Defer latency recording and audit logging
 	var qtypeStr string
 	var qnameAudit string
@@ -117,6 +127,17 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 				Latency:   latency,
 				CacheHit:  cacheHit,
 			})
+		}
+		// End tracing span with DNS attributes
+		if span != nil {
+			if qtypeStr != "" {
+				span.Attrs = append(span.Attrs,
+					otel.Attr{Key: "dns.qname", Value: qnameAudit},
+					otel.Attr{Key: "dns.qtype", Value: qtypeStr},
+					otel.Attr{Key: "dns.cache_hit", Value: cacheHit},
+				)
+			}
+			h.tracer.EndSpan(span, nil)
 		}
 	}()
 

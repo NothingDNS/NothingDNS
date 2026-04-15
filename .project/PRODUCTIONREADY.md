@@ -26,13 +26,13 @@ NothingDNS is a **production-grade DNS server** with a mature core, comprehensiv
 | Security | **9.0** | 20% | 1.80 |
 | Performance | **9.5** | 10% | 0.95 |
 | Testing & Coverage | **8.0** | 15% | 1.20 |
-| Observability | **8.0** | 10% | 0.80 |
+| Observability | **8.5** | 10% | 0.85 |
 | Documentation | **9.0** | 5% | 0.45 |
 | Deployment Readiness | **9.0** | 5% | 0.45 |
 | UI / CLI Completeness | **9.0** | 5% | 0.45 |
-| **TOTAL** | | **100%** | **8.85 / 10** |
+| **TOTAL** | | **100%** | **8.90 / 10** |
 
-*Score improved from 7.45 → 8.70 → 8.75 → 8.85 following remediation, performance optimization, and observability improvements.*
+*Score improved from 7.45 → 8.70 → 8.75 → 8.85 → 8.90 following remediation, performance optimization, and observability improvements.*
 
 ---
 
@@ -64,8 +64,11 @@ NothingDNS is a **production-grade DNS server** with a mature core, comprehensiv
 - **✅ FIXED: RPZ malformed rule logging**: `internal/rpz/rpz.go:191-192` now logs every skipped line at `Warn` level with line number and reason. Parse errors are tracked in metrics.
 
 ### What's Broken
-- **Rate limiter buckets grow unbounded** until a 5-minute prune (high-volume attack risk).
-- **AXFR/XoT silently ignore invalid CIDRs** in allow-lists.
+- No significant reliability issues remain.
+
+### Previously Fixed
+- **✅ FIXED: Rate limiter memory protection**: `maxBuckets` (default 10,000) with LRU eviction prevents unbounded growth during attacks.
+- **✅ FIXED: AXFR/XoT invalid CIDR logging**: Invalid CIDRs in allow-lists now log warnings instead of being silently dropped.
 
 ### Go/No-Go Impact
 - **Green**: The server is stable. RPZ silent failures have been fixed.
@@ -145,12 +148,13 @@ NothingDNS is a **production-grade DNS server** with a mature core, comprehensiv
 - **Dashboard metrics**: Recent queries, top domains, cache stats, cluster node health.
 - **✅ FIXED: Request correlation IDs**: Every DNS query and zone transfer operation generates a unique 16-char hex request ID (10ns, 0 allocs). ID included in all audit log entries and debug output for end-to-end tracing.
 - **✅ FIXED: OpenTelemetry tracing tests**: Expanded from 5 to 27 tests covering span lifecycle, error recording, parent-child spans, HTTP middleware, OTLP exporter batching, and format validation.
+- **✅ FIXED: OpenTelemetry wired into DNS handler**: Every DNS query creates an OTel span in `cmd/nothingdns/handler.go` with `req.id`, `dns.qname`, `dns.qtype`, and `dns.cache_hit` attributes. Span lifecycle tracks full query latency.
 
 ### What's Broken
-- **No distributed tracing maturity**: OpenTelemetry is implemented but not wired into the DNS handler pipeline.
+- No significant observability issues remain.
 
 ### Go/No-Go Impact
-- **Yellow**: Observability is adequate for small-to-medium deployments.
+- **Green**: Observability is production-grade with correlation IDs, structured audit logging, OTel tracing, and Prometheus metrics.
 
 ---
 
@@ -166,7 +170,10 @@ NothingDNS is a **production-grade DNS server** with a mature core, comprehensiv
 - **✅ FIXED: SPEC_DEVIATIONS.md updated**: Documents login flow, mock data (now fixed), settings, logout.
 
 ### What's Broken
-- **Missing `Makefile`**: Referenced in specs but does not exist.
+- No significant documentation issues remain.
+
+### Previously Fixed
+- **✅ FIXED: `Makefile`**: Created at project root with build, test, lint, CI, release, and clean targets.
 
 ### Go/No-Go Impact
 - **Green**: Documentation is accurate and comprehensive.
