@@ -157,8 +157,8 @@ func (l *loginRateLimiter) recordFailedAttempt(ip, username string) {
 			lastTry: now,
 		}
 	} else {
-		// Reset lockout if expired
-		if now.After(attempt.lockedUntil) {
+		// Reset lockout if expired (only check non-zero lockedUntil)
+		if !attempt.lockedUntil.IsZero() && now.After(attempt.lockedUntil) {
 			attempt.count = 0
 			attempt.lockedUntil = time.Time{}
 		}
@@ -177,8 +177,8 @@ func (l *loginRateLimiter) recordFailedAttempt(ip, username string) {
 			lastTry: now,
 		}
 	} else {
-		// Reset lockout if expired
-		if now.After(userAttempt.lockedUntil) {
+		// Reset lockout if expired (only check non-zero lockedUntil)
+		if !userAttempt.lockedUntil.IsZero() && now.After(userAttempt.lockedUntil) {
 			userAttempt.count = 0
 			userAttempt.lockedUntil = time.Time{}
 		}
