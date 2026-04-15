@@ -44,6 +44,12 @@ func NewZoneManager(cfg *config.Config, logger *util.Logger) (*ZoneManager, erro
 		logger.Infof("Zone file persistence enabled: %s", cfg.ZoneDir)
 	}
 
+	// Enable ZONEMD computation if configured
+	if cfg.ZONEMD {
+		zoneManager.SetZONEMDEnabled(true)
+		logger.Info("ZONEMD zone message digests enabled (RFC 8976)")
+	}
+
 	// Load zone files in parallel for faster startup
 	type zoneResult struct {
 		zone     *zone.Zone

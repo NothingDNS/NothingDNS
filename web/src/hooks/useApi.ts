@@ -144,7 +144,7 @@ export function useCreateUser() {
 // Delete User Mutation
 export function useDeleteUser() {
   const queryClient = useQueryClient();
-  
+
   return useMutation({
     mutationFn: (username: string) =>
       fetchApi<void>(`/api/v1/auth/users?username=${encodeURIComponent(username)}`, {
@@ -152,6 +152,71 @@ export function useDeleteUser() {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
+    },
+  });
+}
+
+// Update Logging Config Mutation
+interface LoggingConfigRequest { level: string }
+
+export function useUpdateLoggingConfig() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data: LoggingConfigRequest) =>
+      fetchApi<{ message: string }>('/api/v1/config/logging', {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['server-config'] });
+    },
+  });
+}
+
+// Update RRL Config Mutation
+interface RRLConfigRequest { enabled: boolean; rate: number; burst: number }
+
+export function useUpdateRRLConfig() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data: RRLConfigRequest) =>
+      fetchApi<{ message: string }>('/api/v1/config/rrl', {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['server-config'] });
+    },
+  });
+}
+
+// Update Cache Config Mutation
+interface CacheConfigRequest {
+  enabled: boolean;
+  size: number;
+  default_ttl: number;
+  max_ttl: number;
+  min_ttl: number;
+  negative_ttl: number;
+  prefetch: boolean;
+  prefetch_threshold: number;
+  serve_stale: boolean;
+  stale_grace_secs: number;
+}
+
+export function useUpdateCacheConfig() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data: CacheConfigRequest) =>
+      fetchApi<{ message: string }>('/api/v1/config/cache', {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['server-config'] });
     },
   });
 }

@@ -45,6 +45,7 @@ func NewClusterManager(cfg *config.Config, logger *util.Logger, dnsCache *cache.
 		HTTPAddr:      cfg.Server.HTTP.Bind,
 		EncryptionKey: cfg.Cluster.EncryptionKey,
 		ZoneManager:   zoneMgr,
+		ConsensusMode: cluster.ConsensusMode(cfg.Cluster.ConsensusMode),
 	}
 
 	var err error

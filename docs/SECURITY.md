@@ -30,8 +30,15 @@ If you discover a security vulnerability in NothingDNS, please report it respons
 
 ## Security Design Principles
 
-### Zero External Dependencies
-NothingDNS has **zero external dependencies**. This minimizes the attack surface from third-party code. All cryptographic operations use Go's standard library `crypto/*` packages.
+### Minimal External Dependencies
+
+NothingDNS has **minimal external dependencies** — only two non-standard-library packages:
+
+1. **`github.com/quic-go/quic-go`** — Required for DNS over QUIC (DoQ, RFC 9250). QUIC is a complex protocol that requires a mature implementation. The `quic-go` library is actively maintained and widely used in production.
+
+2. **`golang.org/x/sys`** — Required for platform-specific socket operations (e.g., `SO_REUSEPORT` for multi-core scalability on Linux).
+
+All cryptographic operations use Go's standard library `crypto/*` packages. No third-party crypto libraries are used.
 
 ### DNSSEC
 - Signing uses RSA/SHA-256/SHA-512 with key rollover support

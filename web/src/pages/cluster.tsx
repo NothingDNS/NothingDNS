@@ -58,7 +58,7 @@ export function ClusterPage() {
     );
   }
 
-  const onlineCount = nodes.filter(n => n.state === "online").length;
+  const onlineCount = nodes.filter(n => n.state === "alive").length;
   const quorum = nodes.length > 0 && onlineCount >= Math.floor(nodes.length / 2) + 1;
 
   return (
@@ -180,13 +180,13 @@ export function ClusterPage() {
             {nodes.map(node => (
               <div key={node.id} className="relative">
                 <div className={`w-16 h-16 rounded-full flex items-center justify-center ${
-                  node.state === 'online' ? 'bg-success/20 border-2 border-success' :
-                  node.state === 'offline' ? 'bg-destructive/20 border-2 border-destructive' :
+                  node.state === 'alive' ? 'bg-success/20 border-2 border-success' :
+                  node.state === 'dead' ? 'bg-destructive/20 border-2 border-destructive' :
                   'bg-warning/20 border-2 border-warning'
                 }`}>
                   <Server className={`h-6 w-6 ${
-                    node.state === 'online' ? 'text-success' :
-                    node.state === 'offline' ? 'text-destructive' :
+                    node.state === 'alive' ? 'text-success' :
+                    node.state === 'dead' ? 'text-destructive' :
                     'text-warning'
                   }`} />
                 </div>
@@ -210,10 +210,10 @@ function NodeCard({ node, selected, onSelect, onRemove }: {
   onRemove: () => void;
 }) {
   const statusColors: Record<string, string> = {
-    online: 'text-success bg-success/10 border-success/20',
-    offline: 'text-destructive bg-destructive/10 border-destructive/20',
-    joining: 'text-warning bg-warning/10 border-warning/20',
-    leaving: 'text-muted-foreground bg-muted border-muted',
+    alive: 'text-success bg-success/10 border-success/20',
+    dead: 'text-destructive bg-destructive/10 border-destructive/20',
+    suspect: 'text-warning bg-warning/10 border-warning/20',
+    draining: 'text-muted-foreground bg-muted border-muted',
   };
 
   return (
@@ -231,7 +231,7 @@ function NodeCard({ node, selected, onSelect, onRemove }: {
           <div>
             <div className="font-medium text-sm flex items-center gap-2">
               {node.id}
-              <Badge variant={node.state === 'online' ? 'success' : node.state === 'offline' ? 'destructive' : 'secondary'} className="text-[10px]">
+              <Badge variant={node.state === 'alive' ? 'success' : node.state === 'dead' ? 'destructive' : 'secondary'} className="text-[10px]">
                 {node.state}
               </Badge>
               {node.weight === 1 && <Badge variant="warning" className="text-[10px]">primary</Badge>}

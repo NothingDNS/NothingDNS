@@ -1,0 +1,13 @@
+{{- if .Values.pdb.enabled }}
+apiVersion: {{ include "nothingdns.pdb.apiVersion" . }}
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "nothingdns.fullname" . }}
+  labels:
+    {{- include "nothingdns.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "nothingdns.selectorLabels" . | nindent 6 }}
+{{- end }}

@@ -1,0 +1,349 @@
+# Default values for nothingdns.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+replicaCount: 1
+
+image:
+  repository: nothingdns/nothingdns
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Service account configuration
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+# Pod annotations
+podAnnotations: {}
+
+# Pod security context
+podSecurityContext:
+  fsGroup: 65534  # nobody user for scratch container
+
+# Container security context
+securityContext:
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 65534  # nobody
+
+# Service configuration
+service:
+  type: LoadBalancer
+  annotations: {}
+  # DNS UDP port
+  udpPort: 53
+  # DNS TCP port
+  tcpPort: 53
+  # DNS over TLS port
+  dotPort: 853
+  # DNS over HTTPS port (if enabled)
+  dohPort: 443
+  # API/WebSocket port
+  apiPort: 8080
+
+# Ingress configuration for DoH/API
+ingress:
+  enabled: false
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  hosts:
+    - host: dns.example.com
+      paths:
+        - path: /dns-query
+          pathType: Prefix
+          servicePort: 443
+        - path: /api
+          pathType: Prefix
+          servicePort: 8080
+        - path: /ws
+          pathType: Prefix
+          servicePort: 8080
+  tls:
+    - secretName: nothingdns-tls
+      hosts:
+        - dns.example.com
+
+# Resource limits and requests
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 100m
+    memory: 256Mi
+
+# Horizontal Pod Autoscaler
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+# Pod Disruption Budget
+pdb:
+  enabled: false
+  minAvailable: 1
+
+# Node selector
+nodeSelector: {}
+
+# Tolerations
+tolerations: []
+
+# Affinity rules
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - nothingdns
+          topologyKey: kubernetes.io/hostname
+
+# Topology spread constraints
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: nothingdns
+
+# Persistence for zone files and data
+persistence:
+  enabled: true
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 10Gi
+  annotations: {}
+
+# Additional volumes
+extraVolumes: []
+# - name: custom-certs
+#   secret:
+#     secretName: custom-tls-certs
+
+# Additional volume mounts
+extraVolumeMounts: []
+# - name: custom-certs
+#   mountPath: /etc/nothingdns/certs
+#   readOnly: true
+
+# Configuration
+config:
+  # Server configuration
+  server:
+    bind:
+      - 0.0.0.0
+      - "::"
+    port: 53
+    udp_workers: 0  # 0 = auto (NumCPU * 4)
+    tcp_workers: 0  # 0 = auto (NumCPU * 2)
+    # TLS configuration for DoT and DoH
+    tls:
+      cert_file: ""
+      key_file: ""
+      ca_file: ""
+
+  # API configuration
+  api:
+    enabled: true
+    bind: 0.0.0.0
+    port: 8080
+    # CORS origins
+    allowed_origins:
+      - "http://localhost:3000"
+      - "https://localhost:3000"
+    # Authentication
+    jwt_secret: ""  # Will be auto-generated if empty
+    session_timeout: 24h
+
+  # Logging configuration
+  logging:
+    level: info  # debug, info, warn, error
+    format: json  # json, text
+    output: stdout
+
+  # Cache configuration
+  cache:
+    enabled: true
+    size: 10000
+    ttl: 300
+    negative_ttl: 60
+    stale_ttl: 86400
+    prefetch: true
+    prefetch_threshold: 3
+
+  # DNS64 configuration
+  dns64:
+    enabled: false
+    prefix: "64:ff9b::/96"
+
+  # Rate limiting
+  rate_limit:
+    enabled: true
+    rate: 5
+    burst: 20
+    max_buckets: 10000
+
+  # Upstream DNS servers
+  upstream:
+    servers:
+      - "1.1.1.1:53"
+      - "8.8.8.8:53"
+    timeout: 5s
+    attempts: 3
+    health_check_interval: 30s
+
+  # DNSSEC configuration
+  dnssec:
+    enabled: true
+    validation: true
+    trust_anchor_file: ""
+
+  # Cluster configuration (for HA mode)
+  cluster:
+    enabled: false
+    node_id: ""  # Auto-generated from pod name if empty
+    bind_addr: "0.0.0.0"
+    bind_port: 7946
+    peers: []
+    # consensus_mode: raft  # raft or gossip
+
+  # RPZ (Response Policy Zones)
+  rpz:
+    enabled: false
+    zones: []
+    # - name: "rpz.example.com"
+    #   url: "https://example.com/rpz.zone"
+    #   file: "/var/lib/nothingdns/rpz.zone"
+
+  # Blocklists
+  blocklist:
+    enabled: false
+    files: []
+    urls: []
+    # urls:
+    #   - "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"
+
+  # GeoIP configuration
+  geoip:
+    enabled: false
+    database_path: ""
+    # database_path: "/var/lib/nothingdns/GeoLite2-City.mmdb"
+
+  # XoT (Zone Transfer over TLS)
+  xot:
+    enabled: false
+    port: 853
+    cert_file: ""
+    key_file: ""
+    allowed_networks: []
+
+  # Zone transfer configuration (AXFR/IXFR)
+  zone_transfer:
+    enabled: false
+    allow_list: []
+    # allow_list:
+    #   - "192.168.1.0/24"
+    #   - "10.0.0.0/8"
+    require_tsig: false
+
+  # NOTIFY configuration
+  notify:
+    enabled: false
+    slaves: []
+
+  # Dynamic DNS (DDNS)
+  ddns:
+    enabled: false
+    allow_list: []
+    require_tsig: true
+
+  # Metrics and monitoring
+  metrics:
+    enabled: true
+    port: 9090
+    path: /metrics
+
+  # Health checks
+  health:
+    enabled: true
+    port: 8080
+
+  # OpenTelemetry tracing
+  tracing:
+    enabled: false
+    endpoint: ""
+    # endpoint: "http://otel-collector:4317"
+    sample_rate: 0.1
+
+  # Initial zones to create
+  zones: {}
+  # zones:
+  #   "example.com.":
+  #     type: primary
+  #     file: "/var/lib/nothingdns/zones/example.com.zone"
+  #   "example.net.":
+  #     type: secondary
+  #     masters:
+  #       - "192.168.1.10:53"
+
+# Monitoring
+monitoring:
+  # Prometheus Operator ServiceMonitor
+  serviceMonitor:
+    enabled: false
+    namespace: ""
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+
+  # Prometheus Operator PrometheusRule for alerts
+  prometheusRule:
+    enabled: false
+    namespace: ""
+    labels: {}
+    rules: []
+
+# Network policies
+networkPolicy:
+  enabled: false
+  ingressRules:
+    - from: []
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+        - protocol: TCP
+          port: 853
+        - protocol: TCP
+          port: 8080
+
+# PodMonitor for Prometheus scraping
+podMonitor:
+  enabled: false
+  namespace: ""
+  interval: 30s

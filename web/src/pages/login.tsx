@@ -5,28 +5,19 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Globe, Eye, EyeOff, Loader2 } from 'lucide-react';
-import { useState, useEffect, useRef } from 'react';
+import { useState } from 'react';
 import { useAuthStore } from '@/stores/authStore';
 
 const loginSchema = z.object({
-  token: z.string().min(1, 'Token is required'),
+  username: z.string().min(1, 'Username is required'),
+  password: z.string().min(1, 'Password is required'),
 });
 
 type LoginValues = z.infer<typeof loginSchema>;
 
 export function LoginPage() {
-  const [show, setShow] = useState(false);
-  const [pendingToken, setPendingToken] = useState<string | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
   const setAuth = useAuthStore((state) => state.setAuth);
-  const initialized = useRef(false);
-
-  // Set cookie when authentication succeeds
-  useEffect(() => {
-    if (pendingToken && !initialized.current) {
-      initialized.current = true;
-      document.cookie = `ndns_token=${encodeURIComponent(pendingToken)}; path=/; max-age=86400; SameSite=Strict`;
-    }
-  }, [pendingToken]);
 
   const {
     register,
@@ -36,47 +27,44 @@ export function LoginPage() {
   } = useForm<LoginValues>({
     resolver: zodResolver(loginSchema),
     defaultValues: {
-      token: '',
+      username: '',
+      password: '',
     },
   });
 
   const onSubmit = async (data: LoginValues) => {
     try {
-      // First validate the token by calling /api/v1/status
-      const r = await fetch('/api/v1/status', {
-        headers: { Authorization: `Bearer ${data.token}` },
+      const r = await fetch('/api/v1/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: data.username, password: data.password }),
       });
 
       if (r.ok) {
-        // Token is valid - set cookie and proceed
-        setPendingToken(data.token);
+        const res = await r.json();
+        const token = res.token as string;
+        const username = res.username as string;
+        const role = res.role as string;
 
-        // Try to get user info, but don't fail login if this endpoint requires different auth
-        try {
-          const userResp = await fetch('/api/v1/auth/users', {
-            headers: { Authorization: `Bearer ${data.token}` },
-          });
-          if (userResp.ok) {
-            const users = await userResp.json();
-            if (users.length > 0) {
-              setAuth(data.token, users[0].username, users[0].role);
-              return;
-            }
-          }
-        } catch {
-          // Ignore user fetch errors - token is valid
-        }
-        // Use default user info if users endpoint fails
-        setAuth(data.token, 'operator', 'operator');
+        // eslint-disable-next-line react-hooks/immutability
+        document.cookie = `ndns_token=${encodeURIComponent(token)}; path=/; max-age=86400; SameSite=Strict`;
+        setAuth(token, username, role);
+        // eslint-disable-next-line react-hooks/immutability
+        window.location.href = '/';
       } else if (r.status === 401) {
-        setError('token', { message: 'Invalid token. Please check your token and try again.' });
-      } else if (r.status === 403) {
-        setError('token', { message: 'Access forbidden. Contact your administrator.' });
+        setError('password', { message: 'Invalid credentials. Please check your username and password.' });
+      } else if (r.status === 429) {
+        const retryAfter = r.headers.get('Retry-After');
+        setError('password', {
+          message: retryAfter
+            ? `Too many attempts. Please try again in ${retryAfter} seconds.`
+            : 'Too many attempts. Please try again later.',
+        });
       } else {
-        setError('token', { message: `Connection error (${r.status}). Please try again.` });
+        setError('password', { message: `Connection error (${r.status}). Please try again.` });
       }
     } catch {
-      setError('token', { message: 'Connection error. Please check your network.' });
+      setError('password', { message: 'Connection error. Please check your network.' });
     }
   };
 
@@ -89,33 +77,47 @@ export function LoginPage() {
           </div>
           <h1 className="text-2xl font-bold tracking-tight">NothingDNS</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Enter your access token to continue
+            Sign in to your account to continue
           </p>
         </div>
 
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="token">Access Token</Label>
+            <Label htmlFor="username">Username</Label>
+            <Input
+              id="username"
+              type="text"
+              placeholder="Enter username"
+              {...register('username')}
+              className={errors.username ? 'border-destructive' : ''}
+              autoFocus
+            />
+            {errors.username && (
+              <p className="text-sm text-destructive">{errors.username.message}</p>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="password">Password</Label>
             <div className="relative">
               <Input
-                id="token"
-                type={show ? 'text' : 'password'}
-                placeholder="Enter auth token"
-                {...register('token')}
-                className={errors.token ? 'border-destructive' : ''}
-                autoFocus
+                id="password"
+                type={showPassword ? 'text' : 'password'}
+                placeholder="Enter password"
+                {...register('password')}
+                className={errors.password ? 'border-destructive' : ''}
               />
               <button
                 type="button"
-                onClick={() => setShow(!show)}
+                onClick={() => setShowPassword(!showPassword)}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer"
-                aria-label={show ? 'Hide token' : 'Show token'}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
               >
-                {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </button>
             </div>
-            {errors.token && (
-              <p className="text-sm text-destructive">{errors.token.message}</p>
+            {errors.password && (
+              <p className="text-sm text-destructive">{errors.password.message}</p>
             )}
           </div>
 

@@ -290,10 +290,8 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			token = c.Value
 		}
 	}
-	// WebSocket fallback: query parameter (browser WebSocket API cannot send custom headers)
-	if token == "" {
-		token = r.URL.Query().Get("token")
-	}
+	// Note: Query parameter token fallback has been removed for security.
+	// Browsers automatically send cookies with WebSocket upgrade requests.
 
 	// Validate authentication
 	s.mu.RLock()

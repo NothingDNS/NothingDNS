@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/nothingdns/nothingdns/internal/util"
@@ -103,6 +104,11 @@ func NewStore(cfg *Config) (*Store, error) {
 	// Load initial users
 	for _, u := range cfg.Users {
 		u := u // capture range variable
+		// Hash plaintext password if present and zero it from memory
+		if u.Password != "" && len(u.Hash) == 0 {
+			u.Hash = HashPassword(u.Password, nil)
+			u.Password = strings.Repeat("\x00", len(u.Password))
+		}
 		s.users[u.Username] = &u
 	}
 
@@ -501,9 +507,10 @@ func (s *Store) HasRole(username string, required Role) bool {
 	return roleOrder[user.Role] >= roleOrder[required]
 }
 
-// SaveTokens persists tokens to an encrypted file.
-// Tokens are serialized as JSON and encrypted with HMAC-SHA512 to prevent tampering.
-func (s *Store) SaveTokens(path string) error {
+// SaveTokensSigned persists tokens to a file signed with HMAC-SHA512.
+// Tokens are serialized as JSON and signed with HMAC for integrity verification.
+// Note: this provides integrity, not encryption; tokens are plaintext JSON at rest.
+func (s *Store) SaveTokensSigned(path string) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -526,9 +533,10 @@ func (s *Store) SaveTokens(path string) error {
 	return os.WriteFile(path, encrypted, 0600)
 }
 
-// LoadTokens loads tokens from an encrypted file.
+// LoadTokensSigned loads tokens from a file signed with HMAC-SHA512.
 // Returns error if file doesn't exist or integrity check fails.
-func (s *Store) LoadTokens(path string) error {
+// Note: this verifies integrity, not encryption; tokens are plaintext JSON at rest.
+func (s *Store) LoadTokensSigned(path string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

@@ -1,0 +1,140 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "nothingdns.fullname" . }}-config
+  labels:
+    {{- include "nothingdns.labels" . | nindent 4 }}
+data:
+  nothingdns.yaml: |
+    server:
+      bind: {{ .Values.config.server.bind | toYaml | nindent 8 }}
+      port: {{ .Values.config.server.port }}
+      udp_workers: {{ .Values.config.server.udp_workers }}
+      tcp_workers: {{ .Values.config.server.tcp_workers }}
+      {{- if .Values.config.server.tls.cert_file }}
+      tls:
+        cert_file: {{ .Values.config.server.tls.cert_file }}
+        key_file: {{ .Values.config.server.tls.key_file }}
+        {{- if .Values.config.server.tls.ca_file }}
+        ca_file: {{ .Values.config.server.tls.ca_file }}
+        {{- end }}
+      {{- end }}
+
+    api:
+      enabled: {{ .Values.config.api.enabled }}
+      bind: {{ .Values.config.api.bind }}
+      port: {{ .Values.config.api.port }}
+      allowed_origins: {{ .Values.config.api.allowed_origins | toYaml | nindent 8 }}
+      session_timeout: {{ .Values.config.api.session_timeout }}
+
+    logging:
+      level: {{ .Values.config.logging.level }}
+      format: {{ .Values.config.logging.format }}
+      output: {{ .Values.config.logging.output }}
+
+    cache:
+      enabled: {{ .Values.config.cache.enabled }}
+      size: {{ .Values.config.cache.size }}
+      ttl: {{ .Values.config.cache.ttl }}
+      negative_ttl: {{ .Values.config.cache.negative_ttl }}
+      stale_ttl: {{ .Values.config.cache.stale_ttl }}
+      prefetch: {{ .Values.config.cache.prefetch }}
+      prefetch_threshold: {{ .Values.config.cache.prefetch_threshold }}
+
+    {{- if .Values.config.dns64.enabled }}
+    dns64:
+      enabled: {{ .Values.config.dns64.enabled }}
+      prefix: {{ .Values.config.dns64.prefix }}
+    {{- end }}
+
+    rate_limit:
+      enabled: {{ .Values.config.rate_limit.enabled }}
+      rate: {{ .Values.config.rate_limit.rate }}
+      burst: {{ .Values.config.rate_limit.burst }}
+      max_buckets: {{ .Values.config.rate_limit.max_buckets }}
+
+    upstream:
+      servers: {{ .Values.config.upstream.servers | toYaml | nindent 8 }}
+      timeout: {{ .Values.config.upstream.timeout }}
+      attempts: {{ .Values.config.upstream.attempts }}
+      health_check_interval: {{ .Values.config.upstream.health_check_interval }}
+
+    dnssec:
+      enabled: {{ .Values.config.dnssec.enabled }}
+      validation: {{ .Values.config.dnssec.validation }}
+      {{- if .Values.config.dnssec.trust_anchor_file }}
+      trust_anchor_file: {{ .Values.config.dnssec.trust_anchor_file }}
+      {{- end }}
+
+    {{- if .Values.config.cluster.enabled }}
+    cluster:
+      enabled: {{ .Values.config.cluster.enabled }}
+      node_id: {{ .Values.config.cluster.node_id | default (printf "%s-%s" .Release.Name (randAlphaNum 8)) }}
+      bind_addr: {{ .Values.config.cluster.bind_addr }}
+      bind_port: {{ .Values.config.cluster.bind_port }}
+      peers: {{ .Values.config.cluster.peers | toYaml | nindent 8 }}
+    {{- end }}
+
+    {{- if .Values.config.rpz.enabled }}
+    rpz:
+      enabled: {{ .Values.config.rpz.enabled }}
+      zones: {{ .Values.config.rpz.zones | toYaml | nindent 8 }}
+    {{- end }}
+
+    {{- if .Values.config.blocklist.enabled }}
+    blocklist:
+      enabled: {{ .Values.config.blocklist.enabled }}
+      files: {{ .Values.config.blocklist.files | toYaml | nindent 8 }}
+      urls: {{ .Values.config.blocklist.urls | toYaml | nindent 8 }}
+    {{- end }}
+
+    {{- if .Values.config.geoip.enabled }}
+    geoip:
+      enabled: {{ .Values.config.geoip.enabled }}
+      database_path: {{ .Values.config.geoip.database_path }}
+    {{- end }}
+
+    {{- if .Values.config.xot.enabled }}
+    xot:
+      enabled: {{ .Values.config.xot.enabled }}
+      port: {{ .Values.config.xot.port }}
+      allowed_networks: {{ .Values.config.xot.allowed_networks | toYaml | nindent 8 }}
+    {{- end }}
+
+    {{- if .Values.config.zone_transfer.enabled }}
+    zone_transfer:
+      enabled: {{ .Values.config.zone_transfer.enabled }}
+      allow_list: {{ .Values.config.zone_transfer.allow_list | toYaml | nindent 8 }}
+      require_tsig: {{ .Values.config.zone_transfer.require_tsig }}
+    {{- end }}
+
+    {{- if .Values.config.notify.enabled }}
+    notify:
+      enabled: {{ .Values.config.notify.enabled }}
+      slaves: {{ .Values.config.notify.slaves | toYaml | nindent 8 }}
+    {{- end }}
+
+    {{- if .Values.config.ddns.enabled }}
+    ddns:
+      enabled: {{ .Values.config.ddns.enabled }}
+      allow_list: {{ .Values.config.ddns.allow_list | toYaml | nindent 8 }}
+      require_tsig: {{ .Values.config.ddns.require_tsig }}
+    {{- end }}
+
+    metrics:
+      enabled: {{ .Values.config.metrics.enabled }}
+      port: {{ .Values.config.metrics.port }}
+      path: {{ .Values.config.metrics.path }}
+
+    health:
+      enabled: {{ .Values.config.health.enabled }}
+      port: {{ .Values.config.health.port }}
+
+    {{- if .Values.config.tracing.enabled }}
+    tracing:
+      enabled: {{ .Values.config.tracing.enabled }}
+      endpoint: {{ .Values.config.tracing.endpoint }}
+      sample_rate: {{ .Values.config.tracing.sample_rate }}
+    {{- end }}
+
+    zones: {{ .Values.config.zones | toYaml | nindent 6 }}

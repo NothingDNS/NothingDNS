@@ -51,6 +51,28 @@ func TestAXFRServer_AddRemoveZone(t *testing.T) {
 	}
 }
 
+func TestAXFRServer_WithAllowList_InvalidCIDR(t *testing.T) {
+	// Invalid CIDRs should be skipped (and logged if logger is configured)
+	zones := make(map[string]*zone.Zone)
+	server := NewAXFRServer(zones, WithAllowList([]string{
+		"192.168.1.0/24",
+		"invalid-cidr",     // should be skipped
+		"10.0.0.0/8",       // should be added
+		"not-a-network/xx", // should be skipped
+	}))
+
+	// Valid CIDRs should still work
+	if !server.IsAllowed(net.ParseIP("192.168.1.1")) {
+		t.Error("192.168.1.1 should be allowed")
+	}
+	if !server.IsAllowed(net.ParseIP("10.0.0.1")) {
+		t.Error("10.0.0.1 should be allowed")
+	}
+	if server.IsAllowed(net.ParseIP("172.16.0.1")) {
+		t.Error("172.16.0.1 should not be allowed")
+	}
+}
+
 func TestAXFRServer_IsAllowed(t *testing.T) {
 	tests := []struct {
 		name        string

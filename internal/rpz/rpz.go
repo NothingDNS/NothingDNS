@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/nothingdns/nothingdns/internal/util"
 )
 
 // PolicyAction defines what action to take when a query matches an RPZ rule.
@@ -88,6 +90,10 @@ type Engine struct {
 	// Metrics.
 	matches uint64
 	lookups uint64
+	parseErrors uint64
+
+	// Logger.
+	logger *util.Logger
 
 	// Last reload time.
 	lastReload time.Time
@@ -99,6 +105,8 @@ type Config struct {
 	Files   []string
 	// Policies maps policy zone names to their priority (lower = higher priority).
 	Policies map[string]int
+	// Logger for diagnostics. If nil, logging is silently discarded.
+	Logger   *util.Logger
 }
 
 // NewEngine creates a new RPZ engine.
@@ -113,6 +121,7 @@ func NewEngine(cfg Config) *Engine {
 		files:         cfg.Files,
 		policies:      cfg.Policies,
 		enabled:       cfg.Enabled,
+		logger:        cfg.Logger,
 	}
 }
 
@@ -179,7 +188,11 @@ func (e *Engine) loadFile(filename string) error {
 
 		rule, err := e.parseLine(line, policyName)
 		if err != nil {
-			continue // Skip malformed lines
+			if e.logger != nil {
+				e.logger.Warnf("rpz: skipping malformed line %d in %s: %v", lineNum, filename, err)
+			}
+			atomic.AddUint64(&e.parseErrors, 1)
+			continue
 		}
 		if rule == nil {
 			continue // SOA, NS, or other non-policy records
@@ -499,6 +512,7 @@ func (e *Engine) Stats() Stats {
 		Files:         len(e.files),
 		TotalMatches:  atomic.LoadUint64(&e.matches),
 		TotalLookups:  atomic.LoadUint64(&e.lookups),
+		ParseErrors:   atomic.LoadUint64(&e.parseErrors),
 		LastReload:    e.lastReload,
 	}
 }
@@ -574,5 +588,6 @@ type Stats struct {
 	Files         int
 	TotalMatches  uint64
 	TotalLookups  uint64
+	ParseErrors   uint64
 	LastReload    time.Time
 }

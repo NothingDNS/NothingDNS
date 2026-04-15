@@ -1,295 +1,227 @@
-# Project Roadmap
+# NothingDNS Production Readiness Roadmap
 
-> Based on comprehensive codebase analysis performed on 2026-04-11
-> This roadmap prioritizes work needed to bring the project to production quality.
-
-## Current State Assessment
-
-**Position**: NothingDNS v0.1.0 is released (2026-04-05) with comprehensive DNS server functionality. The codebase demonstrates production-grade engineering with:
-- Zero external Go dependencies
-- 161K+ LOC across 294 Go files
-- All 29 test packages passing
-- Zero `go vet` warnings
-- Comprehensive feature set (authoritative, recursive, DoT/DoH/DoQ, DNSSEC, clustering)
-
-**Key Blockers for Production Readiness:**
-1. Frontend uses React (breaks zero-dependency philosophy) — but is functional
-2. XoT (TLS zone transfer) not implemented — security concern for production
-3. SWIM used by default instead of Raft — spec deviation
-
-**What's Working Well:**
-- DNS wire protocol implementation is comprehensive and well-tested
-- DNSSEC signing/validation complete with multiple algorithms
-- Storage layer (KV + WAL) provides crash-safe persistence
-- Test coverage is strong across all packages
-- Documentation is excellent (SPEC, IMP, TASKS, PRODUCTION_READINESS)
+> Prioritized remediation plan based on comprehensive audit dated 2026-04-14  
+> This roadmap is sequenced by risk: security → reliability → correctness → polish
 
 ---
 
-## Phase 1: Critical Security Fixes (Week 1-2)
+## Phase 0: Critical Security & Reliability Fixes (Week 1)
 
-### Must-fix items blocking production deployment
+These items are **blocking** for any production deployment. They represent security controls that fail silently, consensus logic that is under-validated, or authentication flows that are broken.
 
-- [ ] **XoT (RFC 9103)** — Zone Transfer over TLS
-  - Spec reference: RCP_IMPLEMENTATION.md §1.1
-  - Current gap: AXFR/IXFR only over plaintext TCP
-  - Implementation plan: Add TLS listener on port 853 for AXFR/IXFR, integrate TLSA record validation
-  - Affected files: `internal/transfer/xot.go` [NEW], `internal/server/tls.go` [MODIFY]
-  - Effort: ~3-4 days
+### P0-1: Fix RPZ Silent Failure on Malformed Rules
+- **Risk**: Malicious or corrupted RPZ rules are dropped without alerting. An operator may believe a block is active when it is not.
+- **Files**: `internal/rpz/rpz.go` (parseLine, loadFile)
+- **Action**: Log every skipped line at `Warn` level with line number and reason. Add a metric counter for `rpz_parse_errors_total`.
+- **Effort**: 4 hours
 
-- [ ] **API Secrets Handling** — No query param exposure
-  - Spec reference: SECURITY.md
-  - Current gap: Bearer tokens can be passed via query params, exposing in logs
-  - Implementation plan: Require Authorization header only, reject query param tokens
-  - Affected files: `internal/api/server.go`
-  - Effort: ~1 day
+### P0-2: Expand Raft Test Coverage to Production Grade
+- **Risk**: Consensus bugs cause split-brain, data loss, or cluster unavailability. A 0.14 test-to-source ratio for Raft is unacceptable.
+- **Files**: `internal/cluster/raft/raft.go`, `internal/cluster/raft/log.go`, `internal/cluster/raft/state.go`, etc.
+- **Action**: Add tests for: leader election with network partitions, log replication under packet loss, snapshot install, membership changes (joint consensus), and term monotonicity violations.
+- **Target**: Minimum 150 tests, ratio > 0.50.
+- **Effort**: 5-7 days
 
----
+### P0-3: Fix Frontend Authentication Flow
+- **Risk**: The React login page bypasses the backend JWT login endpoint, validating tokens via an unrelated status check. This breaks session management, login rate limiting, and audit logging.
+- **Files**: `web/src/pages/login.tsx`, `web/src/lib/api.ts`
+- **Action**: Implement username/password form that POSTs to `/api/v1/auth/login`, stores the returned token in `httpOnly` cookie or secure `localStorage`, and handles 401/403/429 responses.
+- **Effort**: 1 day
 
-## Phase 2: Specification Compliance (Week 3-4)
-
-### Align implementation with documented architecture
-
-- [ ] **Raft as Default Cluster Mode** — Make Raft the default, not SWIM
-  - Spec reference: SPEC.md §10 "Cluster-First — Raft consensus for zone replication"
-  - Current gap: SWIM gossip is default; Raft exists but not promoted
-  - Implementation plan: Change default consensus mode, ensure Raft is stable for single-node deployments
-  - Affected files: `internal/cluster/cluster.go`, config defaults
-  - Effort: ~2-3 days
-
-- [ ] **Vanilla JS Dashboard** — Replace React with framework-free UI
-  - Spec reference: SPEC.md §17 "Embedded vanilla JS dashboard (no framework)"
-  - Current gap: React 19 + Tailwind CSS with 9 npm packages
-  - Implementation plan: Either (a) replace with vanilla JS + CSS or (b) document the exception to zero-dependency policy
-  - Affected files: `web/` directory
-  - Effort: ~5-7 days (if rewriting) or ~0.5 day (if documenting exception)
-
-- [ ] **ZONEMD Integration** — Wire up zone message digest
-  - Spec reference: RCP_IMPLEMENTATION.md §1.5, SPEC.md §12
-  - Current gap: `internal/zone/zonemd.go` exists but integration unclear
-  - Implementation plan: Integrate ZONEMD computation into zone transfers
-  - Affected files: `internal/zone/zonemd.go`, `internal/transfer/axfr.go`
-  - Effort: ~2 days
+### P0-4: Remove or Block API Token in Query Parameters
+- **Risk**: Tokens passed as `?token=...` are written to web server access logs, proxy logs, and browser history.
+- **Files**: `internal/api/server.go` (auth middleware), `internal/websocket/websocket.go` (WS token param)
+- **Action**: Reject token-in-query-param auth with a 400 response and explicit error message. Require `Authorization: Bearer <token>` header or secure cookie.
+- **Effort**: 4 hours
 
 ---
 
-## Phase 3: Missing RFCs (Week 5-8)
+## Phase 1: CLI Completeness & Operator Experience (Week 2)
 
-### Complete RFC implementation plan items
+### P1-1: Implement or Remove Stubbed `dnsctl` Commands
+- **Risk**: Operators trust the CLI help text and waste time on commands that do nothing. This erodes confidence in the tooling.
+- **Files**: `cmd/dnsctl/record.go`, `cmd/dnsctl/zone.go`, `cmd/dnsctl/cluster.go`, `cmd/dnsctl/server.go`
+- **Action**:
+  - **Implement** `record add`, `record remove`, `record update` via REST API calls.
+  - **Implement** `zone add` and `zone remove`.
+  - **Implement** `cluster join` and `cluster leave`.
+  - **Implement** `blocklist reload` calling the correct blocklist endpoint.
+  - OR: **Remove** the stub commands from help text and dispatch tables so users are not misled.
+- **Effort**: 3-4 days (implement) or 4 hours (remove)
 
-- [ ] **mDNS (RFC 6762)** — Multicast DNS for .local resolution
-  - Spec reference: RCP_IMPLEMENTATION.md §1.2
-  - Current gap: Not implemented
-  - Implementation plan: New `internal/mdns/` package with querier, responder, browser
-  - Affected files: `internal/mdns/*` [NEW]
-  - Effort: ~4-5 days
+### P1-2: Add HTTP Method Support to `dnsctl` Helpers
+- **Risk**: The CLI helpers only support GET and POST, preventing future REST operations (PUT/DELETE/PATCH).
+- **Files**: `cmd/dnsctl/helpers.go`
+- **Action**: Refactor `apiGet`/`apiPost` into a generic `apiRequest(method, path, body)` helper.
+- **Effort**: 4 hours
 
-- [ ] **DNS-SD (RFC 6763)** — Service discovery
-  - Spec reference: RCP_IMPLEMENTATION.md §1.3
-  - Current gap: Not implemented
-  - Implementation plan: Implement service browser, PTR queries for _service._proto
-  - Affected files: `internal/mdns/*` [MODIFY]
-  - Effort: ~2 days
-
-- [ ] **DSO (RFC 8490)** — DNS Stateful Operations
-  - Spec reference: RCP_IMPLEMENTATION.md §2.1
-  - Current gap: Not implemented
-  - Implementation plan: Add DSO session management, keepalive, redirect
-  - Affected files: `internal/dso/*` [NEW]
-  - Effort: ~3-4 days
-
-- [ ] **SIG(0) (RFC 2931)** — Transaction signatures with public keys
-  - Spec reference: RCP_IMPLEMENTATION.md §2.7
-  - Current gap: Not implemented (only TSIG with shared secrets)
-  - Implementation plan: Add SIG(0) record type, sign/verify with public keys
-  - Affected files: `internal/transfer/sig0.go` [NEW]
-  - Effort: ~3 days
+### P1-3: Add Logout to Dashboard
+- **Risk**: No logout button forces users to manually clear storage.
+- **Files**: `web/src/components/layout/sidebar.tsx`, `web/src/stores/authStore.ts`
+- **Action**: Add logout button that calls `/api/v1/auth/logout`, clears local storage/cookies, and redirects to `/login`.
+- **Effort**: 2 hours
 
 ---
 
-## Phase 4: Hardening & Edge Cases (Week 9-10)
+## Phase 2: Frontend Real Data Integration (Week 3)
 
-### Security, error handling, edge cases
+### P2-1: Replace Mock Data with Real API Calls
+- **Risk**: Dashboard pages show fabricated data, giving operators a false sense of system state.
+- **Files**:
+  - `web/src/pages/geoip.tsx`
+  - `web/src/pages/dns64-cookies.tsx`
+  - `web/src/pages/zone-transfer.tsx`
+- **Action**:
+  - **GeoIP**: Wire to `/api/v1/queries` or a new `/api/v1/geoip/stats` endpoint.
+  - **DNS64/Cookies**: Wire to `/api/v1/server/config` or dedicated status endpoints.
+  - **Zone Transfer**: Wire to `/api/v1/zones` with slave zone filtering.
+- **Effort**: 2-3 days
 
-- [ ] **TSIG MD5 Deprecation Warning** — Log warning when HMAC-MD5 used
-  - Current state: HMAC-MD5 silently accepted
-  - Implementation plan: Add warning log when TSIG algorithm is MD5
-  - Affected files: `internal/transfer/tsig.go`
-  - Effort: ~0.5 day
+### P2-2: Make Settings Editable
+- **Risk**: The settings page is read-only, forcing all config changes through YAML edits and SIGHUP.
+- **Files**: `web/src/pages/settings.tsx`, `internal/api/server.go` (config endpoints)
+- **Action**: Add PUT endpoints for mutable config sections (logging level, rate limits, ACL) and wire the frontend to use them.
+- **Effort**: 3-4 days
 
-- [ ] **NSEC3 Robustness** — Handle NSEC3 chain edge cases
-  - Current state: Partial NSEC3 support
-  - Implementation plan: Verify opt-out handling, bitmap generation
-  - Affected files: `internal/dnssec/`, `internal/protocol/`
-  - Effort: ~2 days
-
-- [ ] **DNSSEC Validation Cache Tuning** — Adjust cache TTL
-  - Current state: 5-minute TTL hardcoded
-  - Implementation plan: Make configurable via config
-  - Affected files: `internal/dnssec/validator.go`
-  - Effort: ~0.5 day
-
-- [ ] **Graceful Degradation Tests** — Verify behavior under failure
-  - Current state: Basic tests pass
-  - Implementation plan: Add chaos testing for network partition, node failure
-  - Affected files: `internal/cluster/*_test.go`
-  - Effort: ~2 days
+### P2-3: Fix Frontend Type Safety Issues
+- **Risk**: `ClusterNode` and other interfaces use field names that may not match backend JSON serialization, causing silent empty values.
+- **Files**: `web/src/hooks/useApi.ts`, `web/src/lib/api.ts`, backend cluster structs
+- **Action**: Add explicit `json:"..."` tags to all backend structs returned by API, or align frontend interfaces to match Go's default encoder output.
+- **Effort**: 1 day
 
 ---
 
-## Phase 5: Testing Completeness (Week 11-12)
+## Phase 3: Auth Hardening & Code Quality (Week 4)
 
-### Comprehensive test coverage
+### P3-1: Rename `SaveTokens`/`LoadTokens` to Reflect Reality
+- **Risk**: Misleading "encryption" naming may cause operators to store tokens inappropriately, believing they are ciphertext.
+- **Files**: `internal/auth/auth.go`
+- **Action**: Rename to `SaveTokensSigned`/`LoadTokensSigned` and update all call sites (`cmd/nothingdns/`, `internal/api/`).
+- **Effort**: 2 hours
 
-- [ ] **Package Coverage Audit** — Identify packages below 70%
-  - Current state: Estimated ~75% overall
-  - Implementation plan: Run `go test -cover` on each package, target 80%+
-  - Affected files: All packages
-  - Effort: ~3 days (across all packages)
+### P3-2: Zero Password Fields from Memory After Config Load
+- **Risk**: Plaintext passwords from config YAML remain in memory indefinitely.
+- **Files**: `internal/auth/auth.go` (`User` struct), `internal/config/config.go`
+- **Action**: After unmarshaling users, hash any present `Password` fields and overwrite the string with zeros (`strings.Repeat("\x00", len(password))`).
+- **Effort**: 2 hours
 
-- [ ] **E2E Test Suite** — Full integration tests
-  - Current state: Unit + integration tests present
-  - Implementation plan: Add end-to-end DNS resolution tests with real network
-  - Affected files: `cmd/nothingdns/main_test.go` or new `e2e/` directory
-  - Effort: ~2 days
+### P3-3: Document the Custom PBKDF2 Implementation
+- **Risk**: A hand-rolled KDF increases audit surface and long-term maintenance burden.
+- **Files**: `internal/auth/auth.go`
+- **Action**: Add a comprehensive design doc (`.project/AUTH_KDF.md`) explaining why the stdlib/x alternative was rejected, the exact algorithm parameters, and the test vectors used for validation. Add known-answer tests if absent.
+- **Effort**: 1 day
 
-- [ ] **Fuzz Tests Expansion** — More malformed input testing
-  - Current state: `internal/protocol/fuzz_test.go` exists
-  - Implementation plan: Add fuzz tests for zone parser, config parser
-  - Affected files: `internal/config/parser.go`, `internal/zone/zone.go`
-  - Effort: ~2 days
-
----
-
-## Phase 6: Performance Optimization (Week 13-14)
-
-### Performance tuning and optimization
-
-- [ ] **Cache Performance Analysis** — Profile cache hit rate
-  - Current state: Basic metrics exported
-  - Implementation plan: Add detailed cache miss analysis, hot key detection
-  - Affected files: `internal/cache/cache.go`
-  - Effort: ~1 day
-
-- [ ] **Zone Loading Optimization** — Parallel zone loading
-  - Current state: Sequential zone file parsing
-  - Implementation plan: Parse zones in parallel on startup
-  - Affected files: `cmd/nothingdns/main.go`, `internal/zone/`
-  - Effort: ~1 day
-
-- [ ] **DNSSEC Signing Cache** — RRSIG caching improvements
-  - Current state: 5-minute validation cache
-  - Implementation plan: Add RRSIG answer cache to avoid re-signing
-  - Affected files: `internal/dnssec/signer.go`
-  - Effort: ~2 days
-
-- [ ] **UDP Socket Tuning** — SO_REUSEPORT verification
-  - Current state: SO_REUSEPORT used
-  - Implementation plan: Verify multi-core scaling, add metrics
-  - Affected files: `internal/server/udp.go`
-  - Effort: ~0.5 day
+### P3-4: Refactor `internal/api/server.go`
+- **Risk**: A 3,150-line file is a code review bottleneck and a breeding ground for merge conflicts.
+- **Files**: `internal/api/server.go` [SPLIT]
+- **Action**: Extract domain routers into separate files:
+  - `api_zones.go` — zone CRUD, records, export, PTR
+  - `api_cache.go` — cache stats, flush
+  - `api_cluster.go` — cluster status, nodes
+  - `api_config.go` — config get/reload
+  - `api_auth.go` — login, logout, users, bootstrap
+  - `api_blocklist.go` — blocklist management
+  - `api_rpz.go` — RPZ rules
+  - `api_metrics.go` — Prometheus and history
+- **Effort**: 2-3 days (pure refactoring, no behavior change)
 
 ---
 
-## Phase 7: Documentation & DX (Week 15-16)
+## Phase 4: Testing Expansion (Week 5-6)
 
-### Documentation and developer experience
+### P4-1: Increase Auth Package Test Coverage
+- **Files**: `internal/auth/auth_test.go`
+- **Action**: Add tests for concurrent token creation, expired token rejection, role enforcement edge cases, malformed token handling, and config reload with user changes.
+- **Target**: 60+ tests (from 22).
+- **Effort**: 2 days
 
-- [ ] **API Documentation** — Complete Swagger/OpenAPI spec
-  - Current state: OpenAPI 3.0 spec exists
-  - Implementation plan: Verify all endpoints documented, add examples
-  - Affected files: `internal/api/openapi.go`
-  - Effort: ~1 day
+### P4-2: Increase RPZ Test Coverage
+- **Files**: `internal/rpz/rpz_test.go`
+- **Action**: Add adversarial tests for all trigger types (QNAME, client IP, response IP, NSDNAME, NSIP), wildcard edge cases, CNAME redirect chains, and parser error paths.
+- **Target**: 50+ tests (from 14).
+- **Effort**: 2 days
 
-- [ ] **Deployment Guide** — Production deployment checklist
-  - Current state: Basic systemd service file
-  - Implementation plan: Add Kubernetes Helm chart, production hardening guide
-  - Affected files: `deploy/` directory
-  - Effort: ~2 days
+### P4-3: Increase DNS Cookie Test Coverage
+- **Files**: `internal/dnscookie/cookie_test.go`
+- **Action**: Add tests for secret rotation grace period boundaries, timestamp forgery, version mismatch, truncated cookies, and high-concurrency validation.
+- **Target**: 25+ tests (from 10).
+- **Effort**: 1 day
 
-- [ ] **Benchmarking Report** — Document performance targets
-  - Current state: SPEC.md §14 has targets
-  - Implementation plan: Run benchmarks, document actual vs target
-  - Affected files: `docs/PERFORMANCE.md` [NEW]
-  - Effort: ~1 day
+### P4-4: Add Integration Tests for `cmd/nothingdns`
+- **Files**: `cmd/nothingdns/main_test.go`
+- **Action**: Add tests for: flag parsing, config file loading, SIGHUP reload, graceful shutdown, and manager initialization order validation.
+- **Effort**: 2 days
 
-- [ ] **CLAUDE.md Update** — Ensure accuracy
-  - Current state: Needs verification against current code
-  - Implementation plan: Re-review for accuracy after recent changes
-  - Affected files: `CLAUDE.md`
-  - Effort: ~0.5 day
-
----
-
-## Phase 8: Release Preparation (Week 17-18)
-
-### Final production preparation
-
-- [ ] **Version Bump** — v0.2.0 or v1.0.0
-  - Current state: v0.1.0 released 2026-04-05
-  - Implementation plan: Evaluate feature completeness, decide version
-  - Affected files: `VERSION`, `CHANGELOG.md`, `go.mod`
-  - Effort: ~0.5 day
-
-- [ ] **Security Audit** — Third-party review
-  - Current state: Internal review
-  - Implementation plan: Engage external security researchers
-  - Affected files: N/A
-  - Effort: ~3-5 days (external)
-
-- [ ] **Release Automation** — goreleaser configuration
-  - Current state: Manual builds
-  - Implementation plan: Complete `.goreleaser.yml`, add GitHub Actions release workflow
-  - Affected files: `.github/workflows/release.yml` [NEW]
-  - Effort: ~1 day
+### P4-5: Add Race-Condition Tests
+- **Files**: `internal/cache/`, `internal/zone/`, `internal/storage/`
+- **Action**: Run `go test -race` (requires `CGO_ENABLED=1`) on core packages and fix any data races. Document the race-free guarantee.
+- **Effort**: 2 days
 
 ---
 
-## Beyond v1.0: Future Enhancements
+## Phase 5: Documentation & Transparency (Week 7)
 
-### Features and improvements for future versions
+### P5-1: Correct Zero-Dependency Claims
+- **Files**: `docs/SECURITY.md`, `README.md`
+- **Action**: Rewrite claims from "zero external dependencies" to "minimal external dependencies — only `quic-go` and `golang.org/x/sys`". Explain why `quic-go` is necessary for DoQ and that all cryptographic code uses the Go standard library.
+- **Effort**: 2 hours
 
-- [ ] **Multi-Signer DNSSEC (RFC 8901)** — Multiple providers signing same zone
-- [ ] **Compact NSEC (RFC 9824)** — NSEC4 for smaller proofs
-- [ ] **TKEY (RFC 2930)** — Secret key establishment
-- [ ] **CHAIN Queries (RFC 7901)** — Return trust chain in response
-- [ ] **DNS Error Reporting (RFC 9567)** — Extended error codes
-- [ ] **YANG Types (RFC 9108)** — NETCONF/YANG management
-- [ ] **Compacted DNS (RFC 8618)** — C-DNS packet capture format
-- [ ] **DNS Catalog Zones (RFC 9432)** — Zone provisioning automation
+### P5-2: Document `dnsctl` Limitations
+- **Files**: `docs/`, `cmd/dnsctl/README.md` [NEW]
+- **Action**: Create a CLI reference document that explicitly marks unimplemented commands and provides workarounds (e.g., "use `curl` against the REST API").
+- **Effort**: 2 hours
 
----
-
-## Effort Summary
-
-| Phase | Estimated Hours | Priority | Dependencies |
-|---|---|---|---|
-| Phase 1 | ~4-5 days | **CRITICAL** | None |
-| Phase 2 | ~8-10 days | **HIGH** | Phase 1 |
-| Phase 3 | ~11-14 days | **MEDIUM** | Phase 2 |
-| Phase 4 | ~6-7 days | **MEDIUM** | Phase 3 |
-| Phase 5 | ~7 days | **MEDIUM** | Phase 4 |
-| Phase 6 | ~4-5 days | **LOW** | Phase 5 |
-| Phase 7 | ~4-5 days | **LOW** | Phase 6 |
-| Phase 8 | ~4-6 days | **HIGH** | All phases |
-| **Total** | **~50-60 days** | | |
-
-**Estimated Time to Production Ready (v1.0):** ~12-15 weeks
+### P5-3: Document Frontend Deviations
+- **Files**: `.project/SPEC_DEVIATIONS.md`
+- **Action**: Append deviations for: login flow mismatch, mock data pages, read-only settings, and missing logout.
+- **Effort**: 1 hour
 
 ---
 
-## Risk Assessment
+## Phase 6: Specification Compliance & Advanced Features (Week 8+)
 
-| Risk | Probability | Impact | Mitigation |
-|---|---|---|---|
-| XoT implementation complexity | High | Medium | Use TLS handshake from existing DoT code |
-| React frontend rewrite | Medium | High | Option to document exception instead of rewrite |
-| Raft stability issues | Low | High | Extensive testing, gradual rollout |
-| mDNS multicast complexity | Medium | Medium | Use existing UDP infrastructure |
-| External security audit findings | Medium | High | Address critical findings before release |
+These are **not production blockers** but are documented in `docs/IMPLEMENTATION.md` and `docs/SPECIFICATION.md`.
+
+### P6-1: ZONEMD Integration
+- **Spec**: RFC 8976 — zone message digest for integrity
+- **Files**: `internal/zone/zonemd.go`, `internal/transfer/axfr.go`
+- **Action**: Wire ZONEMD computation into zone load and AXFR responses.
+- **Effort**: 2-3 days
+
+### P6-2: mDNS (RFC 6762) and DNS-SD (RFC 6763)
+- **Spec**: `docs/IMPLEMENTATION.md` §1.2, §1.3
+- **Files**: `internal/mdns/` [NEW]
+- **Action**: Implement multicast DNS responder and querier for `.local` resolution, plus service discovery PTR browsing.
+- **Effort**: 5-7 days
+
+### P6-3: DSO — DNS Stateful Operations (RFC 8490)
+- **Spec**: `docs/IMPLEMENTATION.md` §2.1
+- **Files**: `internal/dso/` [NEW]
+- **Action**: Add DSO session management, keepalive, and redirect support.
+- **Effort**: 3-4 days
+
+### P6-4: Raft as Default Cluster Mode
+- **Spec**: `docs/SPECIFICATION.md` §10
+- **Files**: `internal/cluster/cluster.go`, config defaults
+- **Action**: Change default consensus to Raft, ensuring single-node deployments degrade gracefully. Only promote after P0-2 (Raft testing) is complete.
+- **Effort**: 1 day (config change) + extensive soak testing
 
 ---
 
-*Document Version: 1.0*
-*Generated: 2026-04-11*
-*Roadmap based on comprehensive codebase analysis*
+## Summary: Critical Path to Production
+
+To be **honestly production-ready**, the following must be completed:
+
+| Phase | Must-Complete Items | Est. Duration |
+|-------|---------------------|---------------|
+| Phase 0 | P0-1 (RPZ logging), P0-2 (Raft tests), P0-3 (login fix), P0-4 (token query param) | 2-3 weeks |
+| Phase 1 | P1-1 (dnsctl stubs fixed or removed) | 3-4 days |
+| Phase 2 | P2-1 (mock data replaced) | 2-3 days |
+| Phase 3 | P3-1 (auth naming), P3-4 (API refactor) | 1 week |
+| Phase 4 | P4-1 (auth tests), P4-2 (RPZ tests) | 4-5 days |
+
+**Total critical path: ~5-6 weeks of focused engineering.**
+
+---
+
+*End of Roadmap*

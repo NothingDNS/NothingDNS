@@ -10,37 +10,79 @@ import (
 
 func cmdBlocklist(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("blocklist subcommand required (status)")
+		return fmt.Errorf("blocklist subcommand required (status, sources)")
 	}
 
 	switch args[0] {
 	case "status":
-		result, err := apiGet("/api/v1/status")
+		result, err := apiGet("/api/v1/blocklists")
 		if err != nil {
 			return err
 		}
-		fmt.Println("Server Status:")
-		if status, ok := result["status"].(string); ok {
-			fmt.Printf("  Status: %s\n", status)
+		fmt.Println("Blocklist Status:")
+		if enabled, ok := result["enabled"].(bool); ok {
+			fmt.Printf("  Enabled:    %v\n", enabled)
 		}
-		if version, ok := result["version"].(string); ok {
-			fmt.Printf("  Version: %s\n", version)
+		if total, ok := result["total_rules"].(float64); ok {
+			fmt.Printf("  Total Rules: %d\n", int(total))
+		}
+		if files, ok := result["files_count"].(float64); ok {
+			fmt.Printf("  Files:      %d\n", int(files))
+		}
+		if urls, ok := result["urls_count"].(float64); ok {
+			fmt.Printf("  URLs:       %d\n", int(urls))
+		}
+
+	case "sources":
+		result, err := apiGet("/api/v1/blocklists/sources")
+		if err != nil {
+			return err
+		}
+		sources, ok := result["sources"].([]interface{})
+		if !ok {
+			sources, ok = result["blocklists"].([]interface{})
+		}
+		if !ok {
+			fmt.Println("No sources information available")
+			return nil
+		}
+		if len(sources) == 0 {
+			fmt.Println("No blocklist sources configured")
+			return nil
+		}
+		for _, s := range sources {
+			if sm, ok := s.(map[string]interface{}); ok {
+				id, _ := sm["id"].(string)
+				if id == "" {
+					id, _ = sm["source"].(string)
+				}
+				enabled, _ := sm["enabled"].(bool)
+				fmt.Printf("  %s (enabled=%v)\n", id, enabled)
+			}
 		}
 
 	default:
-		return fmt.Errorf("unknown blocklist subcommand: %s", args[0])
+		return fmt.Errorf("unknown blocklist subcommand: %s (supported: status, sources)", args[0])
 	}
 	return nil
 }
 
 func cmdConfig(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("config subcommand required (reload)")
+		return fmt.Errorf("config subcommand required (get, reload)")
 	}
 
 	switch args[0] {
+	case "get":
+		result, err := apiGet("/api/v1/config")
+		if err != nil {
+			return err
+		}
+		fmt.Println("Server Configuration:")
+		printJSON("config", result, "  ")
+
 	case "reload":
-		result, err := apiPost("/api/v1/config/reload")
+		result, err := apiPost("/api/v1/config/reload", "")
 		if err != nil {
 			return err
 		}
@@ -49,7 +91,7 @@ func cmdConfig(args []string) error {
 		}
 
 	default:
-		return fmt.Errorf("unknown config subcommand: %s (supported: reload)", args[0])
+		return fmt.Errorf("unknown config subcommand: %s (supported: get, reload)", args[0])
 	}
 	return nil
 }

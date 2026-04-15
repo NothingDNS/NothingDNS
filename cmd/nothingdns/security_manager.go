@@ -59,6 +59,7 @@ func NewSecurityManager(cfg *config.Config, logger *util.Logger) (*SecurityManag
 			Enabled:  true,
 			Files:    rpzFiles,
 			Policies: policies,
+			Logger:   logger,
 		})
 		if err := mgr.result.RPZEngine.Load(); err != nil {
 			logger.Warnf("Failed to load RPZ zones: %v", err)

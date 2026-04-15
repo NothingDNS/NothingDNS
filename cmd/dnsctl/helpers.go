@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,11 +13,18 @@ import (
 // HTTP client helpers
 // ============================================================================
 
-func apiGet(path string) (map[string]interface{}, error) {
+func apiRequest(method, path, body string) (map[string]interface{}, error) {
 	url := strings.TrimRight(globalFlags.Server, "/") + path
-	req, err := http.NewRequest("GET", url, nil)
+	var bodyReader io.Reader
+	if body != "" {
+		bodyReader = bytes.NewReader([]byte(body))
+	}
+	req, err := http.NewRequest(method, url, bodyReader)
 	if err != nil {
 		return nil, err
+	}
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	if globalFlags.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+globalFlags.APIKey)
@@ -26,58 +34,40 @@ func apiGet(path string) (map[string]interface{}, error) {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if err != nil {
 		return nil, fmt.Errorf("reading response body: %w", err)
 	}
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var errResp map[string]interface{}
-		if json.Unmarshal(body, &errResp) == nil {
+		if json.Unmarshal(respBody, &errResp) == nil {
 			if msg, ok := errResp["error"].(string); ok {
 				return nil, fmt.Errorf("server error (%d): %s", resp.StatusCode, msg)
 			}
 		}
-		return nil, fmt.Errorf("server error (%d): %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("server error (%d): %s", resp.StatusCode, string(respBody))
 	}
 	var result map[string]interface{}
-	if err := json.Unmarshal(body, &result); err != nil {
+	if err := json.Unmarshal(respBody, &result); err != nil {
 		return nil, fmt.Errorf("invalid JSON response: %w", err)
 	}
 	return result, nil
 }
 
-func apiPost(path string) (map[string]interface{}, error) {
-	url := strings.TrimRight(globalFlags.Server, "/") + path
-	req, err := http.NewRequest("POST", url, nil)
-	if err != nil {
-		return nil, err
-	}
-	if globalFlags.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+globalFlags.APIKey)
-	}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
-	if err != nil {
-		return nil, fmt.Errorf("reading response body: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		var errResp map[string]interface{}
-		if json.Unmarshal(body, &errResp) == nil {
-			if msg, ok := errResp["error"].(string); ok {
-				return nil, fmt.Errorf("server error (%d): %s", resp.StatusCode, msg)
-			}
-		}
-		return nil, fmt.Errorf("server error (%d): %s", resp.StatusCode, string(body))
-	}
-	var result map[string]interface{}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("invalid JSON response: %w", err)
-	}
-	return result, nil
+func apiGet(path string) (map[string]interface{}, error) {
+	return apiRequest("GET", path, "")
+}
+
+func apiPost(path, body string) (map[string]interface{}, error) {
+	return apiRequest("POST", path, body)
+}
+
+func apiPut(path, body string) (map[string]interface{}, error) {
+	return apiRequest("PUT", path, body)
+}
+
+func apiDelete(path, body string) (map[string]interface{}, error) {
+	return apiRequest("DELETE", path, body)
 }
 
 func printJSON(key string, val interface{}, indent string) {

@@ -24,7 +24,9 @@ import (
 	"github.com/nothingdns/nothingdns/internal/dashboard"
 	"github.com/nothingdns/nothingdns/internal/dnscookie"
 	"github.com/nothingdns/nothingdns/internal/dnssec"
+	"github.com/nothingdns/nothingdns/internal/dso"
 	"github.com/nothingdns/nothingdns/internal/filter"
+	"github.com/nothingdns/nothingdns/internal/mdns"
 	"github.com/nothingdns/nothingdns/internal/metrics"
 	"github.com/nothingdns/nothingdns/internal/odoh"
 	"github.com/nothingdns/nothingdns/internal/quic"
@@ -164,6 +166,38 @@ func run() error {
 	}
 	clusterMgr := clusterManager.Cluster
 
+	// Initialize mDNS responder
+	var mdnsResponder *mdns.Responder
+	if cfg.MDNS.Enabled {
+		mdnsConfig := mdns.Config{
+			Enabled:     cfg.MDNS.Enabled,
+			MulticastIP: cfg.MDNS.MulticastIP,
+			Port:        cfg.MDNS.Port,
+			HostName:    cfg.MDNS.HostName,
+			Browser:     cfg.MDNS.Browser,
+		}
+		mdnsResponder = mdns.NewResponder(mdnsConfig, logger)
+		if err := mdnsResponder.Start(); err != nil {
+			logger.Warnf("Failed to start mDNS responder: %v", err)
+		} else {
+			logger.Infof("mDNS responder started on %s:%d", mdnsConfig.MulticastIP, mdnsConfig.Port)
+		}
+	}
+
+	// Initialize DSO manager
+	var dsoManager *dso.Manager
+	if cfg.DSO.Enabled {
+		dsoConfig := dso.Config{
+			Enabled:           cfg.DSO.Enabled,
+			InactivityTimeout: dso.DefaultInactivityTimeout,
+			MaxSessions:       1000,
+			MaxPayloadSize:    dso.DefaultMaxPayloadSize,
+		}
+		dsoManager = dso.NewManager(dsoConfig, logger)
+		dsoManager.Start()
+		logger.Info("DSO (DNS Stateful Operations) manager started")
+	}
+
 	// Set up cache invalidation callback for cluster sync
 	if cfg.Cluster.Enabled && cfg.Cluster.CacheSync {
 		cacheManager.SetInvalidateFunc(func(key string) {
@@ -187,6 +221,13 @@ func run() error {
 			Password: u.Password,
 			Role:     auth.Role(u.Role),
 		}
+		// Hash plaintext password and zero it from memory
+		if authUsers[i].Password != "" {
+			authUsers[i].Hash = auth.HashPassword(authUsers[i].Password, nil)
+			authUsers[i].Password = strings.Repeat("\x00", len(authUsers[i].Password))
+		}
+		// Zero plaintext in the raw config struct as well
+		cfg.Server.HTTP.Users[i].Password = strings.Repeat("\x00", len(cfg.Server.HTTP.Users[i].Password))
 	}
 	authStore, err := auth.NewStore(&auth.Config{
 		Secret:      cfg.Server.HTTP.AuthSecret,
@@ -299,6 +340,8 @@ func run() error {
 		nsecCache:     cache.NewNSECCache(10000),
 		dns64Synth:    dns64Synth,
 		cookieJar:     cookieJar,
+		mdnsResponder: mdnsResponder,
+		dsoManager:    dsoManager,
 	}
 
 	// Initialize iterative recursive resolver if enabled
@@ -439,7 +482,10 @@ func run() error {
 		WithMetrics(metricsCollector).
 		WithDNSSEC(validator).
 		WithZoneSigners(zoneSigners).
-		WithRPZ(rpzEngine)
+		WithRPZ(rpzEngine).
+		WithGeoDNS(geoEngine).
+		WithSlaveManager(transferManager.Result().SlaveManager).
+		WithRateLimiter(rateLimiter)
 
 	// Initialize ODoH (RFC 9230) if enabled
 	if cfg.Server.HTTP.ODoHEnabled {
@@ -645,7 +691,7 @@ func run() error {
 		}
 
 		if xotConfig.CertFile != "" && xotConfig.KeyFile != "" {
-			xotServer, err = transfer.NewXoTServer(zones, xotConfig)
+			xotServer, err = transfer.NewXoTServer(zones, xotConfig, logger)
 			if err != nil {
 				return fmt.Errorf("creating XoT server: %w", err)
 			}
@@ -758,6 +804,16 @@ func run() error {
 
 				// Stop transfer manager (slave manager, notify handler, DDNS handler)
 				transferManager.Stop()
+
+				// Stop mDNS responder
+				if mdnsResponder != nil {
+					mdnsResponder.Stop()
+				}
+
+				// Stop DSO manager
+				if dsoManager != nil {
+					dsoManager.Stop()
+				}
 
 				// Stop security manager (rate limiter)
 				securityManager.Stop()

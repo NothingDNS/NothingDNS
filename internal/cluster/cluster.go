@@ -18,8 +18,8 @@ import (
 type ConsensusMode string
 
 const (
-	ConsensusSWIM ConsensusMode = "swim" // Gossip-based SWIM (default)
-	ConsensusRaft ConsensusMode = "raft" // Raft consensus (per SPEC §10)
+	ConsensusSWIM ConsensusMode = "swim" // Gossip-based SWIM
+	ConsensusRaft ConsensusMode = "raft" // Raft consensus (default, per SPEC §10)
 )
 
 // Cluster manages the DNS server cluster.
@@ -64,7 +64,7 @@ type Config struct {
 	BindAddr             string
 	BindPort             int
 	GossipPort           int
-	ConsensusMode        ConsensusMode // "swim" (default) or "raft"
+	ConsensusMode        ConsensusMode // "raft" (default) or "swim"
 	Region               string
 	Zone                 string
 	Weight               int

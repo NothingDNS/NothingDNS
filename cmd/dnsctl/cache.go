@@ -23,7 +23,7 @@ func cmdCache(args []string) error {
 		}
 
 	case "flush":
-		result, err := apiPost("/api/v1/cache/flush")
+		result, err := apiPost("/api/v1/cache/flush", "")
 		if err != nil {
 			return err
 		}

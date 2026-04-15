@@ -198,4 +198,36 @@ export interface ServerConfig {
   version: string;
   listen_port: number;
   log_level: string;
+  dns64: {
+    enabled: boolean;
+    prefix: string;
+    prefix_len: number;
+    exclude_nets?: string[];
+  };
+  cookie: {
+    enabled: boolean;
+    secret_rotation?: string;
+  };
+}
+
+export interface GeoDNSStats {
+  enabled: boolean;
+  rules: number;
+  mmdb_loaded: boolean;
+  lookups: number;
+  hits: number;
+  misses: number;
+}
+
+export interface ZoneTransfer {
+  zone: string;
+  masters: string;
+  serial: number;
+  last_transfer: string;
+  status: 'synced' | 'syncing' | 'failed' | 'pending';
+  records: number;
+}
+
+export interface SlaveZonesResponse {
+  slave_zones: ZoneTransfer[];
 }

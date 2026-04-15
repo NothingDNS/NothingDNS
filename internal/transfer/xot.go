@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
+	"github.com/nothingdns/nothingdns/internal/util"
 	"github.com/nothingdns/nothingdns/internal/zone"
 )
 
@@ -27,6 +28,7 @@ type XoTServer struct {
 	closed     bool
 	mu         sync.Mutex
 	allowList  []net.IPNet
+	logger     *util.Logger
 }
 
 // TLSAUsage specifies how TLSA records should be used for XoT validation.
@@ -87,7 +89,7 @@ func (c *TLSCACache) GetTLSARecords(domain string) []*TLSARecord {
 }
 
 // NewXoTServer creates a new XoT server for DNS zone transfer over TLS.
-func NewXoTServer(zones map[string]*zone.Zone, config *XoTConfig) (*XoTServer, error) {
+func NewXoTServer(zones map[string]*zone.Zone, config *XoTConfig, logger *util.Logger) (*XoTServer, error) {
 	if zones == nil {
 		return nil, fmt.Errorf("zones is required")
 	}
@@ -105,6 +107,7 @@ func NewXoTServer(zones map[string]*zone.Zone, config *XoTConfig) (*XoTServer, e
 		zones:     zones,
 		zonesMu:   &sync.RWMutex{},
 		port:      config.ListenPort,
+		logger:    logger,
 	}
 	if server.port == 0 {
 		server.port = 853 // XoT default port
@@ -113,9 +116,13 @@ func NewXoTServer(zones map[string]*zone.Zone, config *XoTConfig) (*XoTServer, e
 	// Parse allowed networks from config
 	for _, cidr := range config.AllowedNetworks {
 		_, network, err := net.ParseCIDR(cidr)
-		if err == nil {
-			server.allowList = append(server.allowList, *network)
+		if err != nil {
+			if logger != nil {
+				logger.Warnf("XoT: invalid CIDR in allowed_networks: %s: %v", cidr, err)
+			}
+			continue
 		}
+		server.allowList = append(server.allowList, *network)
 	}
 
 	return server, nil

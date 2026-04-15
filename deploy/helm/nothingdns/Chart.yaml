@@ -1,0 +1,24 @@
+apiVersion: v2
+name: nothingdns
+description: A production-grade DNS server with comprehensive protocol support
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - dns
+  - dns-server
+  - authoritative
+  - recursive
+  - dnssec
+  - dot
+  - doh
+  - doq
+home: https://github.com/nothingdns/nothingdns
+sources:
+  - https://github.com/nothingdns/nothingdns
+maintainers:
+  - name: NothingDNS Team
+    email: team@nothingdns.io
+dependencies: []
+annotations:
+  category: Infrastructure

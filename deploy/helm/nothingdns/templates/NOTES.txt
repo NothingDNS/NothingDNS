@@ -1,0 +1,94 @@
+Thank you for installing {{ .Chart.Name }}.
+
+Your release is named {{ .Release.Name }}.
+
+## Get the application URL
+
+{{- if eq .Values.service.type "LoadBalancer" }}
+
+Get the LoadBalancer IP:
+
+```bash
+kubectl get svc {{ include "nothingdns.fullname" . }}-dns -n {{ .Release.Namespace }}
+```
+
+{{- else if eq .Values.service.type "NodePort" }}
+
+Get the NodePort:
+
+```bash
+kubectl get svc {{ include "nothingdns.fullname" . }}-dns -n {{ .Release.Namespace }}
+```
+
+{{- else if eq .Values.service.type "ClusterIP" }}
+
+DNS service is exposed via ClusterIP. Use port-forward for testing:
+
+```bash
+kubectl port-forward svc/{{ include "nothingdns.fullname" . }}-dns 5353:53 -n {{ .Release.Namespace }}
+```
+
+Then test with: `dig @localhost -p 5353 example.com`
+
+{{- end }}
+
+## Access the Dashboard
+
+{{- if .Values.ingress.enabled }}
+
+The dashboard is available at: https://{{ (index .Values.ingress.hosts 0).host }}
+
+{{- else }}
+
+Use port-forward to access the API:
+
+```bash
+kubectl port-forward svc/{{ include "nothingdns.fullname" . }}-api {{ .Values.service.apiPort }}:{{ .Values.service.apiPort }} -n {{ .Release.Namespace }}
+```
+
+Then open: http://localhost:{{ .Values.service.apiPort }}
+
+{{- end }}
+
+## Verify Installation
+
+Check deployment status:
+
+```bash
+kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/name={{ include "nothingdns.name" . }}
+```
+
+Check logs:
+
+```bash
+kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/name={{ include "nothingdns.name" . }} --tail=100
+```
+
+## Configuration
+
+The configuration is stored in ConfigMap: `{{ include "nothingdns.fullname" . }}-config`
+
+Edit with:
+
+```bash
+kubectl edit configmap {{ include "nothingdns.fullname" . }}-config -n {{ .Release.Namespace }}
+```
+
+Then reload the server:
+
+```bash
+kubectl exec -n {{ .Release.Namespace }} deployment/{{ include "nothingdns.fullname" . }} -- kill -HUP 1
+```
+
+## Next Steps
+
+1. Configure upstream DNS servers in `values.yaml` or ConfigMap
+2. Set up TLS certificates for DoT/DoH if needed
+3. Configure rate limiting and blocklists
+4. Set up monitoring with Prometheus/Grafana
+
+## Documentation
+
+- Project: https://github.com/nothingdns/nothingdns
+- API Docs: https://docs.nothingdns.io/api
+- Helm Chart: https://artifacthub.io/packages/helm/nothingdns/nothingdns

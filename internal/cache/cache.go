@@ -560,6 +560,24 @@ func (c *Cache) SetPrefetchFunc(fn func(key string, qtype uint16)) {
 	c.prefetchFunc = fn
 }
 
+// UpdateConfig updates the runtime cache configuration.
+// This allows changing cache behavior without restarting the server.
+func (c *Cache) UpdateConfig(cfg Config) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.capacity = cfg.Capacity
+	c.minTTL = cfg.MinTTL
+	c.maxTTL = cfg.MaxTTL
+	c.defaultTTL = cfg.DefaultTTL
+	c.negativeTTL = cfg.NegativeTTL
+	c.prefetchEnabled = cfg.PrefetchEnabled
+	c.prefetchThreshold = cfg.PrefetchThreshold
+	c.serveStale = cfg.ServeStale
+	c.staleGrace = cfg.StaleGrace
+	c.stats.Capacity = cfg.Capacity
+}
+
 // OnPrefetchComplete marks a prefetch as complete and resets the prefetch flag.
 func (c *Cache) OnPrefetchComplete(key string, msg *protocol.Message, ttl uint32) {
 	c.mu.Lock()

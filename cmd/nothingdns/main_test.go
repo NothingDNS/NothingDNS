@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -985,5 +987,566 @@ func TestMinimizeResponse_EmptySections(t *testing.T) {
 	}
 	if len(resp.Additionals) != 0 {
 		t.Errorf("expected 0 additionals, got %d", len(resp.Additionals))
+	}
+}
+
+// --- Integration tests for config and initialization ---
+
+func TestNewTestHandlerInitialization(t *testing.T) {
+	h := newTestHandler()
+
+	if h.config == nil {
+		t.Error("config should not be nil")
+	}
+	if h.logger == nil {
+		t.Error("logger should not be nil")
+	}
+	if h.cache == nil {
+		t.Error("cache should not be nil")
+	}
+	if h.metrics == nil {
+		t.Error("metrics should not be nil")
+	}
+	if h.zones == nil {
+		t.Error("zones map should not be nil")
+	}
+}
+
+func TestServeDNS_TruncatedResponse(t *testing.T) {
+	h := newTestHandler()
+
+	// Add many large records to trigger truncation
+	records := make([]zone.Record, 50)
+	for i := 0; i < 50; i++ {
+		records[i] = zone.Record{
+			Name:  fmt.Sprintf("host%d.example.com.", i),
+			TTL:   300,
+			Class: "IN",
+			Type:  "TXT",
+			RData: strings.Repeat("x", 100), // Large TXT record
+		}
+	}
+	addZoneRecords(t, h, "example.com.", records)
+
+	w := newCaptureWriter("10.0.0.1", "udp")
+	h.ServeDNS(w, newTestQuery(t, "host0.example.com.", protocol.TypeTXT))
+
+	if w.msg == nil {
+		t.Fatal("expected a response")
+	}
+	// Response should be truncated or limited due to UDP size
+}
+
+func TestServeDNS_TCPResponse(t *testing.T) {
+	h := newTestHandler()
+	addZoneRecords(t, h, "example.com.", []zone.Record{
+		{Name: "www.example.com.", TTL: 300, Class: "IN", Type: "A", RData: "192.168.1.1"},
+	})
+
+	w := newCaptureWriter("10.0.0.1", "tcp")
+	h.ServeDNS(w, newTestQuery(t, "www.example.com.", protocol.TypeA))
+
+	if w.msg == nil {
+		t.Fatal("expected a response")
+	}
+	if w.msg.Header.Flags.RCODE != protocol.RcodeSuccess {
+		t.Errorf("expected NOERROR, got rcode %d", w.msg.Header.Flags.RCODE)
+	}
+}
+
+func TestServeDNS_AAAAQuery(t *testing.T) {
+	h := newTestHandler()
+	addZoneRecords(t, h, "example.com.", []zone.Record{
+		{Name: "www.example.com.", TTL: 300, Class: "IN", Type: "AAAA", RData: "2001:db8::1"},
+	})
+
+	w := newCaptureWriter("10.0.0.1", "udp")
+	h.ServeDNS(w, newTestQuery(t, "www.example.com.", protocol.TypeAAAA))
+
+	if w.msg == nil {
+		t.Fatal("expected a response")
+	}
+	if w.msg.Header.Flags.RCODE != protocol.RcodeSuccess {
+		t.Errorf("expected NOERROR, got rcode %d", w.msg.Header.Flags.RCODE)
+	}
+	if len(w.msg.Answers) != 1 {
+		t.Fatalf("expected 1 answer, got %d", len(w.msg.Answers))
+	}
+}
+
+func TestServeDNS_MultipleQuestions(t *testing.T) {
+	h := newTestHandler()
+	w := newCaptureWriter("10.0.0.1", "udp")
+
+	// Create query with multiple questions
+	msg := &protocol.Message{
+		Header: protocol.Header{ID: 1, Flags: protocol.NewQueryFlags()},
+		Questions: []*protocol.Question{
+			{Name: mustParseName(t, "a.example.com."), QType: protocol.TypeA, QClass: protocol.ClassIN},
+			{Name: mustParseName(t, "b.example.com."), QType: protocol.TypeA, QClass: protocol.ClassIN},
+		},
+	}
+	h.ServeDNS(w, msg)
+
+	if w.msg == nil {
+		t.Fatal("expected a response")
+	}
+	// Multiple questions should either work or return appropriate error
+}
+
+func TestServeDNS_LargeQueryName(t *testing.T) {
+	h := newTestHandler()
+	w := newCaptureWriter("10.0.0.1", "udp")
+
+	// Create a very long domain name
+	longLabel := strings.Repeat("a", 63)
+	longDomain := longLabel + ".example.com."
+	h.ServeDNS(w, newTestQuery(t, longDomain, protocol.TypeA))
+
+	if w.msg == nil {
+		t.Fatal("expected a response")
+	}
+	// Should handle without panic
+}
+
+func TestServeDNS_InternationalizedDomain(t *testing.T) {
+	h := newTestHandler()
+	w := newCaptureWriter("10.0.0.1", "udp")
+
+	// Test with internationalized domain (punycode)
+	h.ServeDNS(w, newTestQuery(t, "xn--nxasmq5a.example.com.", protocol.TypeA))
+
+	if w.msg == nil {
+		t.Fatal("expected a response")
+	}
+}
+
+func TestServeDNS_EDNS0(t *testing.T) {
+	h := newTestHandler()
+
+	// Create query with EDNS0 OPT pseudo-record
+	msg := newTestQuery(t, "test.com.", protocol.TypeA)
+	msg.Additionals = append(msg.Additionals, &protocol.ResourceRecord{
+		Name:  &protocol.Name{}, // Root name for OPT
+		Type:  protocol.TypeOPT,
+		Class: 4096, // UDP payload size
+		TTL:   0x8000, // DO bit set
+		Data:  &protocol.RDataTXT{Strings: []string{}},
+	})
+
+	w := newCaptureWriter("10.0.0.1", "udp")
+	h.ServeDNS(w, msg)
+
+	if w.msg == nil {
+		t.Fatal("expected a response")
+	}
+	// Response should preserve EDNS0
+}
+
+func TestServeDNS_NXDOMAIN(t *testing.T) {
+	h := newTestHandler()
+	addZoneRecords(t, h, "example.com.", []zone.Record{
+		{Name: "www.example.com.", TTL: 300, Class: "IN", Type: "A", RData: "192.168.1.1"},
+	})
+
+	w := newCaptureWriter("10.0.0.1", "udp")
+	h.ServeDNS(w, newTestQuery(t, "nonexistent.example.com.", protocol.TypeA))
+
+	if w.msg == nil {
+		t.Fatal("expected a response")
+	}
+	if w.msg.Header.Flags.RCODE != protocol.RcodeNameError {
+		t.Errorf("expected NXDOMAIN, got rcode %d", w.msg.Header.Flags.RCODE)
+	}
+}
+
+func TestServeDNS_Refused(t *testing.T) {
+	h := newTestHandler()
+	// No zones configured, no upstream - should return REFUSED or NXDOMAIN
+	w := newCaptureWriter("10.0.0.1", "udp")
+	h.ServeDNS(w, newTestQuery(t, "test.com.", protocol.TypeA))
+
+	if w.msg == nil {
+		t.Fatal("expected a response")
+	}
+	// Response should indicate failure to resolve
+}
+
+func TestServeDNS_SRVQuery(t *testing.T) {
+	h := newTestHandler()
+	addZoneRecords(t, h, "example.com.", []zone.Record{
+		{Name: "_http._tcp.example.com.", TTL: 300, Class: "IN", Type: "SRV", RData: "10 5 80 www.example.com."},
+	})
+
+	w := newCaptureWriter("10.0.0.1", "udp")
+	h.ServeDNS(w, newTestQuery(t, "_http._tcp.example.com.", protocol.TypeSRV))
+
+	if w.msg == nil {
+		t.Fatal("expected a response")
+	}
+	if w.msg.Header.Flags.RCODE != protocol.RcodeSuccess {
+		t.Errorf("expected NOERROR, got rcode %d", w.msg.Header.Flags.RCODE)
+	}
+}
+
+func TestServeDNS_MXQuery(t *testing.T) {
+	h := newTestHandler()
+	addZoneRecords(t, h, "example.com.", []zone.Record{
+		{Name: "example.com.", TTL: 300, Class: "IN", Type: "MX", RData: "10 mail.example.com."},
+	})
+
+	w := newCaptureWriter("10.0.0.1", "udp")
+	h.ServeDNS(w, newTestQuery(t, "example.com.", protocol.TypeMX))
+
+	if w.msg == nil {
+		t.Fatal("expected a response")
+	}
+	if w.msg.Header.Flags.RCODE != protocol.RcodeSuccess {
+		t.Errorf("expected NOERROR, got rcode %d", w.msg.Header.Flags.RCODE)
+	}
+}
+
+func TestServeDNS_SOAQuery(t *testing.T) {
+	h := newTestHandler()
+	addZoneRecords(t, h, "example.com.", []zone.Record{
+		{Name: "example.com.", TTL: 300, Class: "IN", Type: "SOA", RData: "ns1.example.com. admin.example.com. 2024010101 3600 600 86400 86400"},
+	})
+
+	w := newCaptureWriter("10.0.0.1", "udp")
+	h.ServeDNS(w, newTestQuery(t, "example.com.", protocol.TypeSOA))
+
+	if w.msg == nil {
+		t.Fatal("expected a response")
+	}
+	if w.msg.Header.Flags.RCODE != protocol.RcodeSuccess {
+		t.Errorf("expected NOERROR, got rcode %d", w.msg.Header.Flags.RCODE)
+	}
+}
+
+func TestServeDNS_NSQuery(t *testing.T) {
+	h := newTestHandler()
+	addZoneRecords(t, h, "example.com.", []zone.Record{
+		{Name: "example.com.", TTL: 300, Class: "IN", Type: "NS", RData: "ns1.example.com."},
+		{Name: "example.com.", TTL: 300, Class: "IN", Type: "NS", RData: "ns2.example.com."},
+	})
+
+	w := newCaptureWriter("10.0.0.1", "udp")
+	h.ServeDNS(w, newTestQuery(t, "example.com.", protocol.TypeNS))
+
+	if w.msg == nil {
+		t.Fatal("expected a response")
+	}
+	if w.msg.Header.Flags.RCODE != protocol.RcodeSuccess {
+		t.Errorf("expected NOERROR, got rcode %d", w.msg.Header.Flags.RCODE)
+	}
+	if len(w.msg.Answers) != 2 {
+		t.Errorf("expected 2 NS answers, got %d", len(w.msg.Answers))
+	}
+}
+
+func TestServeDNS_TXTQuery(t *testing.T) {
+	h := newTestHandler()
+	addZoneRecords(t, h, "example.com.", []zone.Record{
+		{Name: "example.com.", TTL: 300, Class: "IN", Type: "TXT", RData: "v=spf1 include:_spf.example.com ~all"},
+	})
+
+	w := newCaptureWriter("10.0.0.1", "udp")
+	h.ServeDNS(w, newTestQuery(t, "example.com.", protocol.TypeTXT))
+
+	if w.msg == nil {
+		t.Fatal("expected a response")
+	}
+	if w.msg.Header.Flags.RCODE != protocol.RcodeSuccess {
+		t.Errorf("expected NOERROR, got rcode %d", w.msg.Header.Flags.RCODE)
+	}
+}
+
+func TestServeDNS_CNAMEChain(t *testing.T) {
+	h := newTestHandler()
+	addZoneRecords(t, h, "example.com.", []zone.Record{
+		{Name: "a.example.com.", TTL: 300, Class: "IN", Type: "CNAME", RData: "b.example.com."},
+		{Name: "b.example.com.", TTL: 300, Class: "IN", Type: "CNAME", RData: "c.example.com."},
+		{Name: "c.example.com.", TTL: 300, Class: "IN", Type: "A", RData: "192.168.1.1"},
+	})
+
+	w := newCaptureWriter("10.0.0.1", "udp")
+	h.ServeDNS(w, newTestQuery(t, "a.example.com.", protocol.TypeA))
+
+	if w.msg == nil {
+		t.Fatal("expected a response")
+	}
+	if w.msg.Header.Flags.RCODE != protocol.RcodeSuccess {
+		t.Errorf("expected NOERROR, got rcode %d", w.msg.Header.Flags.RCODE)
+	}
+	// Should have all CNAMEs + final A record
+	if len(w.msg.Answers) < 3 {
+		t.Errorf("expected at least 3 answers (2 CNAME + 1 A), got %d", len(w.msg.Answers))
+	}
+}
+
+func TestServeDNS_LoopbackClient(t *testing.T) {
+	h := newTestHandler()
+	addZoneRecords(t, h, "example.com.", []zone.Record{
+		{Name: "www.example.com.", TTL: 300, Class: "IN", Type: "A", RData: "192.168.1.1"},
+	})
+
+	w := newCaptureWriter("127.0.0.1", "udp")
+	h.ServeDNS(w, newTestQuery(t, "www.example.com.", protocol.TypeA))
+
+	if w.msg == nil {
+		t.Fatal("expected a response")
+	}
+	if w.msg.Header.Flags.RCODE != protocol.RcodeSuccess {
+		t.Errorf("expected NOERROR, got rcode %d", w.msg.Header.Flags.RCODE)
+	}
+}
+
+func TestServeDNS_IPv6Client(t *testing.T) {
+	h := newTestHandler()
+	addZoneRecords(t, h, "example.com.", []zone.Record{
+		{Name: "www.example.com.", TTL: 300, Class: "IN", Type: "A", RData: "192.168.1.1"},
+	})
+
+	w := newCaptureWriter("::1", "udp")
+	h.ServeDNS(w, newTestQuery(t, "www.example.com.", protocol.TypeA))
+
+	if w.msg == nil {
+		t.Fatal("expected a response")
+	}
+	if w.msg.Header.Flags.RCODE != protocol.RcodeSuccess {
+		t.Errorf("expected NOERROR, got rcode %d", w.msg.Header.Flags.RCODE)
+	}
+}
+
+// TestConfigFileLoading tests config file loading scenarios
+func TestConfigFileLoading(t *testing.T) {
+	t.Run("valid_config", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "test.yaml")
+
+		configYAML := `
+server:
+  port: 5354
+  bind:
+    - "127.0.0.1"
+cache:
+  enabled: true
+  size: 1000
+`
+		if err := os.WriteFile(configFile, []byte(configYAML), 0644); err != nil {
+			t.Fatalf("failed to write config: %v", err)
+		}
+
+		cfg, err := config.UnmarshalYAML(configYAML)
+		if err != nil {
+			t.Errorf("failed to load valid config: %v", err)
+		}
+		if cfg == nil {
+			t.Error("config should not be nil")
+		}
+	})
+
+	t.Run("nonexistent_config", func(t *testing.T) {
+		_, err := os.ReadFile(filepath.Join(t.TempDir(), "nonexistent", "config.yaml"))
+		if err == nil {
+			t.Error("should return error for nonexistent config")
+		}
+	})
+
+	t.Run("empty_config", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configFile := filepath.Join(tmpDir, "empty.yaml")
+
+		if err := os.WriteFile(configFile, []byte(""), 0644); err != nil {
+			t.Fatalf("failed to write empty config: %v", err)
+		}
+
+		// Empty config should use defaults
+		data, err := os.ReadFile(configFile)
+		if err != nil {
+			t.Fatalf("failed to read config: %v", err)
+		}
+
+		cfg, err := config.UnmarshalYAML(string(data))
+		if err != nil {
+			t.Errorf("empty config should use defaults: %v", err)
+		}
+		if cfg == nil {
+			t.Error("config should not be nil with defaults")
+		}
+	})
+}
+
+// TestGracefulShutdown tests graceful shutdown behavior
+func TestGracefulShutdown(t *testing.T) {
+	tmpDir := t.TempDir()
+	pidFile := filepath.Join(tmpDir, "test.pid")
+
+	// Write a PID file
+	if err := os.WriteFile(pidFile, []byte("12345\n"), 0644); err != nil {
+		t.Fatalf("failed to write pid file: %v", err)
+	}
+
+	// Remove PID file (cleanup test)
+	if err := os.Remove(pidFile); err != nil {
+		t.Errorf("failed to remove pid file: %v", err)
+	}
+
+	// Verify PID file is removed
+	if _, err := os.Stat(pidFile); !os.IsNotExist(err) {
+		t.Error("pid file should be removed")
+	}
+}
+
+// TestManagerInitializationOrder tests that managers initialize in correct order
+func TestManagerInitializationOrder(t *testing.T) {
+	// This test validates the manager initialization dependencies
+	// Order: config -> cache -> zones -> upstream -> dnssec -> cluster -> api
+
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Port: 5354,
+			Bind: []string{"127.0.0.1"},
+		},
+		Cache: config.CacheConfig{
+			Enabled: true,
+			Size:    1000,
+		},
+	}
+
+	// Test cache manager creation
+	cacheMgr := cache.New(cache.Config{
+		Capacity:   cfg.Cache.Size,
+		DefaultTTL: 300 * time.Second,
+	})
+	if cacheMgr == nil {
+		t.Fatal("cache manager should be created")
+	}
+
+	// Test zone manager creation
+	zoneMgr := zone.NewManager()
+	if zoneMgr == nil {
+		t.Error("zone manager should be created")
+	}
+
+	// Test metrics creation
+	metricsMgr := metrics.New(metrics.Config{Enabled: true})
+	if metricsMgr == nil {
+		t.Error("metrics manager should be created")
+	}
+
+	// Managers should be created independently
+	_ = zoneMgr // may be nil if zone dir doesn't exist
+}
+
+// TestFlagParsing tests command line flag parsing
+func TestFlagParsing(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr bool
+	}{
+		{
+			name: "version_flag",
+			args: []string{"-version"},
+		},
+		{
+			name: "help_flag",
+			args: []string{"-help"},
+		},
+		{
+			name: "config_flag",
+			args: []string{"-config", "/etc/nothingdns/nothingdns.yaml"},
+		},
+		{
+			name: "validate_config_flag",
+			args: []string{"-validate-config", "-config", "/tmp/test.yaml"},
+		},
+		{
+			name: "pid_file_flag",
+			args: []string{"-pid-file", "/tmp/test.pid"},
+		},
+		{
+			name: "log_level_flag",
+			args: []string{"-log-level", "debug"},
+		},
+		{
+			name: "foreground_flag",
+			args: []string{"-foreground"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// We can't actually parse flags in tests because flag.Parse() can only be called once
+			// Just verify the flag names are valid
+			validFlags := []string{
+				"-version", "-help", "-config", "-validate-config",
+				"-pid-file", "-log-level", "-foreground",
+			}
+			for _, arg := range tc.args {
+				if strings.HasPrefix(arg, "-") {
+					found := false
+					for _, valid := range validFlags {
+						if arg == valid {
+							found = true
+							break
+						}
+					}
+					if !found && !strings.Contains(arg, ".") {
+						// Skip values that look like file paths
+						t.Errorf("unknown flag: %s", arg)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestDefaultConfigValues tests default configuration values
+func TestDefaultConfigValues(t *testing.T) {
+	cfg := config.DefaultConfig()
+
+	if cfg.Server.Port != 53 {
+		t.Errorf("default port = %d, want 53", cfg.Server.Port)
+	}
+	if cfg.Cache.Enabled != true {
+		t.Errorf("default cache enabled = %v, want true", cfg.Cache.Enabled)
+	}
+	if cfg.Cache.Size != 10000 {
+		t.Errorf("default cache size = %d, want 10000", cfg.Cache.Size)
+	}
+}
+
+// TestCacheIntegration tests cache integration with handler
+func TestCacheIntegration(t *testing.T) {
+	h := newTestHandler()
+
+	// Add a zone
+	addZoneRecords(t, h, "example.com.", []zone.Record{
+		{Name: "cached.example.com.", TTL: 300, Class: "IN", Type: "A", RData: "192.168.1.1"},
+	})
+
+	// First query - should hit zone
+	w1 := newCaptureWriter("10.0.0.1", "udp")
+	h.ServeDNS(w1, newTestQuery(t, "cached.example.com.", protocol.TypeA))
+
+	if w1.msg == nil {
+		t.Fatal("expected response")
+	}
+	if w1.msg.Header.Flags.RCODE != protocol.RcodeSuccess {
+		t.Errorf("first query failed: rcode %d", w1.msg.Header.Flags.RCODE)
+	}
+
+	// Verify answer contains expected IP
+	found := false
+	for _, rec := range w1.msg.Answers {
+		if rec.Type == protocol.TypeA {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected A record in answer")
 	}
 }

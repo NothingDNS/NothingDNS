@@ -27,8 +27,8 @@ var commands = []Command{
 	{Name: "zone", Description: "Manage DNS zones (list, add, remove, reload)", Run: cmdZone},
 	{Name: "record", Description: "Manage DNS records (add, remove, update)", Run: cmdRecord},
 	{Name: "cache", Description: "Cache operations (flush, stats)", Run: cmdCache},
-	{Name: "cluster", Description: "Cluster management (status, peers, join, leave)", Run: cmdCluster},
-	{Name: "blocklist", Description: "Blocklist management (reload, status)", Run: cmdBlocklist},
+	{Name: "cluster", Description: "Cluster management (status, peers)", Run: cmdCluster},
+	{Name: "blocklist", Description: "Blocklist management (status, sources)", Run: cmdBlocklist},
 	{Name: "config", Description: "Configuration operations (get, set, reload)", Run: cmdConfig},
 	{Name: "dig", Description: "DNS query tool (like dig)", Run: cmdDig},
 	{Name: "dnssec", Description: "DNSSEC operations (generate-key, ds-from-dnskey, sign-zone)", Run: cmdDNSSEC},
@@ -163,21 +163,18 @@ Subcommands:
 
 Subcommands:
   status            Show cluster status
-  peers             List cluster peers
-  join <addr>       Join a cluster
-  leave             Leave the cluster`,
+  peers             List cluster peers`,
 
 		"blocklist": `Usage: dnsctl blocklist <subcommand>
 
 Subcommands:
-  reload            Reload blocklist files
-  status            Show blocklist statistics`,
+  status            Show blocklist statistics
+  sources           List blocklist sources`,
 
 		"config": `Usage: dnsctl config <subcommand>
 
 Subcommands:
-  get <key>         Get configuration value
-  set <key> <val>   Set configuration value
+  get               Get current configuration
   reload            Reload configuration`,
 
 		"dig": `Usage: dnsctl dig [@server] <name> [<type>]

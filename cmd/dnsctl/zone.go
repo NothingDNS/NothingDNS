@@ -1,13 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
 
 func cmdZone(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("zone subcommand required (list, reload)")
+		return fmt.Errorf("zone subcommand required (list, add, remove, reload)")
 	}
 
 	switch args[0] {
@@ -34,12 +35,49 @@ func cmdZone(args []string) error {
 			}
 		}
 
+	case "add":
+		if len(args) < 2 {
+			return fmt.Errorf("zone name required: dnsctl zone add <zone> [nameserver]")
+		}
+		zoneName := args[1]
+		ns := "ns1." + zoneName + "."
+		if len(args) > 2 {
+			ns = args[2]
+		}
+		body := map[string]interface{}{
+			"name":        zoneName,
+			"nameservers": []string{ns},
+			"admin_email": "admin." + zoneName + ".",
+			"ttl":         3600,
+		}
+		b, _ := json.Marshal(body)
+		result, err := apiPost("/api/v1/zones", string(b))
+		if err != nil {
+			return err
+		}
+		if msg, ok := result["message"].(string); ok {
+			fmt.Println(msg)
+		}
+
+	case "remove":
+		if len(args) < 2 {
+			return fmt.Errorf("zone name required: dnsctl zone remove <zone>")
+		}
+		zoneName := args[1]
+		result, err := apiDelete("/api/v1/zones/"+zoneName, "")
+		if err != nil {
+			return err
+		}
+		if msg, ok := result["message"].(string); ok {
+			fmt.Println(msg)
+		}
+
 	case "reload":
 		if len(args) < 2 {
 			return fmt.Errorf("zone name required: dnsctl zone reload <zone>")
 		}
 		zoneName := args[1]
-		result, err := apiPost("/api/v1/zones/reload?zone=" + zoneName)
+		result, err := apiPost("/api/v1/zones/reload?zone="+zoneName, "")
 		if err != nil {
 			return err
 		}
@@ -48,7 +86,7 @@ func cmdZone(args []string) error {
 		}
 
 	default:
-		return fmt.Errorf("unknown zone subcommand: %s (supported: list, reload)", args[0])
+		return fmt.Errorf("unknown zone subcommand: %s (supported: list, add, remove, reload)", args[0])
 	}
 	return nil
 }

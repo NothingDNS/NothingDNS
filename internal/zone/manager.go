@@ -43,11 +43,12 @@ func SerialIncrement(s uint32) uint32 {
 
 // Manager manages DNS zones.
 type Manager struct {
-	mu      sync.RWMutex
-	zones   map[string]*Zone
-	files   map[string]string // zone name -> file path
-	zoneDir string            // directory for zone file storage
-	logger  Logger            // optional logger for errors
+	mu           sync.RWMutex
+	zones        map[string]*Zone
+	files        map[string]string // zone name -> file path
+	zoneDir      string            // directory for zone file storage
+	logger       Logger            // optional logger for errors
+	onemdEnabled bool              // enable ZONEMD computation (RFC 8976)
 }
 
 // Logger interface for logging errors.
@@ -66,6 +67,13 @@ func NewManager() *Manager {
 // SetLogger sets the logger for the manager.
 func (m *Manager) SetLogger(logger Logger) {
 	m.logger = logger
+}
+
+// SetZONEMDEnabled enables or disables ZONEMD computation for zones.
+func (m *Manager) SetZONEMDEnabled(enabled bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onemdEnabled = enabled
 }
 
 // SetZoneDir sets the directory where zone files are stored.
@@ -106,6 +114,18 @@ func (m *Manager) Load(name, path string) error {
 
 	m.zones[z.Origin] = z
 	m.files[z.Origin] = path
+
+	// Compute ZONEMD if enabled
+	if m.onemdEnabled {
+		zonemd, err := ComputeZoneMD(z, ZONEMDSHA256)
+		if err != nil {
+			if m.logger != nil {
+				m.logger.Warnf("zone: failed to compute ZONEMD for %s: %v", z.Origin, err)
+			}
+		} else {
+			z.ZONEMD = zonemd
+		}
+	}
 
 	return nil
 }

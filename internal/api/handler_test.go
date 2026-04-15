@@ -943,6 +943,33 @@ func TestAuthMiddleware(t *testing.T) {
 		}
 	})
 
+	t.Run("auth with token in WebSocket query parameter is rejected", func(t *testing.T) {
+		cfg := config.HTTPConfig{
+			Enabled:   true,
+			Bind:      "127.0.0.1:0",
+			AuthToken: "secret-token",
+		}
+		server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+
+		handlerCalled := false
+		testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			handlerCalled = true
+			w.WriteHeader(http.StatusOK)
+		})
+
+		req := httptest.NewRequest(http.MethodGet, "/ws?token=secret-token", nil)
+		rec := httptest.NewRecorder()
+
+		server.authMiddleware(testHandler).ServeHTTP(rec, req)
+
+		if handlerCalled {
+			t.Error("Expected handler NOT to be called with token in WebSocket query param")
+		}
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("Expected status %d for ws token-in-query, got %d", http.StatusUnauthorized, rec.Code)
+		}
+	})
+
 	t.Run("auth with raw token in header (no Bearer prefix)", func(t *testing.T) {
 		cfg := config.HTTPConfig{
 			Enabled:   true,

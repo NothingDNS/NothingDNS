@@ -42,6 +42,10 @@ type Config struct {
 	// Directory for zone file storage (defaults to ./zones/)
 	ZoneDir string `yaml:"zone_dir"`
 
+	// ZONEMD enables RFC 8976 zone message digests for integrity verification.
+	// When enabled, a ZONEMD record is computed for each zone and included in AXFR.
+	ZONEMD bool `yaml:"zonemd"`
+
 	// ACL configuration
 	ACL []ACLRule `yaml:"acl"`
 
@@ -83,7 +87,7 @@ type Config struct {
 	ODoH ODoHConfig `yaml:"odoh"`
 
 	// mDNS configuration (RFC 6762 - Multicast DNS)
-	mDNS mDNSConfig `yaml:"mdns"`
+	MDNS mDNSConfig `yaml:"mdns"`
 
 	// Catalog Zone configuration (RFC 9432)
 	Catalog CatalogConfig `yaml:"catalog"`
@@ -418,6 +422,11 @@ type ClusterConfig struct {
 	// Encryption key for gossip traffic (32 bytes, hex-encoded).
 	// When set, all inter-node communication is encrypted with AES-256-GCM.
 	EncryptionKey string `yaml:"encryption_key"`
+
+	// Consensus mode for cluster coordination: "raft" (default) or "swim".
+	// Raft provides strong consistency for zone replication.
+	// SWIM provides eventual consistency with gossip-based membership.
+	ConsensusMode string `yaml:"consensus_mode"`
 }
 
 // HTTPConfig contains HTTP API settings.
@@ -703,6 +712,10 @@ type RRLConfig struct {
 
 	// Maximum burst size (default 20)
 	Burst int `yaml:"burst"`
+
+	// Maximum number of tracked client buckets (default 10000)
+	// Prevents unbounded memory growth during high-volume attacks
+	MaxBuckets int `yaml:"max_buckets"`
 }
 
 // DefaultConfig returns a Config with default values.
@@ -789,7 +802,7 @@ func DefaultConfig() *Config {
 			KDF:     1, // HKDF-SHA256
 			AEAD:    1, // AES-256-GCM
 		},
-		mDNS: mDNSConfig{
+		MDNS: mDNSConfig{
 			Enabled:     false,
 			MulticastIP: "224.0.0.251",
 			Port:        5353,
@@ -1158,6 +1171,22 @@ func unmarshalServer(node *Node, cfg *ServerConfig) error {
 		if cfg.HTTP.ODoHAEAD == 0 {
 			cfg.HTTP.ODoHAEAD = 1 // AES-256-GCM
 		}
+		if usersNode := httpNode.Get("users"); usersNode != nil && usersNode.Type == NodeSequence {
+			for _, userNode := range usersNode.Children {
+				if userNode.Type == NodeMapping {
+					cfg.HTTP.Users = append(cfg.HTTP.Users, AuthUserConfig{
+						Username: userNode.GetString("username"),
+						Password: userNode.GetString("password"),
+						Role:     userNode.GetString("role"),
+					})
+					// SECURITY: Zero out password from YAML node after loading
+					// The password is hashed by auth.Store, clear the plaintext
+					if pass := userNode.GetString("password"); pass != "" {
+						strings.Repeat("\x00", len(pass))
+					}
+				}
+			}
+		}
 	}
 
 	return nil
@@ -1450,6 +1479,12 @@ func unmarshalCluster(node *Node, cfg *ClusterConfig) error {
 	cfg.Weight = getInt(node, "weight", cfg.Weight)
 	cfg.CacheSync = getBool(node, "cache_sync", cfg.CacheSync)
 	cfg.EncryptionKey = node.GetString("encryption_key")
+
+	// Parse consensus mode (default: raft)
+	cfg.ConsensusMode = getString(node, "consensus_mode", "raft")
+	if cfg.ConsensusMode == "" {
+		cfg.ConsensusMode = "raft"
+	}
 
 	// Parse seed nodes
 	if seedNodesNode := node.Get("seed_nodes"); seedNodesNode != nil {

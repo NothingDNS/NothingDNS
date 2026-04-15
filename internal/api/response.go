@@ -364,7 +364,48 @@ type RPZAddRuleRequest struct {
 
 // ServerConfigResponse is returned by GET /api/v1/server/config.
 type ServerConfigResponse struct {
-	Version    string `json:"version"`
-	ListenPort int    `json:"listen_port"`
-	LogLevel   string `json:"log_level"`
+	Version    string           `json:"version"`
+	ListenPort int              `json:"listen_port"`
+	LogLevel   string           `json:"log_level"`
+	DNS64      DNS64ConfigInfo  `json:"dns64"`
+	Cookie     CookieConfigInfo `json:"cookie"`
+}
+
+// DNS64ConfigInfo is the DNS64 sub-object in the server config response.
+type DNS64ConfigInfo struct {
+	Enabled     bool     `json:"enabled"`
+	Prefix      string   `json:"prefix"`
+	PrefixLen   int      `json:"prefix_len"`
+	ExcludeNets []string `json:"exclude_nets,omitempty"`
+}
+
+// CookieConfigInfo is the DNS cookie sub-object in the server config response.
+type CookieConfigInfo struct {
+	Enabled        bool   `json:"enabled"`
+	SecretRotation string `json:"secret_rotation,omitempty"`
+}
+
+// GeoDNSStatsResponse is returned by GET /api/v1/geoip/stats.
+type GeoDNSStatsResponse struct {
+	Enabled    bool   `json:"enabled"`
+	Rules      int    `json:"rules"`
+	MMDBLoaded bool   `json:"mmdb_loaded"`
+	Lookups    uint64 `json:"lookups"`
+	Hits       uint64 `json:"hits"`
+	Misses     uint64 `json:"misses"`
+}
+
+// SlaveZoneResponse represents a slave zone in the transfer list.
+type SlaveZoneResponse struct {
+	Zone         string `json:"zone"`
+	Masters      string `json:"masters"`
+	Serial       uint32 `json:"serial"`
+	LastTransfer string `json:"last_transfer,omitempty"`
+	Status       string `json:"status"`
+	Records      int    `json:"records"`
+}
+
+// SlaveZonesResponse is returned by GET /api/v1/zones/transfers.
+type SlaveZonesResponse struct {
+	SlaveZones []SlaveZoneResponse `json:"slave_zones"`
 }

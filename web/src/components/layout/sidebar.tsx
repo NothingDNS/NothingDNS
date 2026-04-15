@@ -1,8 +1,9 @@
-import { NavLink, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Globe, Settings, Info, ChevronLeft, ChevronRight, Wifi, WifiOff, Sun, Moon, Monitor, ScrollText, TrendingUp, Shield, Wifi as WifiIcon, Users, BarChart3, Key, Network, ShieldCheck, Globe2, Menu, X, ArrowLeftRight, CloudCog } from 'lucide-react';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { LayoutDashboard, Globe, Settings, Info, ChevronLeft, ChevronRight, Wifi, WifiOff, Sun, Moon, Monitor, ScrollText, TrendingUp, Shield, Wifi as WifiIcon, Users, BarChart3, Key, Network, ShieldCheck, Globe2, Menu, X, ArrowLeftRight, CloudCog, LogOut } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useTheme } from '@/hooks/useThemeHook';
 import { useState, useEffect } from 'react';
+import { useAuthStore } from '@/stores/authStore';
 
 const nav = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
@@ -29,10 +30,16 @@ export function Sidebar({ connected }: { connected: boolean }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const { theme, setTheme } = useTheme();
   const loc = useLocation();
+  const navigate = useNavigate();
   const ThemeIcon = theme === 'dark' ? Moon : theme === 'light' ? Sun : Monitor;
 
   // Close mobile menu on route change
   useEffect(() => { setMobileOpen(false); }, [loc.pathname]);
+
+  const handleLogout = () => {
+    useAuthStore.getState().clearAuth();
+    navigate('/login');
+  };
 
   return (
     <>
@@ -84,6 +91,9 @@ export function Sidebar({ connected }: { connected: boolean }) {
           </button>
           <button onClick={() => { setCollapsed(!collapsed); setMobileOpen(false); }} className={cn('flex items-center gap-2 rounded-lg px-3 py-2 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors w-full cursor-pointer', collapsed && 'justify-center px-2')}>
             {collapsed ? <ChevronRight className="h-3.5 w-3.5 shrink-0" /> : <><ChevronLeft className="h-3.5 w-3.5 shrink-0" /><span>Collapse</span></>}
+          </button>
+          <button onClick={handleLogout} className={cn('flex items-center gap-2 rounded-lg px-3 py-2 text-xs text-destructive hover:bg-destructive/10 transition-colors w-full cursor-pointer', collapsed && 'justify-center px-2')}>
+            <LogOut className="h-3.5 w-3.5 shrink-0" />{!collapsed && <span>Logout</span>}
           </button>
         </div>
       </aside>

@@ -20,9 +20,11 @@ import (
 	"github.com/nothingdns/nothingdns/internal/dns64"
 	"github.com/nothingdns/nothingdns/internal/dnscookie"
 	"github.com/nothingdns/nothingdns/internal/dnssec"
+	"github.com/nothingdns/nothingdns/internal/dso"
 	"github.com/nothingdns/nothingdns/internal/filter"
 	"github.com/nothingdns/nothingdns/internal/geodns"
 	"github.com/nothingdns/nothingdns/internal/idna"
+	"github.com/nothingdns/nothingdns/internal/mdns"
 	"github.com/nothingdns/nothingdns/internal/metrics"
 	"github.com/nothingdns/nothingdns/internal/protocol"
 	"github.com/nothingdns/nothingdns/internal/resolver"
@@ -69,6 +71,8 @@ type integratedHandler struct {
 	dns64Synth    *dns64.Synthesizer
 	cookieJar     *dnscookie.CookieJar
 	idnaEnabled   bool // RFC 5891 IDNA validation enabled
+	mdnsResponder *mdns.Responder
+	dsoManager    *dso.Manager
 
 	notifyOnce sync.Once
 	updateOnce sync.Once

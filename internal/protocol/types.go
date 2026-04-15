@@ -1541,3 +1541,99 @@ func formatMandatoryValue(value []byte) string {
 	}
 	return strings.Join(keys, ",")
 }
+
+// RDataZONEMD represents the ZONEMD record type (RFC 8976).
+// ZONEMD provides a cryptographic digest of zone contents for integrity verification.
+type RDataZONEMD struct {
+	Serial    uint32 // SOA serial associated with this digest
+	Scheme    uint8  // Digest scheme (1 = simple ZONEMD)
+	Algorithm uint8  // Hash algorithm (1 = SHA-256, 2 = SHA-384)
+	Digest    []byte // The digest value
+}
+
+// Pack serializes the ZONEMD RData into wire format.
+func (r *RDataZONEMD) Pack(buf []byte, offset int) (int, error) {
+	startOffset := offset
+
+	// Serial (4 bytes, network byte order)
+	buf[offset] = byte(r.Serial >> 24)
+	buf[offset+1] = byte(r.Serial >> 16)
+	buf[offset+2] = byte(r.Serial >> 8)
+	buf[offset+3] = byte(r.Serial)
+	offset += 4
+
+	// Scheme (1 byte)
+	buf[offset] = r.Scheme
+	offset++
+
+	// Algorithm (1 byte)
+	buf[offset] = r.Algorithm
+	offset++
+
+	// Digest (variable length)
+	copy(buf[offset:], r.Digest)
+	offset += len(r.Digest)
+
+	return offset - startOffset, nil
+}
+
+// Unpack deserializes the ZONEMD RData from wire format.
+func (r *RDataZONEMD) Unpack(buf []byte, offset int, rdlength uint16) (int, error) {
+	startOffset := offset
+	endOffset := offset + int(rdlength)
+
+	if offset+6 > endOffset {
+		return 0, fmt.Errorf("ZONEMD rdata too short")
+	}
+
+	// Serial (4 bytes)
+	r.Serial = uint32(buf[offset])<<24 | uint32(buf[offset+1])<<16 | uint32(buf[offset+2])<<8 | uint32(buf[offset+3])
+	offset += 4
+
+	// Scheme (1 byte)
+	r.Scheme = buf[offset]
+	offset++
+
+	// Algorithm (1 byte)
+	r.Algorithm = buf[offset]
+	offset++
+
+	// Digest (remaining bytes)
+	digestLen := endOffset - offset
+	r.Digest = make([]byte, digestLen)
+	copy(r.Digest, buf[offset:offset+digestLen])
+	offset += digestLen
+
+	return offset - startOffset, nil
+}
+
+// String returns a string representation of the ZONEMD record.
+func (r *RDataZONEMD) String() string {
+	digestStr := ""
+	for _, b := range r.Digest {
+		digestStr += fmt.Sprintf("%02x", b)
+	}
+	return fmt.Sprintf("%d %d %d %s", r.Serial, r.Scheme, r.Algorithm, digestStr)
+}
+
+// Copy creates a deep copy of the ZONEMD record.
+func (r *RDataZONEMD) Copy() RData {
+	digestCopy := make([]byte, len(r.Digest))
+	copy(digestCopy, r.Digest)
+	return &RDataZONEMD{
+		Serial:    r.Serial,
+		Scheme:    r.Scheme,
+		Algorithm: r.Algorithm,
+		Digest:    digestCopy,
+	}
+}
+
+// Type returns the DNS record type code for ZONEMD.
+func (r *RDataZONEMD) Type() uint16 {
+	return TypeZONEMD
+}
+
+// Len returns the length of the ZONEMD record data in wire format.
+func (r *RDataZONEMD) Len() int {
+	return 6 + len(r.Digest) // Serial(4) + Scheme(1) + Algorithm(1) + Digest
+}

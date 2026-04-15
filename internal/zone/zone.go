@@ -53,7 +53,11 @@ type Zone struct {
 	// NS records for the zone apex.
 	NS []NSRecord
 
-	// mu protects Records, SOA, and NS from concurrent access.
+	// ZONEMD is the zone message digest for integrity verification (RFC 8976).
+	// Computed on zone load if ZONEMD is enabled in config.
+	ZONEMD *ZONEMD
+
+	// mu protects Records, SOA, NS, and ZONEMD from concurrent access.
 	mu sync.RWMutex
 }
 

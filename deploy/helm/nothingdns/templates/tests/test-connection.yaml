@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nothingdns-test-connection
+  annotations:
+    "helm.sh/hook": test
+spec:
+  containers:
+    - name: dig
+      image: busybox:1.36
+      command:
+        - sh
+        - -c
+        - |
+          # Test DNS resolution
+          nslookup example.com {{ include "nothingdns.fullname" . }}-dns.{{ .Release.Namespace }}.svc.cluster.local
+
+          # Test API health
+          wget -qO- http://{{ include "nothingdns.fullname" . }}-api.{{ .Release.Namespace }}.svc.cluster.local:8080/health
+  restartPolicy: Never

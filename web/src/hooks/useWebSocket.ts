@@ -27,15 +27,10 @@ export function useWebSocket(path: string, opts: UseWebSocketOpts = {}) {
     const connect = () => {
       if (cancelled) return;
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      let url = `${proto}//${location.host}${path}`;
+      const url = `${proto}//${location.host}${path}`;
 
-      // Pass auth token via query param (WebSocket can't send headers)
-      // Cookie stores token already URI-encoded, pass directly to avoid double-encoding
-      const tokenMatch = document.cookie.match(/ndns_token=([^;]+)/);
-      if (tokenMatch) {
-        url += (path.includes('?') ? '&' : '?') + `token=${tokenMatch[1]}`;
-      }
-
+      // Browser WebSocket API automatically sends cookies with the upgrade request.
+      // The server reads the ndns_token from the cookie in authMiddleware.
       const ws = new WebSocket(url);
       wsRef.current = ws;
       ws.onopen = () => { if (!cancelled) { setConnected(true); setError(null); reconnectAttempts.current = 0; } };

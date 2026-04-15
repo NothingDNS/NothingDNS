@@ -1,6 +1,7 @@
 package filter
 
 import (
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -191,5 +192,69 @@ func TestRateLimiter_CapNotExceedBurst(t *testing.T) {
 	}
 	if allowed != 3 {
 		t.Errorf("expected 3 allowed (burst cap), got %d", allowed)
+	}
+}
+
+func TestRateLimiter_MaxBuckets(t *testing.T) {
+	// Test with small maxBuckets to verify eviction
+	rl := NewRateLimiter(config.RRLConfig{Rate: 1, Burst: 10, MaxBuckets: 100})
+	defer rl.Stop()
+
+	// Create 150 unique clients to trigger eviction
+	for i := 0; i < 150; i++ {
+		ip := net.ParseIP(fmt.Sprintf("10.0.0.%d", i%256))
+		if i >= 256 {
+			ip = net.ParseIP(fmt.Sprintf("10.0.%d.%d", i/256, i%256))
+		}
+		rl.Allow(ip)
+	}
+
+	rl.mu.Lock()
+	count := len(rl.buckets)
+	rl.mu.Unlock()
+
+	// Should not exceed maxBuckets (with some tolerance for race conditions)
+	if count > 110 {
+		t.Errorf("expected bucket count around 100, got %d (maxBuckets exceeded)", count)
+	}
+
+	// Should have evicted some but still have most recent
+	if count < 50 {
+		t.Errorf("expected at least 50 buckets remaining, got %d (too many evicted)", count)
+	}
+}
+
+func TestRateLimiter_EvictOldest(t *testing.T) {
+	rl := NewRateLimiter(config.RRLConfig{Rate: 1, Burst: 10, MaxBuckets: 10})
+	defer rl.Stop()
+
+	// Create 10 clients
+	for i := 0; i < 10; i++ {
+		ip := net.ParseIP(fmt.Sprintf("10.0.0.%d", i))
+		rl.Allow(ip)
+	}
+
+	rl.mu.Lock()
+	count := len(rl.buckets)
+	rl.mu.Unlock()
+
+	if count != 10 {
+		t.Errorf("expected 10 buckets, got %d", count)
+	}
+
+	// Add one more - should trigger eviction
+	ip := net.ParseIP("10.0.0.100")
+	rl.Allow(ip)
+
+	rl.mu.Lock()
+	count = len(rl.buckets)
+	hasNew := rl.buckets[ip.String()] != nil
+	rl.mu.Unlock()
+
+	if count > 10 {
+		t.Errorf("expected at most 10 buckets after eviction, got %d", count)
+	}
+	if !hasNew {
+		t.Error("new bucket should exist after eviction")
 	}
 }

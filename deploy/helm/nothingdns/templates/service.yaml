@@ -1,0 +1,51 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nothingdns.fullname" . }}-dns
+  labels:
+    {{- include "nothingdns.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dns
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.udpPort }}
+      targetPort: dns-udp
+      protocol: UDP
+      name: dns-udp
+    - port: {{ .Values.service.tcpPort }}
+      targetPort: dns-tcp
+      protocol: TCP
+      name: dns-tcp
+    {{- if .Values.config.xot.enabled }}
+    - port: {{ .Values.service.dotPort }}
+      targetPort: dot
+      protocol: TCP
+      name: dot
+    {{- end }}
+  selector:
+    {{- include "nothingdns.selectorLabels" . | nindent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nothingdns.fullname" . }}-api
+  labels:
+    {{- include "nothingdns.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.service.apiPort }}
+      targetPort: api
+      protocol: TCP
+      name: api
+    - port: {{ .Values.config.metrics.port }}
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+  selector:
+    {{- include "nothingdns.selectorLabels" . | nindent 4 }}

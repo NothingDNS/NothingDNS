@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 func cmdRecord(args []string) error {
@@ -16,27 +18,28 @@ func cmdRecord(args []string) error {
 			return fmt.Errorf("zone name required: dnsctl record list <zone>")
 		}
 		zoneName := args[1]
-		result, err := apiGet("/api/v1/zones")
+		result, err := apiGet("/api/v1/zones/" + zoneName + "/records")
 		if err != nil {
 			return err
 		}
-		zones, ok := result["zones"].([]interface{})
+		records, ok := result["records"].([]interface{})
 		if !ok {
 			return fmt.Errorf("unexpected response format")
 		}
-		found := false
-		for _, z := range zones {
-			if zm, ok := z.(map[string]interface{}); ok {
-				if name, _ := zm["name"].(string); name == zoneName {
-					records, _ := zm["records"].(float64)
-					fmt.Printf("Zone: %s (%d records)\n", zoneName, int(records))
-					found = true
-					break
-				}
-			}
+		if len(records) == 0 {
+			fmt.Println("No records found")
+			return nil
 		}
-		if !found {
-			fmt.Printf("Zone %s not found\n", zoneName)
+		fmt.Printf("%-40s %-8s %-8s %s\n", "NAME", "TYPE", "TTL", "DATA")
+		fmt.Printf("%-40s %-8s %-8s %s\n", strings.Repeat("-", 40), strings.Repeat("-", 8), strings.Repeat("-", 8), strings.Repeat("-", 20))
+		for _, r := range records {
+			if rm, ok := r.(map[string]interface{}); ok {
+				name, _ := rm["name"].(string)
+				rtype, _ := rm["type"].(string)
+				ttl := fmt.Sprintf("%v", rm["ttl"])
+				data, _ := rm["data"].(string)
+				fmt.Printf("%-40s %-8s %-8s %s\n", name, rtype, ttl, data)
+			}
 		}
 
 	case "add":
@@ -53,8 +56,20 @@ func cmdRecord(args []string) error {
 				ttl = t
 			}
 		}
-		fmt.Printf("Adding record to zone %s: %s %s %s (TTL: %d)\n", zone, name, rtype, rdata, ttl)
-		fmt.Println("Note: Record management via REST API requires dynamic DNS (RFC 2136)")
+		body := map[string]interface{}{
+			"name": name,
+			"type": rtype,
+			"data": rdata,
+			"ttl":  ttl,
+		}
+		b, _ := json.Marshal(body)
+		result, err := apiPost("/api/v1/zones/"+zone+"/records", string(b))
+		if err != nil {
+			return err
+		}
+		if msg, ok := result["message"].(string); ok {
+			fmt.Println(msg)
+		}
 
 	case "remove":
 		if len(args) < 4 {
@@ -63,19 +78,49 @@ func cmdRecord(args []string) error {
 		zone := args[1]
 		name := args[2]
 		rtype := args[3]
-		fmt.Printf("Removing record from zone %s: %s %s\n", zone, name, rtype)
-		fmt.Println("Note: Record management via REST API requires dynamic DNS (RFC 2136)")
+		body := map[string]interface{}{
+			"name": name,
+			"type": rtype,
+		}
+		b, _ := json.Marshal(body)
+		result, err := apiDelete("/api/v1/zones/"+zone+"/records", string(b))
+		if err != nil {
+			return err
+		}
+		if msg, ok := result["message"].(string); ok {
+			fmt.Println(msg)
+		}
 
 	case "update":
-		if len(args) < 5 {
-			return fmt.Errorf("usage: dnsctl record update <zone> <name> <type> <rdata> [ttl]")
+		if len(args) < 6 {
+			return fmt.Errorf("usage: dnsctl record update <zone> <name> <type> <old_data> <new_data> [ttl]")
 		}
 		zone := args[1]
 		name := args[2]
 		rtype := args[3]
-		rdata := args[4]
-		fmt.Printf("Updating record in zone %s: %s %s %s\n", zone, name, rtype, rdata)
-		fmt.Println("Note: Record management via REST API requires dynamic DNS (RFC 2136)")
+		oldData := args[4]
+		newData := args[5]
+		ttl := 0
+		if len(args) > 6 {
+			if t, err := strconv.Atoi(args[6]); err == nil {
+				ttl = t
+			}
+		}
+		body := map[string]interface{}{
+			"name":     name,
+			"type":     rtype,
+			"old_data": oldData,
+			"data":     newData,
+			"ttl":      ttl,
+		}
+		b, _ := json.Marshal(body)
+		result, err := apiPut("/api/v1/zones/"+zone+"/records", string(b))
+		if err != nil {
+			return err
+		}
+		if msg, ok := result["message"].(string); ok {
+			fmt.Println(msg)
+		}
 
 	default:
 		return fmt.Errorf("unknown record subcommand: %s", args[0])

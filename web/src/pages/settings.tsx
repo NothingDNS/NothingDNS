@@ -4,9 +4,20 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { api } from '@/lib/api';
+import { useUpdateLoggingConfig, useUpdateRRLConfig, useUpdateCacheConfig } from '@/hooks/useApi';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import {
   Server, Network, Database, Shield, Globe, HardDrive, Zap,
-  Lock, Key, Users, FileText, Activity, RefreshCw, AlertCircle
+  Lock, Key, Users, FileText, Activity, RefreshCw, AlertCircle, Save
 } from 'lucide-react';
 
 // Full config type matching internal/config/config.go JSON output (Go encoding/json uses field names as-is).
@@ -471,27 +482,105 @@ function UpstreamSettings({ config }: { config: ServerConfig }) {
 // CACHE SETTINGS
 function CacheSettings({ config }: { config: ServerConfig }) {
   const cache = config.Cache;
+  const updateCache = useUpdateCacheConfig();
+  const [cacheEnabled, setCacheEnabled] = useState(cache?.Enabled ?? true);
+  const [cacheSize, setCacheSize] = useState(String(cache?.Size ?? 10000));
+  const [defaultTTL, setDefaultTTL] = useState(String(cache?.DefaultTTL ?? 300));
+  const [maxTTL, setMaxTTL] = useState(String(cache?.MaxTTL ?? 86400));
+  const [minTTL, setMinTTL] = useState(String(cache?.MinTTL ?? 5));
+  const [negativeTTL, setNegativeTTL] = useState(String(cache?.NegativeTTL ?? 60));
+  const [prefetch, setPrefetch] = useState(cache?.Prefetch ?? false);
+  const [prefetchThreshold, setPrefetchThreshold] = useState(String(cache?.PrefetchThreshold ?? 60));
+  const [serveStale, setServeStale] = useState(cache?.ServeStale ?? false);
+  const [staleGrace, setStaleGrace] = useState(String(cache?.StaleGraceSecs ?? 86400));
+
+  useEffect(() => {
+    setCacheEnabled(cache?.Enabled ?? true);
+    setCacheSize(String(cache?.Size ?? 10000));
+    setDefaultTTL(String(cache?.DefaultTTL ?? 300));
+    setMaxTTL(String(cache?.MaxTTL ?? 86400));
+    setMinTTL(String(cache?.MinTTL ?? 5));
+    setNegativeTTL(String(cache?.NegativeTTL ?? 60));
+    setPrefetch(cache?.Prefetch ?? false);
+    setPrefetchThreshold(String(cache?.PrefetchThreshold ?? 60));
+    setServeStale(cache?.ServeStale ?? false);
+    setStaleGrace(String(cache?.StaleGraceSecs ?? 86400));
+  }, [cache]);
+
+  const handleSave = async () => {
+    await updateCache.mutateAsync({
+      enabled: cacheEnabled,
+      size: parseInt(cacheSize) || 10000,
+      default_ttl: parseInt(defaultTTL) || 300,
+      max_ttl: parseInt(maxTTL) || 86400,
+      min_ttl: parseInt(minTTL) || 5,
+      negative_ttl: parseInt(negativeTTL) || 60,
+      prefetch: prefetch,
+      prefetch_threshold: parseInt(prefetchThreshold) || 60,
+      serve_stale: serveStale,
+      stale_grace_secs: parseInt(staleGrace) || 86400,
+    });
+  };
+
   return (
     <div className="space-y-4">
       <Card>
         <SectionHeader title="Cache Configuration" description="DNS response caching" icon={<Database className="h-4 w-4" />} />
-        <CardContent className="space-y-1">
-          <KVRow label="Enabled" value={cache?.Enabled ? 'Enabled' : 'Disabled'} />
-          <KVRow label="Max Size" value={cache?.Size?.toLocaleString() || 10000} />
-          <KVRow label="Default TTL" value={cache?.DefaultTTL ? `${cache.DefaultTTL}s` : '300s'} />
-          <KVRow label="Max TTL" value={cache?.MaxTTL ? `${cache.MaxTTL}s` : '86400s'} />
-          <KVRow label="Min TTL" value={cache?.MinTTL ? `${cache.MinTTL}s` : '5s'} />
-          <KVRow label="Negative TTL" value={cache?.NegativeTTL ? `${cache.NegativeTTL}s` : '60s'} />
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between">
+            <Label>Enabled</Label>
+            <Switch checked={cacheEnabled} onCheckedChange={setCacheEnabled} />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Max Size</Label>
+              <Input type="number" value={cacheSize} onChange={(e) => setCacheSize(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label>Default TTL (seconds)</Label>
+              <Input type="number" value={defaultTTL} onChange={(e) => setDefaultTTL(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label>Max TTL (seconds)</Label>
+              <Input type="number" value={maxTTL} onChange={(e) => setMaxTTL(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label>Min TTL (seconds)</Label>
+              <Input type="number" value={minTTL} onChange={(e) => setMinTTL(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label>Negative TTL (seconds)</Label>
+              <Input type="number" value={negativeTTL} onChange={(e) => setNegativeTTL(e.target.value)} />
+            </div>
+          </div>
         </CardContent>
       </Card>
 
       <Card>
         <SectionHeader title="Prefetch & Stale" description="Cache optimization features" icon={<Zap className="h-4 w-4" />} />
-        <CardContent className="space-y-1">
-          <KVRow label="Prefetch" value={cache?.Prefetch ? 'Enabled' : 'Disabled'} />
-          <KVRow label="Prefetch Threshold" value={cache?.PrefetchThreshold ? `${cache.PrefetchThreshold}s` : '60s'} />
-          <KVRow label="Serve Stale" value={cache?.ServeStale ? 'Enabled' : 'Disabled'} />
-          <KVRow label="Stale Grace Period" value={cache?.StaleGraceSecs ? `${cache.StaleGraceSecs}s` : '86400s'} />
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between">
+            <Label>Prefetch</Label>
+            <Switch checked={prefetch} onCheckedChange={setPrefetch} />
+          </div>
+          <div className="space-y-2">
+            <Label>Prefetch Threshold (seconds)</Label>
+            <Input type="number" value={prefetchThreshold} onChange={(e) => setPrefetchThreshold(e.target.value)} disabled={!prefetch} />
+          </div>
+          <div className="flex items-center justify-between">
+            <Label>Serve Stale</Label>
+            <Switch checked={serveStale} onCheckedChange={setServeStale} />
+          </div>
+          <div className="space-y-2">
+            <Label>Stale Grace Period (seconds)</Label>
+            <Input type="number" value={staleGrace} onChange={(e) => setStaleGrace(e.target.value)} disabled={!serveStale} />
+          </div>
+          <div className="flex justify-end">
+            <Button size="sm" onClick={handleSave} disabled={updateCache.isPending}>
+              <Save className="h-4 w-4 mr-2" />
+              {updateCache.isPending ? 'Saving...' : 'Save'}
+            </Button>
+          </div>
         </CardContent>
       </Card>
     </div>
@@ -503,6 +592,25 @@ function SecuritySettings({ config }: { config: ServerConfig }) {
   const dnssec = config.DNSSEC;
   const acl = config.ACL;
   const rrl = config.RRL;
+  const updateRRL = useUpdateRRLConfig();
+  const [rrlEnabled, setRrlEnabled] = useState(rrl?.Enabled ?? false);
+  const [rrlRate, setRrlRate] = useState(String(rrl?.Rate ?? 5));
+  const [rrlBurst, setRrlBurst] = useState(String(rrl?.Burst ?? 20));
+
+  useEffect(() => {
+    setRrlEnabled(rrl?.Enabled ?? false);
+    setRrlRate(String(rrl?.Rate ?? 5));
+    setRrlBurst(String(rrl?.Burst ?? 20));
+  }, [rrl?.Enabled, rrl?.Rate, rrl?.Burst]);
+
+  const handleSaveRRL = async () => {
+    await updateRRL.mutateAsync({
+      enabled: rrlEnabled,
+      rate: parseFloat(rrlRate) || 5,
+      burst: parseInt(rrlBurst, 10) || 20,
+    });
+  };
+
   return (
     <div className="space-y-4">
       <Card>
@@ -542,10 +650,27 @@ function SecuritySettings({ config }: { config: ServerConfig }) {
 
       <Card>
         <SectionHeader title="Rate Limiting (RRL)" description="Response rate limiting" icon={<Activity className="h-4 w-4" />} />
-        <CardContent className="space-y-1">
-          <KVRow label="Enabled" value={rrl?.Enabled ? 'Enabled' : 'Disabled'} />
-          <KVRow label="Rate" value={rrl?.Rate ? `${rrl.Rate} resp/s` : '5 resp/s'} />
-          <KVRow label="Burst" value={rrl?.Burst || 20} />
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between">
+            <Label>Enabled</Label>
+            <Switch checked={rrlEnabled} onCheckedChange={setRrlEnabled} />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Rate (resp/s)</Label>
+              <Input type="number" value={rrlRate} onChange={(e) => setRrlRate(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label>Burst</Label>
+              <Input type="number" value={rrlBurst} onChange={(e) => setRrlBurst(e.target.value)} />
+            </div>
+          </div>
+          <div className="flex justify-end">
+            <Button size="sm" onClick={handleSaveRRL} disabled={updateRRL.isPending}>
+              <Save className="h-4 w-4 mr-2" />
+              {updateRRL.isPending ? 'Saving...' : 'Save'}
+            </Button>
+          </div>
         </CardContent>
       </Card>
 
@@ -566,12 +691,43 @@ function SecuritySettings({ config }: { config: ServerConfig }) {
 // LOGGING SETTINGS
 function LoggingSettings({ config }: { config: ServerConfig }) {
   const logging = config.Logging;
+  const updateLogging = useUpdateLoggingConfig();
+  const [level, setLevel] = useState(logging?.Level || 'info');
+
+  useEffect(() => {
+    setLevel(logging?.Level || 'info');
+  }, [logging?.Level]);
+
+  const handleSave = async () => {
+    await updateLogging.mutateAsync({ level });
+  };
+
   return (
     <div className="space-y-4">
       <Card>
         <SectionHeader title="Logging" description="Server logging configuration" icon={<FileText className="h-4 w-4" />} />
-        <CardContent className="space-y-1">
-          <KVRow label="Level" value={logging?.Level || 'info'} />
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label>Level</Label>
+            <div className="flex items-center gap-2">
+              <Select value={level} onValueChange={setLevel}>
+                <SelectTrigger className="w-40">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="debug">debug</SelectItem>
+                  <SelectItem value="info">info</SelectItem>
+                  <SelectItem value="warn">warn</SelectItem>
+                  <SelectItem value="error">error</SelectItem>
+                  <SelectItem value="fatal">fatal</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button size="sm" onClick={handleSave} disabled={updateLogging.isPending}>
+                <Save className="h-4 w-4 mr-2" />
+                {updateLogging.isPending ? 'Saving...' : 'Save'}
+              </Button>
+            </div>
+          </div>
           <KVRow label="Format" value={logging?.Format || 'text'} />
           <KVRow label="Output" value={logging?.Output || 'stdout'} />
           <KVRow label="Query Log" value={logging?.QueryLog ? 'Enabled' : 'Disabled'} />

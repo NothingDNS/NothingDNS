@@ -40,7 +40,7 @@ func (s *Snapshotter) Save(snap *Snapshot) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	filename := snapFilename(snap.Index)
+	filename := filepath.Join(s.snapshotsDir, snapFilename(snap.Index))
 	tmpFile := filename + ".tmp"
 
 	f, err := os.OpenFile(tmpFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)

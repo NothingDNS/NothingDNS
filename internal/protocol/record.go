@@ -288,6 +288,8 @@ func createRData(rrtype uint16) RData {
 		return &RDataSVCB{}
 	case TypeHTTPS:
 		return &RDataHTTPS{}
+	case TypeZONEMD:
+		return &RDataZONEMD{}
 	default:
 		return nil
 	}

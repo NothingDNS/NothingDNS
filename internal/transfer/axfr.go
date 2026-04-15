@@ -37,11 +37,12 @@ type AXFRResponse struct {
 // RFC 5936 - DNS Zone Transfer Protocol
 // AXFR must use TCP (RFC 5936 Section 4.1)
 type AXFRServer struct {
-	zones      map[string]*zone.Zone // zone name -> zone
-	zonesMu    *sync.RWMutex         // protects zones map (can be shared externally)
-	keyStore   *KeyStore             // TSIG keys for authentication
-	allowList  []net.IPNet           // Allowed client networks
-	requireTSIG bool                 // Always require TSIG, even with allow list
+	zones       map[string]*zone.Zone // zone name -> zone
+	zonesMu     *sync.RWMutex         // protects zones map (can be shared externally)
+	keyStore    *KeyStore             // TSIG keys for authentication
+	allowList   []net.IPNet           // Allowed client networks
+	requireTSIG bool                  // Always require TSIG, even with allow list
+	logger      *util.Logger          // Logger for diagnostics
 }
 
 // AXFRServerOption configures the AXFR server
@@ -59,9 +60,13 @@ func WithAllowList(networks []string) AXFRServerOption {
 	return func(s *AXFRServer) {
 		for _, cidr := range networks {
 			_, network, err := net.ParseCIDR(cidr)
-			if err == nil {
-				s.allowList = append(s.allowList, *network)
+			if err != nil {
+				if s.logger != nil {
+					s.logger.Warnf("AXFR: invalid CIDR in allowlist: %s: %v", cidr, err)
+				}
+				continue
 			}
+			s.allowList = append(s.allowList, *network)
 		}
 	}
 }
@@ -72,6 +77,14 @@ func WithAllowList(networks []string) AXFRServerOption {
 func WithRequireTSIG() AXFRServerOption {
 	return func(s *AXFRServer) {
 		s.requireTSIG = true
+	}
+}
+
+// WithLogger sets a logger for the AXFR server.
+// Should be applied before WithAllowList to log invalid CIDRs.
+func WithLogger(logger *util.Logger) AXFRServerOption {
+	return func(s *AXFRServer) {
+		s.logger = logger
 	}
 }
 
@@ -244,6 +257,17 @@ func (s *AXFRServer) generateAXFRRecords(z *zone.Zone) ([]*protocol.ResourceReco
 	// Build final response: SOA + sorted zone records + SOA
 	var records []*protocol.ResourceRecord
 	records = append(records, soaRR)
+
+	// Add ZONEMD record if present (RFC 8976)
+	if z.ZONEMD != nil {
+		zonemdRR, err := s.createZONEMDRR(z.ZONEMD, origin)
+		if err != nil {
+			util.Warnf("axfr: failed to create ZONEMD record: %v", err)
+		} else {
+			records = append(records, zonemdRR)
+		}
+	}
+
 	records = append(records, zoneRecords...)
 	records = append(records, soaRR)
 
@@ -278,6 +302,27 @@ func (s *AXFRServer) createSOARR(soa *zone.SOARecord, origin *protocol.Name) (*p
 		Class: protocol.ClassIN,
 		TTL:   soa.TTL,
 		Data:  soaData,
+	}, nil
+}
+
+// createZONEMDRR creates a ResourceRecord from ZONEMD
+// RFC 8976 - Message Digests for DNS Zones
+func (s *AXFRServer) createZONEMDRR(zonemd *zone.ZONEMD, origin *protocol.Name) (*protocol.ResourceRecord, error) {
+	// ZONEMD RData format:
+	// Serial (4 bytes) | Scheme (1 byte) | Hash Algorithm (1 byte) | Digest
+	zonemdData := &protocol.RDataZONEMD{
+		Serial:    0, // Current SOA serial
+		Scheme:    1, // Simple ZONEMD scheme per RFC 8976
+		Algorithm: zonemd.Algorithm,
+		Digest:    zonemd.Hash,
+	}
+
+	return &protocol.ResourceRecord{
+		Name:  origin,
+		Type:  protocol.TypeZONEMD,
+		Class: protocol.ClassIN,
+		TTL:   0, // ZONEMD should have TTL 0 per RFC 8976
+		Data:  zonemdData,
 	}, nil
 }
 

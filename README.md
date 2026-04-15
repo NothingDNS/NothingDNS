@@ -8,12 +8,12 @@
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Go Report Card](https://goreportcard.com/badge/github.com/nothingdns/nothingdns)](https://goreportcard.com/report/github.com/nothingdns/nothingdns)
 
-A zero-dependency DNS server written in pure Go. NothingDNS is designed to be lightweight, fast, and self-contained with no external dependencies.
+A minimal-dependency DNS server written in pure Go. NothingDNS is designed to be lightweight, fast, and self-contained with minimal external dependencies.
 
 ## Features
 
 ### Core DNS
-- **Zero Dependencies** - Pure Go implementation, no external libraries
+- **Minimal Dependencies** - Pure Go implementation, only `quic-go` for DoQ and `golang.org/x/sys` for platform sockets
 - **DNS Protocol Support** - Full RFC 1035 compliant DNS message handling
 - **UDP & TCP** - Support for both UDP and TCP DNS queries with SO_REUSEPORT
 - **Caching** - Thread-safe LRU cache with TTL support, prefetching, and negative caching (RFC 2308)
@@ -503,6 +503,38 @@ dig @localhost +dnssec +adflag www.isc.org | grep "flags:"
 dig @localhost +dnssec +trace www.isc.org
 ```
 
+## ZONEMD (RFC 8976)
+
+ZONEMD provides cryptographic verification of zone integrity using message digests. It enables receivers of zone transfers (AXFR/IXFR) to verify that the zone data has not been corrupted in transit.
+
+### Features
+
+- **SHA-256 and SHA-384** - Supported hash algorithms
+- **Automatic Computation** - Computed on zone load when enabled
+- **AXFR Integration** - ZONEMD records included in zone transfers
+- **RFC 8976 Compliant** - Follows the zone message digest specification
+
+### Configuration
+
+```yaml
+# Enable ZONEMD computation for all zones
+zonemd: true
+```
+
+When enabled, a ZONEMD record is computed for each zone using SHA-256 and stored with the zone. The digest is recalculated whenever the zone is loaded or reloaded.
+
+### Zone Transfer Verification
+
+The ZONEMD record is automatically included in AXFR responses after the initial SOA record. Receiving servers can verify zone integrity by:
+
+1. Receiving the ZONEMD record in the AXFR transfer
+2. Computing the digest of the received zone data
+3. Comparing the computed digest with the ZONEMD value
+
+### DNSSEC Integration
+
+ZONEMD complements DNSSEC by providing a separate integrity mechanism that works even when DNSSEC validation is not possible. While DNSSEC provides authentication and integrity via signatures, ZONEMD provides a simple digest mechanism for zone transfer verification.
+
 ## Response Policy Zones (RPZ)
 
 RPZ allows policy-based DNS filtering using standard zone file format. Trigger types include QNAME, client IP (CIDR), response IP, NSDNAME, and NSIP.
@@ -613,6 +645,7 @@ cluster:
   node_id: ""              # Auto-generated if empty
   bind_addr: ""            # Auto-detect if empty
   gossip_port: 7946        # UDP port for gossip protocol
+  consensus_mode: raft     # "raft" (default, strong consistency) or "swim" (gossip-based)
   region: "us-east"
   zone: "us-east-1a"
   weight: 100              # Load balancing weight
@@ -962,7 +995,7 @@ dnsctl config reload
 
 | Feature | NothingDNS | CoreDNS | PowerDNS | Unbound |
 |---------|------------|---------|----------|---------|
-| Zero Dependencies | ✅ | ❌ | ❌ | ❌ |
+| Minimal Dependencies | ✅ | ❌ | ❌ | ❌ |
 | Pure Go | ✅ | ✅ | ❌ | ❌ |
 | DNSSEC Validation | ✅ | ✅ | ✅ | ✅ |
 | DNSSEC Signing | ✅ | ❌ | ✅ | ❌ |

@@ -17,10 +17,12 @@ export const useAuthStore = create<AuthState>()(
       username: null,
       role: null,
       isAuthenticated: false,
-      setAuth: (token, username, role) => 
+      setAuth: (token, username, role) =>
         set({ token, username, role, isAuthenticated: true }),
-      clearAuth: () => 
-        set({ token: null, username: null, role: null, isAuthenticated: false }),
+      clearAuth: () => {
+        document.cookie = 'ndns_token=; path=/; max-age=0; SameSite=Strict';
+        set({ token: null, username: null, role: null, isAuthenticated: false });
+      },
     }),
     {
       name: 'ndns-auth',

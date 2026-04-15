@@ -1,0 +1,80 @@
+{{- if .Values.monitoring.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "nothingdns.fullname" . }}
+  {{- if .Values.monitoring.prometheusRule.namespace }}
+  namespace: {{ .Values.monitoring.prometheusRule.namespace }}
+  {{- else }}
+  namespace: {{ .Release.Namespace }}
+  {{- end }}
+  labels:
+    {{- include "nothingdns.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: nothingdns
+      rules:
+        # High-level alerts
+        - alert: NothingDNSDown
+          expr: up{job="{{ include "nothingdns.fullname" . }}"} == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "NothingDNS instance is down"
+            description: "NothingDNS instance {{`{{ $labels.instance }}`}} has been down for more than 1 minute"
+
+        - alert: NothingDNSHighErrorRate
+          expr: rate(nothingdns_dns_requests_total{rcode="SERVFAIL"}[5m]) / rate(nothingdns_dns_requests_total[5m]) > 0.1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "NothingDNS high SERVFAIL rate"
+            description: "SERVFAIL rate is above 10% for {{`{{ $labels.instance }}`}}"
+
+        - alert: NothingDNSHighLatency
+          expr: histogram_quantile(0.95, rate(nothingdns_dns_request_duration_seconds_bucket[5m])) > 1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "NothingDNS high latency"
+            description: "95th percentile latency is above 1s for {{`{{ $labels.instance }}`}}"
+
+        - alert: NothingDNSCacheHitRateLow
+          expr: rate(nothingdns_cache_hits_total[5m]) / (rate(nothingdns_cache_hits_total[5m]) + rate(nothingdns_cache_misses_total[5m])) < 0.5
+          for: 10m
+          labels:
+            severity: info
+          annotations:
+            summary: "NothingDNS cache hit rate is low"
+            description: "Cache hit rate is below 50% for {{`{{ $labels.instance }}`}}"
+
+        - alert: NothingDNSRateLimitTriggered
+          expr: rate(nothingdns_rate_limited_total[5m]) > 0
+          for: 1m
+          labels:
+            severity: warning
+          annotations:
+            summary: "NothingDNS rate limiting is active"
+            description: "Rate limiting has been triggered for {{`{{ $labels.instance }}`}}"
+
+        {{- if .Values.config.cluster.enabled }}
+        - alert: NothingDNSClusterNodeDown
+          expr: nothingdns_cluster_nodes < 2
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "NothingDNS cluster has less than 2 nodes"
+            description: "Only {{`{{ $value }}`}} nodes are available in the cluster"
+        {{- end }}
+
+        {{- with .Values.monitoring.prometheusRule.rules }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+{{- end }}
