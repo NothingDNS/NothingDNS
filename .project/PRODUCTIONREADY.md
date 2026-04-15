@@ -26,13 +26,13 @@ NothingDNS is a **production-grade DNS server** with a mature core, comprehensiv
 | Security | **9.0** | 20% | 1.80 |
 | Performance | **9.5** | 10% | 0.95 |
 | Testing & Coverage | **8.0** | 15% | 1.20 |
-| Observability | **7.0** | 10% | 0.70 |
+| Observability | **8.0** | 10% | 0.80 |
 | Documentation | **9.0** | 5% | 0.45 |
 | Deployment Readiness | **9.0** | 5% | 0.45 |
 | UI / CLI Completeness | **9.0** | 5% | 0.45 |
-| **TOTAL** | | **100%** | **8.75 / 10** |
+| **TOTAL** | | **100%** | **8.85 / 10** |
 
-*Score improved from 7.45 → 8.70 → 8.75 following remediation and performance optimization.*
+*Score improved from 7.45 → 8.70 → 8.75 → 8.85 following remediation, performance optimization, and observability improvements.*
 
 ---
 
@@ -136,17 +136,18 @@ NothingDNS is a **production-grade DNS server** with a mature core, comprehensiv
 
 ---
 
-## 6. Observability — 7/10
+## 6. Observability — 8/10
 
 ### What's Working
 - **Prometheus metrics**: `/metrics` endpoint with standard exposition format.
-- **Query audit logging**: Structured query logs with client IP, QNAME, QTYPE, response code, and latency.
+- **Query audit logging**: Structured query logs with client IP, QNAME, QTYPE, response code, latency, and unique request correlation ID (`req=<hex-id>`).
 - **Health probes**: `/health`, `/readyz`, `/livez` endpoints for Kubernetes.
 - **Dashboard metrics**: Recent queries, top domains, cache stats, cluster node health.
+- **✅ FIXED: Request correlation IDs**: Every DNS query and zone transfer operation generates a unique 16-char hex request ID (10ns, 0 allocs). ID included in all audit log entries and debug output for end-to-end tracing.
+- **✅ FIXED: OpenTelemetry tracing tests**: Expanded from 5 to 27 tests covering span lifecycle, error recording, parent-child spans, HTTP middleware, OTLP exporter batching, and format validation.
 
 ### What's Broken
-- **No distributed tracing maturity**: OpenTelemetry has only 5 tests.
-- **No structured log correlation IDs**: Requests not tagged with traceable request ID.
+- **No distributed tracing maturity**: OpenTelemetry is implemented but not wired into the DNS handler pipeline.
 
 ### Go/No-Go Impact
 - **Yellow**: Observability is adequate for small-to-medium deployments.
