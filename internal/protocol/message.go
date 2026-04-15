@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"fmt"
+	"sync"
 )
 
 // Maximum number of records per section to prevent memory exhaustion DoS.
@@ -151,6 +152,13 @@ func (m *Message) WireLength() int {
 	return length
 }
 
+// compressionPool reuses compression maps across Pack calls to avoid allocation.
+var compressionPool = sync.Pool{
+	New: func() any {
+		return make(map[string]int, 16)
+	},
+}
+
 // Pack serializes the DNS message to wire format.
 func (m *Message) Pack(buf []byte) (int, error) {
 	// Update header counts
@@ -170,8 +178,12 @@ func (m *Message) Pack(buf []byte) (int, error) {
 	}
 	offset := HeaderLen
 
-	// Compression map for name compression
-	compression := make(map[string]int)
+	// Compression map for name compression (pooled to avoid per-call allocation)
+	compression := compressionPool.Get().(map[string]int)
+	defer func() {
+		clear(compression)
+		compressionPool.Put(compression)
+	}()
 
 	// Pack questions
 	for _, q := range m.Questions {

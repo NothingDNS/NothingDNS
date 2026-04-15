@@ -19,6 +19,9 @@ const (
 	// MaxPointerDepth is the maximum number of pointer indirections to follow.
 	// RFC 1035 allows 2-byte pointers, depth limit prevents compression attacks.
 	MaxPointerDepth = 5
+	// maxLabels is the maximum number of labels a name can contain.
+	// With MaxNameLength=255 and min label=1 byte (1 len + 1 data), max ≈ 127.
+	maxLabels = 127
 )
 
 // Common label errors.
@@ -191,23 +194,25 @@ func PackName(name *Name, buf []byte, offset int, compression map[string]int) (i
 	startOffset := offset
 	originalOffset := offset
 
-	// Try compression - check all suffixes of the name
-	if compression != nil {
+	if compression != nil && len(name.Labels) > 0 {
+		// Build the full lowercase name once. Sub-suffixes are derived by
+		// slicing this single string, avoiding repeated strings.Join calls.
+		fullName := strings.ToLower(strings.Join(name.Labels, "."))
+
+		// Pre-compute cumulative byte offsets for each suffix start position.
+		// suffixStarts[i] is the byte index in fullName where label[i] begins.
+		// For labels ["www","example","com"] → offsets [0, 4, 12].
+		var suffixStarts [maxLabels]byte // stack-allocated; max 127 labels
+		pos := 0
+		for i, label := range name.Labels {
+			suffixStarts[i] = byte(pos)
+			pos += len(label) + 1 // +1 for dot separator
+		}
+
+		// Lookup phase: check all suffixes for an existing compression pointer.
 		for i := 0; i < len(name.Labels); i++ {
-			// Build suffix key inline to avoid allocations
-			suffixLen := 0
-			for j := i; j < len(name.Labels); j++ {
-				suffixLen += len(name.Labels[j])
-				if j < len(name.Labels)-1 {
-					suffixLen++ // dot separator
-				}
-			}
-			// Reuse a pre-built key via concatenation - still allocates but
-			// only when compression is enabled
-			suffix := strings.ToLower(strings.Join(name.Labels[i:], "."))
-			_ = suffixLen // avoid unused var warning
+			suffix := fullName[suffixStarts[i]:]
 			if ptrOffset, ok := compression[suffix]; ok && ptrOffset < PointerOffsetMask {
-				// Write pointer
 				if offset+2 > len(buf) {
 					return 0, ErrBufferTooSmall
 				}
@@ -216,33 +221,43 @@ func PackName(name *Name, buf []byte, offset int, compression map[string]int) (i
 				return offset + 2 - originalOffset, nil
 			}
 		}
-	}
 
-	// Write labels
-	for i, label := range name.Labels {
-		// Store compression offset for this prefix
-		if compression != nil {
-			prefix := strings.ToLower(strings.Join(name.Labels[i:], "."))
-			compression[prefix] = offset
-		}
+		// No match: write labels and store compression entries.
+		for i, label := range name.Labels {
+			compression[fullName[suffixStarts[i]:]] = offset
 
-		// Write label length and data
-		labelLen := len(label)
-		if labelLen > MaxLabelLength {
-			return 0, ErrLabelTooLong
-		}
+			labelLen := len(label)
+			if labelLen > MaxLabelLength {
+				return 0, ErrLabelTooLong
+			}
+			if offset+1+labelLen > len(buf) {
+				return 0, ErrBufferTooSmall
+			}
 
-		if offset+1+labelLen > len(buf) {
-			return 0, ErrBufferTooSmall
-		}
-
-		buf[offset] = byte(labelLen)
-		offset++
-
-		// Write label data (lowercase for consistency)
-		for j := 0; j < labelLen; j++ {
-			buf[offset] = toLower(label[j])
+			buf[offset] = byte(labelLen)
 			offset++
+			for j := 0; j < labelLen; j++ {
+				buf[offset] = toLower(label[j])
+				offset++
+			}
+		}
+	} else {
+		// No compression — write labels directly.
+		for _, label := range name.Labels {
+			labelLen := len(label)
+			if labelLen > MaxLabelLength {
+				return 0, ErrLabelTooLong
+			}
+			if offset+1+labelLen > len(buf) {
+				return 0, ErrBufferTooSmall
+			}
+
+			buf[offset] = byte(labelLen)
+			offset++
+			for j := 0; j < labelLen; j++ {
+				buf[offset] = toLower(label[j])
+				offset++
+			}
 		}
 	}
 
