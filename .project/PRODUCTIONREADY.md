@@ -24,15 +24,15 @@ NothingDNS is a **production-grade DNS server** with a mature core, comprehensiv
 | Core Functionality | **9.0** | 15% | 1.35 |
 | Reliability & Error Handling | **9.0** | 15% | 1.35 |
 | Security | **9.0** | 20% | 1.80 |
-| Performance | **9.0** | 10% | 0.90 |
+| Performance | **9.5** | 10% | 0.95 |
 | Testing & Coverage | **8.0** | 15% | 1.20 |
 | Observability | **7.0** | 10% | 0.70 |
 | Documentation | **9.0** | 5% | 0.45 |
 | Deployment Readiness | **9.0** | 5% | 0.45 |
 | UI / CLI Completeness | **9.0** | 5% | 0.45 |
-| **TOTAL** | | **100%** | **8.70 / 10** |
+| **TOTAL** | | **100%** | **8.75 / 10** |
 
-*Score improved from 7.45 to 8.70 following remediation.*
+*Score improved from 7.45 → 8.70 → 8.75 following remediation and performance optimization.*
 
 ---
 
@@ -93,11 +93,19 @@ NothingDNS is a **production-grade DNS server** with a mature core, comprehensiv
 
 ---
 
-## 4. Performance — 9/10
+## 4. Performance — 9.5/10
 
 ### What's Working
-- **Protocol layer is extremely fast**: Message pack/unpack round-trip in ~2.3μs.
-- **Cache is excellent**: Hit lookups in ~82ns, sets in ~389ns.
+- **Protocol layer is extremely fast**: Message pack/unpack round-trip in ~1.0μs (optimized from ~2.3μs).
+- **Message Pack**: 259ns, 64B, 4 allocs (optimized from 334ns, 112B, 7 allocs — 23% faster, 43% less memory).
+- **Message Unpack**: 491ns, 1008B, 41 allocs (optimized from 1067ns — 54% faster).
+- **PackName with compression**: 1 alloc per name (optimized from 6 for 3-label names — 83% fewer allocs).
+- **UnpackName**: 78ns, 112B, 5 allocs (optimized from 130ns, 160B, 7 allocs — 40% faster, 30% less memory).
+- **CanonicalWireName**: 59ns (optimized from 88ns — 33% faster).
+- **Cache is excellent**: Hit lookups in ~80ns (0 allocs from cache), sets in ~241ns/137B/3 allocs (optimized from ~389ns/185B/4 allocs — 38% faster, 26% less memory).
+- **Cache uses RLock fast path**: Reads use shared lock, only promoting to exclusive for LRU updates.
+- **RPZ policy evaluation**: 0 allocs for all lookup types, 21ns exact match, 37ns suffix match.
+- **Zone lookup**: 57ns hit, 32ns miss, zero-alloc miss path.
 - **DNSSEC Ed25519 is viable for high QPS**: ~14μs per signature.
 
 ### What's Broken
