@@ -876,6 +876,9 @@ func (r *RDataSSHFP) Pack(buf []byte, offset int) (int, error) {
 // Unpack deserializes the SSHFP record.
 func (r *RDataSSHFP) Unpack(buf []byte, offset int, rdlength uint16) (int, error) {
 	startOffset := offset
+	if rdlength < 2 {
+		return 0, ErrBufferTooSmall
+	}
 	if offset+2 > len(buf) {
 		return 0, ErrBufferTooSmall
 	}
@@ -946,6 +949,9 @@ func (r *RDataTLSA) Pack(buf []byte, offset int) (int, error) {
 // Unpack deserializes the TLSA record.
 func (r *RDataTLSA) Unpack(buf []byte, offset int, rdlength uint16) (int, error) {
 	startOffset := offset
+	if rdlength < 3 {
+		return 0, ErrBufferTooSmall
+	}
 	if offset+3 > len(buf) {
 		return 0, ErrBufferTooSmall
 	}
