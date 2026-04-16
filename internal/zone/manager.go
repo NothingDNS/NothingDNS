@@ -16,6 +16,33 @@ const (
 	SerialHalfRange = uint32(1 << 31)
 )
 
+// reservedZoneNames cannot be created via the API.
+//
+// Why: allowing an operator to create a zone at a real IANA TLD would shadow
+// the global DNS for every downstream client that resolves through this
+// server, and is almost never intended. The list covers common gTLDs and
+// ccTLDs rather than aiming for exhaustiveness.
+//
+// Deliberately NOT on this list:
+//   - arpa. / in-addr.arpa. / ip6.arpa. — operators routinely serve reverse
+//     DNS for their own networks at these names.
+//   - example.* / test. / invalid. / localhost. — RFC 6761 designates these
+//     for testing and local use; blocking them breaks common workflows.
+//
+// Normalized form is lowercase + trailing dot, matching normalizeZoneName.
+var reservedZoneNames = map[string]bool{
+	// Root — already blocked by origin == "." guard; kept for clarity.
+	".": true,
+	// Common IANA gTLDs / ccTLDs. Split-horizon authority over a real TLD
+	// requires removing entries here or adding a config override.
+	"com.": true, "net.": true, "org.": true, "edu.": true, "gov.": true,
+	"mil.": true, "int.": true, "info.": true, "biz.": true, "name.": true,
+	"io.": true, "co.": true, "uk.": true, "us.": true, "de.": true,
+	"fr.": true, "jp.": true, "cn.": true, "ru.": true, "br.": true,
+	"au.": true, "ca.": true, "it.": true, "es.": true, "nl.": true,
+	"tr.": true,
+}
+
 // SerialIsNewer returns true if s1 is considered newer than s2 per RFC 1982.
 // Serial numbers are 32-bit unsigned integers with special comparison rules
 // to handle wrap-around.
@@ -209,6 +236,10 @@ func (m *Manager) CreateZone(origin string, defaultTTL uint32, soa *SOARecord, n
 	origin = normalizeZoneName(origin)
 	if origin == "" || origin == "." {
 		return fmt.Errorf("invalid zone origin")
+	}
+
+	if reservedZoneNames[origin] {
+		return fmt.Errorf("zone origin %q is reserved and cannot be created", origin)
 	}
 
 	m.mu.Lock()
