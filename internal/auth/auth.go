@@ -119,8 +119,7 @@ func NewStore(cfg *Config) (*Store, error) {
 	if len(s.users) == 0 {
 		defaultPassword, err := generateSecurePassword(24)
 		if err != nil {
-			// crypto/rand failure is extremely rare but would indicate system-level issues
-			panic("auth: crypto/rand unavailable for password generation: " + err.Error())
+			return nil, fmt.Errorf("auth: crypto/rand unavailable for password generation: %w", err)
 		}
 		s.users["admin"] = &User{
 			Username:  "admin",
