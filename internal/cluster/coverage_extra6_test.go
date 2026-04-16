@@ -1065,3 +1065,79 @@ func TestCluster_BroadcastConfigUpdate_NoGossip(t *testing.T) {
 		t.Error("expected error when gossip is nil")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Panic recovery tests (now that defer recover() is fixed)
+// ---------------------------------------------------------------------------
+
+func TestHandleZoneUpdate_CallbackPanicsRecovered(t *testing.T) {
+	self := &Node{ID: "node-A", State: NodeStateAlive, Addr: "127.0.0.1"}
+	nl := NewNodeList(self)
+	cfg := DefaultGossipConfig()
+	cfg.BindPort = pickFreePort()
+
+	gp, err := NewGossipProtocol(cfg, nl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gp.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer gp.Stop()
+
+	gp.leaderMu.Lock()
+	gp.isLeader = false
+	gp.currentLeader = "node-B"
+	gp.leaderMu.Unlock()
+
+	gp.SetCallbacks(nil, nil, nil, nil, func(ZoneUpdatePayload) {
+		panic("test panic")
+	}, nil)
+
+	zoneUpdate := ZoneUpdatePayload{ZoneName: "example.com"}
+	payload, _ := encodePayload(zoneUpdate)
+	msg := Message{
+		Type:    MessageTypeZoneUpdate,
+		From:    "node-B",
+		Payload: payload,
+	}
+
+	// Should not panic — recover() now works correctly
+	gp.handleZoneUpdate(msg, &net.UDPAddr{})
+}
+
+func TestHandleConfigSync_CallbackPanicsRecovered(t *testing.T) {
+	self := &Node{ID: "node-A", State: NodeStateAlive, Addr: "127.0.0.1"}
+	nl := NewNodeList(self)
+	cfg := DefaultGossipConfig()
+	cfg.BindPort = pickFreePort()
+
+	gp, err := NewGossipProtocol(cfg, nl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gp.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer gp.Stop()
+
+	gp.leaderMu.Lock()
+	gp.isLeader = false
+	gp.currentLeader = "node-B"
+	gp.leaderMu.Unlock()
+
+	gp.SetCallbacks(nil, nil, nil, nil, nil, func(ConfigSyncPayload) {
+		panic("test panic")
+	})
+
+	configSync := ConfigSyncPayload{ConfigSHA256: "abc"}
+	payload, _ := encodePayload(configSync)
+	msg := Message{
+		Type:    MessageTypeConfigSync,
+		From:    "node-B",
+		Payload: payload,
+	}
+
+	// Should not panic
+	gp.handleConfigSync(msg, &net.UDPAddr{})
+}
