@@ -33,19 +33,20 @@ func NewClusterManager(cfg *config.Config, logger *util.Logger, dnsCache *cache.
 	}
 
 	clusterConfig := cluster.Config{
-		Enabled:       cfg.Cluster.Enabled,
-		NodeID:        cfg.Cluster.NodeID,
-		BindAddr:      cfg.Cluster.BindAddr,
-		GossipPort:    cfg.Cluster.GossipPort,
-		Region:        cfg.Cluster.Region,
-		Zone:          cfg.Cluster.Zone,
-		Weight:        cfg.Cluster.Weight,
-		SeedNodes:     cfg.Cluster.SeedNodes,
-		CacheSync:     cfg.Cluster.CacheSync,
-		HTTPAddr:      cfg.Server.HTTP.Bind,
-		EncryptionKey: cfg.Cluster.EncryptionKey,
-		ZoneManager:   zoneMgr,
-		ConsensusMode: cluster.ConsensusMode(cfg.Cluster.ConsensusMode),
+		Enabled:              cfg.Cluster.Enabled,
+		NodeID:               cfg.Cluster.NodeID,
+		BindAddr:             cfg.Cluster.BindAddr,
+		GossipPort:           cfg.Cluster.GossipPort,
+		Region:               cfg.Cluster.Region,
+		Zone:                 cfg.Cluster.Zone,
+		Weight:               cfg.Cluster.Weight,
+		SeedNodes:            cfg.Cluster.SeedNodes,
+		CacheSync:            cfg.Cluster.CacheSync,
+		HTTPAddr:             cfg.Server.HTTP.Bind,
+		EncryptionKey:        cfg.Cluster.EncryptionKey,
+		AllowInsecureCluster: cfg.Cluster.AllowInsecureCluster,
+		ZoneManager:          zoneMgr,
+		ConsensusMode:        cluster.ConsensusMode(cfg.Cluster.ConsensusMode),
 	}
 
 	var err error

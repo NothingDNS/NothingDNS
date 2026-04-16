@@ -72,6 +72,11 @@ type Config struct {
 	CacheSync            bool
 	HTTPAddr             string
 	EncryptionKey        string                         // hex-encoded 32-byte AES-256 key
+	// AllowInsecureCluster, when true, permits cluster startup without an
+	// EncryptionKey. The default is false: gossip messages carry zone updates
+	// and config sync, so plaintext on the cluster plane means a network
+	// attacker can forge either. Only set this for single-node/dev setups.
+	AllowInsecureCluster bool
 	DataDir              string                         // Directory for Raft WAL and snapshots
 	Peers                []PeerConfig                   // Raft peer nodes
 	ZoneManager          *zone.Manager                  // zone manager for replication
@@ -204,7 +209,17 @@ func (c *Cluster) initGossip() error {
 		if err != nil {
 			return fmt.Errorf("decoding cluster encryption key: %w", err)
 		}
+		if len(key) != 32 {
+			return fmt.Errorf("cluster encryption key must be 32 bytes (hex-encoded); got %d bytes", len(key))
+		}
 		gossipConfig.EncryptionKey = key
+	} else if len(c.config.SeedNodes) > 0 && !c.config.AllowInsecureCluster {
+		// VULN-005: refuse to start a multi-node cluster in plaintext. Gossip
+		// carries zone updates and config sync; a network attacker can forge
+		// either. Single-node clusters (no seeds) skip this check since no
+		// peer traffic is generated. Dev/test multi-node setups must opt in
+		// via cluster.allow_insecure=true.
+		return fmt.Errorf("cluster encryption key is required when seed_nodes are configured (set cluster.encryption_key, or cluster.allow_insecure=true for dev)")
 	}
 
 	gossip, err := NewGossipProtocol(gossipConfig, c.nodeList)

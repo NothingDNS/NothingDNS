@@ -423,6 +423,11 @@ type ClusterConfig struct {
 	// When set, all inter-node communication is encrypted with AES-256-GCM.
 	EncryptionKey string `yaml:"encryption_key"`
 
+	// AllowInsecureCluster permits starting a cluster without encryption_key.
+	// Default: false. Only enable for single-node dev setups; the gossip
+	// channel carries zone updates and config sync, so plaintext is forgeable.
+	AllowInsecureCluster bool `yaml:"allow_insecure"`
+
 	// Consensus mode for cluster coordination: "raft" (default) or "swim".
 	// Raft provides strong consistency for zone replication.
 	// SWIM provides eventual consistency with gossip-based membership.
@@ -1486,6 +1491,7 @@ func unmarshalCluster(node *Node, cfg *ClusterConfig) error {
 	cfg.Weight = getInt(node, "weight", cfg.Weight)
 	cfg.CacheSync = getBool(node, "cache_sync", cfg.CacheSync)
 	cfg.EncryptionKey = node.GetString("encryption_key")
+	cfg.AllowInsecureCluster = getBool(node, "allow_insecure", cfg.AllowInsecureCluster)
 
 	// Parse consensus mode (default: raft)
 	cfg.ConsensusMode = getString(node, "consensus_mode", "raft")

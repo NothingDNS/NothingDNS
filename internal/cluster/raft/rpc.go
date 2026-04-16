@@ -184,8 +184,16 @@ func writeRPCMessage(w io.Writer, msgType uint8, msg any) error {
 	return gob.NewEncoder(w).Encode(msg)
 }
 
+// maxRPCMessageBytes caps a single gob-framed Raft RPC payload. encoding/gob
+// is documented as unsafe against untrusted input — a crafted slice/map length
+// prefix makes the decoder pre-allocate before reading, so without this cap a
+// single attacker-controlled connection can OOM-kill the leader (VULN-001).
+// The cap is deliberately generous for large AppendEntries batches but still
+// bounds per-message allocation.
+const maxRPCMessageBytes = 16 * 1024 * 1024 // 16 MiB
+
 func readRPCMessage(r io.Reader, msg any) error {
-	return gob.NewDecoder(r).Decode(msg)
+	return gob.NewDecoder(io.LimitReader(r, maxRPCMessageBytes)).Decode(msg)
 }
 
 // TCPTransport is a TCP-based Raft transport.

@@ -15,12 +15,13 @@ func TestCluster_Start_WithSeedNodes(t *testing.T) {
 	dnsCache := cache.New(cacheCfg)
 
 	cfg := Config{
-		Enabled:    true,
-		NodeID:     "test-node",
-		BindAddr:   "127.0.0.1",
-		GossipPort: 27946,
-		SeedNodes:  []string{"invalid-seed-address:99999"}, // Will fail to join
-		CacheSync:  true,
+		Enabled:              true,
+		NodeID:               "test-node",
+		BindAddr:             "127.0.0.1",
+		GossipPort:           27946,
+		SeedNodes:            []string{"invalid-seed-address:99999"}, // Will fail to join
+		CacheSync:            true,
+		AllowInsecureCluster: true, // test: no encryption key required
 	}
 
 	c, err := New(cfg, logger, dnsCache)
@@ -56,12 +57,13 @@ func TestCluster_Start_WithSuccessfulSeedJoin(t *testing.T) {
 	defer seedGp.Stop()
 
 	cfg := Config{
-		Enabled:    true,
-		NodeID:     "joiner-node",
-		BindAddr:   "127.0.0.1",
-		GossipPort: 27948,
-		SeedNodes:  []string{"127.0.0.1:27947"},
-		CacheSync:  true,
+		Enabled:              true,
+		NodeID:               "joiner-node",
+		BindAddr:             "127.0.0.1",
+		GossipPort:           27948,
+		SeedNodes:            []string{"127.0.0.1:27947"},
+		CacheSync:            true,
+		AllowInsecureCluster: true, // test: no encryption key required
 	}
 
 	c, err := New(cfg, logger, dnsCache)
