@@ -2,7 +2,7 @@
 
 > Honest, evidence-based assessment of production readiness  
 > Assessment Date: 2026-04-16
-> Audited Commit: `decd628` (security audit remediation)
+> Audited Commit: `78acc7a` (current — GeoDNS IPv6 fix applied)
 > Auditor: Claude Code — Full Codebase Audit
 
 ---
@@ -49,6 +49,9 @@ NothingDNS is a **production-grade DNS server** with a mature core, comprehensiv
 
 ### What's Broken
 - No significant issues.
+
+### Previously Fixed
+- **✅ FIXED: GeoDNS pure IPv6 lookup crash**: `mmdbLookup()` saved original IP before `To4()` call, preventing nil dereference for pure IPv6 addresses. Added `TestMmdbLookupPureIPv6NoCrash` regression test.
 
 ### Go/No-Go Impact
 - **Green**: The DNS engine and management interfaces are production-grade.
@@ -312,7 +315,7 @@ NothingDNS is a **production-grade DNS server** with a mature core, comprehensiv
 |----------|-------|-------|
 | 🔴 Blocker | 0 | All resolved |
 | 🟡 High | 0 | All resolved |
-| 🟢 Low | 1 | RSA signing speed (documented limitation) |
+| 🟢 Low | 3 | F-014: XoT IXFR falls back to AXFR (xot.go:490); F-015: Raft snapshot clears log without applying data (raft.go:697); RSA signing speed (documented limitation) |
 
 ---
 

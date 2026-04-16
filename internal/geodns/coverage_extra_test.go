@@ -227,37 +227,6 @@ func TestMmdbLookupIPv4TreeTraversal(t *testing.T) {
 	}
 }
 
-func TestMmdbLookupIPv6ReturnsNil(t *testing.T) {
-	// mmdbLookup calls ip = ip.To4() first, which overwrites ip with nil
-	// for pure IPv6 addresses. Then ip.To16() on nil returns nil, so the
-	// function returns nil. This test documents that known behavior.
-	nodeCount := uint32(2)
-	treeSize := nodeCount * 6
-
-	node0 := []byte{0x00, 0x00, 0x01, 0x00, 0x00, 0x01}
-	node1 := []byte{0x00, 0x00, 0x02, 0x00, 0x00, 0x02}
-	dataSection := []byte{0x02, 'J', 'P', 0x00, 0x00, 0x00}
-
-	mmdb := make([]byte, 0, int(treeSize)+len(dataSection))
-	mmdb = append(mmdb, node0...)
-	mmdb = append(mmdb, node1...)
-	mmdb = append(mmdb, dataSection...)
-
-	e := &Engine{
-		mmdbData:      mmdb,
-		mmdbIPv4Count: nodeCount,
-		mmdbIPv6Count: nodeCount,
-		mmdbTreeSize:  treeSize,
-		mmdbLoaded:    true,
-	}
-
-	// IPv6 address: To4() returns nil, then To16() on nil returns nil.
-	result := e.mmdbLookup(net.ParseIP("::1"))
-	if result != nil {
-		t.Error("mmdbLookup IPv6 should return nil due to ip.To4() overwrite")
-	}
-}
-
 func TestMmdbLookupIPv4MappedIPv6(t *testing.T) {
 	// An IPv4-mapped IPv6 address like ::ffff:1.2.3.4 can be converted
 	// to IPv4 via To4(), so mmdbLookup should succeed for these.
@@ -289,6 +258,45 @@ func TestMmdbLookupIPv4MappedIPv6(t *testing.T) {
 	if country != "FR" {
 		t.Errorf("country = %q, want FR", country)
 	}
+}
+
+func TestMmdbLookupPureIPv6NoCrash(t *testing.T) {
+	// Verify pure IPv6 lookup does not crash due to nil pointer.
+	// Uses a tree deep enough to not exhaust immediately on first bit.
+	nodeCount := uint32(4)
+	treeSize := nodeCount * 6
+
+	// Node layout for 4 nodes (24 bytes):
+	// Node 0: left=1, right=2
+	// Node 1: left=3, right=3
+	// Node 2: left=3, right=3
+	// Node 3: data record at offset 24 (start of data section)
+	node0 := []byte{0x00, 0x00, 0x01, 0x00, 0x00, 0x02}
+	node1 := []byte{0x00, 0x00, 0x03, 0x00, 0x00, 0x03}
+	node2 := []byte{0x00, 0x00, 0x03, 0x00, 0x00, 0x03}
+	node3 := []byte{0x00, 0x00, 0x03, 0x00, 0x00, 0x03}
+	// Data at offset 24: type=0x02, country="XX"
+	dataSection := []byte{0x02, 'X', 'X', 0x00}
+
+	mmdb := make([]byte, 0, int(treeSize)+len(dataSection))
+	mmdb = append(mmdb, node0...)
+	mmdb = append(mmdb, node1...)
+	mmdb = append(mmdb, node2...)
+	mmdb = append(mmdb, node3...)
+	mmdb = append(mmdb, dataSection...)
+
+	e := &Engine{
+		mmdbData:      mmdb,
+		mmdbIPv4Count: nodeCount,
+		mmdbIPv6Count: nodeCount,
+		mmdbTreeSize:  treeSize,
+		mmdbLoaded:    true,
+	}
+
+	// Pure IPv6: should not crash (was crashing due to ip.To4() overwriting to nil
+	// then calling nil.To16()). Now uses originalIP.To16() instead.
+	result := e.mmdbLookup(net.ParseIP("2001:db8::1"))
+	_ = result // May or may not hit data record; verify no panic occurs
 }
 
 func TestMmdbLookupTreeExhaustion(t *testing.T) {

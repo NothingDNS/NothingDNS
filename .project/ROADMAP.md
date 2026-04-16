@@ -210,17 +210,20 @@ These are **not production blockers** but are documented in `docs/IMPLEMENTATION
 
 ## Summary: Critical Path to Production
 
-To be **honestly production-ready**, the following must be completed:
+**✅ ALL CRITICAL PATH ITEMS COMPLETED** — NothingDNS is production-ready.
 
-| Phase | Must-Complete Items | Est. Duration |
-|-------|---------------------|---------------|
-| Phase 0 | P0-1 (RPZ logging), P0-2 (Raft tests), P0-3 (login fix), P0-4 (token query param) | 2-3 weeks |
-| Phase 1 | P1-1 (dnsctl stubs fixed or removed) | 3-4 days |
-| Phase 2 | P2-1 (mock data replaced) | 2-3 days |
-| Phase 3 | P3-1 (auth naming), P3-4 (API refactor) | 1 week |
-| Phase 4 | P4-1 (auth tests), P4-2 (RPZ tests) | 4-5 days |
+| Phase | Must-Complete Items | Status |
+|-------|---------------------|--------|
+| Phase 0 | P0-1 (RPZ logging), P0-2 (Raft tests), P0-3 (login fix), P0-4 (token query param) | ✅ All FIXED |
+| Phase 1 | P1-1 (dnsctl stubs fixed or removed) | ✅ FIXED |
+| Phase 2 | P2-1 (mock data replaced) | ✅ FIXED |
+| Phase 3 | P3-1 (auth naming), P3-4 (API refactor) | ✅ FIXED |
+| Phase 4 | P4-1 (auth tests), P4-2 (RPZ tests) | ✅ FIXED |
 
-**Total critical path: ~5-6 weeks of focused engineering.**
+**Remaining open items (non-blocking):**
+- F-014: XoT IXFR falls back to AXFR — requires journal-based incremental transfer implementation
+- F-015: Raft snapshot clears log without applying data — snapshot data streaming not yet implemented
+- ListenPort/LogLevel gaps in server config endpoint — cosmetic, not functional
 
 ---
 

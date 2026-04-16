@@ -224,10 +224,11 @@ func (e *Engine) LookupContinent(ip net.IP) string {
 
 // mmdbLookup traverses the MMDB tree for the given IP.
 func (e *Engine) mmdbLookup(ip net.IP) []byte {
+	originalIP := ip
 	ip = ip.To4()
 	isIPv4 := ip != nil
 	if !isIPv4 {
-		ip = ip.To16()
+		ip = originalIP.To16()
 	}
 
 	if ip == nil {
