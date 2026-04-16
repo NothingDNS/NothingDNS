@@ -66,7 +66,7 @@ func (s *Server) handleUpstreams(w http.ResponseWriter, r *http.Request) {
 			}
 			// Validate upstream server is not a private/internal IP (SSRF protection)
 			if err := validateUpstreamAddress(req.Server); err != nil {
-				s.writeError(w, http.StatusBadRequest, err.Error())
+				s.writeError(w, http.StatusBadRequest, sanitizeError(err, "Invalid upstream address"))
 				return
 			}
 			if err := s.upstreamClient.AddServer(req.Server); err != nil {

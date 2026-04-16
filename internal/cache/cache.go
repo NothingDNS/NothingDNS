@@ -391,7 +391,6 @@ func (c *Cache) addEntry(key string, entry *Entry) {
 	// Add to map and LRU list
 	c.pushFront(entry)
 	c.entries[key] = entry
-	c.entries[key] = entry
 }
 
 // removeEntry removes an entry from the cache.

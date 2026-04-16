@@ -4,6 +4,7 @@ package blocklist
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -200,11 +201,19 @@ func (bl *Blocklist) loadURL(url string) error {
 		return fmt.Errorf("HTTP %d for %s", resp.StatusCode, url)
 	}
 
-	scanner := bufio.NewScanner(resp.Body)
+	// SECURITY: Limit total response body size to prevent memory exhaustion
+	const maxBodySize = 100 * 1024 * 1024 // 100MB
+	limitedReader := io.LimitReader(resp.Body, maxBodySize)
+
+	scanner := bufio.NewScanner(limitedReader)
 	// Increase buffer for long lines (some blocklist entries can be very long)
 	const maxLineLength = 4096
 	buf := make([]byte, maxLineLength)
 	scanner.Buffer(buf, maxLineLength)
+
+	// SECURITY: Limit total number of entries to prevent memory exhaustion
+	const maxEntries = 10_000_000 // 10 million
+	entryCount := 0
 
 	lineNum := 0
 	for scanner.Scan() {
@@ -221,6 +230,10 @@ func (bl *Blocklist) loadURL(url string) error {
 		if len(fields) < 2 {
 			// Also accept just domain per line (no IP)
 			if len(fields) == 1 {
+				entryCount++
+				if entryCount > maxEntries {
+					return fmt.Errorf("blocklist %s exceeds maximum entry count of %d", url, maxEntries)
+				}
 				domain := strings.ToLower(fields[0])
 				bl.entries[domain] = Entry{
 					Domain:  domain,
@@ -236,6 +249,10 @@ func (bl *Blocklist) loadURL(url string) error {
 
 		// fields[0] is IP (127.0.0.1, 0.0.0.0, etc.)
 		// fields[1] is the domain to block
+		entryCount++
+		if entryCount > maxEntries {
+			return fmt.Errorf("blocklist %s exceeds maximum entry count of %d", url, maxEntries)
+		}
 		domain := strings.ToLower(fields[1])
 
 		// Extract comment if present

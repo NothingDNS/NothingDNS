@@ -363,12 +363,24 @@ func parsePort(port string) int {
 // generatePadding generates random padding per RFC 7830.
 // Returns a byte slice of random size between MinPaddingSize and MaxPaddingSize.
 func generatePadding() ([]byte, error) {
-	// Random size between MinPaddingSize and MaxPaddingSize
-	size := make([]byte, 1)
-	if _, err := rand.Read(size); err != nil {
-		return nil, err
+	// Random size between MinPaddingSize and MaxPaddingSize.
+	// Range is 481 (MaxPaddingSize - MinPaddingSize + 1), which exceeds 256,
+	// so we use a 2-byte value for rejection sampling to avoid modulo bias.
+	maxPad := MaxPaddingSize - MinPaddingSize + 1 // 481
+	var padSize int
+	var b [2]byte
+	// Threshold: largest multiple of maxPad that fits in 16 bits
+	threshold := (65536 / maxPad) * maxPad
+	for {
+		if _, err := rand.Read(b[:]); err != nil {
+			return nil, err
+		}
+		val := int(b[0])<<8 | int(b[1])
+		if val < threshold {
+			padSize = MinPaddingSize + val%maxPad
+			break
+		}
 	}
-	padSize := MinPaddingSize + int(size[0])%(MaxPaddingSize-MinPaddingSize+1)
 
 	// Generate random padding data
 	padding := make([]byte, padSize)

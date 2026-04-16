@@ -411,14 +411,11 @@ func (m *MetricsCollector) RecordUpstreamQuery(server string) {
 }
 
 // requireMetricsAuth wraps a handler with token-based authentication.
-// The token is accepted via the Authorization header (Bearer token) or ?token= query param.
+// The token is accepted via the Authorization header (Bearer token).
 func (m *MetricsCollector) requireMetricsAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token := r.Header.Get("Authorization")
 		token = strings.TrimPrefix(token, "Bearer ")
-		if token == "" {
-			token = r.URL.Query().Get("token")
-		}
 		if len(token) != len(m.config.AuthToken) ||
 			subtle.ConstantTimeCompare([]byte(token), []byte(m.config.AuthToken)) != 1 {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)

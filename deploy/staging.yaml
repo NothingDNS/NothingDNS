@@ -21,9 +21,10 @@ server:
   http:
     enabled: true
     bind: "0.0.0.0:8080"
-    # Staging uses dev credentials - NEVER use in production
-    auth_token: "staging-dev-token-change-me"
-    # auth_secret: "staging-256-bit-secret"
+    # SECURITY: Auth token must be set via environment variable or secrets management.
+    # NEVER hardcode real credentials in version-controlled files.
+    auth_token: "${NOTHINGDNS_AUTH_TOKEN}"
+    # auth_secret: "${NOTHINGDNS_AUTH_SECRET}"
 
 cache:
   enabled: true

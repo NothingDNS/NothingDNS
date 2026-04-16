@@ -223,10 +223,22 @@ func (h *DynamicDNSHandler) HandleUpdate(req *protocol.Message, clientIP net.IP)
 		}
 	}
 
+	// SECURITY (V-06 fix): Apply update synchronously to prevent TOCTOU race.
+	// Previously, updates were queued to a channel and applied asynchronously,
+	// allowing two concurrent updates with conflicting prerequisites to both pass.
+	// Now we apply the update immediately within the handler while holding zone state,
+	// then notify the channel for audit/logging purposes only.
+	h.zonesMu.Lock()
+	err = ApplyUpdate(z, updateReq)
+	h.zonesMu.Unlock()
+	if err != nil {
+		return h.createUpdateResponse(req, protocol.RcodeServerFailure), nil
+	}
+
+	// Notify update channel for audit/logging (non-blocking)
 	select {
 	case h.updateChan <- updateReq:
 	default:
-		return h.createUpdateResponse(req, protocol.RcodeRefused), nil
 	}
 
 	// Return success response

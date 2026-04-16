@@ -168,7 +168,7 @@ func TestDeriveSharedSecret(t *testing.T) {
 }
 
 func TestBuildKDFInfo(t *testing.T) {
-	info := buildKDFInfo("test.example.com")
+	info := buildKDFInfo("test.example.com", false)
 	if len(info) == 0 {
 		t.Error("buildKDFInfo returned empty")
 	}
@@ -485,7 +485,7 @@ func TestTargetDecapsulateQuery(t *testing.T) {
 	defer clearBytes(sharedSecret)
 
 	// Derive keys (same as encapsulateQuery does)
-	kdfInfo := buildKDFInfo(cfg.TargetName)
+	kdfInfo := buildKDFInfo(cfg.TargetName, false)
 	keys, err := deriveKeys(sharedSecret, kdfInfo, cfg.HPKEKDF, cfg.HPKEAEAD)
 	if err != nil {
 		t.Fatalf("deriveKeys failed: %v", err)
@@ -769,7 +769,7 @@ func TestObliviousTargetServeHTTPWithHandler(t *testing.T) {
 	if err != nil {
 		t.Fatalf("deriveSharedSecret failed: %v", err)
 	}
-	kdfInfo := buildKDFInfo(cfg.TargetName)
+	kdfInfo := buildKDFInfo(cfg.TargetName, false)
 	keys, err := deriveKeys(sharedSecret, kdfInfo, cfg.HPKEKDF, cfg.HPKEAEAD)
 	if err != nil {
 		t.Fatalf("deriveKeys failed: %v", err)
@@ -823,7 +823,7 @@ func TestObliviousTargetServeHTTPInvalidDNS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("deriveSharedSecret failed: %v", err)
 	}
-	kdfInfo := buildKDFInfo(cfg.TargetName)
+	kdfInfo := buildKDFInfo(cfg.TargetName, false)
 	keys, err := deriveKeys(sharedSecret, kdfInfo, cfg.HPKEKDF, cfg.HPKEAEAD)
 	if err != nil {
 		t.Fatalf("deriveKeys failed: %v", err)

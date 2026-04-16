@@ -1181,8 +1181,8 @@ func unmarshalServer(node *Node, cfg *ServerConfig) error {
 					})
 					// SECURITY: Zero out password from YAML node after loading
 					// The password is hashed by auth.Store, clear the plaintext
-					if pass := userNode.GetString("password"); pass != "" {
-						strings.Repeat("\x00", len(pass))
+					if passNode := userNode.Get("password"); passNode != nil {
+						passNode.Value = strings.Repeat("\x00", len(passNode.Value))
 					}
 				}
 			}

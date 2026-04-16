@@ -501,10 +501,10 @@ func TestKVStoreCommitReadOnlyTransaction(t *testing.T) {
 		t.Fatalf("Begin failed: %v", err)
 	}
 
-	// Try to commit a read-only transaction
+	// Commit a read-only transaction — should succeed and clean up properly
 	err = tx.Commit()
-	if err != ErrTxNotWritable {
-		t.Errorf("Expected ErrTxNotWritable, got %v", err)
+	if err != nil {
+		t.Errorf("Commit of read-only tx should succeed, got %v", err)
 	}
 }
 

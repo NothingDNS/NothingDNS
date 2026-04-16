@@ -209,7 +209,7 @@ func (c *ObliviousClient) encapsulateQuery(query, ephemeralPriv, targetPub []byt
 	defer clearBytes(sharedSecret)
 
 	// Derive encryption keys using KDF
-	kdfInfo := buildKDFInfo(c.config.TargetName)
+	kdfInfo := buildKDFInfo(c.config.TargetName, false)
 	keys, err := deriveKeys(sharedSecret, kdfInfo, c.config.HPKEKDF, c.config.HPKEAEAD)
 	if err != nil {
 		return nil, fmt.Errorf("deriving keys: %w", err)
@@ -270,19 +270,25 @@ func (c *ObliviousClient) sendToProxy(msg *ObliviousDNSMessage) (*ObliviousDNSMe
 
 // decapsulateResponse decrypts the response from the target.
 func (c *ObliviousClient) decapsulateResponse(response *ObliviousDNSMessage, ephemeralPriv []byte) ([]byte, error) {
-	// In ODoH, the response is encrypted to the ephemeral key
-	// The target encrypts directly to the ephemeral public key
-
-	// Re-derive the shared secret (response uses same ephemeral)
-	pubKey := derivePublicKey(ephemeralPriv, c.config.HPKEKEM)
-	sharedSecret, err := deriveSharedSecret(ephemeralPriv, pubKey, c.config.HPKEKEM)
+	// SECURITY (V-01 fix): Derive shared secret using the TARGET's static public key,
+	// not from self-ECDH. The target encrypts using ECDH(target_priv, client_epk),
+	// so the client must use ECDH(client_ephemeral_priv, target_pub) to produce
+	// the same shared secret. Previous code did ECDH(self, self) which was trivially
+	// computable from the public key sent in the clear.
+	targetPub, err := c.getTargetPublicKey()
+	if err != nil {
+		return nil, fmt.Errorf("getting target public key: %w", err)
+	}
+	sharedSecret, err := deriveSharedSecret(ephemeralPriv, targetPub, c.config.HPKEKEM)
 	if err != nil {
 		return nil, fmt.Errorf("deriving shared secret: %w", err)
 	}
 	defer clearBytes(sharedSecret)
 
-	// Re-derive keys
-	kdfInfo := buildKDFInfo(c.config.TargetName)
+	// SECURITY (V-02 fix): Use distinct KDF context for response decryption.
+	// The response uses a different key derivation context than the query
+	// to ensure request and response keys are cryptographically independent.
+	kdfInfo := buildKDFInfo(c.config.TargetName, true)
 	keys, err := deriveKeys(sharedSecret, kdfInfo, c.config.HPKEKDF, c.config.HPKEAEAD)
 	if err != nil {
 		return nil, fmt.Errorf("deriving keys: %w", err)
@@ -468,7 +474,7 @@ func (t *ObliviousTarget) decapsulateQuery(msg *ObliviousDNSMessage) ([]byte, er
 	defer clearBytes(sharedSecret)
 
 	// Derive keys
-	kdfInfo := buildKDFInfo(t.config.TargetName)
+	kdfInfo := buildKDFInfo(t.config.TargetName, false)
 	keys, err := deriveKeys(sharedSecret, kdfInfo, t.config.HPKEKDF, t.config.HPKEAEAD)
 	if err != nil {
 		return nil, fmt.Errorf("deriving keys: %w", err)
@@ -485,14 +491,18 @@ func (t *ObliviousTarget) decapsulateQuery(msg *ObliviousDNSMessage) ([]byte, er
 
 // encapsulateResponse encrypts a DNS response to the client.
 func (t *ObliviousTarget) encapsulateResponse(query, response []byte, msg *ObliviousDNSMessage) ([]byte, error) {
-	// Use the same shared secret derivation but encrypt with a new nonce
+	// Derive shared secret using target's private key and client's ephemeral public key
 	sharedSecret, err := deriveSharedSecret(t.privKey, msg.PublicKey, t.config.HPKEKEM)
 	if err != nil {
 		return nil, fmt.Errorf("deriving shared secret: %w", err)
 	}
 	defer clearBytes(sharedSecret)
 
-	kdfInfo := buildKDFInfo(t.config.TargetName)
+	// SECURITY (V-02 fix): Use distinct KDF context for response encryption.
+	// The response key derivation uses a different context byte than the query
+	// to ensure request and response use cryptographically independent keys,
+	// even though they share the same underlying ECDH shared secret.
+	kdfInfo := buildKDFInfo(t.config.TargetName, true)
 	keys, err := deriveKeys(sharedSecret, kdfInfo, t.config.HPKEKDF, t.config.HPKEAEAD)
 	if err != nil {
 		return nil, fmt.Errorf("deriving keys: %w", err)
@@ -590,11 +600,20 @@ func deriveSharedSecret(priv, pub []byte, kem int) ([]byte, error) {
 }
 
 // buildKDFInfo builds the KDF info parameter for HPKE.
-func buildKDFInfo(suiteID string) []byte {
+// The responseCtx parameter differentiates query vs response key derivation:
+//   - false (0x01): query encryption/decryption context
+//   - true  (0x02): response encryption/decryption context
+// This ensures request and response use cryptographically independent keys
+// even when derived from the same ECDH shared secret.
+func buildKDFInfo(suiteID string, responseCtx bool) []byte {
 	var info bytes.Buffer
 	info.WriteString("odoh")
 	info.WriteString(suiteID)
-	info.WriteByte(0)
+	if responseCtx {
+		info.WriteByte(0x02)
+	} else {
+		info.WriteByte(0x01)
+	}
 	return info.Bytes()
 }
 

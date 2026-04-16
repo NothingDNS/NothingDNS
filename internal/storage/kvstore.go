@@ -320,7 +320,13 @@ func (tx *Tx) Commit() error {
 	}
 
 	if !tx.writable {
-		return ErrTxNotWritable
+		// Read-only transactions: clean up without saving
+		tx.store.mu.Lock()
+		tx.closed = true
+		tx.store.removeTx(tx)
+		tx.store.mu.Unlock()
+		atomic.AddInt64(&tx.store.stats.OpenTxCount, -1)
+		return nil
 	}
 
 	tx.store.mu.Lock()

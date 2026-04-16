@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -83,6 +84,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
+	var cfgMu sync.RWMutex
 
 	// Initialize logger
 	level := logLevelFromString(cfg.Logging.Level)
@@ -404,6 +406,9 @@ func run() error {
 	dashboardServer.SetZoneManager(zoneManagerInstance)
 	apiServer := api.NewServer(cfg.Server.HTTP, zoneManagerInstance, dnsCache, func() error {
 		logger.Info("Reloading configuration via API...")
+		cfgMu.RLock()
+		reloadCfg := cfg
+		cfgMu.RUnlock()
 		now := time.Now().UTC().Format(time.RFC3339)
 		if auditLogger != nil {
 			auditLogger.LogReload(audit.ReloadAuditEntry{
@@ -413,7 +418,7 @@ func run() error {
 		}
 		reloadedZones := 0
 		// Reload zone files
-		for _, zoneFile := range cfg.Zones {
+		for _, zoneFile := range reloadCfg.Zones {
 			z, err := loadZoneFile(zoneFile)
 			if err != nil {
 				logger.Warnf("Failed to reload zone file %s: %v", zoneFile, err)
@@ -449,9 +454,9 @@ func run() error {
 			}
 		}
 		// Reload split-horizon views
-		if len(cfg.Views) > 0 {
-			viewConfigs := make([]filter.ViewConfig, len(cfg.Views))
-			for i, v := range cfg.Views {
+		if len(reloadCfg.Views) > 0 {
+			viewConfigs := make([]filter.ViewConfig, len(reloadCfg.Views))
+			for i, v := range reloadCfg.Views {
 				viewConfigs[i] = filter.ViewConfig{
 					Name:         v.Name,
 					MatchClients: v.MatchClients,
@@ -473,7 +478,12 @@ func run() error {
 		}
 		return nil
 	}, handler, clusterMgr, dashboardServer).
-		WithConfigGetter(func() *config.Config { return cfg }).
+		WithConfigGetter(func() *config.Config {
+				cfgMu.RLock()
+				c := cfg
+				cfgMu.RUnlock()
+				return c
+			}).
 		WithBlocklist(bl).
 		WithUpstream(client, loadBalancer).
 		WithACL(aclChecker).
@@ -592,7 +602,7 @@ func run() error {
 
 		tlsConfig := &tls.Config{
 			Certificates: []tls.Certificate{cert},
-			MinVersion:   tls.VersionTLS12,
+			MinVersion:   tls.VersionTLS13,
 			CurvePreferences: []tls.CurveID{
 				tls.CurveP256,
 				tls.X25519,
@@ -645,7 +655,7 @@ func run() error {
 			quicTLSConfig := &tls.Config{
 				Certificates: []tls.Certificate{cert},
 				NextProtos:   []string{"doq"},
-				MinVersion:   tls.VersionTLS12,
+				MinVersion:   tls.VersionTLS13,
 				CurvePreferences: []tls.CurveID{
 					tls.CurveP256,
 					tls.X25519,
@@ -855,10 +865,14 @@ func run() error {
 			if cfgErr != nil {
 				logger.Warnf("Failed to reload config: %v", cfgErr)
 			} else {
+				cfgMu.Lock()
 				cfg = newCfg
+				cfgMu.Unlock()
 			}
 			// Reload zone files
+			cfgMu.RLock()
 			reloadCfg := cfg
+			cfgMu.RUnlock()
 			if cfgErr != nil {
 				reloadCfg = cfg // keep current config on error
 			}

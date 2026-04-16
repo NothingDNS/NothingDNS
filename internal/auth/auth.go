@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha512"
@@ -507,9 +509,9 @@ func (s *Store) HasRole(username string, required Role) bool {
 	return roleOrder[user.Role] >= roleOrder[required]
 }
 
-// SaveTokensSigned persists tokens to a file signed with HMAC-SHA512.
-// Tokens are serialized as JSON and signed with HMAC for integrity verification.
-// Note: this provides integrity, not encryption; tokens are plaintext JSON at rest.
+// SaveTokensSigned persists tokens to a file encrypted with AES-256-GCM.
+// The HMAC secret is used as the encryption key (first 32 bytes after HKDF derivation).
+// File format: nonce (12 bytes) + AES-256-GCM ciphertext (includes auth tag).
 func (s *Store) SaveTokensSigned(path string) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -520,22 +522,37 @@ func (s *Store) SaveTokensSigned(path string) error {
 		return fmt.Errorf("serializing tokens: %w", err)
 	}
 
-	// Encrypt with HMAC for integrity
-	h := hmac.New(sha512.New, s.secret)
-	h.Write(data)
-	signature := h.Sum(nil)
+	// Derive a 32-byte AES key from the HMAC secret using HKDF-like derivation
+	aesKey := deriveAESKey(s.secret)
+	defer clearBytes(aesKey)
 
-	// Combine: signature (64 bytes) + data
-	encrypted := make([]byte, len(signature)+len(data))
-	copy(encrypted, signature)
-	copy(encrypted[len(signature):], data)
+	// Generate random nonce
+	nonce := make([]byte, 12)
+	if _, err := rand.Read(nonce); err != nil {
+		return fmt.Errorf("generating nonce: %w", err)
+	}
+
+	// Encrypt with AES-256-GCM (provides both confidentiality and integrity)
+	block, err := aes.NewCipher(aesKey)
+	if err != nil {
+		return fmt.Errorf("creating cipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return fmt.Errorf("creating GCM: %w", err)
+	}
+	ciphertext := gcm.Seal(nil, nonce, data, nil)
+
+	// Combine: nonce (12 bytes) + ciphertext+tag
+	encrypted := make([]byte, len(nonce)+len(ciphertext))
+	copy(encrypted, nonce)
+	copy(encrypted[len(nonce):], ciphertext)
 
 	return os.WriteFile(path, encrypted, 0600)
 }
 
-// LoadTokensSigned loads tokens from a file signed with HMAC-SHA512.
-// Returns error if file doesn't exist or integrity check fails.
-// Note: this verifies integrity, not encryption; tokens are plaintext JSON at rest.
+// LoadTokensSigned loads tokens from a file encrypted with AES-256-GCM.
+// Returns error if file doesn't exist or decryption/integrity check fails.
 func (s *Store) LoadTokensSigned(path string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -548,26 +565,36 @@ func (s *Store) LoadTokensSigned(path string) error {
 		return fmt.Errorf("reading tokens file: %w", err)
 	}
 
-	// Minimum: 64-byte signature + some JSON
-	if len(data) < 64+2 {
+	// Minimum: 12-byte nonce + 16-byte GCM tag + some JSON
+	if len(data) < 12+16+2 {
 		return fmt.Errorf("tokens file too short")
 	}
 
-	// Split: signature (64 bytes) + encrypted data
-	signature := data[:64]
-	encrypted := data[64:]
+	// Derive AES key from HMAC secret
+	aesKey := deriveAESKey(s.secret)
+	defer clearBytes(aesKey)
 
-	// Verify HMAC
-	h := hmac.New(sha512.New, s.secret)
-	h.Write(encrypted)
-	expected := h.Sum(nil)
-	if !hmac.Equal(signature, expected) {
-		return fmt.Errorf("tokens file integrity check failed")
+	// Split: nonce (12 bytes) + ciphertext+tag
+	nonce := data[:12]
+	ciphertext := data[12:]
+
+	// Decrypt with AES-256-GCM
+	block, err := aes.NewCipher(aesKey)
+	if err != nil {
+		return fmt.Errorf("creating cipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return fmt.Errorf("creating GCM: %w", err)
+	}
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return fmt.Errorf("tokens file integrity check failed: %w", err)
 	}
 
 	// Deserialize
 	var tokens map[string]*Token
-	if err := json.Unmarshal(encrypted, &tokens); err != nil {
+	if err := json.Unmarshal(plaintext, &tokens); err != nil {
 		return fmt.Errorf("deserializing tokens: %w", err)
 	}
 
@@ -581,6 +608,22 @@ func (s *Store) LoadTokensSigned(path string) error {
 
 	s.tokens = tokens
 	return nil
+}
+
+// deriveAESKey derives a 32-byte AES-256 key from the HMAC secret.
+// Uses a simple but effective derivation: SHA-512(secret) truncated to 32 bytes.
+func deriveAESKey(secret []byte) []byte {
+	h := sha512.Sum512(secret)
+	key := make([]byte, 32)
+	copy(key, h[:32])
+	return key
+}
+
+// clearBytes securely clears sensitive key material.
+func clearBytes(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
 }
 
 // SetTokenFilePath sets the path for token persistence.

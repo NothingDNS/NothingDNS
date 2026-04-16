@@ -440,7 +440,13 @@ func (s *Server) handleExportZone(w http.ResponseWriter, _ *http.Request, zoneNa
 	}
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.zone", strings.TrimSuffix(zoneName, ".")))
+	safeName := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '.' {
+			return r
+		}
+		return '_'
+	}, strings.TrimSuffix(zoneName, "."))
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s.zone\"", safeName))
 	if _, err := w.Write([]byte(content)); err != nil {
 		util.Warnf("api: failed to write zone export: %v", err)
 	}

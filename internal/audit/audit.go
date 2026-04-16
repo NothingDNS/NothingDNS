@@ -232,7 +232,7 @@ func formatAXFRAuditLine(e AXFRAuditEntry) string {
 	return fmt.Sprintf("%s req=%s client=%s zone=%s action=%s records=%d latency=%s",
 		e.Timestamp,
 		reqID,
-		e.ClientIP,
+		sanitizeLogField(e.ClientIP),
 		sanitizeLogField(e.Zone),
 		e.Action,
 		e.RecordCount,
@@ -290,7 +290,7 @@ func formatUpdateAuditLine(e UpdateAuditEntry) string {
 func formatReloadAuditLine(e ReloadAuditEntry) string {
 	errStr := ""
 	if e.Error != "" {
-		errStr = " error=" + e.Error
+		errStr = " error=" + sanitizeLogField(e.Error)
 	}
 	return fmt.Sprintf("%s action=reload.%s zones=%d%s",
 		e.Timestamp,

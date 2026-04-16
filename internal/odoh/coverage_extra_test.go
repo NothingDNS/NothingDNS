@@ -395,23 +395,26 @@ func TestClientSendToProxySuccess(t *testing.T) {
 
 func TestClientDecapsulateResponseRoundTrip(t *testing.T) {
 	cfg := NewODoHConfig("target.example.com", "proxy.example.com")
-	client, _ := NewObliviousClient(cfg)
 
-	// Generate ephemeral key
+	// Generate ephemeral key before creating the client
 	ephemeralPriv, err := generateEphemeralKey(cfg.HPKEKEM)
 	if err != nil {
 		t.Fatalf("generateEphemeralKey failed: %v", err)
 	}
-
-	// The decapsulateResponse method derives shared secret using
-	// ephemeralPriv + derivePublicKey(ephemeralPriv), i.e. self-ECDH.
-	// So we encrypt with the same self-derived shared secret.
 	ephemeralPub := derivePublicKey(ephemeralPriv, cfg.HPKEKEM)
+
+	// Set TargetPublicKey so decapsulateResponse can use it (V-01 fix)
+	cfg.TargetPublicKey = ephemeralPub
+
+	client, _ := NewObliviousClient(cfg)
+
+	// decapsulateResponse now uses ECDH(ephemeralPriv, targetPub) with response KDF context.
+	// Encrypt with the matching self-ECDH and response context.
 	sharedSecret, err := deriveSharedSecret(ephemeralPriv, ephemeralPub, cfg.HPKEKEM)
 	if err != nil {
 		t.Fatalf("deriveSharedSecret failed: %v", err)
 	}
-	kdfInfo := buildKDFInfo(cfg.TargetName)
+	kdfInfo := buildKDFInfo(cfg.TargetName, true)
 	keys, err := deriveKeys(sharedSecret, kdfInfo, cfg.HPKEKDF, cfg.HPKEAEAD)
 	if err != nil {
 		t.Fatalf("deriveKeys failed: %v", err)
@@ -681,7 +684,7 @@ func TestObliviousTargetServeHTTPNilResponse(t *testing.T) {
 	ephemeralPriv, _ := generateEphemeralKey(cfg.HPKEKEM)
 	ephemeralPub := derivePublicKey(ephemeralPriv, cfg.HPKEKEM)
 	sharedSecret, _ := deriveSharedSecret(ephemeralPriv, target.pubKey, cfg.HPKEKEM)
-	kdfInfo := buildKDFInfo(cfg.TargetName)
+	kdfInfo := buildKDFInfo(cfg.TargetName, false)
 	keys, _ := deriveKeys(sharedSecret, kdfInfo, cfg.HPKEKDF, cfg.HPKEAEAD)
 	nonce := make([]byte, 12)
 	ciphertext, _ := encrypt(queryBytes, nonce, keys.SealKey, nil, cfg.HPKEAEAD)
@@ -794,7 +797,7 @@ func TestTargetEncryptDecryptRoundTrip(t *testing.T) {
 	query := []byte("test dns query data")
 
 	sharedSecret, _ := deriveSharedSecret(ephemeralPriv, target.pubKey, cfg.HPKEKEM)
-	kdfInfo := buildKDFInfo(cfg.TargetName)
+	kdfInfo := buildKDFInfo(cfg.TargetName, false)
 	keys, _ := deriveKeys(sharedSecret, kdfInfo, cfg.HPKEKDF, cfg.HPKEAEAD)
 
 	nonce := make([]byte, 12)
@@ -828,8 +831,13 @@ func TestTargetEncryptDecryptRoundTrip(t *testing.T) {
 		t.Fatalf("parseProxyResponse failed: %v", err)
 	}
 
-	// Client decrypts the response using the same shared secret
-	clientDecrypted, err := decrypt(parsedResp.Ciphertext, parsedResp.Nonce, keys.SealKey, query, cfg.HPKEAEAD)
+	// Client decrypts the response using the response-specific KDF context (V-02 fix)
+	responseKdfInfo := buildKDFInfo(cfg.TargetName, true)
+	responseKeys, err := deriveKeys(sharedSecret, responseKdfInfo, cfg.HPKEKDF, cfg.HPKEAEAD)
+	if err != nil {
+		t.Fatalf("deriveKeys for response failed: %v", err)
+	}
+	clientDecrypted, err := decrypt(parsedResp.Ciphertext, parsedResp.Nonce, responseKeys.SealKey, query, cfg.HPKEAEAD)
 	if err != nil {
 		t.Fatalf("client decrypt of response failed: %v", err)
 	}
@@ -1022,7 +1030,7 @@ func TestBuildKDFInfoVariants(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			info := buildKDFInfo(tt.suiteID)
+			info := buildKDFInfo(tt.suiteID, false)
 			if len(info) == 0 {
 				t.Error("buildKDFInfo returned empty")
 			}
@@ -1030,12 +1038,20 @@ func TestBuildKDFInfoVariants(t *testing.T) {
 			if !bytes.HasPrefix(info, []byte("odoh")) {
 				t.Errorf("KDF info doesn't start with 'odoh': %q", info)
 			}
-			// Must end with null byte
-			if info[len(info)-1] != 0 {
-				t.Errorf("KDF info doesn't end with null byte: %q", info)
+			// Query context (false) must end with 0x01
+			if info[len(info)-1] != 0x01 {
+				t.Errorf("KDF info query context should end with 0x01, got 0x%02x: %q", info[len(info)-1], info)
 			}
 		})
 	}
+
+	// Verify response context byte
+	t.Run("response_context", func(t *testing.T) {
+		info := buildKDFInfo("test", true)
+		if info[len(info)-1] != 0x02 {
+			t.Errorf("KDF info response context should end with 0x02, got 0x%02x", info[len(info)-1])
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -1141,7 +1157,7 @@ func TestObliviousTargetServeHTTPFullSuccess(t *testing.T) {
 	ephemeralPriv, _ := generateEphemeralKey(cfg.HPKEKEM)
 	ephemeralPub := derivePublicKey(ephemeralPriv, cfg.HPKEKEM)
 	sharedSecret, _ := deriveSharedSecret(ephemeralPriv, target.pubKey, cfg.HPKEKEM)
-	kdfInfo := buildKDFInfo(cfg.TargetName)
+	kdfInfo := buildKDFInfo(cfg.TargetName, false)
 	keys, _ := deriveKeys(sharedSecret, kdfInfo, cfg.HPKEKDF, cfg.HPKEAEAD)
 	nonce := make([]byte, 12)
 	ciphertext, _ := encrypt(queryBytes, nonce, keys.SealKey, nil, cfg.HPKEAEAD)

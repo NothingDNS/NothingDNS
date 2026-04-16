@@ -76,7 +76,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Value:    token.Token,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   r.TLS != nil,
+		Secure:   true,
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   86400,
 	})
@@ -182,7 +182,7 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		Value:    token.Token,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   r.TLS != nil,
+		Secure:   true,
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   86400,
 	})
@@ -219,6 +219,8 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteStrictMode,
 		MaxAge:   -1,
 	})
 

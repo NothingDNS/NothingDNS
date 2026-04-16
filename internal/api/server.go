@@ -90,9 +90,11 @@ type loginAttempt struct {
 
 // LoginRateLimit constants
 const (
-	loginMaxAttempts   = 5                // Maximum attempts before lockout
-	loginLockoutPeriod = 5 * time.Minute  // How long to lock out after max attempts
-	loginMaxDelay      = 30 * time.Second // Maximum delay between attempts
+	loginMaxAttempts    = 5                // Maximum attempts before lockout
+	loginLockoutPeriod  = 5 * time.Minute  // How long to lock out after max attempts
+	loginMaxDelay       = 30 * time.Second // Maximum delay between attempts
+	loginMaxIPEntries   = 50000            // Maximum tracked IPs to prevent unbounded memory growth
+	loginMaxUserEntries = 10000            // Maximum tracked usernames
 )
 
 // checkRateLimit checks if the given IP is rate-limited.
@@ -155,6 +157,18 @@ func (l *loginRateLimiter) recordFailedAttempt(ip, username string) {
 	// Track by IP
 	attempt, exists := l.ipAttempts[ip]
 	if !exists {
+		// Enforce max entries to prevent unbounded memory growth
+		if len(l.ipAttempts) >= loginMaxIPEntries {
+			var oldestIP string
+			var oldestTime time.Time
+			for k, v := range l.ipAttempts {
+				if oldestIP == "" || v.lastTry.Before(oldestTime) {
+					oldestIP = k
+					oldestTime = v.lastTry
+				}
+			}
+			delete(l.ipAttempts, oldestIP)
+		}
 		l.ipAttempts[ip] = &loginAttempt{
 			count:   1,
 			lastTry: now,
@@ -175,6 +189,18 @@ func (l *loginRateLimiter) recordFailedAttempt(ip, username string) {
 	// Track by username (account lockout)
 	userAttempt, userExists := l.userAttempts[username]
 	if !userExists {
+		// Enforce max entries to prevent unbounded memory growth
+		if len(l.userAttempts) >= loginMaxUserEntries {
+			var oldestUser string
+			var oldestTime time.Time
+			for k, v := range l.userAttempts {
+				if oldestUser == "" || v.lastTry.Before(oldestTime) {
+					oldestUser = k
+					oldestTime = v.lastTry
+				}
+			}
+			delete(l.userAttempts, oldestUser)
+		}
 		l.userAttempts[username] = &loginAttempt{
 			count:   1,
 			lastTry: now,
@@ -236,8 +262,9 @@ type apiRateLimiter struct {
 
 // apiRateLimit constants for authenticated endpoints
 const (
-	apiRateLimitMaxRequests = 100 // Max requests per window
-	apiRateLimitWindowSecs  = 60  // Window size in seconds
+	apiRateLimitMaxRequests  = 100   // Max requests per window
+	apiRateLimitWindowSecs   = 60    // Window size in seconds
+	apiRateLimitMaxEntries   = 50000 // Max tracked IPs to prevent unbounded memory growth
 )
 
 // maxBodyBytes is the maximum size for request bodies to prevent OOM attacks.
@@ -255,6 +282,18 @@ func (r *apiRateLimiter) checkRateLimit(ip string) bool {
 	// Get or create request list for this IP
 	reqs, exists := r.requests[ip]
 	if !exists {
+		// Enforce max entries to prevent unbounded memory growth
+		if len(r.requests) >= apiRateLimitMaxEntries {
+			var oldestIP string
+			var oldestTime time.Time
+			for k, v := range r.requests {
+				if len(v) > 0 && (oldestIP == "" || v[0].Before(oldestTime)) {
+					oldestIP = k
+					oldestTime = v[0]
+				}
+			}
+			delete(r.requests, oldestIP)
+		}
 		reqs = []time.Time{}
 	}
 
@@ -669,7 +708,9 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		if r.TLS != nil {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
 		w.Header().Set("Content-Security-Policy", "default-src 'self'")
 		next.ServeHTTP(w, r)
 	})
@@ -774,13 +815,9 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 
 		// Validate token
 		if token != "" {
-			// First try old-style shared token (auth_token or auth_secret as fallback)
+			// First try old-style shared token (auth_token)
 			// SECURITY: Check length first to prevent timing attack via ConstantTimeCompare
 			legacyToken := s.config.AuthToken
-			if legacyToken == "" {
-				// If auth_token not set, use auth_secret as fallback (for single-token mode without users)
-				legacyToken = s.config.AuthSecret
-			}
 			if legacyToken != "" && len(token) == len(legacyToken) && subtle.ConstantTimeCompare([]byte(token), []byte(legacyToken)) == 1 {
 				// Check API rate limit for authenticated requests
 				ip := getClientIP(r)
