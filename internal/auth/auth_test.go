@@ -1544,3 +1544,275 @@ func TestNewStoreVariations(t *testing.T) {
 		_ = err
 	})
 }
+
+// ---------------------------------------------------------------------------
+// SaveTokensSigned / LoadTokensSigned (AES-256-GCM encryption)
+// ---------------------------------------------------------------------------
+
+func TestSaveTokensSigned_LoadTokensSigned_RoundTrip(t *testing.T) {
+	store, _ := NewStore(&Config{
+		Secret:      "test-encryption-secret",
+		Users:       []User{{Username: "admin", Password: "pass", Role: RoleAdmin}},
+		TokenExpiry: Duration{Duration: 1 * time.Hour},
+	})
+
+	// Generate a token
+	tok, _ := store.GenerateToken("admin", time.Hour)
+
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "tokens.enc")
+
+	// Save
+	if err := store.SaveTokensSigned(path); err != nil {
+		t.Fatalf("SaveTokensSigned failed: %v", err)
+	}
+
+	// Verify file exists and is not plaintext JSON
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("failed to read token file: %v", err)
+	}
+	if len(data) < 12+16+2 {
+		t.Errorf("encrypted file too small: %d bytes", len(data))
+	}
+	// Verify it's not plaintext JSON (should not start with '{')
+	if data[0] == '{' || data[12] == '{' {
+		t.Error("token file appears to be plaintext JSON, not encrypted")
+	}
+
+	// Load into new store with same secret
+	store2, _ := NewStore(&Config{
+		Secret:      "test-encryption-secret",
+		Users:       []User{{Username: "admin", Password: "pass", Role: RoleAdmin}},
+		TokenExpiry: Duration{Duration: 1 * time.Hour},
+	})
+	if err := store2.LoadTokensSigned(path); err != nil {
+		t.Fatalf("LoadTokensSigned failed: %v", err)
+	}
+
+	// Verify token is valid in loaded store
+	claims, err := store2.ValidateToken(tok.Token)
+	if err != nil {
+		t.Errorf("ValidateToken failed after load: %v", err)
+	}
+	if claims.Username != "admin" {
+		t.Errorf("Expected username 'admin', got %s", claims.Username)
+	}
+}
+
+func TestLoadTokensSigned_WrongSecret(t *testing.T) {
+	store, _ := NewStore(&Config{
+		Secret:      "correct-secret",
+		Users:       []User{{Username: "admin", Password: "pass", Role: RoleAdmin}},
+		TokenExpiry: Duration{Duration: 1 * time.Hour},
+	})
+
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "tokens.enc")
+
+	store.SaveTokensSigned(path)
+
+	// Try loading with wrong secret - GCM auth check should fail
+	store2, _ := NewStore(&Config{
+		Secret:      "wrong-secret",
+		TokenExpiry: Duration{Duration: 1 * time.Hour},
+	})
+	err := store2.LoadTokensSigned(path)
+	if err == nil {
+		t.Error("Expected error loading tokens with wrong secret")
+	}
+	if !strings.Contains(err.Error(), "integrity check failed") {
+		t.Errorf("Expected integrity check error, got: %v", err)
+	}
+}
+
+func TestLoadTokensSigned_FileNotExist(t *testing.T) {
+	store, _ := NewStore(&Config{
+		Secret:      "test-secret",
+		TokenExpiry: Duration{Duration: 1 * time.Hour},
+	})
+
+	// Loading non-existent file should return nil (no error)
+	err := store.LoadTokensSigned(filepath.Join(t.TempDir(), "nonexistent.enc"))
+	if err != nil {
+		t.Errorf("LoadTokensSigned on missing file should return nil, got: %v", err)
+	}
+}
+
+func TestLoadTokensSigned_TruncatedFile(t *testing.T) {
+	store, _ := NewStore(&Config{
+		Secret:      "test-secret",
+		TokenExpiry: Duration{Duration: 1 * time.Hour},
+	})
+
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "truncated.enc")
+
+	// Write a file that's too short to be valid
+	os.WriteFile(path, []byte("short"), 0600)
+
+	err := store.LoadTokensSigned(path)
+	if err == nil {
+		t.Error("Expected error loading truncated file")
+	}
+}
+
+func TestLoadTokensSigned_CorruptedData(t *testing.T) {
+	store, _ := NewStore(&Config{
+		Secret:      "test-secret",
+		Users:       []User{{Username: "admin", Password: "pass", Role: RoleAdmin}},
+		TokenExpiry: Duration{Duration: 1 * time.Hour},
+	})
+
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "tokens.enc")
+
+	store.SaveTokensSigned(path)
+
+	// Corrupt the ciphertext by flipping a byte
+	data, _ := os.ReadFile(path)
+	data[len(data)-1] ^= 0xFF
+	os.WriteFile(path, data, 0600)
+
+	err := store.LoadTokensSigned(path)
+	if err == nil {
+		t.Error("Expected error loading corrupted file")
+	}
+}
+
+func TestSaveTokensSigned_EmptyTokens(t *testing.T) {
+	store, _ := NewStore(&Config{
+		Secret:      "test-secret",
+		TokenExpiry: Duration{Duration: 1 * time.Hour},
+	})
+
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "tokens.enc")
+
+	if err := store.SaveTokensSigned(path); err != nil {
+		t.Fatalf("SaveTokensSigned with no tokens should work: %v", err)
+	}
+
+	// Load into new store
+	store2, _ := NewStore(&Config{
+		Secret:      "test-secret",
+		TokenExpiry: Duration{Duration: 1 * time.Hour},
+	})
+	if err := store2.LoadTokensSigned(path); err != nil {
+		t.Fatalf("LoadTokensSigned failed: %v", err)
+	}
+}
+
+func TestSaveTokensSigned_MultipleTokens(t *testing.T) {
+	store, _ := NewStore(&Config{
+		Secret: "test-secret",
+		Users: []User{
+			{Username: "admin", Password: "pass1", Role: RoleAdmin},
+			{Username: "user2", Password: "pass2", Role: RoleOperator},
+		},
+		TokenExpiry: Duration{Duration: 1 * time.Hour},
+	})
+
+	tok1, _ := store.GenerateToken("admin", time.Hour)
+	tok2, _ := store.GenerateToken("user2", time.Hour)
+
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "tokens.enc")
+
+	store.SaveTokensSigned(path)
+
+	store2, _ := NewStore(&Config{
+		Secret: "test-secret",
+		Users: []User{
+			{Username: "admin", Password: "pass1", Role: RoleAdmin},
+			{Username: "user2", Password: "pass2", Role: RoleOperator},
+		},
+		TokenExpiry: Duration{Duration: 1 * time.Hour},
+	})
+	store2.LoadTokensSigned(path)
+
+	// Both tokens should be valid
+	if _, err := store2.ValidateToken(tok1.Token); err != nil {
+		t.Errorf("Token 1 should be valid after load: %v", err)
+	}
+	if _, err := store2.ValidateToken(tok2.Token); err != nil {
+		t.Errorf("Token 2 should be valid after load: %v", err)
+	}
+}
+
+func TestLoadTokensSigned_ExpiredTokensFiltered(t *testing.T) {
+	store, _ := NewStore(&Config{
+		Secret:      "test-secret",
+		Users:       []User{{Username: "admin", Password: "pass", Role: RoleAdmin}},
+		TokenExpiry: Duration{Duration: 1 * time.Hour},
+	})
+
+	tok, _ := store.GenerateToken("admin", time.Hour)
+
+	// Manually expire the token in the store
+	store.mu.Lock()
+	if token, ok := store.tokens[tok.Token]; ok {
+		token.ExpiresAt = time.Now().Add(-1 * time.Hour) // set to past
+	}
+	store.mu.Unlock()
+
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "tokens.enc")
+
+	store.SaveTokensSigned(path)
+
+	store2, _ := NewStore(&Config{
+		Secret:      "test-secret",
+		Users:       []User{{Username: "admin", Password: "pass", Role: RoleAdmin}},
+		TokenExpiry: Duration{Duration: 1 * time.Hour},
+	})
+	store2.LoadTokensSigned(path)
+
+	// Expired token should have been filtered out during load
+	_, err := store2.ValidateToken(tok.Token)
+	if err == nil {
+		t.Error("Expired token should not validate after load")
+	}
+}
+
+func TestDeriveAESKey(t *testing.T) {
+	key1 := deriveAESKey([]byte("test-secret"))
+	if len(key1) != 32 {
+		t.Errorf("Expected 32-byte key, got %d", len(key1))
+	}
+
+	// Same input should produce same key
+	key2 := deriveAESKey([]byte("test-secret"))
+	if subtle.ConstantTimeCompare(key1, key2) != 1 {
+		t.Error("Same input should produce same key")
+	}
+
+	// Different input should produce different key
+	key3 := deriveAESKey([]byte("different-secret"))
+	if subtle.ConstantTimeCompare(key1, key3) == 1 {
+		t.Error("Different inputs should produce different keys")
+	}
+}
+
+func TestClearBytes(t *testing.T) {
+	buf := []byte{0x01, 0x02, 0x03, 0x04, 0x05}
+	clearBytes(buf)
+	for i, b := range buf {
+		if b != 0 {
+			t.Errorf("Byte %d not cleared: %x", i, b)
+		}
+	}
+}
+
+func TestSetTokenFilePath(t *testing.T) {
+	store, _ := NewStore(&Config{
+		Secret:      "test-secret",
+		Users:       []User{{Username: "admin", Password: "pass", Role: RoleAdmin}},
+		TokenExpiry: Duration{Duration: 1 * time.Hour},
+	})
+
+	store.SetTokenFilePath("/tmp/test-tokens.enc")
+	if store.tokenFilePath != "/tmp/test-tokens.enc" {
+		t.Errorf("tokenFilePath not set correctly: %s", store.tokenFilePath)
+	}
+}
