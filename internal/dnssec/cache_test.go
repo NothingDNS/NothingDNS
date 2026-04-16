@@ -1,9 +1,13 @@
 package dnssec
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/nothingdns/nothingdns/internal/protocol"
 )
 
 func TestNewValidationCache(t *testing.T) {
@@ -371,4 +375,156 @@ func TestCacheConcurrentMixed(t *testing.T) {
 	}
 
 	wg.Wait()
+}
+
+// ---------------------------------------------------------------------------
+// RRSIGCache tests
+// ---------------------------------------------------------------------------
+
+func TestNewRRSIGCache(t *testing.T) {
+	cache := NewRRSIGCache(5 * time.Minute)
+	if cache == nil {
+		t.Fatal("NewRRSIGCache returned nil")
+	}
+	if cache.ttl != 5*time.Minute {
+		t.Errorf("Expected TTL 5m, got %v", cache.ttl)
+	}
+	if cache.items == nil {
+		t.Error("items map should be initialized")
+	}
+}
+
+func TestRRSIGCache_SetGet(t *testing.T) {
+	cache := NewRRSIGCache(5 * time.Minute)
+
+	rrsig := &protocol.ResourceRecord{
+		Name:  &protocol.Name{Labels: []string{"example", "com"}, FQDN: true},
+		Type:  protocol.TypeRRSIG,
+		Class: protocol.ClassIN,
+		TTL:   300,
+	}
+
+	data := []byte("example RRset data for signing")
+
+	// Set
+	cache.SetRRSIG("example.com.", protocol.TypeA, data, rrsig)
+
+	// Get with matching data should return the RRSIG
+	dataHash := sha256.Sum256(data)
+	got, ok := cache.GetRRSIG("example.com.", protocol.TypeA, dataHash)
+	if !ok {
+		t.Fatal("GetRRSIG should find the cached RRSIG")
+	}
+	if got != rrsig {
+		t.Error("GetRRSIG should return the same RRSIG pointer")
+	}
+}
+
+func TestRRSIGCache_GetMiss(t *testing.T) {
+	cache := NewRRSIGCache(5 * time.Minute)
+
+	var hash [32]byte
+	_, ok := cache.GetRRSIG("example.com.", protocol.TypeA, hash)
+	if ok {
+		t.Error("GetRRSIG should return false for empty cache")
+	}
+}
+
+func TestRRSIGCache_GetExpired(t *testing.T) {
+	cache := NewRRSIGCache(1 * time.Millisecond)
+
+	rrsig := &protocol.ResourceRecord{
+		Name:  &protocol.Name{Labels: []string{"example", "com"}, FQDN: true},
+		Type:  protocol.TypeRRSIG,
+		Class: protocol.ClassIN,
+	}
+
+	data := []byte("data")
+	cache.SetRRSIG("example.com.", protocol.TypeA, data, rrsig)
+
+	// Wait for expiry
+	time.Sleep(10 * time.Millisecond)
+
+	dataHash := sha256.Sum256(data)
+	_, ok := cache.GetRRSIG("example.com.", protocol.TypeA, dataHash)
+	if ok {
+		t.Error("GetRRSIG should not return expired entries")
+	}
+}
+
+func TestRRSIGCache_ClearRRSIG(t *testing.T) {
+	cache := NewRRSIGCache(5 * time.Minute)
+
+	rrsig := &protocol.ResourceRecord{
+		Name:  &protocol.Name{Labels: []string{"example", "com"}, FQDN: true},
+		Type:  protocol.TypeRRSIG,
+		Class: protocol.ClassIN,
+	}
+
+	cache.SetRRSIG("example.com.", protocol.TypeA, []byte("data"), rrsig)
+	cache.ClearRRSIG()
+
+	dataHash := sha256.Sum256([]byte("data"))
+	_, ok := cache.GetRRSIG("example.com.", protocol.TypeA, dataHash)
+	if ok {
+		t.Error("GetRRSIG should return false after ClearRRSIG")
+	}
+}
+
+func TestRRSIGCache_DifferentData(t *testing.T) {
+	cache := NewRRSIGCache(5 * time.Minute)
+
+	rrsig1 := &protocol.ResourceRecord{
+		Name:  &protocol.Name{Labels: []string{"example", "com"}, FQDN: true},
+		Type:  protocol.TypeRRSIG,
+		Class: protocol.ClassIN,
+		TTL:   300,
+	}
+	rrsig2 := &protocol.ResourceRecord{
+		Name:  &protocol.Name{Labels: []string{"example", "com"}, FQDN: true},
+		Type:  protocol.TypeRRSIG,
+		Class: protocol.ClassIN,
+		TTL:   600,
+	}
+
+	data1 := []byte("data version 1")
+	data2 := []byte("data version 2")
+
+	cache.SetRRSIG("example.com.", protocol.TypeA, data1, rrsig1)
+	cache.SetRRSIG("example.com.", protocol.TypeA, data2, rrsig2)
+
+	// Get first
+	hash1 := sha256.Sum256(data1)
+	got1, ok := cache.GetRRSIG("example.com.", protocol.TypeA, hash1)
+	if !ok || got1 != rrsig1 {
+		t.Error("Should get rrsig1 for data1")
+	}
+
+	// Get second
+	hash2 := sha256.Sum256(data2)
+	got2, ok := cache.GetRRSIG("example.com.", protocol.TypeA, hash2)
+	if !ok || got2 != rrsig2 {
+		t.Error("Should get rrsig2 for data2")
+	}
+}
+
+func TestRRSIGCache_LazyEviction(t *testing.T) {
+	cache := NewRRSIGCache(1 * time.Millisecond)
+
+	// Fill cache beyond threshold
+	for i := 0; i < 5001; i++ {
+		data := []byte(fmt.Sprintf("data-%d", i))
+		cache.SetRRSIG("example.com.", protocol.TypeA, data, &protocol.ResourceRecord{})
+	}
+
+	// Wait for all to expire
+	time.Sleep(10 * time.Millisecond)
+
+	// Adding one more should trigger lazy eviction
+	cache.SetRRSIG("example.com.", protocol.TypeA, []byte("trigger-eviction"), &protocol.ResourceRecord{})
+
+	// Cache should have been partially cleaned
+	if len(cache.items) > 5000 {
+		t.Errorf("Cache should have been evicted, but has %d items", len(cache.items))
+	}
 }
