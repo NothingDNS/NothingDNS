@@ -1462,9 +1462,10 @@ func TestMiddlewareChain(t *testing.T) {
 // TestIntegration tests full request flow
 func TestIntegration(t *testing.T) {
 	t.Run("full API flow with auth", func(t *testing.T) {
+		addr := pickFreeAddr(t)
 		cfg := config.HTTPConfig{
 			Enabled:   true,
-			Bind:      "127.0.0.1:18095",
+			Bind:      addr,
 			AuthToken: "test-api-key",
 		}
 
@@ -1490,7 +1491,7 @@ func TestIntegration(t *testing.T) {
 
 		// Helper function for authenticated requests
 		doRequest := func(method, path string, body io.Reader) *http.Response {
-			req, _ := http.NewRequest(method, "http://127.0.0.1:18095"+path, body)
+			req, _ := http.NewRequest(method, "http://"+addr+path, body)
 			req.Header.Set("Authorization", "Bearer "+token)
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
@@ -1546,9 +1547,10 @@ func TestIntegration(t *testing.T) {
 	})
 
 	t.Run("unauthenticated requests are rejected", func(t *testing.T) {
+		addr := pickFreeAddr(t)
 		cfg := config.HTTPConfig{
 			Enabled:   true,
-			Bind:      "127.0.0.1:18096",
+			Bind:      addr,
 			AuthToken: "secret-key",
 		}
 
@@ -1565,7 +1567,7 @@ func TestIntegration(t *testing.T) {
 		}
 
 		for _, endpoint := range endpoints {
-			resp, err := http.Get("http://127.0.0.1:18096" + endpoint)
+			resp, err := http.Get("http://" + addr + endpoint)
 			if err != nil {
 				t.Fatalf("Request to %s failed: %v", endpoint, err)
 			}
@@ -1580,10 +1582,11 @@ func TestIntegration(t *testing.T) {
 
 // TestErrorResponseFormat tests that all error responses have consistent format
 func TestErrorResponseFormat(t *testing.T) {
+	addr := pickFreeAddr(t)
 	cfg := config.HTTPConfig{
 		Enabled:   true,
 		AuthToken: "test-token",
-		Bind:      "127.0.0.1:18097",
+		Bind:      addr,
 	}
 
 	cacheCfg := cache.Config{Capacity: 100}
@@ -1614,7 +1617,7 @@ func TestErrorResponseFormat(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req, _ := http.NewRequest(tt.method, "http://127.0.0.1:18097"+tt.path, nil)
+			req, _ := http.NewRequest(tt.method, "http://"+addr+tt.path, nil)
 			if tt.useAuth {
 				req.Header.Set("Authorization", "Bearer "+token)
 			}
@@ -1646,10 +1649,11 @@ func TestErrorResponseFormat(t *testing.T) {
 
 // TestOptionsPreflight tests CORS preflight requests
 func TestOptionsPreflight(t *testing.T) {
+	addr := pickFreeAddr(t)
 	cfg := config.HTTPConfig{
 		Enabled:        true,
 		AuthToken:      "test-token",
-		Bind:           "127.0.0.1:18098",
+		Bind:           addr,
 		AllowedOrigins: []string{"https://console.example"},
 	}
 
@@ -1667,7 +1671,7 @@ func TestOptionsPreflight(t *testing.T) {
 	}
 
 	for _, endpoint := range endpoints {
-		req, _ := http.NewRequest(http.MethodOptions, "http://127.0.0.1:18098"+endpoint, nil)
+		req, _ := http.NewRequest(http.MethodOptions, "http://"+addr+endpoint, nil)
 		req.Header.Set("Origin", "https://console.example")
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -1688,10 +1692,11 @@ func TestOptionsPreflight(t *testing.T) {
 
 // TestConcurrentRequests tests that the server handles concurrent requests
 func TestConcurrentRequests(t *testing.T) {
+	addr := pickFreeAddr(t)
 	cfg := config.HTTPConfig{
 		Enabled:   true,
 		AuthToken: "test-token",
-		Bind:      "127.0.0.1:18099",
+		Bind:      addr,
 	}
 
 	cacheCfg := cache.Config{Capacity: 1000}
@@ -1708,7 +1713,7 @@ func TestConcurrentRequests(t *testing.T) {
 
 	for i := 0; i < numRequests; i++ {
 		go func() {
-			req, _ := http.NewRequest(http.MethodGet, "http://127.0.0.1:18099/api/v1/status", nil)
+			req, _ := http.NewRequest(http.MethodGet, "http://"+addr+"/api/v1/status", nil)
 			req.Header.Set("Authorization", "Bearer test-token")
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {

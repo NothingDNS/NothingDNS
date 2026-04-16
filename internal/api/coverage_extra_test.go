@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -130,9 +131,10 @@ type mockDNSHandler struct{}
 func (m *mockDNSHandler) ServeDNS(_ server.ResponseWriter, _ *protocol.Message) {}
 
 func TestStart_DoHEnabled(t *testing.T) {
+	addr := pickFreeAddr(t)
 	cfg := config.HTTPConfig{
 		Enabled:    true,
-		Bind:       "127.0.0.1:18100",
+		Bind:       addr,
 		DoHEnabled: true,
 		DoHPath:    "/dns-query",
 	}
@@ -147,7 +149,7 @@ func TestStart_DoHEnabled(t *testing.T) {
 	// Verify the DoH endpoint was registered by making an HTTP GET to it.
 	// A GET to /dns-query without proper DNS wireformat should still get a
 	// response (not 404), confirming the route exists.
-	resp, err := http.Get("http://127.0.0.1:18100/dns-query")
+	resp, err := http.Get("http://" + addr + "/dns-query")
 	if err != nil {
 		t.Fatalf("failed to reach DoH endpoint: %v", err)
 	}
@@ -161,6 +163,7 @@ func TestStart_DoHEnabled(t *testing.T) {
 }
 
 func TestStart_WithCluster(t *testing.T) {
+	addr := pickFreeAddr(t)
 	clusterCfg := cluster.Config{
 		Enabled:    true,
 		NodeID:     "start-cluster-node",
@@ -174,7 +177,7 @@ func TestStart_WithCluster(t *testing.T) {
 
 	cfg := config.HTTPConfig{
 		Enabled: true,
-		Bind:    "127.0.0.1:18101",
+		Bind:    addr,
 	}
 
 	srv := NewServer(cfg, nil, nil, nil, nil, cl, nil)
@@ -186,7 +189,7 @@ func TestStart_WithCluster(t *testing.T) {
 
 	// Verify cluster endpoints were registered.
 	for _, path := range []string{"/api/v1/cluster/status", "/api/v1/cluster/nodes"} {
-		resp, err := http.Get("http://127.0.0.1:18101" + path)
+		resp, err := http.Get("http://" + addr + path)
 		if err != nil {
 			t.Fatalf("failed to reach %s: %v", path, err)
 		}
@@ -202,9 +205,10 @@ func TestStart_WithCluster(t *testing.T) {
 func TestStart_DoHEnabledWithoutDNSHandler(t *testing.T) {
 	// When DoHEnabled is true but dnsHandler is nil, the DoH block should be skipped.
 	// The SPA fallback handler will serve index.html for the path instead.
+	addr := pickFreeAddr(t)
 	cfg := config.HTTPConfig{
 		Enabled:    true,
-		Bind:       "127.0.0.1:18102",
+		Bind:       addr,
 		DoHEnabled: true,
 		DoHPath:    "/dns-query",
 	}
@@ -218,7 +222,7 @@ func TestStart_DoHEnabledWithoutDNSHandler(t *testing.T) {
 
 	// The /dns-query route is not registered as a DoH handler (dnsHandler is nil),
 	// but the SPA fallback will serve index.html for the path.
-	resp, err := http.Get("http://127.0.0.1:18102/dns-query")
+	resp, err := http.Get("http://" + addr + "/dns-query")
 	if err != nil {
 		t.Fatalf("failed to reach server: %v", err)
 	}
@@ -229,6 +233,19 @@ func TestStart_DoHEnabledWithoutDNSHandler(t *testing.T) {
 	}
 
 	srv.Stop()
+}
+
+// pickFreeAddr returns a free "127.0.0.1:port" address by opening a
+// temporary TCP listener. This avoids Windows Hyper-V port exclusion ranges.
+func pickFreeAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to find free port: %v", err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	return addr
 }
 
 // ---------------------------------------------------------------------------
