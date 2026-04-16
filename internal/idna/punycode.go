@@ -262,7 +262,9 @@ func adapt(delta, numPoints int, first bool) int {
 		delta = delta / skew
 	}
 
-	delta += delta / numPoints
+	if numPoints > 0 {
+		delta += delta / numPoints
+	}
 
 	k := 0
 	for delta > ((base-tmin)*tmax)/2 {
