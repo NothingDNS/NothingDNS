@@ -1,8 +1,11 @@
 package cache
 
 import (
+	"fmt"
 	"testing"
 	"time"
+
+	"github.com/nothingdns/nothingdns/internal/protocol"
 )
 
 func TestCacheBasic(t *testing.T) {
@@ -678,4 +681,208 @@ func TestEntryShouldPrefetch(t *testing.T) {
 	if entry2.ShouldPrefetch(now.Add(35 * time.Second)) {
 		t.Error("should not prefetch when CanPrefetch is false")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// crc32Hash, EvictPercent, UpdateConfig, Save/Load tests
+// ---------------------------------------------------------------------------
+
+func TestCRC32Hash(t *testing.T) {
+	// Deterministic
+	h1 := crc32Hash("example.com:A")
+	h2 := crc32Hash("example.com:A")
+	if h1 != h2 {
+		t.Errorf("Same input should produce same hash: %d != %d", h1, h2)
+	}
+
+	// Different inputs should produce different hashes
+	h3 := crc32Hash("other.com:A")
+	if h1 == h3 {
+		t.Error("Different inputs should produce different hashes")
+	}
+
+	// Empty string
+	h4 := crc32Hash("")
+	if h4 != 0 {
+		t.Errorf("Empty string should hash to 0, got %d", h4)
+	}
+}
+
+func TestEvictPercent(t *testing.T) {
+	cache := New(Config{Capacity: 100})
+
+	// Fill cache with entries
+	msg := &protocol.Message{
+		Header:    protocol.Header{ID: 1, Flags: protocol.NewResponseFlags(protocol.RcodeSuccess)},
+		Questions: []*protocol.Question{{Name: &protocol.Name{Labels: []string{"test", "com"}, FQDN: true}, QType: protocol.TypeA, QClass: protocol.ClassIN}},
+	}
+	for i := 0; i < 50; i++ {
+		cache.Set(fmt.Sprintf("key%d.example.com:1", i), msg, 300)
+	}
+
+	stats := cache.Stats()
+	if stats.Size != 50 {
+		t.Fatalf("Expected 50 entries, got %d", stats.Size)
+	}
+
+	// Evict 50% = 25 entries
+	cache.EvictPercent(50)
+
+	stats = cache.Stats()
+	if stats.Size != 25 {
+		t.Errorf("Expected 25 entries after 50%% eviction, got %d", stats.Size)
+	}
+
+	// Invalid percent should be no-op
+	cache.EvictPercent(0)
+	cache.EvictPercent(-1)
+	cache.EvictPercent(101)
+	stats = cache.Stats()
+	if stats.Size != 25 {
+		t.Errorf("Invalid percent should not change cache, got %d entries", stats.Size)
+	}
+}
+
+func TestEvictPercent_EmptyCache(t *testing.T) {
+	cache := New(Config{Capacity: 100})
+	cache.EvictPercent(50) // Should not panic on empty cache
+	stats := cache.Stats()
+	if stats.Size != 0 {
+		t.Errorf("Empty cache should stay empty, got %d", stats.Size)
+	}
+}
+
+func TestUpdateConfig(t *testing.T) {
+	cache := New(Config{Capacity: 100, MinTTL: 60, MaxTTL: 3600})
+
+	newCfg := Config{
+		Capacity:         500,
+		MinTTL:           120,
+		MaxTTL:           7200,
+		DefaultTTL:       300,
+		NegativeTTL:      60,
+		PrefetchEnabled:  true,
+		PrefetchThreshold: 60 * time.Second,
+		ServeStale:       true,
+		StaleGrace:       30 * time.Second,
+	}
+	cache.UpdateConfig(newCfg)
+
+	stats := cache.Stats()
+	if stats.Capacity != 500 {
+		t.Errorf("Expected capacity 500, got %d", stats.Capacity)
+	}
+	if cache.minTTL != 120 {
+		t.Errorf("Expected minTTL 120, got %d", cache.minTTL)
+	}
+	if cache.maxTTL != 7200 {
+		t.Errorf("Expected maxTTL 7200, got %d", cache.maxTTL)
+	}
+	if !cache.prefetchEnabled {
+		t.Error("prefetchEnabled should be true")
+	}
+	if !cache.serveStale {
+		t.Error("serveStale should be true")
+	}
+}
+
+func TestSaveLoad_RoundTrip(t *testing.T) {
+	cache := New(Config{Capacity: 100, MinTTL: 60 * time.Second, MaxTTL: 3600 * time.Second, DefaultTTL: 300 * time.Second})
+
+	// Add entries
+	msg := &protocol.Message{
+		Header:    protocol.Header{ID: 1, Flags: protocol.NewResponseFlags(protocol.RcodeSuccess)},
+		Questions: []*protocol.Question{{Name: &protocol.Name{Labels: []string{"test", "com"}, FQDN: true}, QType: protocol.TypeA, QClass: protocol.ClassIN}},
+		Answers: []*protocol.ResourceRecord{
+			{Name: &protocol.Name{Labels: []string{"test", "com"}, FQDN: true}, Type: protocol.TypeA, Class: protocol.ClassIN, TTL: 300, Data: &protocol.RDataA{Address: [4]byte{1, 2, 3, 4}}},
+		},
+	}
+	cache.Set("test.com:1", msg, 300)
+	cache.Set("other.com:1", msg, 300)
+
+	// Save
+	saved := cache.Save()
+	if len(saved) != 2 {
+		t.Fatalf("Expected 2 saved entries, got %d", len(saved))
+	}
+
+	// Load into new cache
+	cache2 := New(Config{Capacity: 100, MinTTL: 60 * time.Second, MaxTTL: 3600 * time.Second})
+	restored := cache2.Load(saved)
+	if restored != 2 {
+		t.Errorf("Expected 2 restored entries, got %d", restored)
+	}
+
+	// Verify entries are accessible
+	entry := cache2.Get("test.com:1")
+	if entry == nil {
+		t.Error("test.com:1 should be in restored cache")
+	}
+	entry2 := cache2.Get("other.com:1")
+	if entry2 == nil {
+		t.Error("other.com:1 should be in restored cache")
+	}
+}
+
+func TestSave_SkipsNegative(t *testing.T) {
+	cache := New(Config{Capacity: 100, MinTTL: 60 * time.Second, NegativeTTL: 30 * time.Second})
+
+	cache.SetNegative("test.com:1", protocol.RcodeNameError)
+
+	saved := cache.Save()
+	if len(saved) != 0 {
+		t.Errorf("Save should skip negative entries, got %d", len(saved))
+	}
+}
+
+func TestLoad_SkipsExpired(t *testing.T) {
+	cache := New(Config{Capacity: 100})
+
+	// Create an entry that's already expired
+	entries := []CacheEntryJSON{
+		{
+			Key:        "expired.com:1",
+			WireBytes:  validWireMessage(t),
+			TTL:        300,
+			ExpireTime: time.Now().Add(-1 * time.Hour), // already expired
+		},
+	}
+
+	restored := cache.Load(entries)
+	if restored != 0 {
+		t.Errorf("Load should skip expired entries, got %d restored", restored)
+	}
+}
+
+func TestLoad_InvalidWire(t *testing.T) {
+	cache := New(Config{Capacity: 100})
+
+	entries := []CacheEntryJSON{
+		{
+			Key:        "bad.com:1",
+			WireBytes:  []byte("not a valid DNS message"),
+			TTL:        300,
+			ExpireTime: time.Now().Add(1 * time.Hour),
+		},
+	}
+
+	restored := cache.Load(entries)
+	if restored != 0 {
+		t.Errorf("Load should skip invalid wire data, got %d restored", restored)
+	}
+}
+
+
+func validWireMessage(t *testing.T) []byte {
+	t.Helper()
+	msg := &protocol.Message{
+		Header:    protocol.Header{ID: 1, Flags: protocol.NewResponseFlags(protocol.RcodeSuccess)},
+		Questions: []*protocol.Question{{Name: &protocol.Name{Labels: []string{"test", "com"}, FQDN: true}, QType: protocol.TypeA, QClass: protocol.ClassIN}},
+	}
+	buf := make([]byte, msg.WireLength())
+	n, err := msg.Pack(buf)
+	if err != nil {
+		t.Fatalf("Failed to pack test message: %v", err)
+	}
+	return buf[:n]
 }
