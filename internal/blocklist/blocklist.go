@@ -41,6 +41,11 @@ type Config struct {
 	URLs    []string // URLs to download blocklists from
 }
 
+// maxBlocklistRedirects caps the number of HTTP redirects followed when fetching
+// a blocklist. Kept small to bound attacker-controlled hopping through the
+// validator and to limit request-goroutine hold time.
+const maxBlocklistRedirects = 5
+
 // New creates a new blocklist manager.
 func New(cfg Config) *Blocklist {
 	bl := &Blocklist{
@@ -53,6 +58,19 @@ func New(cfg Config) *Blocklist {
 		enabled:         cfg.Enabled,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
+			// SECURITY: Re-validate every redirect hop. Without this, Go's default
+			// policy follows up to 10 redirects with no per-hop check, so a
+			// compliant 302 to http://169.254.169.254/ or RFC1918 bypasses
+			// validateBlocklistURL (which runs only on the initial URL).
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) >= maxBlocklistRedirects {
+					return fmt.Errorf("blocklist fetch: redirect limit (%d) exceeded", maxBlocklistRedirects)
+				}
+				if err := validateBlocklistURL(req.URL.String()); err != nil {
+					return fmt.Errorf("blocklist redirect blocked: %w", err)
+				}
+				return nil
+			},
 		},
 	}
 	return bl
