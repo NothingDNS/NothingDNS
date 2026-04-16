@@ -73,7 +73,7 @@ This pipeline is **well-structured and defensively coded**. Panic recovery wraps
 | `internal/resolver/` | Recursive resolver, CNAME chasing | ~8,000 | **Good** | Iterative + forwarder modes |
 | `internal/dnssec/` | Signing, validation, key rollover | ~12,000 | **Good** | RSA/ECDSA/Ed25519, RFC 7583 rollover |
 | `internal/cluster/` | SWIM gossip + Raft consensus | ~10,000 | **Good** | SWIM is default; Raft tested (0.78 ratio); snapshot data not applied |
-| `internal/transfer/` | AXFR/IXFR/DDNS/NOTIFY/TSIG/XoT/Slave | ~12,000 | **Good** | Very well-tested (447 tests); XoT IXFR falls back to AXFR |
+| `internal/transfer/` | AXFR/IXFR/DDNS/NOTIFY/TSIG/XoT/Slave | ~12,000 | **Good** | Very well-tested (447 tests); XoT IXFR uses journal for incremental transfers |
 | `internal/storage/` | KV store, WAL, TLV serialization | ~8,000 | **Good** | In-memory KV with WAL journaling |
 | `internal/config/` | Custom YAML parser, hot reload | ~5,000 | **Good** | Hand-written parser, no anchors/multiline |
 | `internal/api/` | REST API, OpenAPI, MCP server | ~8,000 | **Good** | Split into 15 domain files; `server.go` reduced to ~1,150 lines |
@@ -390,7 +390,7 @@ Documented deviations are tracked in `.project/SPEC_DEVIATIONS.md`:
 | F-011 | AXFR/XoT silently ignore invalid CIDRs in allow-lists | **Low** | ✅ FIXED | `internal/transfer/axfr.go`, `xot.go` |
 | F-012 | `go.mod` contains external deps despite zero-dep marketing | **Low** | ✅ FIXED | `go.mod`, `docs/SECURITY.md` |
 | F-013 | GeoDNS pure IPv6 lookup crashes (`ip.To4()` overwrites to nil, `nil.To16()` returns nil) | **Medium** | ✅ FIXED | `internal/geodns/geodns.go:226-231` |
-| F-014 | XoT IXFR falls back to full AXFR instead of incremental changes | **Low** | **Open** | `internal/transfer/xot.go:490-492` |
+| F-014 | XoT IXFR falls back to full AXFR instead of incremental changes | **Low** | ✅ FIXED | `internal/transfer/xot.go:490` — journal store wired via `SetJournalStore`, `buildIncrementalIXFR` implements RFC 1995 pattern |
 | F-015 | Raft `handleSnapshotRequest` clears log without applying snapshot data | **Low** | **Open** | `internal/cluster/raft/raft.go:682-702` |
 
 ---

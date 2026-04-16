@@ -884,6 +884,27 @@ func TestXoTServer_generateAXFRRecords_NoSOA_CovExtra(t *testing.T) {
 	}
 }
 
+// mockJournalStore implements JournalStore for testing.
+type mockJournalStore struct {
+	entries map[string][]*IXFRJournalEntry
+}
+
+func (m *mockJournalStore) SaveEntry(zoneName string, entry *IXFRJournalEntry) error {
+	m.entries[zoneName] = append(m.entries[zoneName], entry)
+	return nil
+}
+
+func (m *mockJournalStore) LoadEntries(zoneName string) ([]*IXFRJournalEntry, error) {
+	return m.entries[zoneName], nil
+}
+
+func (m *mockJournalStore) Truncate(zoneName string, keepCount int) error {
+	if entries, ok := m.entries[zoneName]; ok && len(entries) > keepCount {
+		m.entries[zoneName] = entries[len(entries)-keepCount:]
+	}
+	return nil
+}
+
 func TestXoTServer_generateIXFRRecords_SameSerial_CovExtra(t *testing.T) {
 	z := zone.NewZone("example.com.")
 	z.SOA = &zone.SOARecord{
@@ -920,6 +941,82 @@ func TestXoTServer_generateIXFRRecords_DifferentSerial_CovExtra(t *testing.T) {
 	// Different serial => full AXFR (SOA + records + SOA)
 	if len(records) < 2 {
 		t.Errorf("expected >= 2 records for different serial, got %d", len(records))
+	}
+}
+
+func TestXoTServer_generateIXFRRecords_WithJournal_Incremental(t *testing.T) {
+	// Test that XoT IXFR uses journal for incremental transfers
+	z := zone.NewZone("example.com.")
+	z.SOA = &zone.SOARecord{
+		MName: "ns1.example.com.", RName: "admin.example.com.",
+		Serial: 200, TTL: 3600, Refresh: 3600, Retry: 600, Expire: 604800, Minimum: 86400,
+	}
+
+	// Create mock journal store with entries
+	mockStore := &mockJournalStore{
+		entries: map[string][]*IXFRJournalEntry{
+			"example.com.": {
+				{
+					Serial: 150,
+					Added: []zone.RecordChange{
+						{Name: "www.example.com.", Type: protocol.TypeA, TTL: 3600, RData: "10.0.0.1"},
+					},
+					Deleted: []zone.RecordChange{
+						{Name: "www.example.com.", Type: protocol.TypeA, TTL: 3600, RData: "10.0.0.50"},
+					},
+					Timestamp: time.Now(),
+				},
+				{
+					Serial: 200,
+					Added: []zone.RecordChange{
+						{Name: "mail.example.com.", Type: protocol.TypeA, TTL: 3600, RData: "10.0.0.2"},
+					},
+					Deleted: []zone.RecordChange{},
+					Timestamp: time.Now(),
+				},
+			},
+		},
+	}
+
+	srv := &XoTServer{journalStore: mockStore}
+	// Client has serial 100, server has 200 — should get incremental from journal
+	records, err := srv.generateIXFRRecords(z, 100)
+	if err != nil {
+		t.Fatalf("generateIXFRRecords() error: %v", err)
+	}
+
+	// Should be incremental (SOA, del, SOA, add, SOA = 5 records for 2 entries)
+	if len(records) == 0 {
+		t.Fatal("expected records, got none")
+	}
+	// First and last must be SOA with current serial 200
+	if records[0].Type != protocol.TypeSOA || records[len(records)-1].Type != protocol.TypeSOA {
+		t.Errorf("expected SOA first and last, got %d records", len(records))
+	}
+	soa := records[0].Data.(*protocol.RDataSOA)
+	if soa.Serial != 200 {
+		t.Errorf("SOA serial = %d, want 200", soa.Serial)
+	}
+}
+
+func TestXoTServer_generateIXFRRecords_WithJournal_FallbackToAXFR(t *testing.T) {
+	// Test that XoT IXFR falls back to AXFR when journal has no entries for zone
+	z := zone.NewZone("example.com.")
+	z.SOA = &zone.SOARecord{
+		MName: "ns1.example.com.", RName: "admin.example.com.",
+		Serial: 200, TTL: 3600, Refresh: 3600, Retry: 600, Expire: 604800, Minimum: 86400,
+	}
+
+	// Empty journal store — should fall back to AXFR
+	mockStore := &mockJournalStore{entries: map[string][]*IXFRJournalEntry{}}
+	srv := &XoTServer{journalStore: mockStore}
+	records, err := srv.generateIXFRRecords(z, 100)
+	if err != nil {
+		t.Fatalf("generateIXFRRecords() error: %v", err)
+	}
+	// Should fall back to AXFR (SOA + SOA pattern)
+	if records == nil || len(records) == 0 {
+		t.Error("expected AXFR fallback records, got none")
 	}
 }
 

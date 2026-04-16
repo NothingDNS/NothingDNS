@@ -221,7 +221,6 @@ These are **not production blockers** but are documented in `docs/IMPLEMENTATION
 | Phase 4 | P4-1 (auth tests), P4-2 (RPZ tests) | ✅ FIXED |
 
 **Remaining open items (non-blocking):**
-- F-014: XoT IXFR falls back to AXFR — requires journal-based incremental transfer implementation
 - F-015: Raft snapshot clears log without applying data — snapshot data streaming not yet implemented
 - ListenPort/LogLevel gaps in server config endpoint — cosmetic, not functional
 

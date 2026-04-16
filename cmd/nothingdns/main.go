@@ -705,6 +705,7 @@ func run() error {
 			if err != nil {
 				return fmt.Errorf("creating XoT server: %w", err)
 			}
+			xotServer.SetJournalStore(transferManager.Result().JournalStore)
 
 			if err := xotServer.Serve(xotAddr); err != nil {
 				return fmt.Errorf("starting XoT server: %w", err)

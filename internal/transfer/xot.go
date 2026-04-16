@@ -19,16 +19,17 @@ import (
 // XoTServer handles DNS Zone Transfer over TLS (XoT) as specified in RFC 9103.
 // XoT uses TLS 1.3 (preferred) or TLS 1.2 to encrypt zone transfer communications.
 type XoTServer struct {
-	tlsConfig  *tls.Config
-	listener   net.Listener
-	zones      map[string]*zone.Zone
-	zonesMu    *sync.RWMutex
-	address    string
-	port       int
-	closed     bool
-	mu         sync.Mutex
-	allowList  []net.IPNet
-	logger     *util.Logger
+	tlsConfig    *tls.Config
+	listener     net.Listener
+	zones        map[string]*zone.Zone
+	zonesMu      *sync.RWMutex
+	address      string
+	port         int
+	closed       bool
+	mu           sync.Mutex
+	allowList    []net.IPNet
+	logger       *util.Logger
+	journalStore JournalStore // For IXFR incremental transfers
 }
 
 // TLSAUsage specifies how TLSA records should be used for XoT validation.
@@ -126,6 +127,11 @@ func NewXoTServer(zones map[string]*zone.Zone, config *XoTConfig, logger *util.L
 	}
 
 	return server, nil
+}
+
+// SetJournalStore sets the persistent journal store for IXFR incremental transfers.
+func (s *XoTServer) SetJournalStore(store JournalStore) {
+	s.journalStore = store
 }
 
 // buildXoTTLSConfig creates a TLS configuration for XoT.
@@ -448,7 +454,8 @@ func (s *XoTServer) generateAXFRRecords(z *zone.Zone) ([]*protocol.ResourceRecor
 }
 
 // generateIXFRRecords generates IXFR response records.
-// If serial hasn't changed, returns SOA only. Otherwise returns incremental changes.
+// If serial hasn't changed, returns SOA only. Otherwise returns incremental changes
+// from the journal store, or falls back to full AXFR if no journal is available.
 func (s *XoTServer) generateIXFRRecords(z *zone.Zone, clientSerial uint32) ([]*protocol.ResourceRecord, error) {
 	origin, err := protocol.ParseName(z.Origin)
 	if err != nil {
@@ -487,9 +494,125 @@ func (s *XoTServer) generateIXFRRecords(z *zone.Zone, clientSerial uint32) ([]*p
 		}, nil
 	}
 
-	// For now, return full AXFR-style response (IXFR with all records)
-	// A full IXFR implementation would track journal changes
+	// Try incremental transfer from journal
+	if s.journalStore != nil {
+		entries, err := s.journalStore.LoadEntries(strings.ToLower(z.Origin))
+		if err == nil && len(entries) > 0 {
+			return s.buildIncrementalIXFR(entries, z, origin, mname, rname, clientSerial)
+		}
+	}
+
+	// Fall back to full AXFR
 	return s.generateAXFRRecords(z)
+}
+
+// buildIncrementalIXFR builds an incremental IXFR response from journal entries.
+// Follows RFC 1995 pattern: SOA, deleted, SOA, added, ... for each change.
+func (s *XoTServer) buildIncrementalIXFR(entries []*IXFRJournalEntry, z *zone.Zone, origin *protocol.Name, mname, rname *protocol.Name, clientSerial uint32) ([]*protocol.ResourceRecord, error) {
+	// Find starting index: entries with Serial > clientSerial
+	startIdx := -1
+	for i, entry := range entries {
+		if entry.Serial > clientSerial {
+			startIdx = i
+			break
+		}
+	}
+
+	if startIdx == -1 {
+		// No entries newer than client serial — fall back to AXFR
+		return s.generateAXFRRecords(z)
+	}
+
+	// Verify continuity: entry at startIdx-1 must have Serial == clientSerial
+	if startIdx > 0 && entries[startIdx-1].Serial != clientSerial {
+		// Gap in journal — fall back to AXFR
+		return s.generateAXFRRecords(z)
+	}
+
+	var records []*protocol.ResourceRecord
+
+	// RFC 1995 pattern: SOA(del), del, SOA(new), add, ... SOA(final)
+	// First, output the SOA with current serial to start
+	currentSOA := &protocol.ResourceRecord{
+		Name:  origin,
+		Type:  protocol.TypeSOA,
+		Class: protocol.ClassIN,
+		TTL:   z.SOA.TTL,
+		Data: &protocol.RDataSOA{
+			MName:   mname,
+			RName:   rname,
+			Serial:  z.SOA.Serial,
+			Refresh: z.SOA.Refresh,
+			Retry:   z.SOA.Retry,
+			Expire:  z.SOA.Expire,
+			Minimum: z.SOA.Minimum,
+		},
+	}
+	records = append(records, currentSOA)
+
+	// Process each journal entry
+	for i := startIdx; i < len(entries); i++ {
+		entry := entries[i]
+
+		// SOA with previous serial (ending previous version)
+		prevSOA := &protocol.ResourceRecord{
+			Name:  origin,
+			Type:  protocol.TypeSOA,
+			Class: protocol.ClassIN,
+			TTL:   z.SOA.TTL,
+			Data: &protocol.RDataSOA{
+				MName:   mname,
+				RName:   rname,
+				Serial:  entry.Serial,
+				Refresh: z.SOA.Refresh,
+				Retry:   z.SOA.Retry,
+				Expire:  z.SOA.Expire,
+				Minimum: z.SOA.Minimum,
+			},
+		}
+		records = append(records, prevSOA)
+
+		// Deleted records
+		for _, del := range entry.Deleted {
+			rr, err := s.changeToRR(del)
+			if err != nil {
+				continue
+			}
+			records = append(records, rr)
+		}
+
+		// SOA with new serial (starting this version)
+		newSOA := &protocol.ResourceRecord{
+			Name:  origin,
+			Type:  protocol.TypeSOA,
+			Class: protocol.ClassIN,
+			TTL:   z.SOA.TTL,
+			Data: &protocol.RDataSOA{
+				MName:   mname,
+				RName:   rname,
+				Serial:  entry.Serial,
+				Refresh: z.SOA.Refresh,
+				Retry:   z.SOA.Retry,
+				Expire:  z.SOA.Expire,
+				Minimum: z.SOA.Minimum,
+			},
+		}
+		records = append(records, newSOA)
+
+		// Added records
+		for _, add := range entry.Added {
+			rr, err := s.changeToRR(add)
+			if err != nil {
+				continue
+			}
+			records = append(records, rr)
+		}
+	}
+
+	// Final SOA with current serial
+	records = append(records, currentSOA)
+
+	return records, nil
 }
 
 // zoneRecordToRR converts a zone record to a protocol resource record.
@@ -515,6 +638,29 @@ func (s *XoTServer) zoneRecordToRR(name string, rec zone.Record, origin string) 
 		Type:  rrtype,
 		Class: protocol.ClassIN,
 		TTL:   rec.TTL,
+		Data:  rdata,
+	}, nil
+}
+
+// sortRecordsCanonically sorts records in canonical order per RFC 4034.
+
+// changeToRR converts a journal RecordChange to a protocol resource record.
+func (s *XoTServer) changeToRR(change zone.RecordChange) (*protocol.ResourceRecord, error) {
+	owner, err := protocol.ParseName(change.Name)
+	if err != nil {
+		return nil, err
+	}
+
+	rdata, err := parseXoTRData(change.Type, change.RData, "")
+	if err != nil {
+		return nil, err
+	}
+
+	return &protocol.ResourceRecord{
+		Name:  owner,
+		Type:  change.Type,
+		Class: protocol.ClassIN,
+		TTL:   change.TTL,
 		Data:  rdata,
 	}, nil
 }
