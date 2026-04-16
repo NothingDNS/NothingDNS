@@ -80,7 +80,9 @@ func (s *Server) handleRPZRules(w http.ResponseWriter, r *http.Request) {
 		}
 		s.writeJSON(w, http.StatusOK, &RPZRulesResponse{Rules: resp})
 	case http.MethodPost:
-		if s.requireOperator(w, r) {
+		// RPZ rewrites can redirect arbitrary zones (e.g. bank.com →
+		// attacker.example), so admin-only (VULN-009).
+		if s.requireAdmin(w, r) {
 			return
 		}
 		var req RPZAddRuleRequest
@@ -96,7 +98,7 @@ func (s *Server) handleRPZRules(w http.ResponseWriter, r *http.Request) {
 		s.rpzEngine.AddQNAMERule(req.Pattern, action, req.OverrideData)
 		s.writeJSON(w, http.StatusCreated, &MessageResponse{Message: "Rule added"})
 	case http.MethodDelete:
-		if s.requireOperator(w, r) {
+		if s.requireAdmin(w, r) {
 			return
 		}
 		// DELETE /api/v1/rpz/rules?pattern=domain.com
@@ -123,7 +125,9 @@ func (s *Server) handleRPZActions(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 			return
 		}
-		if s.requireOperator(w, r) {
+		// Disabling RPZ effectively turns off response filtering for every
+		// client — admin-only (VULN-009).
+		if s.requireAdmin(w, r) {
 			return
 		}
 		// Toggle enabled state

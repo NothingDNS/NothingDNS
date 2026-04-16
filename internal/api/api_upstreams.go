@@ -43,7 +43,9 @@ func (s *Server) handleUpstreams(w http.ResponseWriter, r *http.Request) {
 		}
 		s.writeJSON(w, http.StatusOK, &UpstreamsResponse{Upstreams: upstreams})
 	case http.MethodPut:
-		if s.requireOperator(w, r) {
+		// Swapping the upstream lets an operator MITM every recursive query
+		// served by this resolver — admin-only (VULN-009).
+		if s.requireAdmin(w, r) {
 			return
 		}
 		// Update upstream configuration (add/remove servers)

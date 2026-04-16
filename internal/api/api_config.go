@@ -15,7 +15,9 @@ func (s *Server) handleConfigReload(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
-	if s.requireOperator(w, r) {
+	// Config reload can swap zones, TLS certs, ACL, upstreams, blocklists.
+	// Admin-only (VULN-009).
+	if s.requireAdmin(w, r) {
 		return
 	}
 
@@ -107,7 +109,8 @@ func (s *Server) handleConfigLogging(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
-	if s.requireOperator(w, r) {
+	// Setting log level to FATAL silences the audit trail; admin-only (VULN-009).
+	if s.requireAdmin(w, r) {
 		return
 	}
 
@@ -146,7 +149,9 @@ func (s *Server) handleConfigRRL(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
-	if s.requireOperator(w, r) {
+	// Disabling rate limiting turns the server into an open amplifier;
+	// admin-only (VULN-009).
+	if s.requireAdmin(w, r) {
 		return
 	}
 

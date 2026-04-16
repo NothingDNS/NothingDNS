@@ -12,7 +12,14 @@ func (s *Server) handleACL(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
-	if s.requireOperator(w, r) {
+	// GET: operator-readable. PUT: admin-only — an ACL rewrite can trivially
+	// self-grant "0.0.0.0/0 allow ANY" and turn the server into an open
+	// amplifier, so operator-role is too broad (VULN-009).
+	if r.Method == http.MethodPut {
+		if s.requireAdmin(w, r) {
+			return
+		}
+	} else if s.requireOperator(w, r) {
 		return
 	}
 
@@ -35,9 +42,7 @@ func (s *Server) handleACL(w http.ResponseWriter, r *http.Request) {
 		}
 		s.writeJSON(w, http.StatusOK, &ACLResponse{Rules: aclRules})
 	case http.MethodPut:
-		if s.requireOperator(w, r) {
-			return
-		}
+		// Admin gate already applied above.
 		var req struct {
 			Rules []struct {
 				Name     string   `json:"name"`

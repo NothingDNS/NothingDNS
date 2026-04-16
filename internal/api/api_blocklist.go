@@ -37,7 +37,11 @@ func (s *Server) handleBlocklists(w http.ResponseWriter, r *http.Request) {
 			URLsCount:  stats.URLs,
 		})
 	case http.MethodPost:
-		if s.requireOperator(w, r) {
+		// URL-based blocklist sources trigger an outbound HTTP fetch, giving
+		// the caller cross-site request primitives even with the allowlist
+		// (cf. VULN-004); and file-based sources can read arbitrary process-
+		// visible paths. Admin-only (VULN-009).
+		if s.requireAdmin(w, r) {
 			return
 		}
 		var req BlocklistAddRequest
@@ -81,7 +85,9 @@ func (s *Server) handleBlocklistActions(w http.ResponseWriter, r *http.Request) 
 			s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 			return
 		}
-		if s.requireOperator(w, r) {
+		// Flipping the global blocklist off undoes all domain filtering.
+		// Admin-only (VULN-009).
+		if s.requireAdmin(w, r) {
 			return
 		}
 		stats := s.blocklist.Stats()
@@ -105,7 +111,7 @@ func (s *Server) handleBlocklistActions(w http.ResponseWriter, r *http.Request) 
 			s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 			return
 		}
-		if s.requireOperator(w, r) {
+		if s.requireAdmin(w, r) {
 			return
 		}
 		id := strings.TrimSuffix(path, "/toggle")
@@ -125,7 +131,7 @@ func (s *Server) handleBlocklistActions(w http.ResponseWriter, r *http.Request) 
 
 	// Delete by file path: /api/v1/blocklists/{filepath}
 	if r.Method == http.MethodDelete {
-		if s.requireOperator(w, r) {
+		if s.requireAdmin(w, r) {
 			return
 		}
 		// URL-decode the path to handle encoded slashes

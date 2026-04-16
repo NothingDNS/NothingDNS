@@ -444,6 +444,12 @@ type HTTPConfig struct {
 	// Authentication token (legacy, single shared token)
 	AuthToken string `yaml:"auth_token"`
 
+	// Role bound to AuthToken when legacy shared-token auth is used.
+	// Valid: "admin", "operator", "viewer". Default: "viewer".
+	// Previously the legacy token silently synthesized admin context,
+	// collapsing RBAC to a single shared secret.
+	AuthTokenRole string `yaml:"auth_token_role"`
+
 	// Auth users for multi-user auth (username/password/role)
 	Users []AuthUserConfig `yaml:"users"`
 
@@ -1142,6 +1148,7 @@ func unmarshalServer(node *Node, cfg *ServerConfig) error {
 		cfg.HTTP.TLSCertFile = httpNode.GetString("tls_cert_file")
 		cfg.HTTP.TLSKeyFile = httpNode.GetString("tls_key_file")
 		cfg.HTTP.AuthToken = httpNode.GetString("auth_token")
+		cfg.HTTP.AuthTokenRole = httpNode.GetString("auth_token_role")
 		cfg.HTTP.AuthSecret = httpNode.GetString("auth_secret")
 		cfg.HTTP.AllowedOrigins = getStringSlice(httpNode, "allowed_origins", cfg.HTTP.AllowedOrigins)
 		cfg.HTTP.DoHEnabled = getBool(httpNode, "doh_enabled", cfg.HTTP.DoHEnabled)

@@ -30,15 +30,23 @@ func newRPZServer(t *testing.T, engine *rpz.Engine) *Server {
 
 // rpzAuthenticatedRequest creates an httptest.Request with an operator user in context.
 func rpzAuthenticatedRequest(method, target string, body []byte) *http.Request {
-	var br *bytes.Reader
+	return rpzRequestWithRole(method, target, body, auth.RoleOperator)
+}
+
+// rpzAdminRequest creates an httptest.Request with an admin user in context.
+// RPZ mutation and toggle endpoints require admin (VULN-009).
+func rpzAdminRequest(method, target string, body []byte) *http.Request {
+	return rpzRequestWithRole(method, target, body, auth.RoleAdmin)
+}
+
+func rpzRequestWithRole(method, target string, body []byte, role auth.Role) *http.Request {
+	var req *http.Request
 	if body != nil {
-		br = bytes.NewReader(body)
-		req := httptest.NewRequest(method, target, br)
-		ctx := WithUser(req.Context(), &auth.User{Username: "op", Role: auth.RoleOperator})
-		return req.WithContext(ctx)
+		req = httptest.NewRequest(method, target, bytes.NewReader(body))
+	} else {
+		req = httptest.NewRequest(method, target, nil)
 	}
-	req := httptest.NewRequest(method, target, nil)
-	ctx := WithUser(req.Context(), &auth.User{Username: "op", Role: auth.RoleOperator})
+	ctx := WithUser(req.Context(), &auth.User{Username: "op", Role: role})
 	return req.WithContext(ctx)
 }
 
@@ -186,7 +194,7 @@ func TestHandleRPZRules_AddRule(t *testing.T) {
 		Pattern: "malware.example.com.",
 		Action:  "NODATA",
 	})
-	req := rpzAuthenticatedRequest(http.MethodPost, "/api/v1/rpz/rules", body)
+	req := rpzAdminRequest(http.MethodPost, "/api/v1/rpz/rules", body)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	s.handleRPZRules(rec, req)
@@ -220,7 +228,7 @@ func TestHandleRPZRules_AddRuleNoPattern(t *testing.T) {
 	body, _ := json.Marshal(RPZAddRuleRequest{
 		Action: "NXDOMAIN",
 	})
-	req := rpzAuthenticatedRequest(http.MethodPost, "/api/v1/rpz/rules", body)
+	req := rpzAdminRequest(http.MethodPost, "/api/v1/rpz/rules", body)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	s.handleRPZRules(rec, req)
@@ -234,7 +242,7 @@ func TestHandleRPZRules_AddRuleInvalidBody(t *testing.T) {
 	engine := newEnabledEngine()
 	s := newRPZServer(t, engine)
 
-	req := rpzAuthenticatedRequest(http.MethodPost, "/api/v1/rpz/rules", []byte("not-json"))
+	req := rpzAdminRequest(http.MethodPost, "/api/v1/rpz/rules", []byte("not-json"))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	s.handleRPZRules(rec, req)
@@ -249,7 +257,7 @@ func TestHandleRPZRules_DeleteRule(t *testing.T) {
 	engine.AddQNAMERule("rm-me.example.com.", rpz.ActionNXDOMAIN, "")
 	s := newRPZServer(t, engine)
 
-	req := rpzAuthenticatedRequest(http.MethodDelete, "/api/v1/rpz/rules?pattern=rm-me.example.com.", nil)
+	req := rpzAdminRequest(http.MethodDelete, "/api/v1/rpz/rules?pattern=rm-me.example.com.", nil)
 	rec := httptest.NewRecorder()
 	s.handleRPZRules(rec, req)
 
@@ -276,7 +284,7 @@ func TestHandleRPZRules_DeleteRuleNoPattern(t *testing.T) {
 	engine := newEnabledEngine()
 	s := newRPZServer(t, engine)
 
-	req := rpzAuthenticatedRequest(http.MethodDelete, "/api/v1/rpz/rules", nil)
+	req := rpzAdminRequest(http.MethodDelete, "/api/v1/rpz/rules", nil)
 	rec := httptest.NewRecorder()
 	s.handleRPZRules(rec, req)
 
@@ -346,7 +354,7 @@ func TestHandleRPZActions_Toggle(t *testing.T) {
 		t.Fatal("engine should start enabled")
 	}
 
-	req := rpzAuthenticatedRequest(http.MethodPost, "/api/v1/rpz/toggle", nil)
+	req := rpzAdminRequest(http.MethodPost, "/api/v1/rpz/toggle", nil)
 	rec := httptest.NewRecorder()
 	s.handleRPZActions(rec, req)
 
@@ -366,7 +374,7 @@ func TestHandleRPZActions_Toggle(t *testing.T) {
 	}
 
 	// Toggle back to enabled
-	req2 := rpzAuthenticatedRequest(http.MethodPost, "/api/v1/rpz/toggle", nil)
+	req2 := rpzAdminRequest(http.MethodPost, "/api/v1/rpz/toggle", nil)
 	rec2 := httptest.NewRecorder()
 	s.handleRPZActions(rec2, req2)
 
@@ -453,7 +461,7 @@ func TestHandleRPZRules_AddRuleWithOverrideData(t *testing.T) {
 		Action:       "CNAME",
 		OverrideData: "safe.example.com.",
 	})
-	req := rpzAuthenticatedRequest(http.MethodPost, "/api/v1/rpz/rules", body)
+	req := rpzAdminRequest(http.MethodPost, "/api/v1/rpz/rules", body)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	s.handleRPZRules(rec, req)

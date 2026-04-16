@@ -806,8 +806,9 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		token := r.Header.Get("Authorization")
 		token = strings.TrimPrefix(token, "Bearer ")
 
-		// Fallback: cookie
-		if token == "" {
+		// Fallback: cookie. Only accepted for safe methods — CSRF prevention.
+		// State-changing requests (POST/PUT/PATCH/DELETE) must use Authorization.
+		if token == "" && isSafeMethod(r.Method) {
 			if c, err := r.Cookie("ndns_token"); err == nil {
 				token = c.Value
 			}
@@ -827,15 +828,10 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 					http.Error(w, `{"error":"rate limit exceeded"}`, http.StatusTooManyRequests)
 					return
 				}
-				// Inject a synthetic admin context so RBAC checks pass in legacy token mode
-				if s.authStore != nil {
-					if user, err := s.authStore.GetUser("admin"); err == nil {
-						ctx := WithUser(r.Context(), user)
-						next.ServeHTTP(w, r.WithContext(ctx))
-						return
-					}
-				}
-				next.ServeHTTP(w, r)
+				// Legacy token binds to config.AuthTokenRole (default viewer).
+				// Previously this silently synthesized admin regardless of intent.
+				ctx := WithUser(r.Context(), legacyTokenUser(s.config.AuthTokenRole))
+				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
 
@@ -1084,12 +1080,61 @@ func GetUser(ctx context.Context) *auth.User {
 	}
 	return nil
 }
-func hasRole(ctx context.Context, store *auth.Store, required auth.Role) bool {
+// roleOrder maps a role to its privilege height. Kept local to avoid coupling
+// the api package to internal auth.Store lookup when the request context
+// carries a synthesized legacy-token user whose username is not in the store.
+var roleOrder = map[auth.Role]int{
+	auth.RoleViewer:   1,
+	auth.RoleOperator: 2,
+	auth.RoleAdmin:    3,
+}
+
+// legacyTokenUsername is the synthetic username assigned to requests
+// authenticated via the legacy shared `auth_token`. Chosen to be distinct
+// from any realistic real username so audit logs and rate-limit keys separate
+// legacy-token traffic from real user traffic.
+const legacyTokenUsername = "__legacy_auth_token__"
+
+// legacyTokenUser returns the synthetic user bound to the legacy auth_token.
+// The role is taken from config.AuthTokenRole (default "viewer"); unknown or
+// empty values fail closed to viewer. Previously the legacy path unconditionally
+// synthesized admin, which collapsed RBAC to a single shared secret (VULN-003).
+func legacyTokenUser(configuredRole string) *auth.User {
+	role := auth.RoleViewer
+	switch strings.ToLower(strings.TrimSpace(configuredRole)) {
+	case string(auth.RoleAdmin):
+		role = auth.RoleAdmin
+	case string(auth.RoleOperator):
+		role = auth.RoleOperator
+	case string(auth.RoleViewer), "":
+		role = auth.RoleViewer
+	}
+	return &auth.User{Username: legacyTokenUsername, Role: role}
+}
+
+// isSafeMethod reports whether the HTTP method is read-only (no server state
+// change). Cookie-based auth is only accepted on safe methods to prevent CSRF
+// via cross-site POST/PUT/DELETE; state-changing requests must use
+// Authorization: Bearer.
+func isSafeMethod(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return true
+	default:
+		return false
+	}
+}
+
+// hasRole checks whether the request user has at least the required role.
+// Trusts user.Role as attached to the context by the auth middleware rather
+// than re-looking up the store, so synthesized users (e.g. legacy-token users
+// whose username is not in the store) are handled correctly.
+func hasRole(ctx context.Context, _ *auth.Store, required auth.Role) bool {
 	user := GetUser(ctx)
 	if user == nil {
 		return false
 	}
-	return store.HasRole(user.Username, required)
+	return roleOrder[user.Role] >= roleOrder[required]
 }
 
 // requireOperator checks if the request has operator role.
@@ -1101,6 +1146,22 @@ func (s *Server) requireOperator(w http.ResponseWriter, r *http.Request) bool {
 	}
 	if !hasRole(r.Context(), s.authStore, auth.RoleOperator) {
 		s.writeError(w, http.StatusForbidden, "Operator role required")
+		return true
+	}
+	return false
+}
+
+// requireAdmin checks if the request has admin role.
+// Destructive infra operations (ACL rewrite, upstream swap, RPZ rewrite,
+// blocklist URL-add, config reload, cluster admin) must gate through this
+// rather than requireOperator to prevent operator-role overreach (VULN-009).
+func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
+	if s.authStore == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Auth not configured")
+		return true
+	}
+	if !hasRole(r.Context(), s.authStore, auth.RoleAdmin) {
+		s.writeError(w, http.StatusForbidden, "Admin role required")
 		return true
 	}
 	return false
