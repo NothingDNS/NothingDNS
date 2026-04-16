@@ -1,9 +1,13 @@
+import { useAuthStore } from '@/stores/authStore';
+
 const API_BASE = '';
 
+// SECURITY: Token comes from the in-memory zustand store, not document.cookie.
+// The backend cookie is HttpOnly and cannot (and should not) be read from JS.
+// If the token is missing — typically right after a page reload — the Bearer
+// header is omitted, and mutating requests will 401, triggering re-login.
 function getToken(): string | null {
-  const match = document.cookie.match(/ndns_token=([^;]+)/);
-  if (match) return decodeURIComponent(match[1]);
-  return null;
+  return useAuthStore.getState().token;
 }
 
 export async function api<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {

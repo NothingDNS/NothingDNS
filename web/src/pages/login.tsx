@@ -46,8 +46,11 @@ export function LoginPage() {
         const username = res.username as string;
         const role = res.role as string;
 
-        // eslint-disable-next-line react-hooks/immutability
-        document.cookie = `ndns_token=${encodeURIComponent(token)}; path=/; max-age=86400; SameSite=Strict`;
+        // SECURITY: Do NOT write the token to document.cookie — that overwrites
+        // the backend's HttpOnly+Secure+SameSite=Strict cookie with a weaker
+        // JS-readable one that any XSS can exfiltrate. The backend cookie is
+        // used by the browser automatically for safe-method requests; the
+        // in-memory Bearer token below is used for mutations.
         setAuth(token, username, role);
         // eslint-disable-next-line react-hooks/immutability
         window.location.href = '/';
