@@ -374,18 +374,23 @@ func (p *parser) handleInclude(args []string) error {
 		return fmt.Errorf("$INCLUDE path traversal attempt blocked: %s", includeFile)
 	}
 
-	// Resolve relative paths against the directory of the current file
-	if !filepath.IsAbs(includeFile) && p.filename != "" {
+	// SECURITY: Absolute paths are rejected unconditionally. The previous
+	// implementation skipped the zone-directory confinement check when
+	// filepath.IsAbs(args[0]) was true, so `$INCLUDE /etc/shadow` reached
+	// os.Open. Zone authors must use paths relative to the parent zone file.
+	if filepath.IsAbs(includeFile) {
+		return fmt.Errorf("$INCLUDE absolute path not allowed: %s", includeFile)
+	}
+
+	// Resolve relative to the directory of the current file
+	if p.filename != "" {
 		includeFile = filepath.Join(filepath.Dir(p.filename), includeFile)
 	}
 
-	// Validate the resolved path doesn't escape the zone directory
-	// For absolute paths, we already checked for .. above
-	// For relative paths, the Join result is already safe
+	// Validate the resolved path stays within the zone directory.
 	cleanPath := filepath.Clean(includeFile)
-	if p.filename != "" && !filepath.IsAbs(args[0]) {
+	if p.filename != "" {
 		zoneDir := filepath.Dir(p.filename)
-		// Use filepath.Rel to safely check the path stays within zone directory
 		rel, err := filepath.Rel(zoneDir, cleanPath)
 		if err != nil || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
 			return fmt.Errorf("$INCLUDE path traversal attempt blocked: %s", includeFile)

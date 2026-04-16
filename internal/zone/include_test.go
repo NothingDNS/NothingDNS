@@ -15,8 +15,7 @@ func TestIncludeBasic(t *testing.T) {
 www  3600 IN A 192.168.1.1
 mail 3600 IN A 192.168.1.2
 `
-	includedPath := filepath.Join(dir, "included.zone")
-	if err := os.WriteFile(includedPath, []byte(includedContent), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "included.zone"), []byte(includedContent), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -24,11 +23,11 @@ mail 3600 IN A 192.168.1.2
 $TTL 3600
 @ IN SOA ns1.example.com. hostmaster.example.com. 2024010101 3600 900 604800 86400
 @ IN NS ns1.example.com.
-$INCLUDE ` + includedPath + `
+$INCLUDE included.zone
 api 3600 IN A 10.0.0.1
 `
 
-	z, err := ParseFile("test.zone", strings.NewReader(mainContent))
+	z, err := ParseFile(filepath.Join(dir, "test.zone"), strings.NewReader(mainContent))
 	if err != nil {
 		t.Fatalf("ParseFile failed: %v", err)
 	}
@@ -67,8 +66,7 @@ func TestIncludeWithOriginOverride(t *testing.T) {
 	includedContent := `
 www 3600 IN A 10.0.0.1
 `
-	includedPath := filepath.Join(dir, "sub.zone")
-	if err := os.WriteFile(includedPath, []byte(includedContent), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "sub.zone"), []byte(includedContent), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -76,11 +74,11 @@ www 3600 IN A 10.0.0.1
 $TTL 3600
 @ IN SOA ns1.example.com. hostmaster.example.com. 2024010101 3600 900 604800 86400
 @ IN NS ns1.example.com.
-$INCLUDE ` + includedPath + ` sub.example.com.
+$INCLUDE sub.zone sub.example.com.
 api 3600 IN A 10.0.0.2
 `
 
-	z, err := ParseFile("test.zone", strings.NewReader(mainContent))
+	z, err := ParseFile(filepath.Join(dir, "test.zone"), strings.NewReader(mainContent))
 	if err != nil {
 		t.Fatalf("ParseFile failed: %v", err)
 	}
@@ -115,18 +113,17 @@ func TestIncludeDepthLimitExceeded(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create a file that includes itself, causing infinite recursion
-	selfPath := filepath.Join(dir, "self.zone")
-	selfContent := "$INCLUDE " + selfPath + "\n"
-	if err := os.WriteFile(selfPath, []byte(selfContent), 0644); err != nil {
+	selfContent := "$INCLUDE self.zone\n"
+	if err := os.WriteFile(filepath.Join(dir, "self.zone"), []byte(selfContent), 0644); err != nil {
 		t.Fatal(err)
 	}
 
 	mainContent := `$ORIGIN example.com.
 $TTL 3600
-$INCLUDE ` + selfPath + `
+$INCLUDE self.zone
 `
 
-	_, err := ParseFile("test.zone", strings.NewReader(mainContent))
+	_, err := ParseFile(filepath.Join(dir, "test.zone"), strings.NewReader(mainContent))
 	if err == nil {
 		t.Fatal("expected error for recursive $INCLUDE, got nil")
 	}
@@ -160,17 +157,15 @@ func TestIncludeNested(t *testing.T) {
 	level2Content := `
 deep 3600 IN A 172.16.0.1
 `
-	level2Path := filepath.Join(dir, "level2.zone")
-	if err := os.WriteFile(level2Path, []byte(level2Content), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "level2.zone"), []byte(level2Content), 0644); err != nil {
 		t.Fatal(err)
 	}
 
 	level1Content := `
 mid 3600 IN A 172.16.0.2
-$INCLUDE ` + level2Path + `
+$INCLUDE level2.zone
 `
-	level1Path := filepath.Join(dir, "level1.zone")
-	if err := os.WriteFile(level1Path, []byte(level1Content), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "level1.zone"), []byte(level1Content), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -179,10 +174,10 @@ $TTL 3600
 @ IN SOA ns1.example.com. hostmaster.example.com. 2024010101 3600 900 604800 86400
 @ IN NS ns1.example.com.
 top 3600 IN A 172.16.0.3
-$INCLUDE ` + level1Path + `
+$INCLUDE level1.zone
 `
 
-	z, err := ParseFile("test.zone", strings.NewReader(mainContent))
+	z, err := ParseFile(filepath.Join(dir, "test.zone"), strings.NewReader(mainContent))
 	if err != nil {
 		t.Fatalf("ParseFile failed: %v", err)
 	}
@@ -260,5 +255,32 @@ $INCLUDE
 
 	if !strings.Contains(err.Error(), "$INCLUDE requires a filename") {
 		t.Errorf("expected '$INCLUDE requires a filename' in error, got: %v", err)
+	}
+}
+
+// TestIncludeAbsolutePathRejected locks in the VULN-006 fix: $INCLUDE must
+// never accept an absolute path, because an absolute path bypassed the
+// zone-directory filepath.Rel confinement check in the pre-fix code.
+func TestIncludeAbsolutePathRejected(t *testing.T) {
+	var target string
+	if filepath.Separator == '\\' {
+		target = `C:\Windows\System32\drivers\etc\hosts`
+	} else {
+		target = "/etc/shadow"
+	}
+
+	mainContent := `$ORIGIN example.com.
+$TTL 3600
+@ IN SOA ns1.example.com. hostmaster.example.com. 2024010101 3600 900 604800 86400
+@ IN NS ns1.example.com.
+$INCLUDE ` + target + `
+`
+
+	_, err := ParseFile("test.zone", strings.NewReader(mainContent))
+	if err == nil {
+		t.Fatal("expected $INCLUDE absolute path to be rejected, got nil error")
+	}
+	if !strings.Contains(err.Error(), "absolute path not allowed") {
+		t.Errorf("expected 'absolute path not allowed' in error, got: %v", err)
 	}
 }
