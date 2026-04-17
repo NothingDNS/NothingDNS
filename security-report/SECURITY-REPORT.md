@@ -134,7 +134,7 @@ Goal: make the DNS server safe to expose.
 - ~~**VULN-041** (open-resolver default)~~ — **FIXED** (security_manager.go:122 creates deny-by-default ACL; line 127 logs startup warning).
 - ~~**VULN-044** (DoH/DoWS/ODoH 401)~~ — **FIXED** (commit `0ca861e`).
 - ~~**VULN-055** (API rate-limit outside auth branch)~~ — **FIXED** (commit `1ea4ad9`).
-- **VULN-045**, **VULN-046** (gossip replay + AAD) — add sequence number in AAD; accept only monotonic sequence per sender; include sender/receiver ID in AAD. **UNRESOLVED.**
+- ~~**VULN-045**, **VULN-046** (gossip replay + AAD)~~ — **FIXED** (per-sender sequence tracking + AAD includes senderID:msgType:seq).
 - ~~**VULN-059** (forwarder TXID)~~ — **FIXED** (handler calls `upstream.RandomTXID()` before forwarding).
 
 ### Phase 3 — Deployment hardening (2–4 weeks)
