@@ -711,7 +711,21 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 		if r.TLS != nil {
 			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}
-		w.Header().Set("Content-Security-Policy", "default-src 'self'")
+		// Explicit CSP directives — default-src alone leaves base-uri,
+		// form-action, frame-ancestors, and object-src unrestricted (VULN-016).
+		// style-src keeps unsafe-inline for Radix UI inline styles; script-src
+		// stays strict. connect-src permits WebSocket to the same origin.
+		w.Header().Set("Content-Security-Policy",
+			"default-src 'self'; "+
+				"script-src 'self'; "+
+				"style-src 'self' 'unsafe-inline'; "+
+				"img-src 'self' data:; "+
+				"font-src 'self' data:; "+
+				"connect-src 'self' ws: wss:; "+
+				"frame-ancestors 'none'; "+
+				"object-src 'none'; "+
+				"base-uri 'self'; "+
+				"form-action 'self'")
 		next.ServeHTTP(w, r)
 	})
 }
