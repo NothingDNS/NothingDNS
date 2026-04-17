@@ -16,6 +16,18 @@ services:
     image: ghcr.io/nothingdns/nothingdns:latest
     container_name: nothingdns-1
     hostname: nothingdns-1
+    # Container runtime hardening (VULN-036). Drops every Linux capability
+    # except NET_BIND_SERVICE (needed for :53), blocks privilege escalation,
+    # uses read-only rootfs with a tmpfs for /tmp scratch.
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
     ports:
       - "53:53/udp"
       - "53:53"
@@ -43,6 +55,15 @@ services:
     image: ghcr.io/nothingdns/nothingdns:latest
     container_name: nothingdns-2
     hostname: nothingdns-2
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
     ports:
       - "5354:53/udp"
       - "5354:53"
@@ -72,6 +93,15 @@ services:
     image: ghcr.io/nothingdns/nothingdns:latest
     container_name: nothingdns-3
     hostname: nothingdns-3
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
     ports:
       - "5355:53/udp"
       - "5355:53"
