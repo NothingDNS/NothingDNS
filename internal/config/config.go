@@ -1561,6 +1561,10 @@ func (c *Config) Validate() []string {
 	// Validate server configuration
 	errors = append(errors, c.validateServer()...)
 
+	// Validate that no secret field still contains a known placeholder
+	// from a shipped template (VULN-050).
+	errors = append(errors, c.validateSecrets()...)
+
 	// Validate upstream configuration
 	errors = append(errors, c.validateUpstream()...)
 
@@ -1640,6 +1644,72 @@ func (c *Config) validateServer() []string {
 	}
 	if c.Server.TCPWorkers < 0 {
 		errors = append(errors, "server: tcp_workers cannot be negative")
+	}
+
+	return errors
+}
+
+// placeholderSecretTokens is the list of substrings that must never appear in a
+// live secret field. They are the literal strings shipped (historically or now)
+// in example configs under deploy/, docs/, and helm/. The match is
+// case-insensitive and substring-based, so "CHANGE-THIS-TO-256-BIT-STRONG-SECRET"
+// and "change_this_password" both trip the check.
+var placeholderSecretTokens = []string{
+	"CHANGE-THIS",
+	"CHANGETHIS",
+	"CHANGE-ME",
+	"CHANGEME",
+	"UNIQUE-STRONG",
+	"PLACEHOLDER",
+	"REPLACE-ME",
+	"REPLACEME",
+	"YOUR-SECRET",
+	"YOUR-PASSWORD",
+	"INSECURE-DEFAULT",
+}
+
+// looksLikePlaceholderSecret returns the matching placeholder token if s
+// contains a known placeholder substring (case-insensitive), or "" if it
+// appears to be a real secret.
+func looksLikePlaceholderSecret(s string) string {
+	if s == "" {
+		return ""
+	}
+	upper := strings.ToUpper(s)
+	for _, token := range placeholderSecretTokens {
+		if strings.Contains(upper, token) {
+			return token
+		}
+	}
+	return ""
+}
+
+// validateSecrets refuses to start when a secret field still contains a known
+// template placeholder (VULN-050). The failure mode being prevented: an
+// operator copies deploy/production.yaml verbatim, the server hashes
+// "UNIQUE-STRONG-PASSWORD" into a real bcrypt credential, and every copy of
+// the deployment ships with the same trivially-guessable admin login. Env
+// substitution runs before Validate(), so a correctly-set ${NOTHINGDNS_*}
+// reference never trips this check — only a literal placeholder does.
+func (c *Config) validateSecrets() []string {
+	var errors []string
+
+	if token := looksLikePlaceholderSecret(c.Server.HTTP.AuthToken); token != "" {
+		errors = append(errors, fmt.Sprintf(
+			"http.auth_token still contains placeholder %q — set it via ${NOTHINGDNS_AUTH_TOKEN} or replace with a real secret before starting",
+			token))
+	}
+	if token := looksLikePlaceholderSecret(c.Server.HTTP.AuthSecret); token != "" {
+		errors = append(errors, fmt.Sprintf(
+			"http.auth_secret still contains placeholder %q — set it via ${NOTHINGDNS_AUTH_SECRET} or replace with a real 32-byte random secret before starting",
+			token))
+	}
+	for i, user := range c.Server.HTTP.Users {
+		if token := looksLikePlaceholderSecret(user.Password); token != "" {
+			errors = append(errors, fmt.Sprintf(
+				"http.users[%d] (%q) password still contains placeholder %q — set it via an environment variable or replace with a real secret before starting",
+				i, user.Username, token))
+		}
 	}
 
 	return errors

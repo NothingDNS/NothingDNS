@@ -610,3 +610,81 @@ func TestValidateMultipleErrors(t *testing.T) {
 		t.Error("expected logging validation errors")
 	}
 }
+
+// TestValidateSecrets_RefusesPlaceholders locks in VULN-050: Validate() must
+// reject any secret field that still carries a known template placeholder.
+// The failure mode being prevented is an operator shipping the example
+// deploy/production.yaml unchanged — the server would hash
+// "UNIQUE-STRONG-PASSWORD" into a real credential and every deployment would
+// share the same trivially-guessable login.
+func TestValidateSecrets_RefusesPlaceholders(t *testing.T) {
+	c := DefaultConfig()
+	c.Server.HTTP.Enabled = true
+	c.Server.HTTP.AuthSecret = "CHANGE-THIS-TO-256-BIT-STRONG-SECRET"
+	c.Server.HTTP.AuthToken = "changeme"
+	c.Server.HTTP.Users = []AuthUserConfig{
+		{Username: "admin", Password: "UNIQUE-STRONG-PASSWORD", Role: "admin"},
+		{Username: "viewer", Password: "s3cretly-random-2f9a...", Role: "viewer"}, // legitimate
+	}
+
+	errs := c.validateSecrets()
+	if len(errs) != 3 {
+		t.Fatalf("got %d errors, want 3 (auth_token + auth_secret + admin user). errors=%v", len(errs), errs)
+	}
+
+	joined := strings.Join(errs, "\n")
+	for _, want := range []string{"auth_token", "auth_secret", `users[0]`, `"admin"`} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("error messages missing %q. full output:\n%s", want, joined)
+		}
+	}
+	// The legitimate viewer password must NOT show up in the error list.
+	if strings.Contains(joined, "viewer") {
+		t.Errorf("viewer user flagged falsely — real secrets should pass. output:\n%s", joined)
+	}
+}
+
+func TestValidateSecrets_AcceptsEmptyAndRealSecrets(t *testing.T) {
+	c := DefaultConfig()
+	c.Server.HTTP.Enabled = true
+	// Empty auth_secret is allowed — it means "auto-generate at startup".
+	c.Server.HTTP.AuthSecret = ""
+	c.Server.HTTP.AuthToken = ""
+	c.Server.HTTP.Users = []AuthUserConfig{
+		{Username: "admin", Password: "hunter2-but-actually-strong-9f2a-c481", Role: "admin"},
+	}
+
+	if errs := c.validateSecrets(); len(errs) != 0 {
+		t.Errorf("valid config should pass secret validation, got: %v", errs)
+	}
+}
+
+func TestLooksLikePlaceholderSecret(t *testing.T) {
+	for _, tc := range []struct {
+		in       string
+		wantHit  bool
+		wantSubs string // expected token substring in the returned match
+	}{
+		{"", false, ""},
+		{"hunter2-7F9a-c481-2d3e", false, ""},
+		{"CHANGE-THIS-TO-256-BIT-STRONG-SECRET", true, "CHANGE-THIS"},
+		{"change-this-to-something", true, "CHANGE-THIS"},
+		{"ChangeMe", true, "CHANGEME"},
+		{"unique-strong-password", true, "UNIQUE-STRONG"},
+		{"my-placeholder-value", true, "PLACEHOLDER"},
+		{"replaceme", true, "REPLACEME"},
+		{"REPLACE-ME", true, "REPLACE-ME"},
+		{"your-secret-here", true, "YOUR-SECRET"},
+	} {
+		got := looksLikePlaceholderSecret(tc.in)
+		if tc.wantHit && got == "" {
+			t.Errorf("looksLikePlaceholderSecret(%q) = \"\", want hit on %q", tc.in, tc.wantSubs)
+		}
+		if !tc.wantHit && got != "" {
+			t.Errorf("looksLikePlaceholderSecret(%q) = %q, want no hit", tc.in, got)
+		}
+		if tc.wantHit && got != "" && got != tc.wantSubs {
+			t.Errorf("looksLikePlaceholderSecret(%q) matched token %q, expected %q", tc.in, got, tc.wantSubs)
+		}
+	}
+}

@@ -29,16 +29,19 @@ server:
     # auth_secret must be a 256-bit (32-byte) random string; auth_token
     # is intentionally disabled in favor of per-user credentials.
     auth_token: ""
-    auth_secret: "CHANGE-THIS-TO-256-BIT-STRONG-SECRET"
+    # VULN-050: All secret material sourced from the environment. Never commit
+    # literal credentials to this file — the config loader refuses to start if
+    # known placeholder strings appear in auth_secret or user passwords.
+    auth_secret: "${NOTHINGDNS_AUTH_SECRET}"
     users:
       - username: admin
-        password: "UNIQUE-STRONG-PASSWORD"
+        password: "${NOTHINGDNS_ADMIN_PASSWORD}"
         role: admin
       - username: operator
-        password: "UNIQUE-STRONG-PASSWORD"
+        password: "${NOTHINGDNS_OPERATOR_PASSWORD}"
         role: operator
       - username: viewer
-        password: "UNIQUE-STRONG-PASSWORD"
+        password: "${NOTHINGDNS_VIEWER_PASSWORD}"
         role: viewer
     doh_enabled: true
     doh_path: /dns-query
