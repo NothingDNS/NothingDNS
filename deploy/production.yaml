@@ -24,19 +24,22 @@ server:
   http:
     enabled: true
     bind: "127.0.0.1:8080"                       # Local only, reverse proxy handles TLS
-    # Production MUST use multi-user auth with strong credentials
-    # auth_token: ""                             # Disable token auth in favor of RBAC
-    # auth_secret: "CHANGE-THIS-TO-256-BIT-STRONG-SECRET"
-    # users:
-    #   - username: admin
-    #     password: "UNIQUE-STRONG-PASSWORD"
-    #     role: admin
-    #   - username: operator
-    #     password: "UNIQUE-STRONG-PASSWORD"
-    #     role: operator
-    #   - username: viewer
-    #     password: "UNIQUE-STRONG-PASSWORD"
-    #     role: viewer
+    auth_required: true                           # Refuse unauthenticated API access (VULN-035)
+    # Multi-user RBAC auth — replace placeholders below before deploying.
+    # auth_secret must be a 256-bit (32-byte) random string; auth_token
+    # is intentionally disabled in favor of per-user credentials.
+    auth_token: ""
+    auth_secret: "CHANGE-THIS-TO-256-BIT-STRONG-SECRET"
+    users:
+      - username: admin
+        password: "UNIQUE-STRONG-PASSWORD"
+        role: admin
+      - username: operator
+        password: "UNIQUE-STRONG-PASSWORD"
+        role: operator
+      - username: viewer
+        password: "UNIQUE-STRONG-PASSWORD"
+        role: viewer
     doh_enabled: true
     doh_path: /dns-query
     dows_enabled: false
