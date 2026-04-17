@@ -117,7 +117,8 @@ func (s *Server) handleConfigLogging(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Level string `json:"level"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	// VULN-071: use MaxBytesReader to prevent unbounded body reading on config PUT
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
@@ -165,7 +166,8 @@ func (s *Server) handleConfigRRL(w http.ResponseWriter, r *http.Request) {
 		Rate    float64 `json:"rate"`
 		Burst   int     `json:"burst"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	// VULN-071: use MaxBytesReader to prevent unbounded body reading on config PUT
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
@@ -208,7 +210,8 @@ func (s *Server) handleConfigCache(w http.ResponseWriter, r *http.Request) {
 		ServeStale        bool `json:"serve_stale"`
 		StaleGraceSecs    int  `json:"stale_grace_secs"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	// VULN-071: use MaxBytesReader to prevent unbounded body reading on config PUT
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}

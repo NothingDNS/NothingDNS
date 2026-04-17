@@ -72,12 +72,13 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Set cookie
+	// VULN-057: Secure=true only when TLS is active; otherwise silently dropped by browsers
 	http.SetCookie(w, &http.Cookie{
 		Name:     "ndns_token",
 		Value:    token.Token,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   r.TLS != nil,
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   int(s.authStore.TokenExpiry().Seconds()),
 	})
@@ -182,12 +183,13 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Set cookie
+	// VULN-057: Secure=true only when TLS is active; otherwise silently dropped by browsers
 	http.SetCookie(w, &http.Cookie{
 		Name:     "ndns_token",
 		Value:    token.Token,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   r.TLS != nil,
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   int(s.authStore.TokenExpiry().Seconds()),
 	})
@@ -218,13 +220,13 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		s.authStore.RevokeToken(cookie.Value)
 	}
 
-	// Clear cookie
+	// Clear cookie — Secure must match original so browser can actually delete it
 	http.SetCookie(w, &http.Cookie{
 		Name:     "ndns_token",
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   r.TLS != nil,
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   -1,
 	})
