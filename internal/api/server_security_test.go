@@ -120,3 +120,87 @@ func TestCookieAuthAcceptedOnSafeMethods(t *testing.T) {
 		}
 	}
 }
+
+// TestDoHPathsBypassAuth locks in VULN-044 remediation. DoH/DoWS/ODoH paths
+// are DNS resolution endpoints, not admin API — clients never send Bearer
+// tokens. Before the fix, enabling auth_token caused authMiddleware to 401
+// every legitimate DoH query.
+func TestDoHPathsBypassAuth(t *testing.T) {
+	cfg := config.HTTPConfig{
+		Enabled:      true,
+		Bind:         "127.0.0.1:0",
+		AuthToken:    "shared-secret-token",
+		DoHEnabled:   true,
+		DoHPath:      "/dns-query",
+		DoWSEnabled:  true,
+		DoWSPath:     "/dns-ws",
+		ODoHEnabled:  true,
+		ODoHPath:     "/odoh",
+	}
+	server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+
+	cases := []struct {
+		name       string
+		path       string
+		wantStatus int
+	}{
+		{"DoH", "/dns-query", http.StatusOK},
+		{"DoWS", "/dns-ws", http.StatusOK},
+		{"ODoH", "/odoh", http.StatusOK},
+		{"ODoH well-known config", "/.well-known/odoh-config", http.StatusOK},
+		// Negative control: the admin API must still require auth.
+		{"admin API is still gated", "/api/v1/zones", http.StatusUnauthorized},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			handlerCalled := false
+			testHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				handlerCalled = true
+				w.WriteHeader(http.StatusOK)
+			})
+
+			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+			// No Authorization header — emulates a real DoH client.
+			rec := httptest.NewRecorder()
+			server.authMiddleware(testHandler).ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Errorf("%s %s: got %d, want %d", http.MethodGet, tc.path, rec.Code, tc.wantStatus)
+			}
+			expectReach := tc.wantStatus == http.StatusOK
+			if handlerCalled != expectReach {
+				t.Errorf("%s %s: handlerCalled=%v, want %v", http.MethodGet, tc.path, handlerCalled, expectReach)
+			}
+		})
+	}
+}
+
+// TestDoHBypassOnlyWhenEnabled verifies the bypass is gated on the feature
+// flag: if DoHEnabled=false, a request to DoHPath must NOT forward to the
+// next handler (the bypass must not activate). The authMiddleware's own
+// SPA fall-through handles the response in that case.
+func TestDoHBypassOnlyWhenEnabled(t *testing.T) {
+	cfg := config.HTTPConfig{
+		Enabled:    true,
+		Bind:       "127.0.0.1:0",
+		AuthToken:  "shared-secret-token",
+		DoHEnabled: false, // disabled
+		DoHPath:    "/dns-query",
+	}
+	server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+
+	handlerCalled := false
+	testHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		handlerCalled = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/dns-query", nil)
+	rec := httptest.NewRecorder()
+	server.authMiddleware(testHandler).ServeHTTP(rec, req)
+
+	if handlerCalled {
+		t.Error("DoH disabled: bypass should not have forwarded to the mux (handler was reached)")
+	}
+}

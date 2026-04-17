@@ -808,6 +808,30 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		// VULN-044: Skip auth for DNS-over-HTTPS family endpoints. These are
+		// DNS resolution paths, not admin API; clients (browsers, stub
+		// resolvers) never send a Bearer token for a DoH query, so running
+		// them through auth returns 401 to every legitimate user the moment
+		// auth_token or the authStore is configured.
+		if s.config.DoHEnabled && s.config.DoHPath != "" && r.URL.Path == s.config.DoHPath {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if s.config.DoWSEnabled && s.config.DoWSPath != "" && r.URL.Path == s.config.DoWSPath {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if s.config.ODoHEnabled {
+			if s.config.ODoHPath != "" && r.URL.Path == s.config.ODoHPath {
+				next.ServeHTTP(w, r)
+				return
+			}
+			if r.URL.Path == "/.well-known/odoh-config" {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+
 		// SECURITY: If neither AuthToken nor authStore is configured,
 		// authentication is required. Deny all API requests.
 		// To allow unauthenticated access, set auth_token or configure users.
