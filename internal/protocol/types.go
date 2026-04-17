@@ -1559,6 +1559,13 @@ type RDataZONEMD struct {
 
 // Pack serializes the ZONEMD RData into wire format.
 func (r *RDataZONEMD) Pack(buf []byte, offset int) (int, error) {
+	// Match sibling DNSSEC RData types (DNSKEY/DS/RRSIG) by bounds-checking
+	// before writing — prevents silent truncation/panic if a future caller
+	// sizes the buffer from something other than Len() (VULN-026).
+	need := 6 + len(r.Digest)
+	if offset+need > len(buf) {
+		return 0, ErrBufferTooSmall
+	}
 	startOffset := offset
 
 	// Serial (4 bytes, network byte order)
