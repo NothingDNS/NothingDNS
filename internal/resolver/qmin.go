@@ -13,11 +13,7 @@
 //  4. Once we reach the final zone, query for the full name + original type.
 package resolver
 
-import (
-	"strings"
-
-	"github.com/nothingdns/nothingdns/internal/protocol"
-)
+import "strings"
 
 // minimizedName returns the query name minimized to one label beyond the
 // known zone cut. If the target name is already at or within the zone cut,
@@ -58,18 +54,6 @@ func minimizedName(target, zoneCut string) string {
 		return lastLabel + "."
 	}
 	return lastLabel + "." + zoneCut + "."
-}
-
-// zoneCutFromNS extracts the zone name from the NS records in the
-// authority section of a referral response. Returns "." if no NS
-// records are found.
-func zoneCutFromNS(authorities []*protocol.ResourceRecord) string {
-	for _, rr := range authorities {
-		if rr.Type == protocol.TypeNS {
-			return rr.Name.String()
-		}
-	}
-	return "."
 }
 
 // isMinimizedTarget returns true if the minimized name equals the full

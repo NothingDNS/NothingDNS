@@ -489,7 +489,7 @@ func TestExtractDelegation_NoNS(t *testing.T) {
 			makeARR("example.com.", "1.2.3.4"), // Not an NS record
 		},
 	}
-	deleg := r.extractDelegation(resp)
+	deleg, _ := r.extractDelegation(resp, ".")
 	if len(deleg.nsNames) != 0 {
 		t.Errorf("nsNames = %d, want 0", len(deleg.nsNames))
 	}
@@ -513,7 +513,7 @@ func TestExtractDelegation_WithGlue(t *testing.T) {
 			},
 		},
 	}
-	deleg := r.extractDelegation(resp)
+	deleg, _ := r.extractDelegation(resp, ".")
 	if len(deleg.nsNames) != 2 {
 		t.Errorf("nsNames = %d, want 2", len(deleg.nsNames))
 	}
@@ -533,7 +533,7 @@ func TestExtractDelegation_DuplicateNS(t *testing.T) {
 			makeNSRR("example.com.", "ns1.example.com."), // Duplicate
 		},
 	}
-	deleg := r.extractDelegation(resp)
+	deleg, _ := r.extractDelegation(resp, ".")
 	if len(deleg.nsNames) != 1 {
 		t.Errorf("nsNames = %d, want 1 (dedup)", len(deleg.nsNames))
 	}
@@ -549,13 +549,18 @@ func TestExtractDelegation_AdditionalNonMatch(t *testing.T) {
 			makeARR("unrelated.example.com.", "9.9.9.9"), // Not matching any NS
 		},
 	}
-	deleg := r.extractDelegation(resp)
+	deleg, _ := r.extractDelegation(resp, ".")
 	if len(deleg.nsNames) != 1 {
 		t.Errorf("nsNames = %d, want 1", len(deleg.nsNames))
 	}
 	// ns1 should have no addresses since glue doesn't match
 	if len(deleg.addrs["ns1.example.com."]) != 0 {
 		t.Errorf("ns1 addrs = %d, want 0", len(deleg.addrs["ns1.example.com."]))
+	}
+	// The non-matching Additional must also not leak into the map.
+	if len(deleg.addrs["unrelated.example.com."]) != 0 {
+		t.Errorf("unrelated.example.com addrs = %d, want 0 (non-NS-target glue must be dropped)",
+			len(deleg.addrs["unrelated.example.com."]))
 	}
 }
 
@@ -714,7 +719,7 @@ func TestCacheResponse_NilCache(t *testing.T) {
 		Answers: []*protocol.ResourceRecord{
 			makeARR("example.com.", "1.2.3.4"),
 		},
-	})
+	}, ".")
 }
 
 func TestCacheResponse_ZeroTTL(t *testing.T) {
@@ -729,7 +734,7 @@ func TestCacheResponse_ZeroTTL(t *testing.T) {
 	rr.TTL = 0
 	resp.AddAnswer(rr)
 
-	r.cacheResponse("example.com.", protocol.TypeA, resp)
+	r.cacheResponse("example.com.", protocol.TypeA, resp, ".")
 	// Should use default TTL of 300
 	if len(cache.sets) == 0 {
 		t.Error("cacheResponse should cache even with zero TTL (uses default)")
@@ -751,7 +756,7 @@ func TestCacheResponse_WithAAAARecord(t *testing.T) {
 		Data:  &protocol.RDataAAAA{Address: [16]byte{0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}},
 	})
 
-	r.cacheResponse("example.com.", protocol.TypeAAAA, resp)
+	r.cacheResponse("example.com.", protocol.TypeAAAA, resp, ".")
 	if len(cache.sets) < 1 {
 		t.Error("cacheResponse should cache AAAA records")
 	}
@@ -1900,7 +1905,7 @@ func TestExtractDelegation_NSWithWrongData(t *testing.T) {
 			},
 		},
 	}
-	deleg := r.extractDelegation(resp)
+	deleg, _ := r.extractDelegation(resp, ".")
 	if len(deleg.nsNames) != 0 {
 		t.Errorf("nsNames = %d, want 0 (data type mismatch)", len(deleg.nsNames))
 	}
@@ -1919,7 +1924,7 @@ func TestExtractDelegation_AdditionalWithWrongData(t *testing.T) {
 			},
 		},
 	}
-	deleg := r.extractDelegation(resp)
+	deleg, _ := r.extractDelegation(resp, ".")
 	// Should not crash, just skip the bad data
 	if deleg == nil {
 		t.Error("extractDelegation should not return nil")
@@ -1973,3 +1978,176 @@ func TestResolver_ConcurrentResolve(t *testing.T) {
 
 // Need fmt for error transport - already imported above
 var _ = fmt.Sprintf // ensure fmt is used
+
+// ============================================================================
+// VULN-039: bailiwick enforcement
+// ============================================================================
+
+func TestInBailiwick(t *testing.T) {
+	tests := []struct {
+		name string
+		zone string
+		want bool
+	}{
+		// root contains everything
+		{"example.com.", ".", true},
+		{"example.com.", "", true},
+		{".", ".", true},
+
+		// exact match and subdomain
+		{"example.com.", "example.com.", true},
+		{"www.example.com.", "example.com.", true},
+		{"a.b.c.example.com.", "example.com.", true},
+
+		// case insensitive
+		{"EXAMPLE.com.", "example.com.", true},
+		{"example.com.", "EXAMPLE.COM.", true},
+
+		// trailing dot tolerance
+		{"www.example.com", "example.com.", true},
+		{"www.example.com.", "example.com", true},
+
+		// siblings must NOT match
+		{"other.com.", "example.com.", false},
+		{"evil.net.", "com.", false},
+		// partial label suffix must NOT match (the leading-dot rule)
+		{"notexample.com.", "example.com.", false},
+		{"myexample.com.", "example.com.", false},
+	}
+	for _, tt := range tests {
+		got := inBailiwick(tt.name, tt.zone)
+		if got != tt.want {
+			t.Errorf("inBailiwick(%q, %q) = %v, want %v", tt.name, tt.zone, got, tt.want)
+		}
+	}
+}
+
+// Core Kaminsky defense: a response with Answer records for out-of-bailiwick
+// names must not poison the cache under those names' keys.
+func TestCacheResponse_SideRecord_OutOfBailiwickRejected(t *testing.T) {
+	cache := newMockCache()
+	r := NewResolver(DefaultConfig(), cache, newMockTransport())
+
+	// Simulate: we queried ns.attacker.com (authoritative for attacker.com)
+	// for the name attacker.com/A. The evil response answers attacker.com
+	// correctly AND bundles a poison A record for victim-bank.com.
+	resp := &protocol.Message{
+		Header: protocol.Header{Flags: protocol.Flags{QR: true, RCODE: protocol.RcodeSuccess}},
+	}
+	resp.AddAnswer(makeARR("attacker.com.", "1.2.3.4"))           // in-bailiwick: legit
+	resp.AddAnswer(makeARR("www.victim-bank.com.", "6.6.6.6"))    // out-of-bailiwick: poison
+
+	r.cacheResponse("attacker.com.", protocol.TypeA, resp, "attacker.com.")
+
+	// Primary key (the query we actually asked) must be cached.
+	mainKey := cacheKey("attacker.com.", protocol.TypeA)
+	found := false
+	for _, k := range cache.sets {
+		if k == mainKey {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("primary cache entry missing for %s", mainKey)
+	}
+
+	// Poison side-record key must NOT have been cached.
+	poisonKey := cacheKey("www.victim-bank.com.", protocol.TypeA)
+	for _, k := range cache.sets {
+		if k == poisonKey {
+			t.Fatalf("out-of-bailiwick side record was cached under key %q (Kaminsky-class bug)", k)
+		}
+	}
+}
+
+// In-bailiwick side records (typical: A records bundled with a CNAME answer
+// that resolve to the same zone) should still be cached, so the fix preserves
+// the resolution-speed optimization for legitimate cases.
+func TestCacheResponse_SideRecord_InBailiwickAccepted(t *testing.T) {
+	cache := newMockCache()
+	r := NewResolver(DefaultConfig(), cache, newMockTransport())
+
+	resp := &protocol.Message{
+		Header: protocol.Header{Flags: protocol.Flags{QR: true, RCODE: protocol.RcodeSuccess}},
+	}
+	resp.AddAnswer(makeARR("example.com.", "1.2.3.4"))
+	resp.AddAnswer(makeARR("www.example.com.", "5.6.7.8")) // same zone, legit
+
+	r.cacheResponse("example.com.", protocol.TypeA, resp, "example.com.")
+
+	wantKey := cacheKey("www.example.com.", protocol.TypeA)
+	found := false
+	for _, k := range cache.sets {
+		if k == wantKey {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("in-bailiwick side record %q should have been cached; keys=%v", wantKey, cache.sets)
+	}
+}
+
+// extractDelegation must reject NS records whose owner is not in bailiwick of
+// the querier's current zone cut — a .com server cannot delegate .net.
+func TestExtractDelegation_RejectsOutOfBailiwickNS(t *testing.T) {
+	r := NewResolver(DefaultConfig(), nil, newMockTransport())
+
+	// Querier believes it is at a .com server (zoneCut = "com.").
+	// An evil referral tries to redirect resolution of evil.net.
+	resp := &protocol.Message{
+		Authorities: []*protocol.ResourceRecord{
+			makeNSRR("evil.net.", "ns.attacker.example."), // out-of-bailiwick for .com
+			makeNSRR("example.com.", "ns1.example.com."),  // in-bailiwick: legit
+		},
+		Additionals: []*protocol.ResourceRecord{
+			makeARR("ns1.example.com.", "1.2.3.4"),
+			makeARR("ns.attacker.example.", "6.6.6.6"), // should never be collected
+		},
+	}
+
+	deleg, newZoneCut := r.extractDelegation(resp, "com.")
+
+	// Only the in-bailiwick delegation survives.
+	if len(deleg.nsNames) != 1 {
+		t.Fatalf("nsNames = %d, want 1 (out-of-bailiwick NS must be dropped). got=%v",
+			len(deleg.nsNames), deleg.nsNames)
+	}
+	if deleg.nsNames[0] != "ns1.example.com." {
+		t.Errorf("surviving nsName = %q, want %q", deleg.nsNames[0], "ns1.example.com.")
+	}
+	if newZoneCut != "example.com." {
+		t.Errorf("newZoneCut = %q, want %q", newZoneCut, "example.com.")
+	}
+
+	// The attacker's glue must not be in the address map under any key.
+	if _, ok := deleg.addrs["ns.attacker.example."]; ok {
+		t.Error("attacker glue was accepted into delegation (should be dropped)")
+	}
+}
+
+// extractDelegation must also reject Additional records whose owner is in
+// bailiwick but is NOT actually a listed NS target (drive-by records).
+func TestExtractDelegation_RejectsNonNSTargetAdditional(t *testing.T) {
+	r := NewResolver(DefaultConfig(), nil, newMockTransport())
+
+	resp := &protocol.Message{
+		Authorities: []*protocol.ResourceRecord{
+			makeNSRR("example.com.", "ns1.example.com."),
+		},
+		Additionals: []*protocol.ResourceRecord{
+			makeARR("ns1.example.com.", "1.2.3.4"),        // legit glue
+			makeARR("www.example.com.", "6.6.6.6"),        // in-bailiwick, but not an NS target: drive-by
+		},
+	}
+
+	deleg, _ := r.extractDelegation(resp, "com.")
+
+	if len(deleg.addrs["ns1.example.com."]) != 1 {
+		t.Errorf("ns1 glue = %v, want one entry", deleg.addrs["ns1.example.com."])
+	}
+	if _, ok := deleg.addrs["www.example.com."]; ok {
+		t.Error("non-NS-target Additional was accepted (drive-by drop failed)")
+	}
+}

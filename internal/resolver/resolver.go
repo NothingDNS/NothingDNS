@@ -184,7 +184,7 @@ func (r *Resolver) resolve(ctx context.Context, name string, qtype uint16, cname
 		if r.config.QnameMinimization && qTypeToSend == protocol.TypeNS && qName != name {
 			if isAnswer(resp) || isNXDomain(resp) {
 				// Cache the response - it contains valid NS records for this zone
-				r.cacheResponse(qName, protocol.TypeNS, resp)
+				r.cacheResponse(qName, protocol.TypeNS, resp, currentZoneCut)
 				// Update the zone cut and re-query with full name
 				currentZoneCut = qName
 				// Don't continue - fall through to query with full name
@@ -194,7 +194,7 @@ func (r *Resolver) resolve(ctx context.Context, name string, qtype uint16, cname
 		switch {
 		case isAnswer(resp):
 			// Got authoritative answer
-			r.cacheResponse(name, qtype, resp)
+			r.cacheResponse(name, qtype, resp, currentZoneCut)
 
 			// Check for DNAME that needs synthesis (RFC 6672)
 			// DNAME takes precedence over CNAME per RFC 6672 §2.1
@@ -265,17 +265,16 @@ func (r *Resolver) resolve(ctx context.Context, name string, qtype uint16, cname
 			return resp, nil
 
 		case isReferral(resp):
-			// Follow delegation
-			newDeleg := r.extractDelegation(resp)
+			// Follow delegation. extractDelegation bailiwick-filters NS records
+			// against currentZoneCut and returns the narrowed zone cut.
+			newDeleg, newZoneCut := r.extractDelegation(resp, currentZoneCut)
 			if newDeleg == nil || len(newDeleg.nsNames) == 0 {
-				// No usable NS records in referral — SERVFAIL
+				// No usable (in-bailiwick) NS records in referral — SERVFAIL.
 				return servfail(name, qtype), nil
 			}
 
-			// Update zone cut from referral NS records
-			if r.config.QnameMinimization {
-				currentZoneCut = zoneCutFromNS(resp.Authorities)
-			}
+			// Advance the zone cut to the delegated zone.
+			currentZoneCut = newZoneCut
 
 			// Resolve NS names that don't have glue
 			r.resolveNSAddresses(ctx, newDeleg)
@@ -379,44 +378,97 @@ func (r *Resolver) sendQuery(ctx context.Context, name string, qtype uint16, add
 	return resp, nil
 }
 
-// extractDelegation extracts NS records and glue A/AAAA from a referral response.
-func (r *Resolver) extractDelegation(resp *protocol.Message) *delegation {
+// inBailiwick reports whether name is equal to zone or a subdomain of zone.
+// Comparison is case-insensitive and trailing-dot-insensitive. A zone of
+// "" or "." is treated as the root and matches any name.
+//
+// Used to defend against Kaminsky-class cache poisoning (VULN-039): records
+// received from an authoritative server must be within that server's zone cut
+// before they are cached or used for further resolution.
+func inBailiwick(name, zone string) bool {
+	zone = strings.ToLower(strings.TrimSuffix(zone, "."))
+	if zone == "" {
+		return true // root zone contains everything
+	}
+	name = strings.ToLower(strings.TrimSuffix(name, "."))
+	if name == zone {
+		return true
+	}
+	return strings.HasSuffix(name, "."+zone)
+}
+
+// extractDelegation extracts NS records and glue A/AAAA from a referral response,
+// filtered against the querier's current zone cut. Only records whose owner is
+// in-bailiwick of zoneCut are accepted.
+//
+// Returns the delegation and the derived new zone cut (the owner of the first
+// accepted NS record). If no NS records were accepted, newZoneCut == zoneCut.
+func (r *Resolver) extractDelegation(resp *protocol.Message, zoneCut string) (*delegation, string) {
 	deleg := &delegation{
 		addrs: make(map[string][]string),
 	}
+	newZoneCut := zoneCut
 
-	// Extract NS names from Authority section
+	// Extract NS names from Authority section. Reject NS records whose owner
+	// is outside the current zone cut — e.g., a .com server cannot delegate
+	// .net, and must not be allowed to redirect resolution to an attacker.
+	nsOwners := make(map[string]bool) // the delegated zones we accepted
 	for _, rr := range resp.Authorities {
-		if rr.Type == protocol.TypeNS {
-			ns, ok := rr.Data.(*protocol.RDataNS)
-			if ok {
-				nsName := ns.NSDName.String()
-				if !containsString(deleg.nsNames, nsName) {
-					deleg.nsNames = append(deleg.nsNames, nsName)
-				}
-			}
+		if rr.Type != protocol.TypeNS {
+			continue
+		}
+		owner := rr.Name.String()
+		if !inBailiwick(owner, zoneCut) {
+			continue
+		}
+		ns, ok := rr.Data.(*protocol.RDataNS)
+		if !ok {
+			continue
+		}
+		nsName := ns.NSDName.String()
+		if !containsString(deleg.nsNames, nsName) {
+			deleg.nsNames = append(deleg.nsNames, nsName)
+		}
+		nsOwners[strings.ToLower(strings.TrimSuffix(owner, "."))] = true
+		if newZoneCut == zoneCut {
+			newZoneCut = owner
 		}
 	}
 
-	// Extract glue records (A/AAAA in Additional section matching NS names)
+	// Build the set of NS target names we'll accept glue for.
+	nsTargets := make(map[string]bool, len(deleg.nsNames))
+	for _, n := range deleg.nsNames {
+		nsTargets[strings.ToLower(strings.TrimSuffix(n, "."))] = true
+	}
+
+	// Extract glue (A/AAAA in Additional). To be accepted, glue must be:
+	//   1. In-bailiwick of the querier's current zone cut (server authority bound).
+	//   2. For a name actually listed as an NS target above (no drive-by records).
 	for _, rr := range resp.Additionals {
+		owner := rr.Name.String()
+		if !inBailiwick(owner, zoneCut) {
+			continue
+		}
+		ownerKey := strings.ToLower(strings.TrimSuffix(owner, "."))
+		if !nsTargets[ownerKey] {
+			continue
+		}
+
 		switch rr.Type {
 		case protocol.TypeA:
 			if a, ok := rr.Data.(*protocol.RDataA); ok {
-				name := rr.Name.String()
 				ip := net.IP(a.Address[:]).String()
-				deleg.addrs[name] = append(deleg.addrs[name], withPort(ip, "53"))
+				deleg.addrs[owner] = append(deleg.addrs[owner], withPort(ip, "53"))
 			}
 		case protocol.TypeAAAA:
 			if a, ok := rr.Data.(*protocol.RDataAAAA); ok {
-				name := rr.Name.String()
 				ip := net.IP(a.Address[:]).String()
-				deleg.addrs[name] = append(deleg.addrs[name], withPort(ip, "53"))
+				deleg.addrs[owner] = append(deleg.addrs[owner], withPort(ip, "53"))
 			}
 		}
 	}
 
-	return deleg
+	return deleg, newZoneCut
 }
 
 // resolveNSAddresses resolves A/AAAA for NS names that lack glue.
@@ -487,8 +539,14 @@ func (r *Resolver) lookupNSAddresses(ctx context.Context, nsName string) []strin
 	return addrs
 }
 
-// cacheResponse stores a successful response in the cache.
-func (r *Resolver) cacheResponse(name string, qtype uint16, msg *protocol.Message) {
+// cacheResponse stores a successful response in the cache. The primary entry
+// is keyed by (name, qtype) — this is the caller's own query, always safe to
+// cache. Side-record entries (individual A/AAAA records from the Answer section
+// keyed by their own owner) are only cached when the record is in-bailiwick of
+// zoneCut, to prevent Kaminsky-class cache poisoning (VULN-039): without this
+// filter, an authoritative server for foo.example could return an Answer for
+// www.victim-bank.com and have it accepted as authoritative for victim-bank.
+func (r *Resolver) cacheResponse(name string, qtype uint16, msg *protocol.Message, zoneCut string) {
 	if r.cache == nil {
 		return
 	}
@@ -507,20 +565,28 @@ func (r *Resolver) cacheResponse(name string, qtype uint16, msg *protocol.Messag
 	key := cacheKey(name, qtype)
 	r.cache.Set(key, msg, ttl)
 
-	// Also cache individual records for NS resolution
+	// Cache individual A/AAAA records by their owner name for later NS-address
+	// lookups — but only for records in-bailiwick of the serving zone. A record
+	// whose owner falls outside zoneCut was not within the answering server's
+	// authority and must not be trusted for any other name.
 	for _, rr := range msg.Answers {
 		switch rr.Type {
+		case protocol.TypeA, protocol.TypeAAAA:
+		default:
+			continue
+		}
+		owner := rr.Name.String()
+		if !inBailiwick(owner, zoneCut) {
+			continue
+		}
+		switch rr.Type {
 		case protocol.TypeA:
-			if a, ok := rr.Data.(*protocol.RDataA); ok {
-				k := cacheKey(rr.Name.String(), protocol.TypeA)
-				r.cache.Set(k, msg, rr.TTL)
-				_ = a
+			if _, ok := rr.Data.(*protocol.RDataA); ok {
+				r.cache.Set(cacheKey(owner, protocol.TypeA), msg, rr.TTL)
 			}
 		case protocol.TypeAAAA:
-			if a, ok := rr.Data.(*protocol.RDataAAAA); ok {
-				k := cacheKey(rr.Name.String(), protocol.TypeAAAA)
-				r.cache.Set(k, msg, rr.TTL)
-				_ = a
+			if _, ok := rr.Data.(*protocol.RDataAAAA); ok {
+				r.cache.Set(cacheKey(owner, protocol.TypeAAAA), msg, rr.TTL)
 			}
 		}
 	}

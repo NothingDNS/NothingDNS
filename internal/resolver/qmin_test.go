@@ -60,26 +60,6 @@ func TestIsMinimizedTarget(t *testing.T) {
 	}
 }
 
-func TestZoneCutFromNS(t *testing.T) {
-	authorities := []*protocol.ResourceRecord{
-		{
-			Name: mustParseName("example.com."),
-			Type: protocol.TypeNS,
-			Data: &protocol.RDataNS{NSDName: mustParseName("ns1.example.com.")},
-		},
-	}
-	got := zoneCutFromNS(authorities)
-	if got != "example.com." {
-		t.Errorf("zoneCutFromNS = %q, want %q", got, "example.com.")
-	}
-
-	// No NS records
-	got = zoneCutFromNS(nil)
-	if got != "." {
-		t.Errorf("zoneCutFromNS(nil) = %q, want %q", got, ".")
-	}
-}
-
 // mockQminTransport records queries to verify minimization behavior.
 type mockQminTransport struct {
 	queries []qminQuery
