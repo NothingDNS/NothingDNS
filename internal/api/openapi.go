@@ -663,12 +663,23 @@ func (s *Server) handleSwaggerUI(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(swaggerUIHTML))
 }
 
+// swaggerUIHTML pins swagger-ui-dist to an exact version and adds
+// Subresource Integrity hashes so a compromised unpkg (or a malicious
+// @5.x range resolution) cannot inject JS into the authenticated
+// dashboard origin (VULN-012). When upgrading the pin, regenerate both
+// sha384 hashes with:
+//
+//	curl -sL https://unpkg.com/swagger-ui-dist@<ver>/swagger-ui.css | openssl dgst -sha384 -binary | openssl base64 -A
+//	curl -sL https://unpkg.com/swagger-ui-dist@<ver>/swagger-ui-bundle.js | openssl dgst -sha384 -binary | openssl base64 -A
 const swaggerUIHTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <title>NothingDNS API Documentation</title>
-  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+  <link rel="stylesheet"
+        href="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui.css"
+        integrity="sha384-wxLW6kwyHktdDGr6Pv1zgm/VGJh99lfUbzSn6HNHBENZlCN7W602k9VkGdxuFvPn"
+        crossorigin="anonymous">
   <style>
     body { margin: 0; padding: 0; }
     #swagger-ui { max-width: 1200px; margin: 0 auto; }
@@ -676,7 +687,9 @@ const swaggerUIHTML = `<!DOCTYPE html>
 </head>
 <body>
   <div id="swagger-ui"></div>
-  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script src="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui-bundle.js"
+          integrity="sha384-wmyclcVGX/WhUkdkATwhaK1X1JtiNrr2EoYJ+diV3vj4v6OC5yCeSu+yW13SYJep"
+          crossorigin="anonymous"></script>
   <script>
     SwaggerUIBundle({
       url: '/api/openapi.json',
