@@ -28,6 +28,16 @@ services:
       - ALL
     cap_add:
       - NET_BIND_SERVICE
+    # VULN-051: Resource limits to prevent unbounded container resource usage
+    pids_limit: 64
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+          cpus: '0.5'
+        reservations:
+          memory: 64m
+          cpus: '0.1'
     ports:
       - "53:53/udp"
       - "53:53"
@@ -64,6 +74,16 @@ services:
       - ALL
     cap_add:
       - NET_BIND_SERVICE
+    # VULN-051: Resource limits to prevent unbounded container resource usage
+    pids_limit: 64
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+          cpus: '0.5'
+        reservations:
+          memory: 64m
+          cpus: '0.1'
     ports:
       - "5354:53/udp"
       - "5354:53"
@@ -102,6 +122,16 @@ services:
       - ALL
     cap_add:
       - NET_BIND_SERVICE
+    # VULN-051: Resource limits to prevent unbounded container resource usage
+    pids_limit: 64
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+          cpus: '0.5'
+        reservations:
+          memory: 64m
+          cpus: '0.1'
     ports:
       - "5355:53/udp"
       - "5355:53"
