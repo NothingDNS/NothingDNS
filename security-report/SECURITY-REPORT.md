@@ -63,7 +63,7 @@ Qualitative: **MEDIUM-RISK** for cluster deployments — VULN-037 is partially m
 | VULN-044 | DoH / DoWS / ODoH endpoints return 401 when auth enabled | `internal/api/server.go:629,790-806` | FIXED |
 | VULN-045 | Gossip encryption has no replay protection | `internal/cluster/gossip.go` (decodeMessage) | FIXED — per-sender sequence tracking |
 | VULN-046 | Gossip AES-GCM lacks AAD binding peer identity | `internal/cluster/gossip.go` | PARTIAL — AAD computed at send; full re-check TODO |
-| VULN-047 | Raft WAL parser short-reads and trusts on-disk `cmdLen` → OOM/corruption | `internal/cluster/raft/wal.go:67-120` | |
+| VULN-047 | Raft WAL parser short-reads and trusts on-disk `cmdLen` → OOM/corruption | `internal/cluster/raft/wal.go:67-120` | FIXED — io.ReadFull + 64MiB cmdLen cap |
 | VULN-048 | gob-decode of untrusted Raft RPC input (compounds VULN-037) | `internal/cluster/raft/rpc.go:196` | PARTIAL — TLS required for production |
 | VULN-049 | Raft RPC server conns map keyed `""` → fd leak on reconnect | `internal/cluster/raft/rpc.go:111` | FIXED — keyed by NodeID(addr) |
 | VULN-050 | `deploy/production.yaml` ships known placeholder secret literals | `deploy/production.yaml:32-41` | FIXED |

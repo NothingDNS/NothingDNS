@@ -2,6 +2,8 @@ package upstream
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
@@ -200,6 +202,17 @@ func (c *Client) Close() error {
 	c.mu.Unlock()
 
 	return nil
+}
+
+// RandomTXID generates a cryptographically random 16-bit transaction ID.
+// Exported for use in handler.go for the forwarder path (VULN-059).
+func RandomTXID() uint16 {
+	var b [2]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// Fallback to time-based bottom bits if crypto/rand fails (shouldn't happen)
+		return uint16(time.Now().UnixNano() & 0xFFFF)
+	}
+	return binary.BigEndian.Uint16(b[:])
 }
 
 // Query forwards a DNS query to an upstream server.

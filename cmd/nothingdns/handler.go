@@ -561,11 +561,16 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 
 		var resp *protocol.Message
 		var err error
+		// VULN-059: Re-randomize TXID before forwarding to upstream.
+		// We need to keep the original ID to validate the response, so save it.
+		origID := r.Header.ID
+		r.Header.ID = upstream.RandomTXID()
 		if h.loadBalancer != nil {
 			resp, err = h.loadBalancer.Query(r)
 		} else {
 			resp, err = h.upstream.Query(r)
 		}
+		r.Header.ID = origID // Restore after upstream call
 		if err != nil {
 			h.logger.Warnf("Upstream query failed for %s: %v", qname, err)
 			// RFC 8767: Try serve-stale when upstream is unavailable
