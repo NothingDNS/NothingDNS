@@ -83,7 +83,7 @@ Qualitative: **MEDIUM-RISK** for cluster deployments — VULN-037 is partially m
 | VULN-059 | Forwarder reuses client DNS TXID upstream (no re-randomization) | `cmd/nothingdns/handler.go:567` | FIXED — handler calls upstream.RandomTXID() |
 | VULN-060 | Cache key omits DO/CD bits — mixes DNSSEC/plain responses | `internal/resolver/resolver.go:507` | FIXED — MakeKey includes doBit parameter |
 | VULN-061 | NOTIFY accepts IP-only auth (no TSIG enforcement) | `internal/transfer/notify.go:247` |
-| VULN-062 | Cluster gossip encryption is optional (log-only warning) | `internal/cluster/gossip.go:281` |
+| VULN-062 | Cluster gossip encryption is optional (log-only warning) | `internal/cluster/gossip.go:281` | FIXED — encryption mandatory, allowInsecure for tests |
 | VULN-063 | No response-rate-limiting; per-IP tokens defeated by spoofed floods | `internal/filter/rate_limit.go` |
 | VULN-064 | RPZ response-IP policy runs post-cache (cache leaks blocked IPs) | pipeline stage 18 (handler.go) |
 | VULN-065 | No RFC 8482 ANY handling; no TC-forcing for DNSKEY/TXT over UDP | handler.go |
