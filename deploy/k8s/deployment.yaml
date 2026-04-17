@@ -17,6 +17,16 @@ spec:
         app: nothingdns
         version: v0.1.0
     spec:
+      # Never leak a cluster token into the container filesystem. Using the
+      # namespace's default SA — create a dedicated SA if RBAC is layered on.
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: nothingdns
         image: nothingdns/nothingdns:latest
@@ -72,6 +82,12 @@ spec:
           readOnlyRootFilesystem: true
           runAsNonRoot: true
           runAsUser: 1000
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - ALL
+            add:
+              - NET_BIND_SERVICE  # only for binding port 53
       volumes:
       - name: config
         configMap:
