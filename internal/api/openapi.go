@@ -649,10 +649,11 @@ const OpenAPISpec = `{
   ]
 }`
 
-// handleOpenAPISpec serves the OpenAPI JSON specification.
+// handleOpenAPISpec serves the OpenAPI JSON specification. CORS headers are
+// applied by corsMiddleware — a hardcoded `Access-Control-Allow-Origin: *`
+// here would bypass the configurable allowlist (VULN-034).
 func (s *Server) handleOpenAPISpec(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Write([]byte(OpenAPISpec))
 }
 
