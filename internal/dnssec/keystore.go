@@ -92,7 +92,12 @@ func NewKeyStoreWithEncryption(store KeyStoreBackend, encryptionKey []byte) (*Ke
 	if len(encryptionKey) != 32 {
 		return nil, fmt.Errorf("encryption key must be 32 bytes for AES-256, got %d", len(encryptionKey))
 	}
-	return &KeyStore{store: store, encryptionKey: make([]byte, len(encryptionKey))}, nil
+	// Defensive copy: caller may mutate or zero the input slice.
+	// Prior to VULN-038 this allocated a zero buffer and never copied, silently
+	// running AES-256 with an all-zero key.
+	keyCopy := make([]byte, len(encryptionKey))
+	copy(keyCopy, encryptionKey)
+	return &KeyStore{store: store, encryptionKey: keyCopy}, nil
 }
 
 // SetEncryptionKey enables or changes the encryption key for private keys at rest.

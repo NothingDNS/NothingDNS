@@ -121,6 +121,60 @@ func TestNewKeyStoreWithEncryption_InvalidSize(t *testing.T) {
 	}
 }
 
+// VULN-038 regression: constructor must copy the caller's key bytes.
+// Pre-fix, the buffer was allocated but never populated, so AES-256 ran with
+// an all-zero key regardless of what the caller passed.
+func TestNewKeyStoreWithEncryption_StoresKeyBytes(t *testing.T) {
+	input := make([]byte, 32)
+	for i := range input {
+		input[i] = byte(i + 1) // deliberately non-zero
+	}
+
+	ks, err := NewKeyStoreWithEncryption(newMockBackend(), input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	ks.mu.RLock()
+	stored := make([]byte, len(ks.encryptionKey))
+	copy(stored, ks.encryptionKey)
+	ks.mu.RUnlock()
+
+	for i := range input {
+		if stored[i] != input[i] {
+			t.Fatalf("stored key byte %d = %d, want %d (constructor did not copy key)",
+				i, stored[i], input[i])
+		}
+	}
+}
+
+// VULN-038 regression: constructor must make a defensive copy so that
+// mutating the caller's slice after construction does not change the stored key.
+func TestNewKeyStoreWithEncryption_DefensiveCopy(t *testing.T) {
+	input := make([]byte, 32)
+	for i := range input {
+		input[i] = byte(i + 1)
+	}
+
+	ks, err := NewKeyStoreWithEncryption(newMockBackend(), input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Mutate the caller's slice after construction; stored key must not change.
+	for i := range input {
+		input[i] = 0xFF
+	}
+
+	ks.mu.RLock()
+	defer ks.mu.RUnlock()
+	for i := range ks.encryptionKey {
+		if ks.encryptionKey[i] == 0xFF {
+			t.Fatalf("stored key was aliased with caller slice (byte %d = 0xFF)", i)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // SetEncryptionKey
 // ---------------------------------------------------------------------------
