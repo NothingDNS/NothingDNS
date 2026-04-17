@@ -106,7 +106,7 @@ Qualitative: **MEDIUM-RISK** for cluster deployments — VULN-037 is partially m
 | VULN-077 | Username enumeration via 401-vs-429 (lockout returns 429 only for real users) |
 | VULN-078 | `.dockerignore` missing `dnssec-keys/`, `data/`, `zones/`, `*.db`, `cache.json` | FIXED — entries added to .dockerignore |
 | VULN-079 | Missing `Referrer-Policy`, `Cache-Control: no-store`, `Permissions-Policy`, `COOP` | `internal/api/server.go:706-716` | FIXED — all five headers added to securityHeadersMiddleware |
-| VULN-080 | SHA-1 DS digests still accepted in DNSSEC validator |
+| VULN-080 | SHA-1 DS digests still accepted in DNSSEC validator | `internal/dnssec/validator.go:870` | DESIGN — SHA-1 required for legacy DS compatibility per RFC 8624; warn in logs |
 | VULN-081 | MCP `UpdateUser` lacks caller-role check (latent — handler not mounted) |
 
 ---
