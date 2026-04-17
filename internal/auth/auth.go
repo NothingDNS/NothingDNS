@@ -447,13 +447,25 @@ func (s *Store) GetUser(username string) (*User, error) {
 	}, nil
 }
 
+// dummyHash is a pre-computed hash used to equalize login timing when the
+// requested username does not exist (VULN-017). Computed once on first call.
+var dummyHash = sync.OnceValue(func() []byte {
+	return HashPassword("timing-equalization-placeholder", nil)
+})
+
 // VerifyUserPassword checks username + password against stored credentials.
+// On a missing user it still runs VerifyPassword against a fixed dummy hash so
+// the response time does not reveal whether the username exists (VULN-017).
 func (s *Store) VerifyUserPassword(username, password string) bool {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	user, ok := s.users[username]
+	s.mu.RUnlock()
+
 	if !ok {
+		// Burn the same PBKDF2 rounds a real verification would, then return
+		// false. The result is discarded — subtle.ConstantTimeCompare still
+		// pays the comparison cost.
+		_ = VerifyPassword(password, dummyHash())
 		return false
 	}
 	return VerifyPassword(password, user.Hash)
