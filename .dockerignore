@@ -10,6 +10,11 @@ web/node_modules/
 web/dist/
 build/
 coverage/
+.dnssec-keys/
+data/
+zones/
+*.db
+cache.json
 .DS_Store
 *.log
 .dockerignore
