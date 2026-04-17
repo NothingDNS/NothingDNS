@@ -222,7 +222,7 @@ func (c *Cluster) initGossip() error {
 		return fmt.Errorf("cluster encryption key is required when seed_nodes are configured (set cluster.encryption_key, or cluster.allow_insecure=true for dev)")
 	}
 
-	gossip, err := NewGossipProtocol(gossipConfig, c.nodeList)
+	gossip, err := NewGossipProtocol(gossipConfig, c.nodeList, c.config.AllowInsecureCluster)
 	if err != nil {
 		return fmt.Errorf("creating gossip protocol: %w", err)
 	}

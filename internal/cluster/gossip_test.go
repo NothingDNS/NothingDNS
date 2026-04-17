@@ -39,7 +39,7 @@ func TestNewGossipProtocol(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, err := NewGossipProtocol(cfg, nl)
+	gp, err := NewGossipProtocol(cfg, nl, true)
 	if err != nil {
 		t.Fatalf("NewGossipProtocol() error = %v", err)
 	}
@@ -61,7 +61,7 @@ func TestGossipProtocol_SetCallbacks(t *testing.T) {
 	self := &Node{ID: "self", State: NodeStateAlive}
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	joinCalled := false
 	leaveCalled := false
@@ -120,7 +120,7 @@ func TestGossipProtocol_Stats(t *testing.T) {
 	self := &Node{ID: "self", State: NodeStateAlive}
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	// Initial stats should be zero
 	stats := gp.Stats()
@@ -315,7 +315,7 @@ func TestGossipProtocol_StartStop(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = 17970 // Use high port to avoid conflicts
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	if err := gp.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -338,7 +338,7 @@ func TestGossipProtocol_Join(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = 17971
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	if err := gp.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -357,7 +357,7 @@ func TestGossipProtocol_Join_InvalidAddress(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = 17973
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	if err := gp.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -380,7 +380,7 @@ func TestGossipProtocol_BroadcastCacheInvalidation(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = 17974
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	if err := gp.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -400,7 +400,7 @@ func TestGossipProtocol_handleMessage(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = 17975
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	// Start is needed for handlePing to access the connection
 	if err := gp.Start(); err != nil {
@@ -427,7 +427,7 @@ func TestGossipProtocol_handleMessage_FromSelf(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = 17981
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	if err := gp.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -463,7 +463,7 @@ func TestGossipProtocol_handleMessage_InvalidData(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	from, _ := net.ResolveUDPAddr("udp", "127.0.0.1:12345")
 	// Invalid gob data should be silently ignored
@@ -476,7 +476,7 @@ func TestGossipProtocol_handlePing(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = 17976
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 	gp.Start()
 	defer gp.Stop()
 
@@ -508,7 +508,7 @@ func TestGossipProtocol_handleAck(t *testing.T) {
 
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	// Create an ack message
 	ack := AckPayload{
@@ -539,7 +539,7 @@ func TestGossipProtocol_handleGossip_NewNode(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	joinCalled := false
 	gp.SetCallbacks(
@@ -591,7 +591,7 @@ func TestGossipProtocol_handleGossip_UpdateNode(t *testing.T) {
 	nl.Add(existingNode)
 
 	cfg := DefaultGossipConfig()
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	updateCalled := false
 	gp.SetCallbacks(
@@ -633,7 +633,7 @@ func TestGossipProtocol_handleCacheInvalidate(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	cacheInvalidKeys := []string{}
 	gp.SetCallbacks(
@@ -667,7 +667,7 @@ func TestGossipProtocol_handleCacheInvalidate_FromSelf(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	called := false
 	gp.SetCallbacks(
@@ -707,7 +707,7 @@ func TestGossipProtocol_gossip(t *testing.T) {
 	cfg.BindPort = 17977
 	cfg.GossipNodes = 1
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	if err := gp.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -733,7 +733,7 @@ func TestGossipProtocol_probeNodes(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = 17978
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	if err := gp.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -760,7 +760,7 @@ func TestGossipProtocol_probeNodes_DeadNode(t *testing.T) {
 	cfg.SuspicionMult = 1
 	cfg.BindPort = 17979
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	leaveCalled := false
 	gp.SetCallbacks(
@@ -791,7 +791,7 @@ func TestGossipProtocol_sendPing(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = 17980
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	if err := gp.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -811,7 +811,7 @@ func TestGossipProtocol_Stop_WithoutStart(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	// Stop without start should not panic
 	err := gp.Stop()

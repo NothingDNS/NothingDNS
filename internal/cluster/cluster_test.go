@@ -14,7 +14,8 @@ func TestNew(t *testing.T) {
 	dnsCache := cache.New(cacheCfg)
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "test-node",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 17946, // Use high port to avoid conflicts
@@ -60,7 +61,8 @@ func TestNew_AutoGenerateNodeID(t *testing.T) {
 	dnsCache := cache.New(cacheCfg)
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "", // Empty - should auto-generate
 		BindAddr:   "127.0.0.1",
 		GossipPort: 17947,
@@ -86,7 +88,8 @@ func TestNew_AutoDetectBindAddr(t *testing.T) {
 	dnsCache := cache.New(cacheCfg)
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "test-node",
 		BindAddr:   "", // Empty - should auto-detect
 		GossipPort: 17948,
@@ -108,7 +111,8 @@ func TestCluster_GetNodes(t *testing.T) {
 	dnsCache := cache.New(cacheCfg)
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "test-node",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 17949,
@@ -132,7 +136,8 @@ func TestCluster_GetAliveNodes(t *testing.T) {
 	dnsCache := cache.New(cacheCfg)
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "test-node",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 17950,
@@ -153,7 +158,8 @@ func TestCluster_GetNodeCount(t *testing.T) {
 	dnsCache := cache.New(cacheCfg)
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "test-node",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 17951,
@@ -176,7 +182,8 @@ func TestCluster_IsHealthy(t *testing.T) {
 	dnsCache := cache.New(cacheCfg)
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "test-node",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 17952,
@@ -196,7 +203,8 @@ func TestCluster_IsHealthy_NotStarted(t *testing.T) {
 	dnsCache := cache.New(cacheCfg)
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "test-node",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 17953,
@@ -217,7 +225,8 @@ func TestCluster_Stats(t *testing.T) {
 	dnsCache := cache.New(cacheCfg)
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "test-node",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 17954,
@@ -250,7 +259,8 @@ func TestCluster_AddRemoveEventHandler(t *testing.T) {
 	dnsCache := cache.New(cacheCfg)
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "test-node",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 17955,
@@ -301,7 +311,8 @@ func TestCluster_InvalidateCacheLocal(t *testing.T) {
 	}
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "test-node",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 17956,
@@ -324,7 +335,8 @@ func TestCluster_InvalidateCache_Disabled(t *testing.T) {
 	dnsCache := cache.New(cacheCfg)
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "test-node",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 17957,
@@ -363,7 +375,8 @@ func TestCacheSyncEvent_Struct(t *testing.T) {
 
 func TestConfig_Values(t *testing.T) {
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "node1",
 		BindAddr:   "192.168.1.1",
 		BindPort:   7946,
@@ -395,7 +408,8 @@ func TestCluster_IsStarted(t *testing.T) {
 	dnsCache := cache.New(cacheCfg)
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "test-node",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 17958,
@@ -433,7 +447,8 @@ func TestCluster_Start_AlreadyStarted(t *testing.T) {
 	dnsCache := cache.New(cacheCfg)
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "test-node",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 17959,
@@ -459,7 +474,8 @@ func TestCluster_Stop_NotStarted(t *testing.T) {
 	dnsCache := cache.New(cacheCfg)
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "test-node",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 17960,
@@ -478,7 +494,8 @@ func TestCluster_InvalidateCacheLocal_NilCache(t *testing.T) {
 	logger := util.NewLogger(util.INFO, util.TextFormat, nil)
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "test-node",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 17961,
@@ -543,7 +560,8 @@ func TestCluster_HandleNodeJoin(t *testing.T) {
 	dnsCache := cache.New(cacheCfg)
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "test-node",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 17962,
@@ -575,7 +593,8 @@ func TestCluster_HandleNodeLeave(t *testing.T) {
 	dnsCache := cache.New(cacheCfg)
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "test-node",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 17963,
@@ -607,7 +626,8 @@ func TestCluster_HandleNodeUpdate(t *testing.T) {
 	dnsCache := cache.New(cacheCfg)
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "test-node",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 17964,
@@ -645,7 +665,8 @@ func TestCluster_HandleCacheInvalid(t *testing.T) {
 	dnsCache.Set("key1", nil, 3600)
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "test-node",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 17965,
@@ -683,7 +704,8 @@ func TestCluster_RemoveEventHandler_NotFound(t *testing.T) {
 	dnsCache := cache.New(cacheCfg)
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "test-node",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 17966,
@@ -715,7 +737,8 @@ func TestCluster_Stats_Started(t *testing.T) {
 	dnsCache := cache.New(cacheCfg)
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "test-node",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 17967,

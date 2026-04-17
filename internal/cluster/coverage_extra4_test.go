@@ -167,7 +167,8 @@ func TestCluster_CacheSyncLoop_RapidEvents(t *testing.T) {
 	dnsCache := cache.New(cache.Config{Capacity: 1000})
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "rapid-sync-node",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 48001,
@@ -209,7 +210,8 @@ func TestCluster_TwoClusterCacheInvalidation(t *testing.T) {
 	dnsCache2.Set("shared-key", nil, 3600)
 
 	cfg1 := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "cluster-node-1",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 48002,
@@ -217,7 +219,8 @@ func TestCluster_TwoClusterCacheInvalidation(t *testing.T) {
 	}
 
 	cfg2 := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "cluster-node-2",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 48003,
@@ -278,7 +281,8 @@ func TestCluster_CacheSyncDisabled_NoLoopStarted(t *testing.T) {
 	dnsCache := cache.New(cache.Config{Capacity: 1000})
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "no-sync-node",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 48004,
@@ -323,7 +327,7 @@ func TestGossipProtocol_Join_GossipNotStarted_Panics(t *testing.T) {
 	cfg.BindAddr = "127.0.0.1"
 	cfg.BindPort = 48005
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 	// Do NOT start - conn is nil
 
 	gp.Join("127.0.0.1:48006")
@@ -342,7 +346,7 @@ func TestGossipProtocol_BroadcastCacheInvalidation_NoAliveNodes_VerifyNil(t *tes
 	cfg.BindAddr = "127.0.0.1"
 	cfg.BindPort = 48007
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 	if err := gp.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -363,7 +367,7 @@ func TestGossipProtocol_HandlePing_InvalidPayload(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	// Create a ping message with invalid payload
 	msg := Message{
@@ -389,7 +393,7 @@ func TestGossipProtocol_HandleAck_InvalidPayload(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	msg := Message{
 		Type:    MessageTypeAck,
@@ -416,7 +420,7 @@ func TestGossipProtocol_HandleGossip_SelfInPayload(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	joinCalled := false
 	gp.SetCallbacks(
@@ -454,7 +458,7 @@ func TestGossipProtocol_HandleGossip_EmptyNodes(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	joinCalled := false
 	gp.SetCallbacks(
@@ -498,7 +502,7 @@ func TestGossipProtocol_ProbeNodes_AliveNodeRecentSeen(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = 48008
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 	if err := gp.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -535,7 +539,7 @@ func TestGossipProtocol_ProbeNodes_DeadNodeRemoval(t *testing.T) {
 	cfg.BindPort = 48009
 	cfg.ProbeInterval = 1 * time.Second
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 	if err := gp.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -559,7 +563,7 @@ func TestGossipProtocol_HandleGossip_InvalidPayload(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	msg := Message{
 		Type:    MessageTypeGossip,
@@ -584,7 +588,7 @@ func TestGossipProtocol_HandleCacheInvalidate_InvalidPayload(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	cacheInvalidCalled := false
 	gp.SetCallbacks(
@@ -615,7 +619,7 @@ func TestGossipProtocol_HandleGossip_NewNode_NilCallback(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 	// Don't set callbacks - onNodeJoin is nil
 
 	gossipPayload := GossipPayload{
@@ -653,7 +657,7 @@ func TestGossipProtocol_HandleGossip_UpdateNode_NilCallback(t *testing.T) {
 	nl.Add(existingNode)
 
 	cfg := DefaultGossipConfig()
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 	// Don't set callbacks - onNodeUpdate is nil
 
 	gossipPayload := GossipPayload{
@@ -694,7 +698,7 @@ func TestGossipProtocol_HandleMessage_AckRoundTrip(t *testing.T) {
 	cfg.BindAddr = "127.0.0.1"
 	cfg.BindPort = 48010
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 	if err := gp.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -739,7 +743,7 @@ func TestGossipProtocol_HandleMessage_CacheInvalidate(t *testing.T) {
 	cfg.BindAddr = "127.0.0.1"
 	cfg.BindPort = 48011
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	receivedKeys := []string{}
 	gp.SetCallbacks(
@@ -790,7 +794,8 @@ func TestCluster_InvalidateCacheLocal_EmptyKeys(t *testing.T) {
 	dnsCache := cache.New(cache.Config{Capacity: 1000})
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "empty-keys-test",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 48012,
@@ -812,7 +817,8 @@ func TestCluster_Stats_UnhealthyCluster(t *testing.T) {
 	dnsCache := cache.New(cache.Config{Capacity: 1000})
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "stats-unhealthy",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 48013,
@@ -860,7 +866,8 @@ func TestCluster_IsHealthy_ExactQuorum(t *testing.T) {
 	dnsCache := cache.New(cache.Config{Capacity: 1000})
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "quorum-test",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 48014,
@@ -949,7 +956,7 @@ func TestGossipProtocol_ProbeNodes_AliveToSuspect(t *testing.T) {
 	cfg.ProbeInterval = 1 * time.Second
 	cfg.SuspicionMult = 2
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 	if err := gp.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -988,7 +995,7 @@ func TestGossipProtocol_ProbeNodes_SuspectPing(t *testing.T) {
 	cfg.ProbeInterval = 1 * time.Second
 	cfg.SuspicionMult = 4
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 	if err := gp.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -1016,7 +1023,7 @@ func TestGossipProtocol_Gossip_SelfOnly(t *testing.T) {
 	cfg.BindPort = 48017
 	cfg.GossipNodes = 3
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 	if err := gp.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -1040,7 +1047,8 @@ func TestCluster_HandleCacheInvalid_NilCache_VerifyCallback(t *testing.T) {
 	logger := util.NewLogger(util.INFO, util.TextFormat, nil)
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "nil-cache-test",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 48018,
@@ -1069,7 +1077,8 @@ func TestCluster_HandleEvents_NoHandlers(t *testing.T) {
 	logger := util.NewLogger(util.INFO, util.TextFormat, nil)
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "no-handlers",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 48019,
@@ -1095,7 +1104,8 @@ func TestCluster_New_AutoNodeID_GeneratesUniqueIDs(t *testing.T) {
 	ids := make(map[string]bool)
 	for i := 0; i < 10; i++ {
 		cfg := Config{
-			Enabled:    true,
+			Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 			NodeID:     "", // Auto-generate
 			BindAddr:   "127.0.0.1",
 			GossipPort: 48020 + i,
@@ -1127,7 +1137,7 @@ func TestGossipProtocol_Stop_AlreadyCancelled(t *testing.T) {
 	cfg.BindAddr = "127.0.0.1"
 	cfg.BindPort = 48021
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 	if err := gp.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -1151,7 +1161,7 @@ func TestGossipProtocol_SetCallbacks_Nil(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	// Set all nil callbacks
 	gp.SetCallbacks(nil, nil, nil, nil, nil, nil)
@@ -1179,7 +1189,8 @@ func TestCluster_StartStop_LifecycleWithCacheSync(t *testing.T) {
 	dnsCache := cache.New(cache.Config{Capacity: 1000})
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "lifecycle-test",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 48022,

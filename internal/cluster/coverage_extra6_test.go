@@ -26,7 +26,7 @@ func TestHandleElection_ThisNodeIsProposedLeader(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = pickFreePort()
 
-	gp, err := NewGossipProtocol(cfg, nl)
+	gp, err := NewGossipProtocol(cfg, nl, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestHandleElection_AnotherNodeProposed(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = pickFreePort()
 
-	gp, err := NewGossipProtocol(cfg, nl)
+	gp, err := NewGossipProtocol(cfg, nl, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestHandleElection_InvalidPayload(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = pickFreePort()
 
-	gp, err := NewGossipProtocol(cfg, nl)
+	gp, err := NewGossipProtocol(cfg, nl, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestHandleLeader_AcceptHigherTerm(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = pickFreePort()
 
-	gp, err := NewGossipProtocol(cfg, nl)
+	gp, err := NewGossipProtocol(cfg, nl, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +194,7 @@ func TestHandleLeader_RejectLowerTerm(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = pickFreePort()
 
-	gp, err := NewGossipProtocol(cfg, nl)
+	gp, err := NewGossipProtocol(cfg, nl, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +243,7 @@ func TestHandleLeader_InvalidPayload(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = pickFreePort()
 
-	gp, err := NewGossipProtocol(cfg, nl)
+	gp, err := NewGossipProtocol(cfg, nl, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +272,7 @@ func TestHandleHeartbeat_RefreshesLastHeartbeat(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = pickFreePort()
 
-	gp, err := NewGossipProtocol(cfg, nl)
+	gp, err := NewGossipProtocol(cfg, nl, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +316,7 @@ func TestHandleHeartbeat_WrongLeaderIgnored(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = pickFreePort()
 
-	gp, err := NewGossipProtocol(cfg, nl)
+	gp, err := NewGossipProtocol(cfg, nl, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -361,7 +361,7 @@ func TestHandleHeartbeat_LowerTermIgnored(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = pickFreePort()
 
-	gp, err := NewGossipProtocol(cfg, nl)
+	gp, err := NewGossipProtocol(cfg, nl, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -409,7 +409,7 @@ func TestHandleZoneUpdate_FollowerInvokesCallback(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = pickFreePort()
 
-	gp, err := NewGossipProtocol(cfg, nl)
+	gp, err := NewGossipProtocol(cfg, nl, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -469,7 +469,7 @@ func TestHandleZoneUpdate_LeaderIgnores(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = pickFreePort()
 
-	gp, err := NewGossipProtocol(cfg, nl)
+	gp, err := NewGossipProtocol(cfg, nl, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -510,7 +510,7 @@ func TestHandleZoneUpdate_NoLeader_Ignores(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = pickFreePort()
 
-	gp, err := NewGossipProtocol(cfg, nl)
+	gp, err := NewGossipProtocol(cfg, nl, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -552,7 +552,7 @@ func TestHandleZoneUpdate_InvalidPayload(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = pickFreePort()
 
-	gp, err := NewGossipProtocol(cfg, nl)
+	gp, err := NewGossipProtocol(cfg, nl, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -594,7 +594,7 @@ func TestHandleConfigSync_FollowerInvokesCallback(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = pickFreePort()
 
-	gp, err := NewGossipProtocol(cfg, nl)
+	gp, err := NewGossipProtocol(cfg, nl, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -651,7 +651,7 @@ func TestHandleConfigSync_LeaderIgnores(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = pickFreePort()
 
-	gp, err := NewGossipProtocol(cfg, nl)
+	gp, err := NewGossipProtocol(cfg, nl, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -696,7 +696,7 @@ func TestCheckLeaderHealth_TriggersElection(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = pickFreePort()
 
-	gp, err := NewGossipProtocol(cfg, nl)
+	gp, err := NewGossipProtocol(cfg, nl, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -733,7 +733,7 @@ func TestCheckLeaderHealth_LeaderNoOp(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = pickFreePort()
 
-	gp, err := NewGossipProtocol(cfg, nl)
+	gp, err := NewGossipProtocol(cfg, nl, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -768,7 +768,7 @@ func TestCheckLeaderHealth_NoLeaderNoOp(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = pickFreePort()
 
-	gp, err := NewGossipProtocol(cfg, nl)
+	gp, err := NewGossipProtocol(cfg, nl, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -802,7 +802,7 @@ func TestCheckLeaderHealth_RecentHeartbeatNoOp(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = pickFreePort()
 
-	gp, err := NewGossipProtocol(cfg, nl)
+	gp, err := NewGossipProtocol(cfg, nl, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -841,7 +841,7 @@ func TestMuLeaderSendHeartbeat_NonLeaderNoOp(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = pickFreePort()
 
-	gp, err := NewGossipProtocol(cfg, nl)
+	gp, err := NewGossipProtocol(cfg, nl, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -875,7 +875,7 @@ func TestMuLeaderSendHeartbeat_LeaderSendsToAliveNodes(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = pickFreePort()
 
-	gp, err := NewGossipProtocol(cfg, nl)
+	gp, err := NewGossipProtocol(cfg, nl, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -929,7 +929,7 @@ func TestBroadcastNodeStats_SendsToPeers(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = pickFreePort()
 
-	gp, err := NewGossipProtocol(cfg, nl)
+	gp, err := NewGossipProtocol(cfg, nl, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -994,7 +994,7 @@ func TestBroadcastClusterMetrics_SendsToPeers(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = pickFreePort()
 
-	gp, err := NewGossipProtocol(cfg, nl)
+	gp, err := NewGossipProtocol(cfg, nl, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1076,7 +1076,7 @@ func TestHandleZoneUpdate_CallbackPanicsRecovered(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = pickFreePort()
 
-	gp, err := NewGossipProtocol(cfg, nl)
+	gp, err := NewGossipProtocol(cfg, nl, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1112,7 +1112,7 @@ func TestHandleConfigSync_CallbackPanicsRecovered(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = pickFreePort()
 
-	gp, err := NewGossipProtocol(cfg, nl)
+	gp, err := NewGossipProtocol(cfg, nl, true)
 	if err != nil {
 		t.Fatal(err)
 	}

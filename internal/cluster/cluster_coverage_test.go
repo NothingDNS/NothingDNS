@@ -50,7 +50,7 @@ func TestCluster_Start_WithSuccessfulSeedJoin(t *testing.T) {
 	nl := NewNodeList(self)
 	seedCfg := DefaultGossipConfig()
 	seedCfg.BindPort = 27947
-	seedGp, _ := NewGossipProtocol(seedCfg, nl)
+	seedGp, _ := NewGossipProtocol(seedCfg, nl, true)
 	if err := seedGp.Start(); err != nil {
 		t.Fatalf("Failed to start seed: %v", err)
 	}
@@ -87,11 +87,12 @@ func TestCluster_cacheSyncLoop(t *testing.T) {
 	dnsCache := cache.New(cacheCfg)
 
 	cfg := Config{
-		Enabled:    true,
-		NodeID:     "test-node",
-		BindAddr:   "127.0.0.1",
-		GossipPort: 27949,
-		CacheSync:  true,
+		Enabled:              true,
+		NodeID:               "test-node",
+		BindAddr:             "127.0.0.1",
+		GossipPort:           27949,
+		CacheSync:            true,
+		AllowInsecureCluster: true, // test: no encryption key required
 	}
 
 	c, err := New(cfg, logger, dnsCache)
@@ -121,11 +122,12 @@ func TestCluster_cacheSyncLoop_WithBroadcastError(t *testing.T) {
 	dnsCache := cache.New(cacheCfg)
 
 	cfg := Config{
-		Enabled:    true,
-		NodeID:     "test-node",
-		BindAddr:   "127.0.0.1",
-		GossipPort: 27970,
-		CacheSync:  true,
+		Enabled:              true,
+		NodeID:               "test-node",
+		BindAddr:             "127.0.0.1",
+		GossipPort:           27970,
+		CacheSync:            true,
+		AllowInsecureCluster: true, // test: no encryption key required
 	}
 
 	c, err := New(cfg, logger, dnsCache)
@@ -158,11 +160,12 @@ func TestCluster_InvalidateCache_Enabled(t *testing.T) {
 	dnsCache := cache.New(cacheCfg)
 
 	cfg := Config{
-		Enabled:    true,
-		NodeID:     "test-node",
-		BindAddr:   "127.0.0.1",
-		GossipPort: 27950,
-		CacheSync:  true,
+		Enabled:              true,
+		NodeID:               "test-node",
+		BindAddr:             "127.0.0.1",
+		GossipPort:           27950,
+		CacheSync:            true,
+		AllowInsecureCluster: true, // test: no encryption key required
 	}
 
 	c, err := New(cfg, logger, dnsCache)
@@ -208,7 +211,7 @@ func TestGossipProtocol_probeNodes_AliveToSuspect(t *testing.T) {
 	cfg.SuspicionMult = 1
 	cfg.ProbeInterval = 1 * time.Second
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	if err := gp.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -243,7 +246,7 @@ func TestGossipProtocol_probeNodes_DeadNodeRemoval(t *testing.T) {
 	cfg.BindPort = 27952
 	cfg.ProbeInterval = 1 * time.Second
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	if err := gp.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -265,7 +268,7 @@ func TestGossipProtocol_handleMessage_AllTypes(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = 27953
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	if err := gp.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -306,7 +309,7 @@ func TestGossipProtocol_handleMessage_InvalidPayload(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	from, _ := net.ResolveUDPAddr("udp", "127.0.0.1:12345")
 
@@ -338,7 +341,7 @@ func TestGossipProtocol_gossip_NoOtherNodes(t *testing.T) {
 	cfg.BindPort = 27954
 	cfg.GossipNodes = 3
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	if err := gp.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -355,7 +358,7 @@ func TestGossipProtocol_Join_ResolveError(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = 27955
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	if err := gp.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -375,7 +378,7 @@ func TestGossipProtocol_BroadcastCacheInvalidation_NoAliveNodes(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = 27956
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	if err := gp.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -395,11 +398,12 @@ func TestCluster_Start_NoCacheSync(t *testing.T) {
 	dnsCache := cache.New(cacheCfg)
 
 	cfg := Config{
-		Enabled:    true,
-		NodeID:     "test-node",
-		BindAddr:   "127.0.0.1",
-		GossipPort: 27957,
-		CacheSync:  false, // CacheSync disabled
+		Enabled:              true,
+		NodeID:               "test-node",
+		BindAddr:             "127.0.0.1",
+		GossipPort:           27957,
+		CacheSync:            false, // CacheSync disabled
+		AllowInsecureCluster: true,  // test: no encryption key required
 	}
 
 	c, err := New(cfg, logger, dnsCache)
@@ -421,13 +425,17 @@ func TestCluster_HandleCacheInvalid_NilCache(t *testing.T) {
 	logger := util.NewLogger(util.INFO, util.TextFormat, nil)
 
 	cfg := Config{
-		Enabled:    true,
-		NodeID:     "test-node",
-		BindAddr:   "127.0.0.1",
-		GossipPort: 27958,
+		Enabled:              true,
+		NodeID:               "test-node",
+		BindAddr:             "127.0.0.1",
+		GossipPort:           27958,
+		AllowInsecureCluster: true, // test: no encryption key required
 	}
 
-	c, _ := New(cfg, logger, nil)
+	c, err := New(cfg, logger, nil)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
 
 	// Should not panic with nil cache
 	c.handleCacheInvalid([]string{"key1"})
@@ -439,10 +447,11 @@ func TestCluster_HandleCacheInvalid_WithEventHandler(t *testing.T) {
 	dnsCache := cache.New(cacheCfg)
 
 	cfg := Config{
-		Enabled:    true,
-		NodeID:     "test-node",
-		BindAddr:   "127.0.0.1",
-		GossipPort: 27959,
+		Enabled:              true,
+		NodeID:               "test-node",
+		BindAddr:             "127.0.0.1",
+		GossipPort:           27959,
+		AllowInsecureCluster: true, // test: no encryption key required
 	}
 
 	c, _ := New(cfg, logger, dnsCache)
@@ -466,7 +475,7 @@ func TestGossipProtocol_handlePing_InvalidPayload(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	from, _ := net.ResolveUDPAddr("udp", "127.0.0.1:12345")
 
@@ -485,7 +494,7 @@ func TestGossipProtocol_handleAck_InvalidPayload(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	from, _ := net.ResolveUDPAddr("udp", "127.0.0.1:12345")
 
@@ -502,7 +511,7 @@ func TestGossipProtocol_handleGossip_InvalidPayload(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	from, _ := net.ResolveUDPAddr("udp", "127.0.0.1:12345")
 
@@ -519,7 +528,7 @@ func TestGossipProtocol_handleCacheInvalidate_InvalidPayload(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	from, _ := net.ResolveUDPAddr("udp", "127.0.0.1:12345")
 
@@ -536,7 +545,7 @@ func TestGossipProtocol_handleGossip_SelfNode(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	from, _ := net.ResolveUDPAddr("udp", "127.0.0.1:12345")
 
@@ -568,7 +577,7 @@ func TestGossipProtocol_handleGossip_OldVersion(t *testing.T) {
 	nl.Add(existingNode)
 
 	cfg := DefaultGossipConfig()
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	updateCalled := false
 	gp.SetCallbacks(
@@ -606,10 +615,11 @@ func TestCluster_IsHealthy_WithNodes(t *testing.T) {
 	dnsCache := cache.New(cacheCfg)
 
 	cfg := Config{
-		Enabled:    true,
-		NodeID:     "test-node",
-		BindAddr:   "127.0.0.1",
-		GossipPort: 27960,
+		Enabled:              true,
+		NodeID:               "test-node",
+		BindAddr:             "127.0.0.1",
+		GossipPort:           27960,
+		AllowInsecureCluster: true, // test: no encryption key required
 	}
 
 	c, _ := New(cfg, logger, dnsCache)
@@ -635,10 +645,11 @@ func TestCluster_IsHealthy_Unhealthy(t *testing.T) {
 	dnsCache := cache.New(cacheCfg)
 
 	cfg := Config{
-		Enabled:    true,
-		NodeID:     "test-node",
-		BindAddr:   "127.0.0.1",
-		GossipPort: 27961,
+		Enabled:              true,
+		NodeID:               "test-node",
+		BindAddr:             "127.0.0.1",
+		GossipPort:           27961,
+		AllowInsecureCluster: true, // test: no encryption key required
 	}
 
 	c, _ := New(cfg, logger, dnsCache)
@@ -665,10 +676,11 @@ func TestCluster_Stop_Twice(t *testing.T) {
 	dnsCache := cache.New(cacheCfg)
 
 	cfg := Config{
-		Enabled:    true,
-		NodeID:     "test-node",
-		BindAddr:   "127.0.0.1",
-		GossipPort: 27962,
+		Enabled:              true,
+		NodeID:               "test-node",
+		BindAddr:             "127.0.0.1",
+		GossipPort:           27962,
+		AllowInsecureCluster: true, // test: no encryption key required
 	}
 
 	c, _ := New(cfg, logger, dnsCache)

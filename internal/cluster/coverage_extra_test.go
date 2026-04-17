@@ -25,7 +25,8 @@ func TestNew_GetLocalIPErrors(t *testing.T) {
 	dnsCache := cache.New(cacheCfg)
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key required
 		NodeID:     "",
 		BindAddr:   "", // triggers GetLocalIP
 		GossipPort: 37901,
@@ -50,7 +51,7 @@ func TestNewGossipProtocol_NeverErrors(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, err := NewGossipProtocol(cfg, nl)
+	gp, err := NewGossipProtocol(cfg, nl, true)
 	if err != nil {
 		t.Errorf("NewGossipProtocol() returned unexpected error: %v", err)
 	}
@@ -70,7 +71,8 @@ func TestCluster_Start_GossipStartError(t *testing.T) {
 	dnsCache := cache.New(cacheCfg)
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key required
 		NodeID:     "test-node",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 37902,
@@ -89,7 +91,7 @@ func TestCluster_Start_GossipStartError(t *testing.T) {
 	blockerCfg := DefaultGossipConfig()
 	blockerCfg.BindAddr = "127.0.0.1"
 	blockerCfg.BindPort = 37902
-	blocker, err := NewGossipProtocol(blockerCfg, nl2)
+	blocker, err := NewGossipProtocol(blockerCfg, nl2, true)
 	if err != nil {
 		t.Fatalf("NewGossipProtocol() error = %v", err)
 	}
@@ -119,7 +121,8 @@ func TestCluster_Stop_GossipAlreadyStopped(t *testing.T) {
 	dnsCache := cache.New(cacheCfg)
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key required
 		NodeID:     "test-node",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 37903,
@@ -156,7 +159,8 @@ func TestCluster_cacheSyncLoop_UnknownEventType(t *testing.T) {
 	dnsCache := cache.New(cacheCfg)
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key required
 		NodeID:     "test-node",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 37904,
@@ -201,7 +205,7 @@ func TestGossipProtocol_Start_ResolveUDPAddrError(t *testing.T) {
 	cfg.BindAddr = "not-a-valid-ip-address!!!"
 	cfg.BindPort = 37905
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	err := gp.Start()
 	if err == nil {
@@ -227,7 +231,7 @@ func TestGossipProtocol_Start_ListenUDPError(t *testing.T) {
 	cfg.BindAddr = "127.0.0.1"
 	cfg.BindPort = 1
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	err := gp.Start()
 	if err == nil {
@@ -246,7 +250,7 @@ func TestGossipProtocol_Join_EncodePayloadError(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = 37906
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	if err := gp.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -304,7 +308,7 @@ func TestGossipProtocol_BroadcastCacheInvalidation_EncodeError(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = 37907
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 	if err := gp.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -328,7 +332,7 @@ func TestGossipProtocol_handleMessage_IgnoresFromSelf(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = 37908
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	joinCalled := false
 	gp.SetCallbacks(
@@ -386,7 +390,7 @@ func TestGossipProtocol_receiveLoop_ConnectionError(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = 37909
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	if err := gp.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -418,7 +422,7 @@ func TestGossipProtocol_gossip_WithNodes(t *testing.T) {
 	cfg.BindPort = 37910
 	cfg.GossipNodes = 2
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	if err := gp.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -456,7 +460,7 @@ func TestGossipProtocol_probeLoop_Fires(t *testing.T) {
 	cfg.BindPort = 37911
 	cfg.ProbeInterval = 50 * time.Millisecond
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	if err := gp.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -476,7 +480,7 @@ func TestGossipProtocol_gossipLoop_Fires(t *testing.T) {
 	cfg.BindPort = 37912
 	cfg.GossipInterval = 50 * time.Millisecond
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	if err := gp.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -524,7 +528,7 @@ func TestGossipProtocol_Join_WriteToUDPError(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = 37913
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	if err := gp.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -551,7 +555,7 @@ func TestGossipProtocol_receiveLoop_ReadErrorNonTimeout(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.BindPort = 37915
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	if err := gp.Start(); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -598,7 +602,8 @@ func TestCluster_MultipleEventHandlers(t *testing.T) {
 	dnsCache := cache.New(cacheCfg)
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key required
 		NodeID:     "test-node",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 37916,
@@ -656,7 +661,7 @@ func TestGossipProtocol_handleMessage_UnknownType(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	from, _ := net.ResolveUDPAddr("udp", "127.0.0.1:12345")
 
@@ -693,7 +698,7 @@ func TestGossipProtocol_TwoNodeIntegration(t *testing.T) {
 	cfg1.BindPort = 37917
 	cfg1.GossipInterval = 50 * time.Millisecond
 
-	gp1, _ := NewGossipProtocol(cfg1, nl1)
+	gp1, _ := NewGossipProtocol(cfg1, nl1, true)
 
 	joinCalled := false
 	gp1.SetCallbacks(
@@ -714,7 +719,7 @@ func TestGossipProtocol_TwoNodeIntegration(t *testing.T) {
 	cfg2.BindPort = 37918
 	cfg2.GossipInterval = 50 * time.Millisecond
 
-	gp2, _ := NewGossipProtocol(cfg2, nl2)
+	gp2, _ := NewGossipProtocol(cfg2, nl2, true)
 	if err := gp2.Start(); err != nil {
 		t.Fatalf("gp2 Start() error = %v", err)
 	}

@@ -551,10 +551,11 @@ func TestCluster_GetLeader_WithGossip(t *testing.T) {
 	dnsCache := cache.New(cache.Config{Capacity: 1000})
 
 	cfg := Config{
-		Enabled:    true,
-		NodeID:     "leader-test",
-		BindAddr:   "127.0.0.1",
-		GossipPort: 49001,
+		Enabled:              true,
+		NodeID:               "leader-test",
+		BindAddr:             "127.0.0.1",
+		GossipPort:           49001,
+		AllowInsecureCluster: true, // test: no encryption key required
 	}
 
 	c, err := New(cfg, logger, dnsCache)
@@ -607,13 +608,17 @@ func TestCluster_DetectSplitBrain_NotLeader(t *testing.T) {
 	dnsCache := cache.New(cache.Config{Capacity: 1000})
 
 	cfg := Config{
-		Enabled:    true,
-		NodeID:     "sb-not-leader",
-		BindAddr:   "127.0.0.1",
-		GossipPort: 49002,
+		Enabled:              true,
+		NodeID:               "sb-not-leader",
+		BindAddr:             "127.0.0.1",
+		GossipPort:           49002,
+		AllowInsecureCluster: true, // test: no encryption key required
 	}
 
-	c, _ := New(cfg, logger, dnsCache)
+	c, err := New(cfg, logger, dnsCache)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
 
 	// Not the leader, so DetectSplitBrain should return false
 	if c.DetectSplitBrain() {
@@ -626,13 +631,17 @@ func TestCluster_DetectSplitBrain_AsLeader_NoSplit(t *testing.T) {
 	dnsCache := cache.New(cache.Config{Capacity: 1000})
 
 	cfg := Config{
-		Enabled:    true,
-		NodeID:     "sb-leader",
-		BindAddr:   "127.0.0.1",
-		GossipPort: 49003,
+		Enabled:              true,
+		NodeID:               "sb-leader",
+		BindAddr:             "127.0.0.1",
+		GossipPort:           49003,
+		AllowInsecureCluster: true, // test: no encryption key required
 	}
 
-	c, _ := New(cfg, logger, dnsCache)
+	c, err := New(cfg, logger, dnsCache)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
 
 	// Set as leader, electionTerm == leaderTerm (no split brain)
 	c.gossip.leaderMu.Lock()
@@ -652,13 +661,17 @@ func TestCluster_DetectSplitBrain_AsLeader_SplitDetected(t *testing.T) {
 	dnsCache := cache.New(cache.Config{Capacity: 1000})
 
 	cfg := Config{
-		Enabled:    true,
-		NodeID:     "sb-split",
-		BindAddr:   "127.0.0.1",
-		GossipPort: 49004,
+		Enabled:              true,
+		NodeID:               "sb-split",
+		BindAddr:             "127.0.0.1",
+		GossipPort:           49004,
+		AllowInsecureCluster: true, // test: no encryption key required
 	}
 
-	c, _ := New(cfg, logger, dnsCache)
+	c, err := New(cfg, logger, dnsCache)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
 
 	// Set as leader but electionTerm > leaderTerm => split brain
 	c.gossip.leaderMu.Lock()
@@ -695,16 +708,20 @@ func TestCluster_StartDraining_NotStarted(t *testing.T) {
 	dnsCache := cache.New(cache.Config{Capacity: 1000})
 
 	cfg := Config{
-		Enabled:    true,
-		NodeID:     "drain-not-started",
-		BindAddr:   "127.0.0.1",
-		GossipPort: 49005,
+		Enabled:              true,
+		NodeID:               "drain-not-started",
+		BindAddr:             "127.0.0.1",
+		GossipPort:           49005,
+		AllowInsecureCluster: true, // test: no encryption key required
 	}
 
-	c, _ := New(cfg, logger, dnsCache)
+	c, err := New(cfg, logger, dnsCache)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
 	// Do NOT start the cluster
 
-	err := c.StartDraining()
+	err = c.StartDraining()
 	if err == nil {
 		t.Error("StartDraining() should return error when cluster not started")
 	}
@@ -715,10 +732,11 @@ func TestCluster_StartDraining_Succeeds(t *testing.T) {
 	dnsCache := cache.New(cache.Config{Capacity: 1000})
 
 	cfg := Config{
-		Enabled:    true,
-		NodeID:     "drain-start",
-		BindAddr:   "127.0.0.1",
-		GossipPort: 49006,
+		Enabled:              true,
+		NodeID:               "drain-start",
+		BindAddr:             "127.0.0.1",
+		GossipPort:           49006,
+		AllowInsecureCluster: true, // test: no encryption key required
 	}
 
 	c, err := New(cfg, logger, dnsCache)
@@ -751,7 +769,8 @@ func TestCluster_CompleteDraining_LeaveCluster(t *testing.T) {
 	dnsCache := cache.New(cache.Config{Capacity: 1000})
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key required
 		NodeID:     "drain-leave",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 49007,
@@ -790,7 +809,8 @@ func TestCluster_CompleteDraining_StayInCluster(t *testing.T) {
 	dnsCache := cache.New(cache.Config{Capacity: 1000})
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key required
 		NodeID:     "drain-stay",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 49008,
@@ -832,7 +852,8 @@ func TestCluster_CompleteDraining_WithoutPriorStart(t *testing.T) {
 	dnsCache := cache.New(cache.Config{Capacity: 1000})
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key required
 		NodeID:     "drain-nostart",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 49009,
@@ -919,7 +940,8 @@ func TestCluster_UpdateNodeHealth(t *testing.T) {
 	dnsCache := cache.New(cache.Config{Capacity: 1000})
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key required
 		NodeID:     "health-update-node",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 49010,
@@ -962,7 +984,8 @@ func TestCluster_GetNodesWithHealth(t *testing.T) {
 	dnsCache := cache.New(cache.Config{Capacity: 1000})
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key required
 		NodeID:     "health-list-node",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 49011,
@@ -996,7 +1019,8 @@ func TestCluster_GetNodeForQuery(t *testing.T) {
 	dnsCache := cache.New(cache.Config{Capacity: 1000})
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key required
 		NodeID:     "query-self",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 49012,
@@ -1036,7 +1060,8 @@ func TestCluster_GetNodeForQuery_NoAliveNodes(t *testing.T) {
 	dnsCache := cache.New(cache.Config{Capacity: 1000})
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key required
 		NodeID:     "query-solo",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 49013,
@@ -1065,7 +1090,8 @@ func TestCluster_BroadcastClusterMetrics_NotStarted(t *testing.T) {
 	dnsCache := cache.New(cache.Config{Capacity: 1000})
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key required
 		NodeID:     "metrics-not-started",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 49014,

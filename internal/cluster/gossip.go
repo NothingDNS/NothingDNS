@@ -268,7 +268,9 @@ func DefaultGossipConfig() GossipConfig {
 }
 
 // NewGossipProtocol creates a new gossip protocol instance.
-func NewGossipProtocol(config GossipConfig, nodeList *NodeList) (*GossipProtocol, error) {
+// allowInsecure permits unencrypted gossip for test/dev scenarios where
+// AllowInsecureCluster is set at the cluster level.
+func NewGossipProtocol(config GossipConfig, nodeList *NodeList, allowInsecure bool) (*GossipProtocol, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	gp := &GossipProtocol{
@@ -281,14 +283,15 @@ func NewGossipProtocol(config GossipConfig, nodeList *NodeList) (*GossipProtocol
 		nextSequence:  1, // Start at 1; 0 is the null/unset sentinel
 	}
 
-	// Initialize AES-GCM if encryption key is provided
+	// VULN-062: Encryption is mandatory unless explicitly allowed for dev/test.
 	if len(config.EncryptionKey) > 0 {
 		if err := gp.initEncryption(config.EncryptionKey); err != nil {
 			cancel()
 			return nil, fmt.Errorf("init encryption: %w", err)
 		}
-	} else {
-		util.Warnf("Cluster gossip encryption is not configured - all cluster communication is transmitted in plaintext. Configure encryption_key for production deployments.")
+	} else if !allowInsecure {
+		cancel()
+		return nil, fmt.Errorf("gossip encryption_key is required: cluster communication would be in plaintext")
 	}
 
 	return gp, nil

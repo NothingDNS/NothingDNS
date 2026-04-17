@@ -714,7 +714,8 @@ func TestHandleClusterStatus(t *testing.T) {
 		}
 
 		clusterCfg := cluster.Config{
-			Enabled:    true,
+			Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key required
 			NodeID:     "test-node-1",
 			BindAddr:   "127.0.0.1",
 			GossipPort: 7946,
@@ -802,7 +803,8 @@ func TestHandleClusterNodes(t *testing.T) {
 		}
 
 		clusterCfg := cluster.Config{
-			Enabled:    true,
+			Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key required
 			NodeID:     "test-node-1",
 			BindAddr:   "127.0.0.1",
 			GossipPort: 7947,

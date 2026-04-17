@@ -21,7 +21,8 @@ func TestNew_EmptyBindAddr_CallsGetLocalIP(t *testing.T) {
 	dnsCache := cache.New(cache.Config{Capacity: 1000})
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "auto-ip-node",
 		BindAddr:   "", // Forces GetLocalIP call
 		GossipPort: 47001,
@@ -47,7 +48,8 @@ func TestNew_NewGossipProtocolNeverErrors(t *testing.T) {
 	dnsCache := cache.New(cache.Config{Capacity: 1000})
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "gossip-err-test",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 47002,
@@ -73,7 +75,8 @@ func TestCluster_Stop_GossipStopNeverErrors(t *testing.T) {
 	dnsCache := cache.New(cache.Config{Capacity: 1000})
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "stop-err-test",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 47003,
@@ -228,7 +231,8 @@ func TestCluster_CacheSyncLoop_InvalidateWithAliveRemoteNode(t *testing.T) {
 	dnsCache := cache.New(cache.Config{Capacity: 1000})
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "sync-remote-test",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 47004,
@@ -272,7 +276,8 @@ func TestCluster_Stop_WithNilGossipConn(t *testing.T) {
 	dnsCache := cache.New(cache.Config{Capacity: 1000})
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "nil-conn-test",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 47005,
@@ -307,7 +312,8 @@ func TestCluster_Stats_WithCacheSync(t *testing.T) {
 	dnsCache := cache.New(cache.Config{Capacity: 1000})
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "stats-sync-test",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 47006,
@@ -344,7 +350,7 @@ func TestGossipProtocol_HandleGossip_ExistingNodeSameVersion(t *testing.T) {
 	nl := NewNodeList(self)
 	nl.Add(existingNode)
 
-	gp, _ := NewGossipProtocol(DefaultGossipConfig(), nl)
+	gp, _ := NewGossipProtocol(DefaultGossipConfig(), nl, true)
 
 	joinCalled := false
 	updateCalled := false
@@ -398,7 +404,8 @@ func TestCluster_InvalidateCacheLocal_MultipleKeys(t *testing.T) {
 	}
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "multi-inval-test",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 47007,
@@ -434,8 +441,8 @@ func TestGossipProtocol_FullPingAckRoundTrip(t *testing.T) {
 	cfg2.BindAddr = "127.0.0.1"
 	cfg2.BindPort = 47009
 
-	gp1, _ := NewGossipProtocol(cfg1, nl1)
-	gp2, _ := NewGossipProtocol(cfg2, nl2)
+	gp1, _ := NewGossipProtocol(cfg1, nl1, true)
+	gp2, _ := NewGossipProtocol(cfg2, nl2, true)
 
 	pingReceived := false
 	gp2.SetCallbacks(
@@ -482,7 +489,8 @@ func TestCluster_Start_EmptySeeds(t *testing.T) {
 	dnsCache := cache.New(cache.Config{Capacity: 1000})
 
 	cfg := Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key
 		NodeID:     "empty-seeds-test",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 47010,

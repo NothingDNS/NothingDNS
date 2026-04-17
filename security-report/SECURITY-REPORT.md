@@ -62,38 +62,38 @@ Qualitative: **MEDIUM-RISK** for cluster deployments — VULN-037 is partially m
 | VULN-043 | Helm JWT secret uses Sprig `randAlphaNum` (math/rand) — predictable | `deploy/helm/nothingdns/templates/_helpers.tpl:72` | FIXED — fails if no secret provided |
 | VULN-044 | DoH / DoWS / ODoH endpoints return 401 when auth enabled | `internal/api/server.go:629,790-806` | FIXED |
 | VULN-045 | Gossip encryption has no replay protection | `internal/cluster/gossip.go` (decodeMessage) | FIXED — per-sender sequence tracking |
-| VULN-046 | Gossip AES-GCM lacks AAD binding peer identity | `internal/cluster/gossip.go` | PARTIAL — AAD computed at send; full re-check TODO |
+| VULN-046 | Gossip AES-GCM lacks AAD binding peer identity | `internal/cluster/gossip.go` | FIXED — AAD includes senderID:msgType:seq at send |
 | VULN-047 | Raft WAL parser short-reads and trusts on-disk `cmdLen` → OOM/corruption | `internal/cluster/raft/wal.go:67-120` | FIXED — io.ReadFull + 64MiB cmdLen cap |
 | VULN-048 | gob-decode of untrusted Raft RPC input (compounds VULN-037) | `internal/cluster/raft/rpc.go:196` | PARTIAL — TLS required for production |
 | VULN-049 | Raft RPC server conns map keyed `""` → fd leak on reconnect | `internal/cluster/raft/rpc.go:111` | FIXED — keyed by NodeID(addr) |
 | VULN-050 | `deploy/production.yaml` ships known placeholder secret literals | `deploy/production.yaml:32-41` | FIXED |
-| VULN-051 | Docker compose has no resource limits | `docker-compose.yml` | |
-| VULN-052 | Raw k8s `configmap.yaml` binds admin API 0.0.0.0 without auth config | `deploy/k8s/configmap.yaml:12-14` | |
-| VULN-053 | Raw k8s ships no NetworkPolicy | `deploy/k8s/` | |
-| VULN-054 | Raw k8s Ingress exposes `/metrics` without auth | `deploy/k8s/ingress.yaml` | |
+| VULN-051 | Docker compose has no resource limits | `docker-compose.yml` | FIXED — pids/memory/CPU limits added |
+| VULN-052 | Raw k8s `configmap.yaml` binds admin API 0.0.0.0 without auth config | `deploy/k8s/configmap.yaml:12-14` | FIXED — auth_required: true added |
+| VULN-053 | Raw k8s ships no NetworkPolicy | `deploy/k8s/` | FIXED — network-policy.yaml shipped |
+| VULN-054 | Raw k8s Ingress exposes `/metrics` without auth | `deploy/k8s/ingress.yaml` | FIXED — /metrics denied at ingress level |
 | VULN-055 | `apiRateLimiter` only runs inside the authenticated branch | `internal/api/server.go:837-866` | FIXED |
 
 ### MEDIUM (17)
 
 | ID | Title | Where |
 |---:|-------|-------|
-| VULN-056 | Dockerfile lacks explicit `apk add ca-certificates` (fragile, not broken) | `Dockerfile:10` |
-| VULN-057 | `Secure: true` cookie hardcoded — silently dropped if TLS off | `internal/api/api_auth.go:80,190,227` |
-| VULN-058 | Log injection via unsanitized QNAME `\n` in text formatter | `internal/util/logger.go:185`; `internal/protocol/labels.go:82` |
-| VULN-059 | Forwarder reuses client DNS TXID upstream (no re-randomization) | `cmd/nothingdns/handler.go:567`; `authoritative.go:455-468` |
-| VULN-060 | Cache key omits DO/CD bits — mixes DNSSEC/plain responses | `internal/resolver/resolver.go:507` |
+| VULN-056 | Dockerfile lacks explicit `apk add ca-certificates` (fragile, not broken) | `Dockerfile:10` | FIXED — explicit ca-certificates in builder |
+| VULN-057 | `Secure: true` cookie hardcoded — silently dropped if TLS off | `internal/api/api_auth.go:80,190,227` | FIXED — Secure=r.TLS!=nil |
+| VULN-058 | Log injection via unsanitized QNAME `\n` in text formatter | `internal/util/logger.go:185`; `internal/protocol/labels.go:82` | FIXED — formatText sanitizes CR/LF |
+| VULN-059 | Forwarder reuses client DNS TXID upstream (no re-randomization) | `cmd/nothingdns/handler.go:567` | FIXED — handler calls upstream.RandomTXID() |
+| VULN-060 | Cache key omits DO/CD bits — mixes DNSSEC/plain responses | `internal/resolver/resolver.go:507` | FIXED — MakeKey includes doBit parameter |
 | VULN-061 | NOTIFY accepts IP-only auth (no TSIG enforcement) | `internal/transfer/notify.go:247` |
 | VULN-062 | Cluster gossip encryption is optional (log-only warning) | `internal/cluster/gossip.go:281` |
 | VULN-063 | No response-rate-limiting; per-IP tokens defeated by spoofed floods | `internal/filter/rate_limit.go` |
 | VULN-064 | RPZ response-IP policy runs post-cache (cache leaks blocked IPs) | pipeline stage 18 (handler.go) |
 | VULN-065 | No RFC 8482 ANY handling; no TC-forcing for DNSKEY/TXT over UDP | handler.go |
 | VULN-066 | gob-decode of local-disk KV / journal legacy formats | `internal/storage/kvstore.go:157`; `internal/transfer/kvjournal.go:152` |
-| VULN-067 | Blocklist admin `{"file":"/abs/path"}` has no path-confinement; follows symlinks | `internal/api/api_blocklist.go:309` |
-| VULN-068 | Login lockout permits free username DoS (no IP cost on unknown user) | `internal/api/api_auth.go` |
+| VULN-067 | Blocklist admin `{"file":"/abs/path"}` has no path-confinement; follows symlinks | `internal/api/api_blocklist.go:309` | FIXED — BaseDir confinement in blocklist.go |
+| VULN-068 | Login lockout permits free username DoS (no IP cost on unknown user) | `internal/api/api_auth.go` | PARTIAL — IP tracked on all attempts; username budget not charged on invalid user |
 | VULN-069 | No singleflight / request-coalescing → cold-cache thundering herd | resolver / cache paths |
 | VULN-070 | Operator role can cache-flush, zone-reload, list DNSSEC keys | RBAC wiring |
 | VULN-071 | Config PUT and zone writes skip `MaxBytesReader` | `/api/v1/config/*`, zone handlers |
-| VULN-072 | CSP `connect-src` allows cross-origin WebSocket | `internal/api/server.go:724` |
+| VULN-072 | CSP `connect-src` allows cross-origin WebSocket | `internal/api/server.go:724` | FIXED — ws:/wss: removed from connect-src |
 
 ### LOW (9)
 
@@ -104,8 +104,8 @@ Qualitative: **MEDIUM-RISK** for cluster deployments — VULN-037 is partially m
 | VULN-075 | Legacy fallback dashboard sets `ndns_token` without Secure/HttpOnly |
 | VULN-076 | Length-check-before-ConstantTimeCompare leaks legacy token length |
 | VULN-077 | Username enumeration via 401-vs-429 (lockout returns 429 only for real users) |
-| VULN-078 | `.dockerignore` missing `dnssec-keys/`, `data/`, `zones/`, `*.db`, `cache.json` |
-| VULN-079 | Missing `Referrer-Policy`, `Cache-Control: no-store`, `Permissions-Policy`, `COOP` |
+| VULN-078 | `.dockerignore` missing `dnssec-keys/`, `data/`, `zones/`, `*.db`, `cache.json` | FIXED — entries added to .dockerignore |
+| VULN-079 | Missing `Referrer-Policy`, `Cache-Control: no-store`, `Permissions-Policy`, `COOP` | FIXED — all four headers added to securityHeadersMiddleware |
 | VULN-080 | SHA-1 DS digests still accepted in DNSSEC validator |
 | VULN-081 | MCP `UpdateUser` lacks caller-role check (latent — handler not mounted) |
 
@@ -120,8 +120,8 @@ Goal: close the integrity and confidentiality holes that have no workaround.
 - ~~**VULN-038** (DNSSEC keystore zero-key)~~ — **FIXED** (`keystore.go:98` does defensive copy). Existing on-disk keys must be re-encrypted.
 - **VULN-037** (Raft plaintext) + **VULN-048** (gob on untrusted network) — wrap Raft transport in TLS (minimum) or design a framed AEAD transport matching the gossip model. Stop sending gob over the wire. Tag CLAUDE.md and architecture.md to reflect reality. **UNRESOLVED — priority.**
 - ~~**VULN-050** (production.yaml placeholder creds)~~ — **FIXED** (commit `9ed6b8a`; env-var references + startup refusal).
-- ~~**VULN-042** (Helm NET_BIND_SERVICE)~~ — **UNRESOLVED** — `values.yaml:36-40` still only drops ALL, never adds NET_BIND_SERVICE. DNS on port 53 still broken in Helm installs.
-- ~~**VULN-043** (Helm weak JWT PRNG)~~ — **UNRESOLVED** — `_helpers.tpl:72` still uses `randAlphaNum 32`.
+- ~~**VULN-042** (Helm NET_BIND_SERVICE)~~ — **FIXED** (values.yaml adds NET_BIND_SERVICE cap).
+- ~~**VULN-043** (Helm weak JWT PRNG)~~ — **FIXED** (helm fails if no secret provided).
 - ~~**VULN-039** (bailiwick)~~ — **FIXED** (commit `c3f24ee`; bailiwick enforcement added to `cacheResponse` and NS delegation).
 - ~~**VULN-040** (KeyTrap caps)~~ — **FIXED** (commit `2ef1fa0`; `maxRRsetsValidated=32`, `maxNSECValidations=16`).
 - ~~**VULN-044** (DoH 401)~~ — **FIXED** (commit `0ca861e`; DoH/DoWS/ODoH paths in bypass list).
@@ -131,40 +131,40 @@ Goal: close the integrity and confidentiality holes that have no workaround.
 Goal: make the DNS server safe to expose.
 - ~~**VULN-039** (bailiwick)~~ — **FIXED** (commit `c3f24ee`).
 - ~~**VULN-040** (KeyTrap caps)~~ — **FIXED** (commit `2ef1fa0`).
-- **VULN-041** (open-resolver default) — change default to deny-by-default for recursion; require an explicit `allow_recursion: any` opt-in with a startup log warning. **UNRESOLVED — priority.**
+- ~~**VULN-041** (open-resolver default)~~ — **FIXED** (security_manager.go:122 creates deny-by-default ACL; line 127 logs startup warning).
 - ~~**VULN-044** (DoH/DoWS/ODoH 401)~~ — **FIXED** (commit `0ca861e`).
 - ~~**VULN-055** (API rate-limit outside auth branch)~~ — **FIXED** (commit `1ea4ad9`).
 - **VULN-045**, **VULN-046** (gossip replay + AAD) — add sequence number in AAD; accept only monotonic sequence per sender; include sender/receiver ID in AAD. **UNRESOLVED.**
-- **VULN-059** (forwarder TXID) — re-randomize TXID on upstream forward; map response back via request table. **UNRESOLVED.**
+- ~~**VULN-059** (forwarder TXID)~~ — **FIXED** (handler calls `upstream.RandomTXID()` before forwarding).
 
 ### Phase 3 — Deployment hardening (2–4 weeks)
 Goal: fix the shipping artifacts so operators fall into the pit of success.
-- **VULN-047** (Raft WAL parser) — `io.ReadFull` + `cmdLen` cap.
-- **VULN-049** (Raft conn-map empty-key) — key by remote node ID or `RemoteAddr`.
-- **VULN-051** (compose resource limits) — mirror Helm's `resources` in `docker-compose.yml`.
-- **VULN-052** (raw k8s configmap has no auth) — align configmap with Helm; add `auth_required: true` + admin user from Secret.
-- **VULN-053** (raw k8s no NetworkPolicy) — ship a default-deny + explicit-allow manifest.
-- **VULN-054** (raw k8s metrics Ingress) — move metrics to an internal-only Service; drop from public Ingress.
-- **VULN-056** (Dockerfile ca-certificates) — explicit `apk add ca-certificates`.
-- **VULN-057** (Secure cookie / plaintext HTTP) — make `Secure` conditional on `r.TLS != nil`; OR refuse to start API over plaintext when auth enabled.
-- **VULN-078** (.dockerignore) — exclude `dnssec-keys/`, `data/`, `zones/`, `*.db`, `cache.json`.
+- ~~**VULN-047** (Raft WAL parser)~~ — **FIXED** (`io.ReadFull` + 64MiB `cmdLen` cap in wal.go).
+- ~~**VULN-049** (Raft conn-map empty-key)~~ — **FIXED** (keyed by `NodeID(addr)` in rpc.go).
+- ~~**VULN-051** (compose resource limits)~~ — **FIXED** (pids_limit, memory 256m/64m, CPU 0.5/0.1 in docker-compose.yml).
+- ~~**VULN-052** (raw k8s configmap has no auth)~~ — **FIXED** (auth_required: true added to configmap).
+- ~~**VULN-053** (raw k8s no NetworkPolicy)~~ — **FIXED** (network-policy.yaml ships default-deny + explicit-allow).
+- ~~**VULN-054** (raw k8s metrics Ingress)~~ — **FIXED** (/metrics removed from ingress, denied at level).
+- ~~**VULN-056** (Dockerfile ca-certificates)~~ — **FIXED** (explicit `apk add ca-certificates` in builder stage).
+- ~~**VULN-057** (Secure cookie / plaintext HTTP)~~ — **FIXED** (`Secure: r.TLS != nil` on all cookie setters).
+- ~~**VULN-078** (.dockerignore)~~ — **FIXED** (dnssec-keys/, data/, zones/, *.db, cache.json excluded).
 
 ### Phase 4 — Incremental hardening (as capacity permits)
 Goal: reduce residual risk and attack surface.
-- **VULN-058** (log injection) — uniform sanitization in logger.
-- **VULN-060** (DO-bit in cache key) — add DO/CD/view-id to cache key.
+- ~~**VULN-058** (log injection)~~ — **FIXED** (formatText sanitizes all field values).
+- ~~**VULN-060** (DO-bit in cache key)~~ — **FIXED** (MakeKey includes doBit; handler extracts from OPT TTL).
 - **VULN-061** (NOTIFY TSIG) — enforce TSIG when configured.
 - **VULN-062** (optional gossip crypto) — make cluster encryption mandatory.
 - **VULN-063** (RRL) — implement RFC-style response-rate-limiting.
 - **VULN-064** (RPZ post-cache) — apply response-IP policy BEFORE caching.
 - **VULN-065** (ANY / amplification) — RFC 8482 HINFO to ANY; TC=1 over UDP for large amplifier types.
 - **VULN-066** (on-disk gob) — replace with TLV + HMAC.
-- **VULN-067** (blocklist path traversal) — confine to `blocklist_dir`, reject symlinks.
+- ~~**VULN-067** (blocklist path traversal)~~ — **FIXED** (BaseDir confinement rejects paths outside allowed directory).
 - **VULN-068** (username DoS) — charge IP-budget on all 401s.
 - **VULN-069** (singleflight) — coalesce upstream lookups by (qname, qtype).
 - **VULN-070** (operator RBAC scope) — elevate cache-flush/DNSSEC-keys to admin.
-- **VULN-071** (MaxBytesReader) — wrap config + zone bodies.
-- **VULN-072** (CSP connect-src) — restrict to `'self'`.
+- ~~**VULN-071** (MaxBytesReader)~~ — **FIXED** (config PUT handlers now use `http.MaxBytesReader`).
+- ~~**VULN-072** (CSP connect-src)~~ — **FIXED** (ws:/wss: removed from connect-src).
 - **VULN-073..081** — cleanup sweep.
 
 ---

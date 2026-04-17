@@ -85,7 +85,7 @@ func TestGossipProtocol_InitEncryption_ValidKey(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, err := NewGossipProtocol(cfg, nl)
+	gp, err := NewGossipProtocol(cfg, nl, true)
 	if err != nil {
 		t.Fatalf("NewGossipProtocol() error = %v", err)
 	}
@@ -108,7 +108,7 @@ func TestGossipProtocol_InitEncryption_InvalidKeySize(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	// 16-byte key should fail
 	err := gp.initEncryption(make([]byte, 16))
@@ -138,7 +138,7 @@ func TestGossipProtocol_EncryptDecryptRoundTrip(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	// Initialize encryption
 	key := make([]byte, 32)
@@ -184,7 +184,7 @@ func TestGossipProtocol_Encrypt_NoAEAD(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 	// Do NOT init encryption — aead is nil
 
 	plaintext := []byte("no encryption")
@@ -202,7 +202,7 @@ func TestGossipProtocol_Decrypt_NoAEAD(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	data := []byte("no encryption")
 	result, err := gp.decrypt(data)
@@ -223,7 +223,7 @@ func TestGossipProtocol_Decrypt_TooShort(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 	key := make([]byte, 32)
 	if err := gp.initEncryption(key); err != nil {
 		t.Fatalf("initEncryption() error = %v", err)
@@ -245,7 +245,7 @@ func TestGossipProtocol_Decrypt_Corrupted(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 	key := make([]byte, 32)
 	if err := gp.initEncryption(key); err != nil {
 		t.Fatalf("initEncryption() error = %v", err)
@@ -727,7 +727,7 @@ func TestGossipProtocol_GetSelfID(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	if got := gp.GetSelfID(); got != "my-node-id" {
 		t.Errorf("GetSelfID() = %q, want %q", got, "my-node-id")
@@ -739,7 +739,7 @@ func TestGossipProtocol_GetLeaderTerm_Initial(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	if got := gp.GetLeaderTerm(); got != 0 {
 		t.Errorf("GetLeaderTerm() = %d, want 0 (initial)", got)
@@ -751,7 +751,7 @@ func TestGossipProtocol_IsLeaderAlive_NoLeader(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	// No leader set, should return false
 	if gp.IsLeaderAlive(10 * time.Second) {
@@ -764,7 +764,7 @@ func TestGossipProtocol_IsLeaderAlive_StaleHeartbeat(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	// Set a leader with old heartbeat
 	gp.leaderMu.Lock()
@@ -782,7 +782,7 @@ func TestGossipProtocol_IsLeaderAlive_RecentHeartbeat(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	// Set a leader with recent heartbeat
 	gp.leaderMu.Lock()
@@ -804,7 +804,7 @@ func TestGossipProtocol_GetClusterMetrics_Aggregation(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	// Pre-populate nodeMetrics
 	gp.nodeMetrics["node-a"] = ClusterMetricsPayload{
@@ -859,7 +859,7 @@ func TestGossipProtocol_GetClusterMetrics_Empty(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	metrics := gp.GetClusterMetrics()
 	if metrics.QueriesTotal != 0 {
@@ -879,7 +879,7 @@ func TestGossipProtocol_StepDown_AsLeader(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	// Set as leader
 	gp.leaderMu.Lock()
@@ -912,7 +912,7 @@ func TestGossipProtocol_StepDown_NotLeader(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	// Not leader, StepDown should be a no-op
 	gp.leaderMu.Lock()
@@ -935,7 +935,7 @@ func TestGossipStats_Initial(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	stats := gp.Stats()
 	if stats.MessagesSent != 0 {
@@ -994,7 +994,7 @@ func TestGossipProtocol_AnnounceLeader_NotLeader(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 	// Not started, not leader
 
 	err := gp.AnnounceLeader()
@@ -1012,7 +1012,7 @@ func TestGossipProtocol_BroadcastZoneUpdate_NotLeader(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	err := gp.BroadcastZoneUpdate(ZoneUpdatePayload{
 		ZoneName: "example.com.",
@@ -1033,7 +1033,7 @@ func TestGossipProtocol_BroadcastConfigUpdate_NotLeader(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	err := gp.BroadcastConfigUpdate(ConfigSyncPayload{
 		ConfigSHA256: "abc123",
@@ -1054,7 +1054,7 @@ func TestNewGossipProtocol_WithEncryptionKey(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.EncryptionKey = make([]byte, 32)
 
-	gp, err := NewGossipProtocol(cfg, nl)
+	gp, err := NewGossipProtocol(cfg, nl, true)
 	if err != nil {
 		t.Fatalf("NewGossipProtocol() with valid key error = %v", err)
 	}
@@ -1069,7 +1069,7 @@ func TestNewGossipProtocol_WithInvalidEncryptionKey(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.EncryptionKey = make([]byte, 16) // Wrong size
 
-	_, err := NewGossipProtocol(cfg, nl)
+	_, err := NewGossipProtocol(cfg, nl, true)
 	if err == nil {
 		t.Error("NewGossipProtocol() with 16-byte key should fail")
 	}
@@ -1085,7 +1085,7 @@ func TestGossipProtocol_DecodeMessage_EncryptedRejectsPlaintext(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.EncryptionKey = make([]byte, 32)
 
-	gp, err := NewGossipProtocol(cfg, nl)
+	gp, err := NewGossipProtocol(cfg, nl, true)
 	if err != nil {
 		t.Fatalf("NewGossipProtocol() error = %v", err)
 	}
@@ -1108,7 +1108,7 @@ func TestGossipProtocol_DecodeMessage_ProtocolVersionMismatch(t *testing.T) {
 	cfg := DefaultGossipConfig()
 	cfg.ProtocolVersion = 2
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	// Encode a message with a different protocol version
 	msgData, _ := encodeMessage(MessageTypePing, "other-node", 5, []byte("test"))
@@ -1126,7 +1126,7 @@ func TestGossipProtocol_DecodeMessage_ProtocolVersionZeroAccepted(t *testing.T) 
 	cfg := DefaultGossipConfig()
 	cfg.ProtocolVersion = 2
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	// Create a message with ProtocolVersion=0 (legacy)
 	msg := Message{
@@ -1431,7 +1431,7 @@ func TestGossipProtocol_HandleDraining_EnteringDraining(t *testing.T) {
 	nl.Add(&Node{ID: "other", State: NodeStateAlive, Version: 1})
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	// Handle draining message from "other" node
 	payload := DrainingPayload{
@@ -1469,7 +1469,7 @@ func TestGossipProtocol_HandleNodeStats(t *testing.T) {
 	nl.Add(&Node{ID: "other", State: NodeStateAlive, Version: 1})
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	now := time.Now()
 	payload := NodeStatsPayload{
@@ -1512,7 +1512,7 @@ func TestGossipProtocol_HandleClusterMetrics(t *testing.T) {
 	nl := NewNodeList(self)
 	cfg := DefaultGossipConfig()
 
-	gp, _ := NewGossipProtocol(cfg, nl)
+	gp, _ := NewGossipProtocol(cfg, nl, true)
 
 	payload := ClusterMetricsPayload{
 		NodeID:        "remote-metrics-node",

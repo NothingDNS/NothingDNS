@@ -72,7 +72,8 @@ func TestHandleStatus_WithCluster(t *testing.T) {
 	}
 
 	clusterCfg := cluster.Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key required
 		NodeID:     "status-test-node",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 0, // let OS pick
@@ -133,10 +134,10 @@ func (m *mockDNSHandler) ServeDNS(_ server.ResponseWriter, _ *protocol.Message) 
 func TestStart_DoHEnabled(t *testing.T) {
 	addr := pickFreeAddr(t)
 	cfg := config.HTTPConfig{
-		Enabled:    true,
-		Bind:       addr,
+		Enabled:   true,
+		Bind:      addr,
 		DoHEnabled: true,
-		DoHPath:    "/dns-query",
+		DoHPath:   "/dns-query",
 	}
 
 	srv := NewServer(cfg, nil, nil, nil, &mockDNSHandler{}, nil, nil)
@@ -165,7 +166,8 @@ func TestStart_DoHEnabled(t *testing.T) {
 func TestStart_WithCluster(t *testing.T) {
 	addr := pickFreeAddr(t)
 	clusterCfg := cluster.Config{
-		Enabled:    true,
+		Enabled:              true,
+		AllowInsecureCluster: true, // test: no encryption key required
 		NodeID:     "start-cluster-node",
 		BindAddr:   "127.0.0.1",
 		GossipPort: 0,
