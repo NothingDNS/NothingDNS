@@ -832,6 +832,21 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			}
 		}
 
+		// VULN-055: Apply the API rate limit to every /api/ request BEFORE
+		// any auth decision, so unauthenticated scans and failed-auth
+		// brute-force attempts also consume budget. Previously the limiter
+		// only fired inside the successful-auth branches, which left the
+		// login/credential-stuffing surface unthrottled.
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			ip := getClientIP(r)
+			if s.apiRateLimiter.checkRateLimit(ip) {
+				resetTime := s.apiRateLimiter.getResetTime(ip)
+				w.Header().Set("Retry-After", strconv.Itoa(int(resetTime.Seconds())+1))
+				http.Error(w, `{"error":"rate limit exceeded"}`, http.StatusTooManyRequests)
+				return
+			}
+		}
+
 		// SECURITY: If neither AuthToken nor authStore is configured,
 		// authentication is required. Deny all API requests.
 		// To allow unauthenticated access, set auth_token or configure users.
@@ -858,14 +873,6 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			// SECURITY: Check length first to prevent timing attack via ConstantTimeCompare
 			legacyToken := s.config.AuthToken
 			if legacyToken != "" && len(token) == len(legacyToken) && subtle.ConstantTimeCompare([]byte(token), []byte(legacyToken)) == 1 {
-				// Check API rate limit for authenticated requests
-				ip := getClientIP(r)
-				if s.apiRateLimiter.checkRateLimit(ip) {
-					resetTime := s.apiRateLimiter.getResetTime(ip)
-					w.Header().Set("Retry-After", strconv.Itoa(int(resetTime.Seconds())+1))
-					http.Error(w, `{"error":"rate limit exceeded"}`, http.StatusTooManyRequests)
-					return
-				}
 				// Legacy token binds to config.AuthTokenRole (default viewer).
 				// Previously this silently synthesized admin regardless of intent.
 				ctx := WithUser(r.Context(), legacyTokenUser(s.config.AuthTokenRole))
@@ -876,14 +883,6 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			// Try JWT-style token from auth store
 			if s.authStore != nil {
 				if user, err := s.authStore.ValidateToken(token); err == nil {
-					// Check API rate limit for authenticated requests
-					ip := getClientIP(r)
-					if s.apiRateLimiter.checkRateLimit(ip) {
-						resetTime := s.apiRateLimiter.getResetTime(ip)
-						w.Header().Set("Retry-After", strconv.Itoa(int(resetTime.Seconds())+1))
-						http.Error(w, `{"error":"rate limit exceeded"}`, http.StatusTooManyRequests)
-						return
-					}
 					// Set user info in request context
 					ctx := WithUser(r.Context(), user)
 					next.ServeHTTP(w, r.WithContext(ctx))

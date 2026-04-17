@@ -176,6 +176,42 @@ func TestDoHPathsBypassAuth(t *testing.T) {
 	}
 }
 
+// TestAPIRateLimitAppliesToUnauthenticatedRequests locks in VULN-055. The
+// apiRateLimiter used to only fire inside the successful-auth branches of
+// authMiddleware, so an attacker brute-forcing credentials (which fails auth
+// every time) never consumed budget. After the fix the limit applies to all
+// /api/ requests before any auth decision.
+func TestAPIRateLimitAppliesToUnauthenticatedRequests(t *testing.T) {
+	cfg := config.HTTPConfig{
+		Enabled:   true,
+		Bind:      "127.0.0.1:0",
+		AuthToken: "shared-secret-token",
+	}
+	server := NewServer(cfg, nil, nil, nil, nil, nil, nil)
+
+	testHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// Burn the per-IP budget with unauthenticated requests. The exact max
+	// lives in apiRateLimitMaxRequests; use it directly to stay in sync if
+	// the constant ever changes.
+	var lastStatus int
+	for i := 0; i < apiRateLimitMaxRequests+1; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil)
+		// Route every simulated request from the same source IP.
+		req.RemoteAddr = "203.0.113.10:40000"
+		rec := httptest.NewRecorder()
+		server.authMiddleware(testHandler).ServeHTTP(rec, req)
+		lastStatus = rec.Code
+	}
+
+	if lastStatus != http.StatusTooManyRequests {
+		t.Errorf("after %d unauthenticated /api/ requests, last status = %d, want %d (rate-limit must apply before auth)",
+			apiRateLimitMaxRequests+1, lastStatus, http.StatusTooManyRequests)
+	}
+}
+
 // TestDoHBypassOnlyWhenEnabled verifies the bypass is gated on the feature
 // flag: if DoHEnabled=false, a request to DoHPath must NOT forward to the
 // next handler (the bypass must not activate). The authMiddleware's own
