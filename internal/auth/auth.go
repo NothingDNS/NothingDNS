@@ -240,20 +240,45 @@ func generateSecurePassword(length int) (string, error) {
 }
 
 // VerifyPassword checks if a password matches a stored hash.
+// Timing-safe: all code paths pay the same PBKDF2 cost and the final
+// constant-time comparison always operates on equal-length buffers,
+// eliminating the timing side-channel from the old length-check-then-
+// constant-time-compare pattern (VULN-076).
 func VerifyPassword(password string, hash []byte) bool {
+	// Max output length = 32-byte salt + 64-byte PBKDF2 key = 96 bytes.
+	const maxLen = 96
+
+	// Determine salt length from hash length.
 	// New format: 32-byte salt + 64-byte key = 96 bytes total
-	// Old format: 16-byte salt + 32-byte key = 48 bytes total
-	if len(hash) < 48 {
-		return false
-	}
+	// Legacy format: 16-byte salt + 32-byte key = 48 bytes total
 	saltLen := 32
 	if len(hash) == 48 {
-		// Legacy format: 16-byte salt + 32-byte key
 		saltLen = 16
 	}
-	salt := hash[:saltLen]
+
+	// Extract salt — if hash is shorter than saltLen, copy what we have;
+	// zeros fill the remainder. The copied bytes are only used for KDF,
+	// not for the comparison, so zero-filling is safe.
+	salt := make([]byte, saltLen)
+	if n := copy(salt, hash); n > 0 {
+		// salt populated by copy; zeros pad any remaining bytes
+	}
+
+	// Always run PBKDF2 so every code path pays the same crypto cost.
+	// This closes the timing side-channel where a very-short hash would
+	// return before the expensive KDF (VULN-076).
 	expected := HashPassword(password, salt)
-	return subtle.ConstantTimeCompare(hash, expected) == 1
+
+	// Constant-time comparison of equal-length (maxLen) buffers.
+	// Zero-pad both hash and expected to maxLen so that:
+	//   - old 48-byte hashes are padded to 96 bytes (zero-fill)
+	//   - old 96-byte hashes compare directly
+	//   - new 96-byte hashes compare directly
+	// No secret-dependent branching or early returns occur.
+	var bufHash, bufExpected [maxLen]byte
+	copy(bufHash[:], hash)
+	copy(bufExpected[:], expected)
+	return subtle.ConstantTimeCompare(bufHash[:], bufExpected[:]) == 1
 }
 
 // GenerateToken creates a new authentication token for a user.

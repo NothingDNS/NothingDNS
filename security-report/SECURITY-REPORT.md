@@ -102,7 +102,7 @@ Qualitative: **MEDIUM-RISK** for cluster deployments — VULN-037 is partially m
 | VULN-073 | Upstream client goroutine leak on ctx cancellation |
 | VULN-074 | SPA catch-all serves `index.html` for unknown `/api/*` |
 | VULN-075 | Legacy fallback dashboard sets `ndns_token` without Secure/HttpOnly |
-| VULN-076 | Length-check-before-ConstantTimeCompare leaks legacy token length |
+| VULN-076 | Length-check-before-ConstantTimeCompare leaks legacy token length | FIXED — `VerifyPassword` now zero-pads both hash and expected to 96 bytes before constant-time compare; PBKDF2 cost is paid on all code paths |
 | VULN-077 | Username enumeration via 401-vs-429 (lockout returns 429 only for real users) |
 | VULN-078 | `.dockerignore` missing `dnssec-keys/`, `data/`, `zones/`, `*.db`, `cache.json` | FIXED — entries added to .dockerignore |
 | VULN-079 | Missing `Referrer-Policy`, `Cache-Control: no-store`, `Permissions-Policy`, `COOP` | `internal/api/server.go:706-716` | FIXED — all five headers added to securityHeadersMiddleware |
