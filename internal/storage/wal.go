@@ -402,6 +402,12 @@ func (wal *WAL) decodeEntry(buf []byte) (*WALEntry, error) {
 
 	// Read length
 	length := binary.BigEndian.Uint32(buf[5:9])
+	// Reject entries larger than a segment before allocating — a corrupted or
+	// hostile length prefix otherwise makes us `make([]byte, 4 GiB)` during
+	// recovery (VULN-020).
+	if int64(length) > MaxSegmentSize {
+		return nil, ErrCorruptEntry
+	}
 	if len(buf) < WALHeaderSize+int(length) {
 		return nil, ErrCorruptEntry
 	}
