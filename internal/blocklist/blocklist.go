@@ -32,6 +32,8 @@ type Blocklist struct {
 	sourceEntries   map[string]map[string]Entry // source → domain → Entry
 	disabledSources map[string]bool             // source → disabled
 	manualEntries   map[string]Entry            // manually added domains (no source)
+	// baseDir confines file sources to prevent arbitrary file reads (VULN-067)
+	baseDir string
 }
 
 // Config holds blocklist configuration.
@@ -39,6 +41,9 @@ type Config struct {
 	Enabled bool
 	Files   []string
 	URLs    []string // URLs to download blocklists from
+	// BaseDir confines file sources to this directory to prevent
+	// arbitrary file reads (VULN-067). Paths outside BaseDir are rejected.
+	BaseDir string
 }
 
 // maxBlocklistRedirects caps the number of HTTP redirects followed when fetching
@@ -56,6 +61,7 @@ func New(cfg Config) *Blocklist {
 		files:           cfg.Files,
 		urls:            cfg.URLs,
 		enabled:         cfg.Enabled,
+		baseDir:         cfg.BaseDir,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 			// SECURITY: Re-validate every redirect hop. Without this, Go's default
@@ -302,7 +308,22 @@ func (bl *Blocklist) loadFile(path string) error {
 	if strings.Contains(cleanPath, "..") {
 		return fmt.Errorf("blocklist path traversal attempt blocked: %s", path)
 	}
-	// Ensure the path is absolute and doesn't escape the base directory
+	// VULN-067: Reject absolute paths outside BaseDir when BaseDir is configured.
+	// This prevents reading arbitrary files like /etc/passwd or ../../secret.
+	if bl.baseDir != "" {
+		absPath, err := filepath.Abs(cleanPath)
+		if err != nil {
+			return fmt.Errorf("blocklist path: %w", err)
+		}
+		absBaseDir, err := filepath.Abs(bl.baseDir)
+		if err != nil {
+			return fmt.Errorf("blocklist basedir: %w", err)
+		}
+		if !strings.HasPrefix(absPath, absBaseDir+string(filepath.Separator)) {
+			return fmt.Errorf("blocklist path %q is outside BaseDir %q", path, bl.baseDir)
+		}
+	}
+	// Ensure the path is absolute
 	if !filepath.IsAbs(cleanPath) {
 		return fmt.Errorf("blocklist path must be absolute: %s", path)
 	}
