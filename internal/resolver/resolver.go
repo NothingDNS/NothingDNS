@@ -69,12 +69,57 @@ func DefaultConfig() Config {
 	}
 }
 
+// call represents an in-flight or completed singleflight request.
+type call[T any] struct {
+	result T
+	err    error
+	ready  chan struct{} // closed when result is ready
+}
+
+// singleflight deduplicates concurrent Resolve calls for the same (name, qtype).
+type singleflight[T any] struct {
+	mu     sync.Mutex
+	active map[string]*call[T]
+}
+
+// Do deduplicates concurrent calls. If an identical call is already in flight,
+// the caller waits and shares the result. The key should uniquely identify the
+// work item (e.g., "example.com.:A").
+func (sf *singleflight[T]) Do(key string, fn func() (T, error)) (T, error, bool) {
+	sf.mu.Lock()
+	if sf.active == nil {
+		sf.active = make(map[string]*call[T])
+	}
+	if c, ok := sf.active[key]; ok {
+		sf.mu.Unlock()
+		<-c.ready
+		return c.result, c.err, true // shared = true (result from another caller)
+	}
+	c := &call[T]{ready: make(chan struct{})}
+	sf.active[key] = c
+	sf.mu.Unlock()
+
+	c.result, c.err = fn()
+
+	close(c.ready)
+
+	sf.mu.Lock()
+	delete(sf.active, key)
+	sf.mu.Unlock()
+
+	return c.result, c.err, false // shared = false (first caller)
+}
+
 // Resolver performs iterative DNS resolution starting from root servers.
 type Resolver struct {
 	config    Config
 	cache     Cache
 	transport Transport
 	hints     []RootHint
+
+	// singleflight deduplicates concurrent upstream queries for the same
+	// (name, qtype) to prevent cold-cache thundering herd (VULN-069).
+	sfGroup singleflight[*protocol.Message]
 }
 
 // NewResolver creates a new iterative resolver.
@@ -111,8 +156,14 @@ type delegation struct {
 
 // Resolve resolves a DNS query iteratively starting from root servers.
 // Implements RFC 1034 §5.3.3 resolver algorithm.
+// Uses singleflight to deduplicate concurrent identical queries, preventing
+// cold-cache thundering herd (VULN-069).
 func (r *Resolver) Resolve(ctx context.Context, name string, qtype uint16) (*protocol.Message, error) {
-	return r.resolve(ctx, name, qtype, 0)
+	key := fmt.Sprintf("%s:%d", strings.ToLower(strings.TrimSuffix(name, ".")), qtype)
+	msg, err, _ := r.sfGroup.Do(key, func() (*protocol.Message, error) {
+		return r.resolve(ctx, name, qtype, 0)
+	})
+	return msg, err
 }
 
 func (r *Resolver) resolve(ctx context.Context, name string, qtype uint16, cnameDepth int) (*protocol.Message, error) {

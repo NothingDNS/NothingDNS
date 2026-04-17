@@ -30,6 +30,9 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 		if h.metrics != nil {
 			h.metrics.RecordResponse(protocol.RcodeSuccess)
 		}
+		if h.checkRPZResponseIP(w, r, q, resp) {
+			return true
+		}
 		reply(w, r, resp)
 		return true
 	}
@@ -53,6 +56,9 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 				if h.metrics != nil {
 					h.metrics.RecordResponse(protocol.RcodeSuccess)
 				}
+				if h.checkRPZResponseIP(w, r, q, resp) {
+					return true
+				}
 				reply(w, r, resp)
 				return true
 			}
@@ -73,6 +79,9 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 		}
 		if h.metrics != nil {
 			h.metrics.RecordResponse(protocol.RcodeSuccess)
+		}
+		if h.checkRPZResponseIP(w, r, q, resp) {
+			return true
 		}
 		reply(w, r, resp)
 		return true
@@ -119,6 +128,9 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 				if h.metrics != nil {
 					h.metrics.RecordResponse(protocol.RcodeSuccess)
 				}
+				if h.checkRPZResponseIP(w, r, q, resp) {
+					return true
+				}
 				reply(w, r, resp)
 				return true
 			}
@@ -126,6 +138,9 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 			resp := h.buildNODATAResponse(r, z)
 			if h.metrics != nil {
 				h.metrics.RecordResponse(protocol.RcodeSuccess)
+			}
+			if h.checkRPZResponseIP(w, r, q, resp) {
+				return true
 			}
 			reply(w, r, resp)
 			return true
@@ -325,6 +340,9 @@ func (h *integratedHandler) handleDNAMERecord(w server.ResponseWriter, r *protoc
 
 	if h.metrics != nil {
 		h.metrics.RecordResponse(protocol.RcodeSuccess)
+	}
+	if h.checkRPZResponseIP(w, r, q, resp) {
+		return
 	}
 	reply(w, r, resp)
 }

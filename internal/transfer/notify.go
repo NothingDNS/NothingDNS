@@ -180,6 +180,7 @@ type NOTIFYSlaveHandler struct {
 	serialCheck    SerialChecker
 	closeOnce      sync.Once
 	notifyAllowList []net.IPNet // authorized master IPs
+	keyStore       *KeyStore     // TSIG keys for authentication (VULN-061)
 }
 
 // SerialChecker is called to check if the serial has changed
@@ -210,6 +211,12 @@ func (h *NOTIFYSlaveHandler) AddNotifyAllowed(cidr string) error {
 	}
 	h.notifyAllowList = append(h.notifyAllowList, *ipNet)
 	return nil
+}
+
+// SetKeyStore sets the TSIG key store for NOTIFY authentication.
+// When keys are configured, all NOTIFY requests must be TSIG-signed.
+func (h *NOTIFYSlaveHandler) SetKeyStore(ks *KeyStore) {
+	h.keyStore = ks
 }
 
 // isNOTIFYAllowed checks if the given IP is authorized to send NOTIFY.
@@ -250,6 +257,24 @@ func (h *NOTIFYSlaveHandler) HandleNOTIFY(req *protocol.Message, clientIP net.IP
 	// Check if client IP is authorized
 	if !h.isNOTIFYAllowed(clientIP) {
 		return h.createNOTIFYResponse(req, protocol.RcodeRefused), nil
+	}
+
+	// Verify TSIG — if keyStore has keys, TSIG is required for NOTIFY (VULN-061)
+	if h.keyStore != nil && h.keyStore.HasKeys() {
+		if !hasTSIG(req) {
+			return h.createNOTIFYResponse(req, protocol.RcodeRefused), fmt.Errorf("TSIG authentication required for NOTIFY")
+		}
+		keyName, err := getTSIGKeyName(req)
+		if err != nil {
+			return h.createNOTIFYResponse(req, protocol.RcodeFormatError), fmt.Errorf("getting TSIG key name: %w", err)
+		}
+		key, ok := h.keyStore.GetKey(keyName)
+		if !ok {
+			return h.createNOTIFYResponse(req, protocol.RcodeNotAuth), fmt.Errorf("TSIG key not found: %s", keyName)
+		}
+		if err := VerifyMessage(req, key, nil); err != nil {
+			return h.createNOTIFYResponse(req, protocol.RcodeNotAuth), fmt.Errorf("TSIG verification failed: %w", err)
+		}
 	}
 
 	// Validate request

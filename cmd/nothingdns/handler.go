@@ -771,6 +771,27 @@ func (h *integratedHandler) tryDNS64Synthesis(w server.ResponseWriter, r *protoc
 	return true
 }
 
+// checkRPZResponseIP checks a DNS response against RPZ response-IP policy.
+// If RPZ triggers, applies the rule (writes to w) and returns true.
+// Returns false if no RPZ action needed (caller should proceed with normal reply).
+//
+// This ensures authoritative zone responses are also subject to RPZ filtering,
+// closing VULN-064 where the authoritative path bypassed RPZ response-IP checks.
+func (h *integratedHandler) checkRPZResponseIP(w server.ResponseWriter, r *protocol.Message, q *protocol.Question, resp *protocol.Message) bool {
+	if h.rpzEngine == nil {
+		return false
+	}
+	respIPs := extractResponseIPs(resp)
+	if len(respIPs) == 0 {
+		return false
+	}
+	if rule := h.rpzEngine.ResponseIPPolicy(respIPs); rule != nil {
+		h.logger.Debugf("RPZ response IP match for %s (policy: %s)", q.Name.String(), rule.PolicyName)
+		return h.applyRPZRule(w, r, q, rule)
+	}
+	return false
+}
+
 // reply sends a response message.
 func reply(w server.ResponseWriter, query, response *protocol.Message) {
 	response.Header.ID = query.Header.ID
