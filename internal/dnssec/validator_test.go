@@ -2207,3 +2207,187 @@ func TestNewValidatorDefaults(t *testing.T) {
 		t.Errorf("Expected default ClockSkew 5m, got %v", v.config.ClockSkew)
 	}
 }
+
+// ============================================================================
+// VULN-040: KeyTrap (CVE-2023-50387 family) caps
+// ============================================================================
+
+// validateMessage must reject responses with more signed RRsets than
+// maxRRsetsValidated, regardless of whether signatures are required.
+func TestValidateMessage_CapsRRsets_VULN040(t *testing.T) {
+	v := NewValidator(DefaultValidatorConfig(), nil, nil)
+	chain := []*chainLink{{zone: "example.com.", validated: true}}
+
+	// Build a message whose Answer section contains maxRRsetsValidated + 1
+	// distinct RRsets. Each (name, type) pair is its own RRset, so naming
+	// "a0.ex.", "a1.ex.", ... with type A yields the required count after
+	// groupRecordsByRRSet.
+	msg := &protocol.Message{}
+	for i := 0; i <= maxRRsetsValidated; i++ {
+		name, _ := protocol.ParseName("a" + strconv.Itoa(i) + ".ex.")
+		msg.Answers = append(msg.Answers, &protocol.ResourceRecord{
+			Name:  name,
+			Type:  protocol.TypeA,
+			Class: protocol.ClassIN,
+			TTL:   60,
+			Data:  &protocol.RDataA{Address: [4]byte{1, 2, 3, 4}},
+		})
+	}
+
+	result := v.validateMessage(context.Background(), msg, "example.com.", chain)
+	if result != ValidationBogus {
+		t.Errorf("validateMessage(%d RRsets) = %v, want BOGUS (KeyTrap cap)",
+			maxRRsetsValidated+1, result)
+	}
+
+	// Sanity: at exactly the cap, the same message shape does not hit the
+	// guard (unsigned RRsets skipped when RequireDNSSEC=false).
+	msg2 := &protocol.Message{}
+	for i := 0; i < maxRRsetsValidated; i++ {
+		name, _ := protocol.ParseName("b" + strconv.Itoa(i) + ".ex.")
+		msg2.Answers = append(msg2.Answers, &protocol.ResourceRecord{
+			Name:  name,
+			Type:  protocol.TypeA,
+			Class: protocol.ClassIN,
+			TTL:   60,
+			Data:  &protocol.RDataA{Address: [4]byte{1, 2, 3, 4}},
+		})
+	}
+	if got := v.validateMessage(context.Background(), msg2, "example.com.", chain); got == ValidationBogus {
+		t.Errorf("validateMessage(%d RRsets) = BOGUS, want non-BOGUS (cap should not trigger at exactly the limit)",
+			maxRRsetsValidated)
+	}
+}
+
+// validateNegativeResponse must stop scanning NSEC/NSEC3 records after
+// maxNSECValidations and return BOGUS, even if a later record would match.
+func TestValidateNegativeResponse_CapsNSEC_VULN040(t *testing.T) {
+	v := NewValidator(DefaultValidatorConfig(), nil, nil)
+
+	// Pack Authority with (maxNSECValidations + 1) bogus NSEC records whose
+	// owner/NextDomain ranges do not cover the query name, then append one
+	// NSEC record that would match. A correct validator without the cap
+	// would reach the matching one and return SECURE; with the cap it aborts.
+	msg := &protocol.Message{}
+	qname, _ := protocol.ParseName("victim.example.com.")
+	q := &protocol.Question{
+		Name:   qname,
+		QType:  protocol.TypeAAAA,
+		QClass: protocol.ClassIN,
+	}
+	msg.Questions = append(msg.Questions, q)
+
+	bogusOwner, _ := protocol.ParseName("zzzz.other.com.")
+	bogusNext, _ := protocol.ParseName("zzzz1.other.com.")
+	for i := 0; i < maxNSECValidations+1; i++ {
+		msg.Authorities = append(msg.Authorities, &protocol.ResourceRecord{
+			Name:  bogusOwner,
+			Type:  protocol.TypeNSEC,
+			Class: protocol.ClassIN,
+			TTL:   60,
+			Data:  &protocol.RDataNSEC{NextDomain: bogusNext, TypeBitMap: nil},
+		})
+	}
+
+	// Append a would-match NSEC: owner is the query name itself (exact match)
+	// and the type bitmap does not include the queried type (NODATA proof).
+	matchOwner, _ := protocol.ParseName("victim.example.com.")
+	matchNext, _ := protocol.ParseName("zzzz.victim.example.com.")
+	msg.Authorities = append(msg.Authorities, &protocol.ResourceRecord{
+		Name:  matchOwner,
+		Type:  protocol.TypeNSEC,
+		Class: protocol.ClassIN,
+		TTL:   60,
+		Data:  &protocol.RDataNSEC{NextDomain: matchNext, TypeBitMap: nil},
+	})
+
+	result := v.validateNegativeResponse(msg, "victim.example.com.", nil)
+	if result != ValidationBogus {
+		t.Errorf("validateNegativeResponse with %d+1 NSEC records before a match = %v, want BOGUS (cap aborted scan)",
+			maxNSECValidations, result)
+	}
+}
+
+// validateDelegation must bail out when the DS × DNSKEY cross-product exceeds
+// maxDelegationOps, even if a legitimate match exists past the cap.
+func TestValidateDelegation_CapsOps_VULN040(t *testing.T) {
+	v := NewValidator(DefaultValidatorConfig(), nil, nil)
+
+	// One valid DNSKEY at the end; many decoy DNSKEYs before it. Same shape
+	// for DS. We dimension dsN × keyN > maxDelegationOps so the cap triggers
+	// before the real match at (dsN-1, keyN-1) is reached.
+	parentName, _ := protocol.ParseName("com.")
+	childName, _ := protocol.ParseName("example.com.")
+
+	validDNSKEY := &protocol.RDataDNSKEY{
+		Flags:     protocol.DNSKEYFlagZone | protocol.DNSKEYFlagSEP,
+		Protocol:  3,
+		Algorithm: protocol.AlgorithmRSASHA256,
+		PublicKey: []byte{0xAB, 0xCD, 0xEF, 0x01, 0x02},
+	}
+	validTag := protocol.CalculateKeyTag(validDNSKEY.Flags, validDNSKEY.Algorithm, validDNSKEY.PublicKey)
+
+	decoyDNSKEY := func(i int) *protocol.ResourceRecord {
+		d := &protocol.RDataDNSKEY{
+			Flags:     protocol.DNSKEYFlagZone,
+			Protocol:  3,
+			Algorithm: protocol.AlgorithmRSASHA256,
+			// Different public key per decoy → different key tag, no match.
+			PublicKey: []byte{byte(i), 0x01, 0x02, 0x03, 0x04},
+		}
+		return &protocol.ResourceRecord{Name: childName, Data: d}
+	}
+	decoyDS := func(i int) *protocol.ResourceRecord {
+		return &protocol.ResourceRecord{
+			Name: childName,
+			Data: &protocol.RDataDS{
+				KeyTag:     65535, // unlikely to ever match a decoy DNSKEY
+				Algorithm:  protocol.AlgorithmRSASHA256,
+				DigestType: 2,
+				Digest:     []byte{byte(i)},
+			},
+		}
+	}
+
+	const dsN = 7
+	const keyN = 6 // dsN * keyN = 42 > maxDelegationOps (32)
+
+	dsRecords := []*protocol.ResourceRecord{}
+	for i := 0; i < dsN-1; i++ {
+		dsRecords = append(dsRecords, decoyDS(i))
+	}
+	// Final DS is the real match for the valid DNSKEY.
+	dsRecords = append(dsRecords, &protocol.ResourceRecord{
+		Name: childName,
+		Data: &protocol.RDataDS{
+			KeyTag:     validTag,
+			Algorithm:  protocol.AlgorithmRSASHA256,
+			DigestType: 2,
+			Digest:     calculateDSDigestFromDNSKEY("example.com.", validDNSKEY, 2),
+		},
+	})
+
+	childKeys := []*protocol.ResourceRecord{}
+	for i := 0; i < keyN-1; i++ {
+		childKeys = append(childKeys, decoyDNSKEY(i))
+	}
+	// Final DNSKEY is the real one.
+	childKeys = append(childKeys, &protocol.ResourceRecord{Name: childName, Data: validDNSKEY})
+
+	parent := &chainLink{
+		zone:    "com.",
+		dnsKeys: []*protocol.ResourceRecord{{Name: parentName, Data: validDNSKEY}},
+	}
+
+	if v.validateDelegation(parent, dsRecords, childKeys) {
+		t.Errorf("validateDelegation with %d × %d combinations succeeded; cap at %d should have aborted before finding the late match",
+			dsN, keyN, maxDelegationOps)
+	}
+
+	// Sanity: a small, in-bounds cross product still accepts a valid delegation.
+	smallDS := dsRecords[len(dsRecords)-1:]
+	smallKeys := childKeys[len(childKeys)-1:]
+	if !v.validateDelegation(parent, smallDS, smallKeys) {
+		t.Error("validateDelegation with valid 1×1 DS/DNSKEY should succeed")
+	}
+}

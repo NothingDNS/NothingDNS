@@ -307,7 +307,12 @@ func (v *Validator) validateTrustAnchor(anchor *TrustAnchor, dnsKeys []*protocol
 }
 
 // validateDelegation validates a delegation using DS/DNSKEY.
+//
+// KeyTrap mitigation (VULN-040): bounds the DS × DNSKEY comparison work. A
+// malicious parent zone could otherwise publish many DS records with
+// key-tag collisions forcing O(N²) digest computations.
 func (v *Validator) validateDelegation(parent *chainLink, dsRecords, childKeys []*protocol.ResourceRecord) bool {
+	ops := 0
 	for _, dsRR := range dsRecords {
 		ds, ok := dsRR.Data.(*protocol.RDataDS)
 		if !ok {
@@ -319,6 +324,11 @@ func (v *Validator) validateDelegation(parent *chainLink, dsRecords, childKeys [
 			if !ok {
 				continue
 			}
+
+			if ops >= maxDelegationOps {
+				return false
+			}
+			ops++
 
 			// Check if DNSKEY matches DS
 			keyTag := protocol.CalculateKeyTag(dnskey.Flags, dnskey.Algorithm, dnskey.PublicKey)
@@ -340,6 +350,22 @@ func (v *Validator) validateDelegation(parent *chainLink, dsRecords, childKeys [
 	return false
 }
 
+// KeyTrap mitigation caps (VULN-040 / CVE-2023-50387).
+// Bound per-message cryptographic work so a crafted response cannot pin CPU.
+const (
+	// maxRRsetsValidated bounds the number of Answer-section RRsets whose
+	// signatures the validator will verify per response. Legitimate signed
+	// zones almost never exceed a handful.
+	maxRRsetsValidated = 32
+	// maxNSECValidations bounds the number of NSEC/NSEC3 records the validator
+	// will attempt to evaluate for one negative response. RFC 5155 needs at
+	// most 3 NSEC3 records for a full denial proof.
+	maxNSECValidations = 16
+	// maxDelegationOps bounds the nested DS × DNSKEY comparison cost per
+	// delegation. Legitimate zones ship 1–2 DS and 2–4 DNSKEYs.
+	maxDelegationOps = 32
+)
+
 // validateMessage validates the DNS response message.
 func (v *Validator) validateMessage(ctx context.Context, msg *protocol.Message, queryName string, chain []*chainLink) ValidationResult {
 	if len(chain) == 0 {
@@ -351,6 +377,13 @@ func (v *Validator) validateMessage(ctx context.Context, msg *protocol.Message, 
 
 	// Group answers by name and type
 	answerGroups := groupRecordsByRRSet(msg.Answers)
+
+	// KeyTrap (VULN-040): refuse outright if the response packs more RRsets
+	// than any legitimate zone would ever sign in one message. A ballooned
+	// Answer section is a DoS-by-validation primitive.
+	if len(answerGroups) > maxRRsetsValidated {
+		return ValidationBogus
+	}
 
 	// Validate each answer RRSet
 	for _, rrSet := range answerGroups {
@@ -574,6 +607,11 @@ func canonicalSort(rrs []*protocol.ResourceRecord) {
 }
 
 // validateNegativeResponse validates NSEC/NSEC3 for negative answers.
+//
+// KeyTrap mitigation (VULN-040): caps the number of NSEC/NSEC3 evaluations
+// considered per message. NSEC3 hashing is the expensive operation and an
+// attacker could otherwise stuff the Authority section with thousands of
+// bogus NSEC3 records to pin CPU.
 func (v *Validator) validateNegativeResponse(msg *protocol.Message, queryName string, chain []*chainLink) ValidationResult {
 	if len(msg.Questions) == 0 {
 		return ValidationBogus
@@ -581,7 +619,16 @@ func (v *Validator) validateNegativeResponse(msg *protocol.Message, queryName st
 	qtype := msg.Questions[0].QType
 
 	// Check for NSEC records
+	checks := 0
 	for _, rr := range msg.Authorities {
+		if rr.Type != protocol.TypeNSEC && rr.Type != protocol.TypeNSEC3 {
+			continue
+		}
+		if checks >= maxNSECValidations {
+			return ValidationBogus
+		}
+		checks++
+
 		if rr.Type == protocol.TypeNSEC {
 			nsec, ok := rr.Data.(*protocol.RDataNSEC)
 			if !ok {
