@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { api, type ZoneDetail, type DnsRecord } from '@/lib/api';
+import { api, downloadAuthenticated, type ZoneDetail, type DnsRecord } from '@/lib/api';
 import { ZoneEditor } from '@/components/zone-editor';
 import { ChevronRight, Download, Shield, Zap, Database, Clock, Globe } from 'lucide-react';
 
@@ -97,7 +97,10 @@ export function ZoneDetailPage() {
 
             <div className="flex flex-wrap gap-2">
               <Button variant="outline" size="sm" onClick={() => {
-                window.location.href = `/api/v1/zones/${encodeURIComponent(zn)}/export`;
+                downloadAuthenticated(
+                  `/api/v1/zones/${encodeURIComponent(zn)}/export`,
+                  `${zn}.zone`,
+                ).catch((e) => console.error('zone export failed', e));
               }}>
                 <Download className="h-4 w-4 mr-2" /> Export Zone
               </Button>

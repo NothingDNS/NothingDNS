@@ -10,6 +10,31 @@ function getToken(): string | null {
   return useAuthStore.getState().token;
 }
 
+// downloadAuthenticated fetches a binary/text asset with the Bearer header
+// and triggers a browser download, avoiding `window.location.href` which
+// skips every `fetch` header and loses the Authorization header (VULN-033).
+export async function downloadAuthenticated(path: string, filename: string): Promise<void> {
+  const headers: Record<string, string> = {};
+  const token = getToken();
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const resp = await fetch(`${API_BASE}${path}`, { headers });
+  if (!resp.ok) {
+    throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
+  }
+  const blob = await resp.blob();
+  const url = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 export async function api<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   const token = getToken();
