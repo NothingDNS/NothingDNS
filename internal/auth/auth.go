@@ -344,8 +344,30 @@ func (s *Store) RevokeAllTokens(username string) {
 	}
 }
 
+// MaxPasswordBytes bounds accepted password size. PBKDF2 iterations run over
+// the full input, so an attacker posting a 10 MB password forces ~50× the
+// server CPU compared to a normal login (VULN-021).
+const MaxPasswordBytes = 128
+
+// ValidatePassword rejects empty passwords and passwords larger than
+// MaxPasswordBytes. Length-only for now — upstream callers (bootstrap) may
+// add stricter policy.
+func ValidatePassword(password string) error {
+	if password == "" {
+		return fmt.Errorf("password must not be empty")
+	}
+	if len(password) > MaxPasswordBytes {
+		return fmt.Errorf("password must be at most %d bytes", MaxPasswordBytes)
+	}
+	return nil
+}
+
 // CreateUser creates a new user.
 func (s *Store) CreateUser(username, password string, role Role) (*User, error) {
+	if err := ValidatePassword(password); err != nil {
+		return nil, err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -367,7 +389,15 @@ func (s *Store) CreateUser(username, password string, role Role) (*User, error) 
 }
 
 // UpdateUser updates an existing user's password or role.
+// Empty password means "do not change" — nonempty passwords go through
+// ValidatePassword for size bounds (VULN-021).
 func (s *Store) UpdateUser(username, password string, role Role) (*User, error) {
+	if password != "" {
+		if err := ValidatePassword(password); err != nil {
+			return nil, err
+		}
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

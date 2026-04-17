@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -139,6 +140,10 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 
 	if len(req.Password) < 8 {
 		s.writeError(w, http.StatusBadRequest, "Password must be at least 8 characters")
+		return
+	}
+	if len(req.Password) > auth.MaxPasswordBytes {
+		s.writeError(w, http.StatusBadRequest, fmt.Sprintf("Password must be at most %d bytes", auth.MaxPasswordBytes))
 		return
 	}
 

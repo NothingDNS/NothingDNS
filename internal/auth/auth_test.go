@@ -1117,7 +1117,7 @@ func TestPasswordEdgeCases(t *testing.T) {
 		password string
 	}{
 		{"single_char", "x"},
-		{"long_password", strings.Repeat("a", 1000)},
+		{"max_length", strings.Repeat("a", MaxPasswordBytes)},
 		{"unicode", "密码密码密码"},
 		{"emoji", "🔐🔑🔒"},
 		{"whitespace_only", "   "},
@@ -1147,6 +1147,14 @@ func TestPasswordEdgeCases(t *testing.T) {
 			}
 		})
 	}
+
+	// Over-long passwords are rejected to bound PBKDF2 cost (VULN-021).
+	t.Run("too_long", func(t *testing.T) {
+		_, err := store.UpdateUser("testuser", strings.Repeat("a", MaxPasswordBytes+1), "")
+		if err == nil {
+			t.Error("UpdateUser should reject password larger than MaxPasswordBytes")
+		}
+	})
 }
 
 // TestEmptyPassword specifically tests empty password behavior
