@@ -130,10 +130,10 @@ func (s *Server) handleRPZActions(w http.ResponseWriter, r *http.Request) {
 		if s.requireAdmin(w, r) {
 			return
 		}
-		// Toggle enabled state
-		s.rpzEngine.SetEnabled(!s.rpzEngine.IsEnabled())
+		// Toggle enabled state atomically (VULN-015).
+		newState := s.rpzEngine.Toggle()
 		s.writeJSON(w, http.StatusOK, &MessageResponse{
-			Message: fmt.Sprintf("RPZ %s", map[bool]string{true: "enabled", false: "disabled"}[s.rpzEngine.IsEnabled()]),
+			Message: fmt.Sprintf("RPZ %s", map[bool]string{true: "enabled", false: "disabled"}[newState]),
 		})
 		return
 	}

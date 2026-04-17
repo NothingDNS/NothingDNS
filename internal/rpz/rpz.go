@@ -84,8 +84,9 @@ type Engine struct {
 	// Policy zones with their priorities.
 	policies map[string]int // name -> priority
 
-	// Enabled flag.
-	enabled bool
+	// Enabled flag. atomic.Bool so DNS-hot-path IsEnabled() does not race
+	// with admin toggle (VULN-015).
+	enabled atomic.Bool
 
 	// Metrics.
 	matches uint64
@@ -114,20 +115,21 @@ func NewEngine(cfg Config) *Engine {
 	if cfg.Policies == nil {
 		cfg.Policies = make(map[string]int)
 	}
-	return &Engine{
+	e := &Engine{
 		qnameRules:    make(map[string]*Rule),
 		clientActions: make([]*Rule, 0),
 		respActions:   make([]*Rule, 0),
 		files:         cfg.Files,
 		policies:      cfg.Policies,
-		enabled:       cfg.Enabled,
 		logger:        cfg.Logger,
 	}
+	e.enabled.Store(cfg.Enabled)
+	return e
 }
 
 // Load loads all configured RPZ zone files.
 func (e *Engine) Load() error {
-	if !e.enabled {
+	if !e.enabled.Load() {
 		return nil
 	}
 
@@ -419,7 +421,7 @@ func (e *Engine) addRule(rule *Rule) {
 // QNAMEPolicy evaluates RPZ policy for a query name.
 // Returns the matching rule or nil if no policy applies.
 func (e *Engine) QNAMEPolicy(qname string) *Rule {
-	if !e.enabled {
+	if !e.enabled.Load() {
 		return nil
 	}
 
@@ -474,7 +476,7 @@ func (e *Engine) QNAMEPolicy(qname string) *Rule {
 
 // ClientIPPolicy evaluates RPZ policy based on client IP.
 func (e *Engine) ClientIPPolicy(clientIP net.IP) *Rule {
-	if !e.enabled {
+	if !e.enabled.Load() {
 		return nil
 	}
 
@@ -491,7 +493,7 @@ func (e *Engine) ClientIPPolicy(clientIP net.IP) *Rule {
 
 // ResponseIPPolicy evaluates RPZ policy based on response IP addresses.
 func (e *Engine) ResponseIPPolicy(ips []net.IP) *Rule {
-	if !e.enabled || len(ips) == 0 {
+	if !e.enabled.Load() || len(ips) == 0 {
 		return nil
 	}
 
@@ -520,7 +522,7 @@ func (e *Engine) Stats() Stats {
 	e.mu.RUnlock()
 
 	return Stats{
-		Enabled:       e.enabled,
+		Enabled:       e.enabled.Load(),
 		TotalRules:    ruleCount,
 		QNAMERules:    len(e.qnameRules),
 		ClientIPRules: len(e.clientIPRules),
@@ -535,14 +537,23 @@ func (e *Engine) Stats() Stats {
 
 // IsEnabled returns whether the engine is enabled.
 func (e *Engine) IsEnabled() bool {
-	return e.enabled
+	return e.enabled.Load()
 }
 
 // SetEnabled enables or disables the RPZ engine.
 func (e *Engine) SetEnabled(enabled bool) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.enabled = enabled
+	e.enabled.Store(enabled)
+}
+
+// Toggle atomically flips the enabled state and returns the new value.
+// Replaces the TOCTOU-prone SetEnabled(!IsEnabled()) pattern (VULN-015).
+func (e *Engine) Toggle() bool {
+	for {
+		cur := e.enabled.Load()
+		if e.enabled.CompareAndSwap(cur, !cur) {
+			return !cur
+		}
+	}
 }
 
 // AddQNAMERule adds a QNAME trigger rule dynamically.
