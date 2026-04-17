@@ -98,7 +98,7 @@ SIGHUP triggers config reload without downtime: zones, blocklists, RPZ rules, sp
 - `internal/protocol/` — DNS wire protocol (RFC 1035), no external dependencies
 - `internal/server/` — UDP, TCP, TLS, DoH transports
 - `internal/cache/` — Thread-safe LRU with TTL, negative caching, stale serving, NSEC aggressive caching
-- `internal/cluster/` — Gossip-based membership (SWIM-like) with AES-256-GCM encryption; Raft consensus in `cluster/raft/`
+- `internal/cluster/` — Gossip-based membership (SWIM-like) with AES-256-GCM encryption; Raft consensus in `cluster/raft/` with optional TLS RPC
 - `internal/config/` — Custom YAML parser (tokenizer → parser → node tree, no gopkg.in/yaml)
 - `internal/resolver/` — Iterative recursive resolver with CNAME chasing
 - `internal/dnssec/` — Validation, signing, key rollover (RFC 7583), Ed25519/ECDSA/RSA

@@ -69,7 +69,7 @@ Generate JWT secret
 {{- if and $secret (index $secret.data "jwt-secret") }}
 {{- index $secret.data "jwt-secret" | b64dec }}
 {{- else }}
-{{- randAlphaNum 32 }}
+{{- fail "JWT secret is required: set jwtSecret value or provide a Secret with jwt-secret key. Generate with: openssl rand -base64 32" }}
 {{- end }}
 {{- end }}
 

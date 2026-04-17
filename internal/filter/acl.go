@@ -21,14 +21,19 @@ type compiledRule struct {
 
 // ACLChecker evaluates ACL rules against client IPs and query types.
 type ACLChecker struct {
-	mu    sync.RWMutex
-	rules []compiledRule
+	mu           sync.RWMutex
+	rules        []compiledRule
+	denyByDefault bool
 }
 
 // NewACLChecker creates an ACL checker from configuration rules.
-// Returns nil if rules is empty (allow-all default).
-func NewACLChecker(rules []config.ACLRule) (*ACLChecker, error) {
+// Returns nil if rules is empty (allow-all default), unless denyByDefault is true.
+// When denyByDefault is true, an empty rule set results in deny-by-default behavior.
+func NewACLChecker(rules []config.ACLRule, denyByDefault bool) (*ACLChecker, error) {
 	if len(rules) == 0 {
+		if denyByDefault {
+			return &ACLChecker{rules: nil, denyByDefault: true}, nil
+		}
 		return nil, nil
 	}
 
@@ -65,12 +70,12 @@ func NewACLChecker(rules []config.ACLRule) (*ACLChecker, error) {
 		compiled = append(compiled, cr)
 	}
 
-	return &ACLChecker{rules: compiled}, nil
+	return &ACLChecker{rules: compiled, denyByDefault: denyByDefault}, nil
 }
 
 // IsAllowed checks if a client IP is allowed to make a query of the given type.
 // Returns (allowed bool, redirectTarget string).
-// If no rule matches, the default is allow.
+// If no rule matches, the default is allow, unless denyByDefault is set.
 func (a *ACLChecker) IsAllowed(clientIP net.IP, queryType uint16) (bool, string) {
 	if a == nil {
 		return true, ""
@@ -80,6 +85,9 @@ func (a *ACLChecker) IsAllowed(clientIP net.IP, queryType uint16) (bool, string)
 	defer a.mu.RUnlock()
 
 	if len(a.rules) == 0 {
+		if a.denyByDefault {
+			return false, ""
+		}
 		return true, ""
 	}
 
@@ -103,7 +111,10 @@ func (a *ACLChecker) IsAllowed(clientIP net.IP, queryType uint16) (bool, string)
 		}
 	}
 
-	// Default: allow if no rule matched
+	// Default: allow if no rule matched, unless denyByDefault is set
+	if a.denyByDefault {
+		return false, ""
+	}
 	return true, ""
 }
 

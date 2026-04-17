@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"crypto/tls"
 	"encoding/binary"
 	"encoding/gob"
 	"fmt"
@@ -41,26 +42,33 @@ type RPCHandler interface {
 
 // RPCServer is the RPC server that handles incoming connections.
 type RPCServer struct {
-	listener net.Listener
-	handler  RPCHandler
-	conns    map[NodeID]net.Conn
-	mu       sync.RWMutex
-	stopCh   chan struct{}
-	wg       sync.WaitGroup
+	listener  net.Listener
+	handler   RPCHandler
+	conns     map[NodeID]net.Conn
+	mu        sync.RWMutex
+	stopCh    chan struct{}
+	wg        sync.WaitGroup
+	tlsConfig *tls.Config // nil means plain TCP
 }
 
-// NewRPCServer creates a new RPC server.
-func NewRPCServer(addr string, handler RPCHandler) (*RPCServer, error) {
+// NewRPCServer creates a new RPC server with optional TLS.
+// Pass nil for tlsConfig to use plain TCP (for development only).
+func NewRPCServer(addr string, handler RPCHandler, tlsConfig *tls.Config) (*RPCServer, error) {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("listen: %w", err)
 	}
 
+	if tlsConfig != nil {
+		listener = tls.NewListener(listener, tlsConfig)
+	}
+
 	return &RPCServer{
-		listener: listener,
+		listener:  listener,
 		handler:  handler,
 		conns:    make(map[NodeID]net.Conn),
 		stopCh:   make(chan struct{}),
+		tlsConfig: tlsConfig,
 	}, nil
 }
 
@@ -107,19 +115,27 @@ func (s *RPCServer) acceptLoop() {
 			return
 		}
 
+		// Store connection keyed by remote address until we learn the NodeID
+		// from the first message (VULN-049: was using "" which is incorrect)
+		addr := conn.RemoteAddr().String()
 		s.mu.Lock()
-		s.conns[""] = conn // Could track by remote node ID
+		s.conns[NodeID(addr)] = conn
 		s.mu.Unlock()
 
 		s.wg.Add(1)
-		go s.handleConn(conn)
+		go s.handleConn(conn, NodeID(addr))
 	}
 }
 
 // handleConn handles a single connection.
-func (s *RPCServer) handleConn(conn net.Conn) {
+func (s *RPCServer) handleConn(conn net.Conn, nodeID NodeID) {
 	defer s.wg.Done()
 	defer conn.Close()
+	defer func() {
+		s.mu.Lock()
+		delete(s.conns, nodeID)
+		s.mu.Unlock()
+	}()
 
 	for {
 		select {
@@ -202,14 +218,17 @@ type TCPTransport struct {
 	conns       map[NodeID]net.Conn
 	peerAddrs   map[NodeID]string
 	mu          sync.RWMutex
+	tlsConfig   *tls.Config // nil means plain TCP
 }
 
-// NewTCPTransport creates a new TCP transport.
-func NewTCPTransport() *TCPTransport {
+// NewTCPTransport creates a new TCP transport with optional TLS.
+// Pass nil for tlsConfig to use plain TCP (for development only).
+func NewTCPTransport(tlsConfig *tls.Config) *TCPTransport {
 	return &TCPTransport{
 		dialTimeout: 5 * time.Second,
 		conns:       make(map[NodeID]net.Conn),
 		peerAddrs:   make(map[NodeID]string),
+		tlsConfig:   tlsConfig,
 	}
 }
 
@@ -292,7 +311,13 @@ func (t *TCPTransport) getConn(peerID NodeID) (net.Conn, error) {
 	}
 
 	// Dial new connection
-	dialConn, err := net.DialTimeout("tcp", addr, t.dialTimeout)
+	var dialConn net.Conn
+	var err error
+	if t.tlsConfig != nil {
+		dialConn, err = tls.Dial("tcp", addr, t.tlsConfig)
+	} else {
+		dialConn, err = net.DialTimeout("tcp", addr, t.dialTimeout)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", addr, err)
 	}

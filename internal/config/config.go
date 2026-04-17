@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net"
 	"os"
@@ -337,6 +339,11 @@ type ServerConfig struct {
 
 	// Systemd notify socket path (empty = disabled)
 	SystemdNotify string `yaml:"systemd_notify"`
+
+	// ACLAllowUnrestrictedRecursion permits the server to run as an open resolver
+	// when recursion is enabled but no ACL rules are configured. Default: false
+	// (deny-by-default when recursion is enabled without ACL rules).
+	ACLAllowUnrestrictedRecursion bool `yaml:"acl_allow_unrestricted_recursion"`
 }
 
 // TLSConfig contains TLS settings for DNS over TLS.
@@ -432,6 +439,29 @@ type ClusterConfig struct {
 	// Raft provides strong consistency for zone replication.
 	// SWIM provides eventual consistency with gossip-based membership.
 	ConsensusMode string `yaml:"consensus_mode"`
+
+	// RPC TLS configuration for Raft consensus traffic.
+	// When TLSCertFile/TLSKeyFile are set, Raft RPC uses TLS.
+	RPC RPCConfig `yaml:"rpc"`
+}
+
+// RPCConfig contains TLS settings for cluster RPC traffic (Raft consensus).
+type RPCConfig struct {
+	// Enable TLS for Raft RPC
+	Enabled bool `yaml:"enabled"`
+
+	// Certificate file for TLS
+	TLSCertFile string `yaml:"tls_cert_file"`
+
+	// Key file for TLS
+	TLSKeyFile string `yaml:"tls_key_file"`
+
+	// CA file for client certificate verification (optional, for mTLS)
+	TLSCACertFile string `yaml:"tls_ca_cert_file"`
+
+	// Minimum TLS version (10=TLS1.0, 11=TLS1.1, 12=TLS1.2, 13=TLS1.3)
+	// Default: 12 (TLS1.2)
+	MinTLSVersion int `yaml:"min_tls_version"`
 }
 
 // HTTPConfig contains HTTP API settings.
@@ -1499,6 +1529,15 @@ func unmarshalCluster(node *Node, cfg *ClusterConfig) error {
 		cfg.ConsensusMode = "raft"
 	}
 
+	// Parse RPC TLS configuration
+	if rpcNode := node.Get("rpc"); rpcNode != nil {
+		cfg.RPC.Enabled = getBool(rpcNode, "enabled", cfg.RPC.Enabled)
+		cfg.RPC.TLSCertFile = rpcNode.GetString("tls_cert_file")
+		cfg.RPC.TLSKeyFile = rpcNode.GetString("tls_key_file")
+		cfg.RPC.TLSCACertFile = rpcNode.GetString("tls_ca_cert_file")
+		cfg.RPC.MinTLSVersion = getInt(rpcNode, "min_tls_version", 12)
+	}
+
 	// Parse seed nodes
 	if seedNodesNode := node.Get("seed_nodes"); seedNodesNode != nil {
 		if seedNodesNode.Type == NodeSequence {
@@ -1995,6 +2034,19 @@ func (c *Config) validateCluster() []string {
 		errors = append(errors, "cluster: weight cannot be negative")
 	}
 
+	// Validate RPC TLS configuration
+	if c.Cluster.RPC.Enabled {
+		if c.Cluster.RPC.TLSCertFile == "" {
+			errors = append(errors, "cluster.rpc: tls_cert_file is required when TLS is enabled")
+		}
+		if c.Cluster.RPC.TLSKeyFile == "" {
+			errors = append(errors, "cluster.rpc: tls_key_file is required when TLS is enabled")
+		}
+		if c.Cluster.RPC.MinTLSVersion != 0 && c.Cluster.RPC.MinTLSVersion != 12 && c.Cluster.RPC.MinTLSVersion != 13 {
+			errors = append(errors, fmt.Sprintf("cluster.rpc: invalid min_tls_version %d (must be 12 or 13)", c.Cluster.RPC.MinTLSVersion))
+		}
+	}
+
 	// Validate seed nodes format
 	for _, seed := range c.Cluster.SeedNodes {
 		if seed == "" {
@@ -2198,4 +2250,41 @@ func isValidQueryType(s string) bool {
 	}
 
 	return false
+}
+
+// NewRPC TLSConfig creates a tls.Config for Raft RPC traffic from the RPCConfig.
+// Returns nil if TLS is not enabled.
+func (c *RPCConfig) NewTLSConfig() (*tls.Config, error) {
+	if !c.Enabled {
+		return nil, nil
+	}
+
+	tlsCert, err := tls.LoadX509KeyPair(c.TLSCertFile, c.TLSKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load RPC TLS certificate: %w", err)
+	}
+
+	config := &tls.Config{
+		Certificates: []tls.Certificate{tlsCert},
+		MinVersion:   tls.VersionTLS12,
+	}
+
+	if c.MinTLSVersion == 13 {
+		config.MinVersion = tls.VersionTLS13
+	}
+
+	if c.TLSCACertFile != "" {
+		caCert, err := os.ReadFile(c.TLSCACertFile)
+		if err != nil {
+			return nil, fmt.Errorf("read RPC CA certificate: %w", err)
+		}
+		caCertPool := x509.NewCertPool()
+		if !caCertPool.AppendCertsFromPEM(caCert) {
+			return nil, fmt.Errorf("parse RPC CA certificate: %w", err)
+		}
+		config.ClientCAs = caCertPool
+		config.ClientAuth = tls.RequireAndVerifyClientCert
+	}
+
+	return config, nil
 }

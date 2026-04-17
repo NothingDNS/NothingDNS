@@ -9,7 +9,7 @@ import (
 )
 
 func TestNewACLChecker_EmptyRules(t *testing.T) {
-	ac, err := NewACLChecker(nil)
+	ac, err := NewACLChecker(nil, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -21,7 +21,7 @@ func TestNewACLChecker_EmptyRules(t *testing.T) {
 func TestNewACLChecker_InvalidCIDR(t *testing.T) {
 	_, err := NewACLChecker([]config.ACLRule{
 		{Name: "bad", Networks: []string{"not-a-cidr"}, Action: "allow"},
-	})
+	}, false)
 	if err == nil {
 		t.Error("expected error for invalid CIDR")
 	}
@@ -30,14 +30,14 @@ func TestNewACLChecker_InvalidCIDR(t *testing.T) {
 func TestNewACLChecker_InvalidType(t *testing.T) {
 	_, err := NewACLChecker([]config.ACLRule{
 		{Name: "bad", Networks: []string{"10.0.0.0/8"}, Types: []string{"INVALID"}, Action: "allow"},
-	})
+	}, false)
 	if err == nil {
 		t.Error("expected error for invalid type")
 	}
 }
 
 func TestACLChecker_IsAllowed_AllowAll(t *testing.T) {
-	ac, _ := NewACLChecker(nil)
+	ac, _ := NewACLChecker(nil, false)
 	allowed, redirect := ac.IsAllowed(net.ParseIP("10.0.0.1"), protocol.TypeA)
 	if !allowed || redirect != "" {
 		t.Error("nil checker should allow all")
@@ -47,7 +47,7 @@ func TestACLChecker_IsAllowed_AllowAll(t *testing.T) {
 func TestACLChecker_IsAllowed_DenyNetwork(t *testing.T) {
 	ac, err := NewACLChecker([]config.ACLRule{
 		{Name: "block-bad", Networks: []string{"192.168.1.0/24"}, Action: "deny"},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestACLChecker_IsAllowed_AllowThenDeny(t *testing.T) {
 	ac, err := NewACLChecker([]config.ACLRule{
 		{Name: "allow-admin", Networks: []string{"10.0.0.1/32"}, Action: "allow"},
 		{Name: "deny-all", Networks: []string{"10.0.0.0/8"}, Action: "deny"},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestACLChecker_IsAllowed_AllowThenDeny(t *testing.T) {
 func TestACLChecker_IsAllowed_TypeFilter(t *testing.T) {
 	ac, err := NewACLChecker([]config.ACLRule{
 		{Name: "only-axfr", Networks: []string{"10.0.0.0/8"}, Types: []string{"AXFR"}, Action: "deny"},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestACLChecker_IsAllowed_TypeFilter(t *testing.T) {
 func TestACLChecker_IsAllowed_Redirect(t *testing.T) {
 	ac, err := NewACLChecker([]config.ACLRule{
 		{Name: "redirect-guest", Networks: []string{"172.16.0.0/12"}, Action: "redirect", Redirect: "portal.example.com"},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestACLChecker_IsAllowed_Redirect(t *testing.T) {
 func TestACLChecker_IsAllowed_IPv6(t *testing.T) {
 	ac, err := NewACLChecker([]config.ACLRule{
 		{Name: "deny-v6", Networks: []string{"2001:db8::/32"}, Action: "deny"},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestACLChecker_IsAllowed_IPv6(t *testing.T) {
 func TestACLChecker_IsAllowed_IPv4MappedIPv6(t *testing.T) {
 	ac, err := NewACLChecker([]config.ACLRule{
 		{Name: "deny-10", Networks: []string{"10.0.0.0/8"}, Action: "deny"},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestACLChecker_IsAllowed_IPv4MappedIPv6(t *testing.T) {
 func TestACLChecker_IsAllowed_NoNetworkRestriction(t *testing.T) {
 	ac, err := NewACLChecker([]config.ACLRule{
 		{Name: "deny-axfr-all", Types: []string{"AXFR"}, Action: "deny"},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestACLChecker_IsAllowed_NoNetworkRestriction(t *testing.T) {
 func TestACLChecker_UpdateRules(t *testing.T) {
 	ac, err := NewACLChecker([]config.ACLRule{
 		{Name: "initial", Networks: []string{"10.0.0.0/8"}, Action: "allow"},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestACLChecker_UpdateRules(t *testing.T) {
 }
 
 func TestACLChecker_UpdateRules_InvalidCIDR(t *testing.T) {
-	ac, _ := NewACLChecker(nil)
+	ac, _ := NewACLChecker(nil, false)
 
 	err := ac.UpdateRules([]config.ACLRule{
 		{Name: "bad", Networks: []string{"invalid"}, Action: "allow"},
@@ -226,7 +226,7 @@ func TestACLChecker_GetRules(t *testing.T) {
 	ac, err := NewACLChecker([]config.ACLRule{
 		{Name: "allow-local", Networks: []string{"127.0.0.0/8", "::1/128"}, Action: "allow"},
 		{Name: "deny-bad", Networks: []string{"192.168.1.0/24"}, Action: "deny"},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestACLChecker_GetRules(t *testing.T) {
 }
 
 func TestACLChecker_GetRules_Empty(t *testing.T) {
-	ac, _ := NewACLChecker(nil)
+	ac, _ := NewACLChecker(nil, false)
 
 	rules := ac.GetRules()
 	if len(rules) != 0 {

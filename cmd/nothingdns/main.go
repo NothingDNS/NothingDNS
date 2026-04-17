@@ -388,6 +388,11 @@ func run() error {
 		}
 	}
 
+	// VULN-041: Warn if recursion is enabled without ACL rules but with explicit allow-unrestricted
+	if cfg.Resolution.Recursive && aclChecker == nil && cfg.Server.ACLAllowUnrestrictedRecursion {
+		logger.Warnf("SECURITY WARNING: Recursive resolver is enabled with no ACL rules but acl_allow_unrestricted_recursion=true. This configuration makes the server an OPEN RECURSIVE RESOLVER accessible from any IP. Only set acl_allow_unrestricted_recursion=true if you intentionally want to run an open resolver.")
+	}
+
 	// Share the zones mutex between handler, AXFR server, and DDNS handler
 	// to prevent data races on the shared zones map
 	transferManager.SetZonesMu(&handler.zonesMu)

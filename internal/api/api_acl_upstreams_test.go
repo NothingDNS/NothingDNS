@@ -74,7 +74,7 @@ func TestHandleACL_GetWithRules(t *testing.T) {
 			Types:    []string{"A", "AAAA"},
 		},
 	}
-	checker, err := filter.NewACLChecker(rules)
+	checker, err := filter.NewACLChecker(rules, false)
 	if err != nil {
 		t.Fatalf("NewACLChecker: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestHandleACL_PutUpdate(t *testing.T) {
 	initialRules := []config.ACLRule{
 		{Name: "deny-bad", Networks: []string{"10.0.0.0/8"}, Action: "deny"},
 	}
-	checker, err := filter.NewACLChecker(initialRules)
+	checker, err := filter.NewACLChecker(initialRules, false)
 	if err != nil {
 		t.Fatalf("NewACLChecker: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestHandleACL_PutInvalidBody(t *testing.T) {
 
 	checker, err := filter.NewACLChecker([]config.ACLRule{
 		{Name: "test", Networks: []string{"192.168.0.0/16"}, Action: "allow"},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("NewACLChecker: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestHandleACL_PutInvalidNetwork(t *testing.T) {
 
 	checker, err := filter.NewACLChecker([]config.ACLRule{
 		{Name: "test", Networks: []string{"192.168.0.0/16"}, Action: "allow"},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("NewACLChecker: %v", err)
 	}
@@ -236,7 +236,7 @@ func TestHandleACL_PutEmptyRules(t *testing.T) {
 	// Start with a rule, then update to empty set
 	checker, err := filter.NewACLChecker([]config.ACLRule{
 		{Name: "old-rule", Networks: []string{"10.0.0.0/8"}, Action: "deny"},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("NewACLChecker: %v", err)
 	}

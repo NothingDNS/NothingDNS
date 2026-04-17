@@ -111,11 +111,20 @@ func NewSecurityManager(cfg *config.Config, logger *util.Logger) (*SecurityManag
 	// Initialize ACL checker
 	if len(cfg.ACL) > 0 {
 		var err error
-		mgr.result.ACLChecher, err = filter.NewACLChecker(cfg.ACL)
+		mgr.result.ACLChecher, err = filter.NewACLChecker(cfg.ACL, false)
 		if err != nil {
 			return nil, err
 		}
 		logger.Infof("ACL loaded with %d rules", len(cfg.ACL))
+	} else if cfg.Resolution.Recursive && !cfg.Server.ACLAllowUnrestrictedRecursion {
+		// VULN-041: Recursion enabled but no ACL rules and not explicitly allowed to be unrestricted.
+		// Create a deny-by-default ACL checker to prevent open resolver.
+		aclChecker, err := filter.NewACLChecker(nil, true)
+		if err != nil {
+			return nil, err
+		}
+		mgr.result.ACLChecher = aclChecker
+		logger.Warnf("Recursive resolver enabled with no ACL rules and acl_allow_unrestricted_recursion=false; defaulting to deny-by-default (all clients blocked). Set explicit ACL rules or set acl_allow_unrestricted_recursion=true to allow unrestricted access.")
 	}
 
 	// Initialize rate limiter

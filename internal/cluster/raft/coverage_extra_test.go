@@ -1239,7 +1239,7 @@ func TestPeerFields(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestTCPTransportGetConnExisting(t *testing.T) {
-	tp := NewTCPTransport()
+	tp := NewTCPTransport(nil)
 	// Simulate existing connection
 	client, server := net.Pipe()
 	defer client.Close()

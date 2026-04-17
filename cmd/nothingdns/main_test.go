@@ -205,7 +205,7 @@ func TestServeDNS_ACLDeny(t *testing.T) {
 			Action:   "deny",
 			Types:    []string{"A"},
 		},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("failed to create ACL: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestServeDNS_ACLAllow(t *testing.T) {
 			Networks: []string{"0.0.0.0/0"},
 			Action:   "allow",
 		},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("failed to create ACL: %v", err)
 	}
@@ -339,7 +339,7 @@ func TestServeDNS_ACLRedirect(t *testing.T) {
 			Redirect: "safe.example.com.",
 			Types:    []string{"A"},
 		},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("failed to create ACL: %v", err)
 	}

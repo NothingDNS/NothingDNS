@@ -703,7 +703,7 @@ func TestZoneStateMachineDelNonexistentZone(t *testing.T) {
 // Transport tests
 
 func TestTCPTransportNew(t *testing.T) {
-	tp := NewTCPTransport()
+	tp := NewTCPTransport(nil)
 	if tp == nil {
 		t.Fatal("NewTCPTransport returned nil")
 	}
@@ -716,7 +716,7 @@ func TestTCPTransportNew(t *testing.T) {
 }
 
 func TestTCPTransportSetPeerAddr(t *testing.T) {
-	tp := NewTCPTransport()
+	tp := NewTCPTransport(nil)
 	tp.SetPeerAddr("node1", "192.168.1.1:9230")
 
 	tp.mu.RLock()
@@ -732,7 +732,7 @@ func TestTCPTransportSetPeerAddr(t *testing.T) {
 }
 
 func TestTCPTransportGetConnUnknownPeer(t *testing.T) {
-	tp := NewTCPTransport()
+	tp := NewTCPTransport(nil)
 	_, err := tp.getConn("unknown_peer")
 	if err == nil {
 		t.Error("expected error for unknown peer")
