@@ -678,6 +678,14 @@ func clearBytes(b []byte) {
 }
 
 // SetTokenFilePath sets the path for token persistence.
+//
+// Operational note (VULN-022): the token map is in-memory only by default.
+// cmd/nothingdns never calls SetTokenFilePath, so server restart acts as a
+// universal logout — every outstanding session token becomes invalid because
+// the HMAC validates but the token is no longer in the map. This is
+// deliberate: it removes the need to safeguard a persisted secret file.
+// Operators who need continuity across restarts must call this alongside
+// SaveTokensSigned / LoadTokensSigned in their own startup wiring.
 func (s *Store) SetTokenFilePath(path string) {
 	s.tokenFilePath = path
 }
