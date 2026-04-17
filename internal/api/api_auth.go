@@ -65,7 +65,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	s.authStore.RevokeAllTokens(req.Username)
 
 	// Generate token
-	token, err := s.authStore.GenerateToken(req.Username, 24*time.Hour)
+	token, err := s.authStore.GenerateToken(req.Username, s.authStore.TokenExpiry())
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "Failed to generate token")
 		return
@@ -79,7 +79,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		Secure:   true,
 		SameSite: http.SameSiteStrictMode,
-		MaxAge:   86400,
+		MaxAge:   int(s.authStore.TokenExpiry().Seconds()),
 	})
 
 	s.writeJSON(w, http.StatusOK, &LoginResponse{
@@ -175,7 +175,7 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Generate token
-	token, err := s.authStore.GenerateToken(req.Username, 24*time.Hour)
+	token, err := s.authStore.GenerateToken(req.Username, s.authStore.TokenExpiry())
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "Failed to generate token")
 		return
@@ -189,7 +189,7 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		Secure:   true,
 		SameSite: http.SameSiteStrictMode,
-		MaxAge:   86400,
+		MaxAge:   int(s.authStore.TokenExpiry().Seconds()),
 	})
 
 	s.writeJSON(w, http.StatusOK, &BootstrapResponse{

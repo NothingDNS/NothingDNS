@@ -52,8 +52,14 @@ type Store struct {
 	mu            sync.RWMutex
 	users         map[string]*User
 	tokens        map[string]*Token
-	secret        []byte // HMAC signing key
-	tokenFilePath string // Path to persist tokens (optional)
+	secret        []byte        // HMAC signing key
+	tokenFilePath string        // Path to persist tokens (optional)
+	tokenExpiry   time.Duration // TTL for newly-issued tokens (VULN-032)
+}
+
+// TokenExpiry returns the configured TTL for newly-issued tokens.
+func (s *Store) TokenExpiry() time.Duration {
+	return s.tokenExpiry
 }
 
 // Config holds auth store configuration.
@@ -98,9 +104,13 @@ func NewStore(cfg *Config) (*Store, error) {
 	}
 
 	s := &Store{
-		users:  make(map[string]*User),
-		tokens: make(map[string]*Token),
-		secret: secret,
+		users:       make(map[string]*User),
+		tokens:      make(map[string]*Token),
+		secret:      secret,
+		tokenExpiry: cfg.TokenExpiry.Duration,
+	}
+	if s.tokenExpiry <= 0 {
+		s.tokenExpiry = 24 * time.Hour
 	}
 
 	// Load initial users
