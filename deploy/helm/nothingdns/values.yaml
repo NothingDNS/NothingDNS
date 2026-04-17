@@ -40,9 +40,12 @@ securityContext:
   runAsNonRoot: true
   runAsUser: 65534  # nobody
 
-# Service configuration
+# Service configuration.
+# Default to ClusterIP so a naive `helm install` does not publish an open
+# DNS resolver to the internet — flip to LoadBalancer explicitly once the
+# operator has reviewed DDoS-amplification exposure (VULN-024).
 service:
-  type: LoadBalancer
+  type: ClusterIP
   annotations: {}
   # DNS UDP port
   udpPort: 53
@@ -327,9 +330,12 @@ monitoring:
     labels: {}
     rules: []
 
-# Network policies
+# Network policies.
+# Defaults to on so ingress is restricted to the declared rules below
+# instead of permitting any pod in the cluster to reach the DNS/API
+# ports (VULN-024).
 networkPolicy:
-  enabled: false
+  enabled: true
   ingressRules:
     - from: []
       ports:

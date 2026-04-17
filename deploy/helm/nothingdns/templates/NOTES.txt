@@ -6,6 +6,12 @@ Your release is named {{ .Release.Name }}.
 
 {{- if eq .Values.service.type "LoadBalancer" }}
 
+WARNING: service.type is LoadBalancer. This exposes DNS (port 53),
+DoT (853), DoH (443), and the API (8080) publicly — open resolvers
+are commonly abused as DNS amplification vectors. Restrict the cloud
+LoadBalancer via `service.annotations` (source IP allowlist) and keep
+NetworkPolicy enabled.
+
 Get the LoadBalancer IP:
 
 ```bash
