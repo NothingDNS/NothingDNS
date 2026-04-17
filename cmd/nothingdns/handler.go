@@ -297,7 +297,14 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 	}
 
 	// Check cache first
-	cacheKey := cache.MakeKey(qname, qtype)
+	// VULN-060: include DO bit in cache key so DNSSEC responses don't collide with plain ones
+	doBit := false
+	if opt := r.GetOPT(); opt != nil {
+		// ParseEDNS0Header extracts the DO bit from the OPT record TTL
+		optHdr := protocol.ParseEDNS0Header(opt)
+		doBit = optHdr.DO
+	}
+	cacheKey := cache.MakeKey(qname, qtype, doBit)
 	if entry := h.cache.Get(cacheKey); entry != nil {
 		cacheHit = true
 		if entry.IsNegative {

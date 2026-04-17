@@ -138,7 +138,7 @@ func TestServeDNS_CacheHit(t *testing.T) {
 			},
 		},
 	}
-	key := cache.MakeKey("cached.example.com.", protocol.TypeA)
+	key := cache.MakeKey("cached.example.com.", protocol.TypeA, false)
 	h.cache.Set(key, resp, 300)
 
 	w := newCaptureWriter("10.0.0.1", "udp")

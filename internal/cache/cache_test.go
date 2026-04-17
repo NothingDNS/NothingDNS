@@ -340,7 +340,7 @@ func TestCacheConcurrency(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		go func(id int) {
 			for j := 0; j < 100; j++ {
-				key := MakeKey("test.com", uint16(j%10))
+				key := MakeKey("test.com", uint16(j%10), false)
 				c.SetNegative(key, 3)
 			}
 			done <- true
@@ -351,7 +351,7 @@ func TestCacheConcurrency(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		go func(id int) {
 			for j := 0; j < 100; j++ {
-				key := MakeKey("test.com", uint16(j%10))
+				key := MakeKey("test.com", uint16(j%10), false)
 				c.Get(key)
 			}
 			done <- true
@@ -393,14 +393,14 @@ func TestEntryRemainingTTL(t *testing.T) {
 }
 
 func TestMakeKey(t *testing.T) {
-	key := MakeKey("example.com", 1)
-	expected := "example.com:1"
+	key := MakeKey("example.com", 1, false)
+	expected := "example.com:1:0"
 	if key != expected {
 		t.Errorf("expected key %q, got %q", expected, key)
 	}
 
-	key = MakeKey("test.com", 28)
-	expected = "test.com:28"
+	key = MakeKey("test.com", 28, true)
+	expected = "test.com:28:1"
 	if key != expected {
 		t.Errorf("expected key %q, got %q", expected, key)
 	}

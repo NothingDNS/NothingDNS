@@ -168,17 +168,18 @@ func New(config Config) *Cache {
 	}
 }
 
-// MakeKey creates a cache key from query name and type.
-// Uses strings.Builder instead of fmt.Sprintf for efficiency.
+// MakeKey creates a cache key from query name, type, and DNSSEC DO bit.
+// VULN-060: DO bit included so DNSSEC and plain responses don't share cache entries.
 //
 // SECURITY: Domain names longer than maxKeyNameLen are hashed to prevent
 // cache key DoS attacks where an attacker floods the cache with unique
 // long domain names.
-func MakeKey(name string, qtype uint16) string {
+func MakeKey(name string, qtype uint16, doBit bool) string {
 	const maxKeyNameLen = 128 // Maximum domain name length before hashing
 
 	var b strings.Builder
-	b.Grow(len(name) + 1 + 10)
+	// +1 for :do + 1 for digit (0/1) + 10 for qtype
+	b.Grow(len(name) + 1 + 1 + 10)
 
 	if len(name) > maxKeyNameLen {
 		// Hash long domain names to prevent cache flooding
@@ -190,6 +191,12 @@ func MakeKey(name string, qtype uint16) string {
 
 	b.WriteByte(':')
 	b.WriteString(strconv.FormatUint(uint64(qtype), 10))
+	b.WriteByte(':')
+	if doBit {
+		b.WriteByte('1')
+	} else {
+		b.WriteByte('0')
+	}
 	return b.String()
 }
 

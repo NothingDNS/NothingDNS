@@ -432,8 +432,8 @@ func (h *integratedHandler) resolveCNAMETarget(w server.ResponseWriter, r *proto
 	}
 	h.zonesMu.RUnlock()
 
-	// 2. Check cache for the target
-	cacheKey := cache.MakeKey(targetName, qtype)
+	// 2. Check cache for the target (no DO bit needed — authoritative zone lookup)
+	cacheKey := cache.MakeKey(targetName, qtype, false)
 	if entry := h.cache.Get(cacheKey); entry != nil && !entry.IsNegative && entry.Message != nil {
 		var answers []*protocol.ResourceRecord
 		for _, rr := range entry.Message.Answers {
