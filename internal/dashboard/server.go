@@ -327,6 +327,10 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		util.Warnf("dashboard: websocket handshake failed: %v", err)
 		return
 	}
+	// Per-connection rate limit so a single authenticated client cannot
+	// hold a server goroutine at line-rate (VULN-018). 100 msg/s matches
+	// the primitive's documented sizing.
+	conn.SetRateLimit(100, time.Second)
 
 	client := &Client{
 		conn:   conn,
