@@ -1,0 +1,85 @@
+# VULN-053: Default-deny NetworkPolicy + explicit allow for NothingDNS
+# This ensures that even if a pod is misconfigured, it cannot receive
+# traffic from unexpected sources.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nothingdns-default-deny
+  namespace: default
+spec:
+  # Deny all ingress by default; explicitly allow what each role needs
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# VULN-053: Allow DNS (53/udp+tcp) from any source — DNS must be open
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nothingdns-allow-dns
+  namespace: default
+spec:
+  podSelector:
+    matchLabels:
+      app: nothingdns
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow DNS queries from any client
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow DoT/DoH from any client
+    - ports:
+        - protocol: TCP
+          port: 853
+        - protocol: TCP
+          port: 443
+  egress:
+    # Allow outbound DNS to upstream servers
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+      to:
+        - namespaceSelector: {}  # Allow upstream DNS anywhere
+    # Allow API server TLS (GitHub, etc.)
+    - ports:
+        - protocol: TCP
+          port: 443
+---
+# Allow cluster gossip between NothingDNS pods
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nothingdns-allow-cluster
+  namespace: default
+spec:
+  podSelector:
+    matchLabels:
+      app: nothingdns
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow gossip port from other NothingDNS pods
+    - ports:
+        - protocol: UDP
+          port: 7946
+      from:
+        - podSelector:
+            matchLabels:
+              app: nothingdns
+  egress:
+    - ports:
+        - protocol: UDP
+          port: 7946
+      to:
+        - podSelector:
+            matchLabels:
+              app: nothingdns

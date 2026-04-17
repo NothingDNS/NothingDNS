@@ -6,6 +6,14 @@ metadata:
   annotations:
     kubernetes.io/ingress.class: nginx
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    # VULN-054: Require auth on metrics endpoint — move to internal-only service in production
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/auth-secret: nothingdns-auth
+    nginx.ingress.kubernetes.io/server-snippet: |
+      # Deny access to metrics path unless from internal network
+      location /metrics {
+        deny all;
+      }
 spec:
   rules:
   - host: dns.example.com
@@ -18,13 +26,5 @@ spec:
             name: nothingdns
             port:
               number: 8080
-  - host: dns.example.com
-    http:
-      paths:
-      - path: /metrics
-        pathType: Prefix
-        backend:
-          service:
-            name: nothingdns
-            port:
-              number: 9153
+  # VULN-054: /metrics removed from ingress — deny all via server-snippet above.
+  # Metrics should only be accessed via internal ClusterIP service on port 9153.
