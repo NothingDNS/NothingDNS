@@ -744,7 +744,7 @@ func (s *Server) handleZoneReload(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
-	if s.requireOperator(w, r) {
+	if s.requireAdmin(w, r) {
 		return
 	}
 
