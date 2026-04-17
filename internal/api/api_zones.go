@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -191,19 +190,14 @@ func (s *Server) handleCreateZone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(io.LimitReader(r.Body, 65536))
-	if err != nil {
-		s.writeError(w, http.StatusBadRequest, "Failed to read request body")
-		return
-	}
-
+	// VULN-071: use MaxBytesReader to prevent unbounded body reading
 	var req struct {
 		Name        string   `json:"name"`
 		TTL         uint32   `json:"ttl"`
 		AdminEmail  string   `json:"admin_email"`
 		Nameservers []string `json:"nameservers"`
 	}
-	if err := json.Unmarshal(body, &req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
@@ -297,19 +291,14 @@ func (s *Server) handleAddRecord(w http.ResponseWriter, r *http.Request, zoneNam
 	if s.requireOperator(w, r) {
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 65536))
-	if err != nil {
-		s.writeError(w, http.StatusBadRequest, "Failed to read request body")
-		return
-	}
-
+	// VULN-071: use MaxBytesReader to prevent unbounded body reading
 	var req struct {
 		Name string `json:"name"`
 		Type string `json:"type"`
 		TTL  uint32 `json:"ttl"`
 		Data string `json:"data"`
 	}
-	if err := json.Unmarshal(body, &req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
@@ -355,12 +344,7 @@ func (s *Server) handleUpdateRecord(w http.ResponseWriter, r *http.Request, zone
 	if s.requireOperator(w, r) {
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 65536))
-	if err != nil {
-		s.writeError(w, http.StatusBadRequest, "Failed to read request body")
-		return
-	}
-
+	// VULN-071: use MaxBytesReader to prevent unbounded body reading
 	var req struct {
 		Name    string `json:"name"`
 		Type    string `json:"type"`
@@ -368,7 +352,7 @@ func (s *Server) handleUpdateRecord(w http.ResponseWriter, r *http.Request, zone
 		TTL     uint32 `json:"ttl"`
 		Data    string `json:"data"`
 	}
-	if err := json.Unmarshal(body, &req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
@@ -401,17 +385,12 @@ func (s *Server) handleDeleteRecord(w http.ResponseWriter, r *http.Request, zone
 	if s.requireOperator(w, r) {
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 65536))
-	if err != nil {
-		s.writeError(w, http.StatusBadRequest, "Failed to read request body")
-		return
-	}
-
+	// VULN-071: use MaxBytesReader to prevent unbounded body reading
 	var req struct {
 		Name string `json:"name"`
 		Type string `json:"type"`
 	}
-	if err := json.Unmarshal(body, &req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
@@ -457,13 +436,7 @@ func (s *Server) handleBulkPTR(w http.ResponseWriter, r *http.Request, zoneName 
 	if s.requireOperator(w, r) {
 		return
 	}
-
-	body, err := io.ReadAll(io.LimitReader(r.Body, 65536))
-	if err != nil {
-		s.writeError(w, http.StatusBadRequest, "Failed to read request body")
-		return
-	}
-
+	// VULN-071: use MaxBytesReader to prevent unbounded body reading
 	var req struct {
 		CIDR     string `json:"cidr"`
 		Pattern  string `json:"pattern"`
@@ -471,7 +444,7 @@ func (s *Server) handleBulkPTR(w http.ResponseWriter, r *http.Request, zoneName 
 		AddA     bool   `json:"addA"`
 		Preview  bool   `json:"preview"`
 	}
-	if err := json.Unmarshal(body, &req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}

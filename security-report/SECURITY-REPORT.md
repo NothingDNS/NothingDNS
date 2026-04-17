@@ -92,7 +92,7 @@ Qualitative: **MEDIUM-RISK** for cluster deployments — VULN-037 is partially m
 | VULN-068 | Login lockout permits free username DoS (no IP cost on unknown user) | `internal/api/api_auth.go` | PARTIAL — IP tracked on all attempts; username budget not charged on invalid user |
 | VULN-069 | No singleflight / request-coalescing → cold-cache thundering herd | resolver / cache paths |
 | VULN-070 | Operator role can cache-flush, zone-reload, list DNSSEC keys | RBAC wiring |
-| VULN-071 | Config PUT and zone writes skip `MaxBytesReader` | `/api/v1/config/*`, zone handlers |
+| VULN-071 | Config PUT and zone writes skip `MaxBytesReader` | `/api/v1/config/*`, zone handlers | FIXED — MaxBytesReader on all JSON body handlers |
 | VULN-072 | CSP `connect-src` allows cross-origin WebSocket | `internal/api/server.go:724` | FIXED — ws:/wss: removed from connect-src |
 
 ### LOW (9)
