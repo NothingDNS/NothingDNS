@@ -82,15 +82,15 @@ Qualitative: **MEDIUM-RISK** for cluster deployments — VULN-037 is partially m
 | VULN-058 | Log injection via unsanitized QNAME `\n` in text formatter | `internal/util/logger.go:185`; `internal/protocol/labels.go:82` | FIXED — formatText sanitizes CR/LF |
 | VULN-059 | Forwarder reuses client DNS TXID upstream (no re-randomization) | `cmd/nothingdns/handler.go:567` | FIXED — handler calls upstream.RandomTXID() |
 | VULN-060 | Cache key omits DO/CD bits — mixes DNSSEC/plain responses | `internal/resolver/resolver.go:507` | FIXED — MakeKey includes doBit parameter |
-| VULN-061 | NOTIFY accepts IP-only auth (no TSIG enforcement) | `internal/transfer/notify.go:247` |
+| VULN-061 | NOTIFY accepts IP-only auth (no TSIG enforcement) | `internal/transfer/notify.go:247` | FIXED — `HandleNOTIFY` now requires TSIG when keyStore has keys configured, using same pattern as AXFR TSIG enforcement |
 | VULN-062 | Cluster gossip encryption is optional (log-only warning) | `internal/cluster/gossip.go:281` | FIXED — encryption mandatory, allowInsecure for tests |
 | VULN-063 | No response-rate-limiting; per-IP tokens defeated by spoofed floods | `internal/filter/rate_limit.go` |
-| VULN-064 | RPZ response-IP policy runs post-cache (cache leaks blocked IPs) | pipeline stage 18 (handler.go) |
+| VULN-064 | RPZ response-IP policy runs post-cache (cache leaks blocked IPs) | pipeline stage 18 (handler.go) | FIXED — `checkRPZResponseIP` now called before authoritative zone replies (GeoDNS, exact, wildcard, DNAME, delegation), ensuring response IPs are checked before being served without RPZ filtering |
 | VULN-065 | No RFC 8482 ANY handling; no TC-forcing for DNSKEY/TXT over UDP | handler.go |
 | VULN-066 | gob-decode of local-disk KV / journal legacy formats | `internal/storage/kvstore.go:157`; `internal/transfer/kvjournal.go:152` |
 | VULN-067 | Blocklist admin `{"file":"/abs/path"}` has no path-confinement; follows symlinks | `internal/api/api_blocklist.go:309` | FIXED — BaseDir confinement in blocklist.go |
 | VULN-068 | Login lockout permits free username DoS (no IP cost on unknown user) | `internal/api/api_auth.go` | PARTIAL — IP tracked on all attempts; username budget not charged on invalid user |
-| VULN-069 | No singleflight / request-coalescing → cold-cache thundering herd | resolver / cache paths |
+| VULN-069 | No singleflight / request-coalescing → cold-cache thundering herd | resolver / cache paths | FIXED — generic singleflight added to `Resolver.Resolve()`, keyed by `name:qtype`, using stdlib `sync` only |
 | VULN-070 | Operator role can cache-flush, zone-reload, list DNSSEC keys | RBAC wiring | FIXED — cache-flush, zone-reload, DNSSEC keys now require admin |
 | VULN-071 | Config PUT and zone writes skip `MaxBytesReader` | `/api/v1/config/*`, zone handlers | FIXED — MaxBytesReader on all JSON body handlers |
 | VULN-072 | CSP `connect-src` allows cross-origin WebSocket | `internal/api/server.go:724` | FIXED — ws:/wss: removed from connect-src |
@@ -153,15 +153,15 @@ Goal: fix the shipping artifacts so operators fall into the pit of success.
 Goal: reduce residual risk and attack surface.
 - ~~**VULN-058** (log injection)~~ — **FIXED** (formatText sanitizes all field values).
 - ~~**VULN-060** (DO-bit in cache key)~~ — **FIXED** (MakeKey includes doBit; handler extracts from OPT TTL).
-- **VULN-061** (NOTIFY TSIG) — enforce TSIG when configured.
+- ~~**VULN-061** (NOTIFY TSIG)~~ — **FIXED** (HandleNOTIFY enforces TSIG when keyStore has keys).
 - **VULN-062** (optional gossip crypto) — make cluster encryption mandatory.
 - **VULN-063** (RRL) — implement RFC-style response-rate-limiting.
-- **VULN-064** (RPZ post-cache) — apply response-IP policy BEFORE caching.
+- ~~**VULN-064** (RPZ post-cache)~~ — **FIXED** (`checkRPZResponseIP` called before authoritative replies).
 - **VULN-065** (ANY / amplification) — RFC 8482 HINFO to ANY; TC=1 over UDP for large amplifier types.
 - **VULN-066** (on-disk gob) — replace with TLV + HMAC.
 - ~~**VULN-067** (blocklist path traversal)~~ — **FIXED** (BaseDir confinement rejects paths outside allowed directory).
 - **VULN-068** (username DoS) — charge IP-budget on all 401s.
-- **VULN-069** (singleflight) — coalesce upstream lookups by (qname, qtype).
+- ~~**VULN-069** (singleflight)~~ — **FIXED** (generic singleflight added to resolver).
 - **VULN-070** (operator RBAC scope) — elevate cache-flush/DNSSEC-keys to admin.
 - ~~**VULN-071** (MaxBytesReader)~~ — **FIXED** (config PUT handlers now use `http.MaxBytesReader`).
 - ~~**VULN-072** (CSP connect-src)~~ — **FIXED** (ws:/wss: removed from connect-src).
