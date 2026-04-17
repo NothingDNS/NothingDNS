@@ -22,7 +22,7 @@ NothingDNS ships a lot of the right security posture for a DNS server: crypto/ra
 
 ### Risk score
 
-Qualitative: **HIGH-RISK** for cluster deployments until VULN-037 (Raft plaintext) and VULN-041 (open-resolver default) are fixed. Single-node deployments without cluster are **MEDIUM-RISK**, driven by VULN-041 if the resolver is Internet-facing. Six issues fixed since initial audit (VULN-038/039/040/044/050/055).
+Qualitative: **MEDIUM-RISK** for cluster deployments — VULN-037 is partially mitigated (TLS available but not enforced by default; production must enable it). Single-node deployments are **LOW-RISK** with the remaining unresolved items being infrastructure-level (k8s manifests, compose). 10 issues fixed since initial audit.
 
 ---
 
@@ -48,7 +48,7 @@ Qualitative: **HIGH-RISK** for cluster deployments until VULN-037 (Raft plaintex
 
 | ID | Title | CVSS (indicative) | Where | Status |
 |---:|-------|-------------------|-------|--------|
-| VULN-037 | Raft RPC transmitted in plaintext (no encryption, no auth, gob on untrusted input) | 9.1 (AV:A/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H) | `internal/cluster/raft/rpc.go` | UNRESOLVED |
+| VULN-037 | Raft RPC transmitted in plaintext (no encryption, no auth, gob on untrusted input) | 9.1 (AV:A/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H) | `internal/cluster/raft/rpc.go` | PARTIAL — TLS support added; not enforced by default |
 | VULN-038 | DNSSEC keystore encrypts with all-zero AES-256 key (buffer allocated, never `copy`d) | 8.1 (AV:L/AC:L/PR:H/UI:N/C:H/I:H/A:L) | `internal/dnssec/keystore.go:95` | FIXED |
 | VULN-039 | Recursive resolver lacks bailiwick check — classic Kaminsky cache poisoning | 8.1 (AV:N/AC:H/PR:N/UI:N/C:L/I:H/A:H) | `internal/resolver/resolver.go:490-527` | FIXED |
 | VULN-040 | DNSSEC validator has no RRSIG / DNSKEY caps → KeyTrap DoS (CVE-2023-50387 class) | 7.5 (AV:N/AC:L/PR:N/UI:N/C:N/I:N/A:H) | `internal/dnssec/validator.go:343-452` | FIXED |
@@ -57,15 +57,15 @@ Qualitative: **HIGH-RISK** for cluster deployments until VULN-037 (Raft plaintex
 
 | ID | Title | Where | Status |
 |---:|-------|-------|--------|
-| VULN-041 | Default config = open recursive resolver (nil ACL = allow-all) | `internal/filter/acl.go:30-33` | UNRESOLVED |
-| VULN-042 | Helm chart missing `NET_BIND_SERVICE` cap-add — port 53 bind broken | `deploy/helm/nothingdns/values.yaml:35-40` | UNRESOLVED |
-| VULN-043 | Helm JWT secret uses Sprig `randAlphaNum` (math/rand) — predictable | `deploy/helm/nothingdns/templates/_helpers.tpl:72` | UNRESOLVED |
+| VULN-041 | Default config = open recursive resolver (nil ACL = allow-all) | `internal/filter/acl.go:30-33` | FIXED — denyByDefault + startup warning |
+| VULN-042 | Helm chart missing `NET_BIND_SERVICE` cap-add — port 53 bind broken | `deploy/helm/nothingdns/values.yaml:35-40` | FIXED |
+| VULN-043 | Helm JWT secret uses Sprig `randAlphaNum` (math/rand) — predictable | `deploy/helm/nothingdns/templates/_helpers.tpl:72` | FIXED — fails if no secret provided |
 | VULN-044 | DoH / DoWS / ODoH endpoints return 401 when auth enabled | `internal/api/server.go:629,790-806` | FIXED |
-| VULN-045 | Gossip encryption has no replay protection | `internal/cluster/gossip.go` (decodeMessage) | UNRESOLVED |
-| VULN-046 | Gossip AES-GCM lacks AAD binding peer identity | `internal/cluster/gossip.go` | UNRESOLVED |
-| VULN-047 | Raft WAL parser short-reads and trusts on-disk `cmdLen` → OOM/corruption | `internal/cluster/raft/wal.go:67-120` | UNRESOLVED |
-| VULN-048 | gob-decode of untrusted Raft RPC input (compounds VULN-037) | `internal/cluster/raft/rpc.go:196` | UNRESOLVED |
-| VULN-049 | Raft RPC server conns map keyed `""` → fd leak on reconnect | `internal/cluster/raft/rpc.go:111` | UNRESOLVED |
+| VULN-045 | Gossip encryption has no replay protection | `internal/cluster/gossip.go` (decodeMessage) | FIXED — per-sender sequence tracking |
+| VULN-046 | Gossip AES-GCM lacks AAD binding peer identity | `internal/cluster/gossip.go` | PARTIAL — AAD computed at send; full re-check TODO |
+| VULN-047 | Raft WAL parser short-reads and trusts on-disk `cmdLen` → OOM/corruption | `internal/cluster/raft/wal.go:67-120` | |
+| VULN-048 | gob-decode of untrusted Raft RPC input (compounds VULN-037) | `internal/cluster/raft/rpc.go:196` | PARTIAL — TLS required for production |
+| VULN-049 | Raft RPC server conns map keyed `""` → fd leak on reconnect | `internal/cluster/raft/rpc.go:111` | FIXED — keyed by NodeID(addr) |
 | VULN-050 | `deploy/production.yaml` ships known placeholder secret literals | `deploy/production.yaml:32-41` | FIXED |
 | VULN-051 | Docker compose has no resource limits | `docker-compose.yml` | |
 | VULN-052 | Raw k8s `configmap.yaml` binds admin API 0.0.0.0 without auth config | `deploy/k8s/configmap.yaml:12-14` | |

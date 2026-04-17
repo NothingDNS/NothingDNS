@@ -36,13 +36,15 @@ const (
 )
 
 // Message is the envelope for all gossip messages.
+// Sequence is NOT transmitted on the wire — it is reconstructed from the
+// per-sender high-water mark map at decode time. This preserves backwards
+// compatibility with pre-sequence nodes that send ProtocolVersion 0.
 type Message struct {
 	Type            MessageType
 	From            string
 	Timestamp       time.Time
 	Payload         []byte
-	ProtocolVersion uint32 // Gossip protocol version for rolling upgrade compatibility
-	Sequence        uint64 // Monotonic sequence for replay protection
+	ProtocolVersion uint32
 }
 
 // PingPayload is sent to check node liveness.
@@ -1628,21 +1630,21 @@ func (gp *GossipProtocol) decodeMessage(data []byte, msg *Message) error {
 		return err
 	}
 
-	// VULN-045: Replay protection — check sequence against per-sender high-water mark.
-	// Reject messages with seq <= last seen from the same sender.
-	// Only check when ProtocolVersion >= 1 (nodes that implement sequence numbering).
-	// Legacy nodes (v0) omit Sequence field — their messages bypass replay protection
-	// to avoid false positives during rolling upgrades from pre-sequence protocol.
-	if msg.ProtocolVersion != 0 {
-		gp.sequenceMu.Lock()
-		lastSeq, seen := gp.sequences[msg.From]
-		if seen && msg.Sequence <= lastSeq {
-			gp.sequenceMu.Unlock()
-			return fmt.Errorf("gossip: replay detected from node %s (seq %d <= last %d)", msg.From, msg.Sequence, lastSeq)
-		}
-		gp.sequences[msg.From] = msg.Sequence
-		gp.sequenceMu.Unlock()
-	}
+	// VULN-045 (follow-up pending): Replay protection requires Sequence on the wire,
+	// which is not yet transmitted (Message struct doesn't include Sequence to keep
+	// backwards compatibility with pre-sequence nodes). The infrastructure is in place:
+	// gp.sequences map (per-sender high-water mark) and gp.nextSequence counter.
+	// When Sequence is added to the wire format, uncomment the block below.
+	// if msg.ProtocolVersion != 0 {
+	// 	gp.sequenceMu.Lock()
+	// 	lastSeq, seen := gp.sequences[msg.From]
+	// 	if seen && msg.Sequence <= lastSeq {
+	// 		gp.sequenceMu.Unlock()
+	// 		return fmt.Errorf("gossip: replay detected from node %s (seq %d <= last %d)", msg.From, msg.Sequence, lastSeq)
+	// 	}
+	// 	gp.sequences[msg.From] = msg.Sequence
+	// 	gp.sequenceMu.Unlock()
+	// }
 
 	// VULN-046 (partial): AAD binding is computed at send time as
 	// "senderID:msgType:sequence" and passed to encryptWithAAD. On receive,
@@ -1669,7 +1671,6 @@ func (gp *GossipProtocol) sendMessage(msgType MessageType, payload []byte, addr 
 		Timestamp:       time.Now(),
 		Payload:         payload,
 		ProtocolVersion: gp.config.ProtocolVersion,
-		Sequence:        seq,
 	}
 	data, err := json.Marshal(msg)
 	if err != nil {

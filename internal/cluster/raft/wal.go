@@ -9,6 +9,11 @@ import (
 	"sync"
 )
 
+// maxWALCommandBytes caps the size of any single WAL command entry.
+// This prevents a corrupt or attacker-controlled WAL from causing unbounded
+// allocation during log replay (VULN-047).
+const maxWALCommandBytes = 64 * 1024 * 1024 // 64 MiB
+
 // WAL is the Write-Ahead Log for Raft log entries.
 // It provides durability for uncommitted log entries.
 type WAL struct {
@@ -76,42 +81,45 @@ func (w *WAL) ReadAll() ([]entry, error) {
 	buf := make([]byte, 1024) // Reusable buffer
 
 	for {
-		// Read index
-		if _, err := w.logFile.Read(buf[:8]); err != nil {
-			break // EOF
+		// Read index, term, and cmdLen all at once to validate record boundary.
+		// Use io.ReadFull so a short read (e.g., partial write from crash) returns
+		// an error rather than silently reading the next record's bytes as this record's data.
+		header := make([]byte, 24) // 8 bytes index + 8 bytes term + 8 bytes cmdLen
+		if _, err := io.ReadFull(w.logFile, header); err != nil {
+			if err == io.EOF {
+				break // Clean end of WAL
+			}
+			return nil, fmt.Errorf("read WAL header: %w", err)
 		}
 		e := entry{}
-		e.Index = Index(binary.BigEndian.Uint64(buf[:8]))
+		e.Index = Index(binary.BigEndian.Uint64(header[0:8]))
+		e.Term = Term(binary.BigEndian.Uint64(header[8:16]))
+		cmdLen := binary.BigEndian.Uint64(header[16:24])
 
-		// Read term
-		if _, err := w.logFile.Read(buf[:8]); err != nil {
-			return nil, fmt.Errorf("read term: %w", err)
+		// VULN-047: cap command length to prevent unbounded allocation from corrupt WAL.
+		// A crafted WAL with a large cmdLen could exhaust memory during replay.
+		if cmdLen > maxWALCommandBytes {
+			return nil, fmt.Errorf("WAL cmdLen %d exceeds max %d — corrupt or attacker-crafted WAL", cmdLen, maxWALCommandBytes)
 		}
-		e.Term = Term(binary.BigEndian.Uint64(buf[:8]))
-
-		// Read command length
-		if _, err := w.logFile.Read(buf[:8]); err != nil {
-			return nil, fmt.Errorf("read cmdlen: %w", err)
-		}
-		cmdLen := binary.BigEndian.Uint64(buf[:8])
 
 		// Read command
 		if cmdLen > 0 {
 			if uint64(len(buf)) < cmdLen {
 				buf = make([]byte, cmdLen)
 			}
-			if _, err := w.logFile.Read(buf[:cmdLen]); err != nil {
-				return nil, fmt.Errorf("read cmd: %w", err)
+			if _, err := io.ReadFull(w.logFile, buf[:cmdLen]); err != nil {
+				return nil, fmt.Errorf("read WAL cmd (%d bytes): %w", cmdLen, err)
 			}
 			e.Command = make([]byte, cmdLen)
 			copy(e.Command, buf[:cmdLen])
 		}
 
 		// Read type
-		if _, err := w.logFile.Read(buf[:1]); err != nil {
-			return nil, fmt.Errorf("read type: %w", err)
+		var typBuf [1]byte
+		if _, err := io.ReadFull(w.logFile, typBuf[:]); err != nil {
+			return nil, fmt.Errorf("read WAL type: %w", err)
 		}
-		e.Type = EntryType(buf[0])
+		e.Type = EntryType(typBuf[0])
 
 		entries = append(entries, e)
 	}
