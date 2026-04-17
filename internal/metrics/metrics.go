@@ -152,10 +152,13 @@ func (m *MetricsCollector) Start() error {
 
 	m.mu.Lock()
 	m.server = &http.Server{
-		Addr:         m.config.Bind,
-		Handler:      mux,
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 5 * time.Second,
+		Addr:              m.config.Bind,
+		Handler:           mux,
+		ReadHeaderTimeout: 2 * time.Second,
+		ReadTimeout:       5 * time.Second,
+		WriteTimeout:      5 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 15,
 	}
 	m.mu.Unlock()
 
