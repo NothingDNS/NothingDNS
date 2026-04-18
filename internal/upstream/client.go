@@ -251,6 +251,9 @@ func (c *Client) QueryContext(ctx context.Context, msg *protocol.Message) (*prot
 		err  error
 	}
 
+	// Buffered channel: goroutine exits even if context is cancelled and
+	// no receiver reads from done. Without buffer size 1, a cancelled context
+	// causes the goroutine to block forever on the send to done.
 	done := make(chan result, 1)
 	go func() {
 		resp, err := c.Query(msg)
