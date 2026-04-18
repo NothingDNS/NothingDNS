@@ -1,6 +1,9 @@
 package raft
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -34,40 +37,64 @@ type ClusterIntegration struct {
 }
 
 // NewClusterIntegration creates a new Raft cluster integration.
-func NewClusterIntegration(nodeID NodeID, peers []NodeID, addr string, dataDir string) (*ClusterIntegration, error) {
+// encryptionKey is a hex-encoded 32-byte AES-256 key. If empty, AEAD is disabled
+// (dev-only; production must supply a key).
+func NewClusterIntegration(nodeID NodeID, peers []NodeID, addr string, dataDir string, encryptionKey string) (*ClusterIntegration, error) {
 	config := DefaultConfig()
 	config.NodeID = nodeID
 
-	// Create transport (nil TLS config = plaintext for development)
-	transport := NewTCPTransport(nil)
-
-	// Set peer addresses (simplified — would be looked up from config)
-	for _, peerID := range peers {
-		transport.SetPeerAddr(peerID, string(peerID)) // Placeholder
+	// Derive AEAD from the cluster encryption key (same scheme as gossip).
+	var aead cipher.AEAD
+	if encryptionKey != "" {
+		key, err := hex.DecodeString(encryptionKey)
+		if err != nil {
+			return nil, fmt.Errorf("invalid encryption key hex: %w", err)
+		}
+		if len(key) != 32 {
+			return nil, fmt.Errorf("encryption key must be 32 bytes (%d provided)", len(key))
+		}
+		block, err := aes.NewCipher(key)
+		if err != nil {
+			return nil, fmt.Errorf("aes cipher: %w", err)
+		}
+		aead, err = cipher.NewGCM(block)
+		if err != nil {
+			return nil, fmt.Errorf("gcm: %w", err)
+		}
+		// Warn if running without transport-level encryption.
+		// Note: the gossip protocol uses AES-256-GCM with per-sender sequence tracking.
 	}
 
-	// Create Raft node
+	// Create transport with AEAD encryption (nil AEAD = plaintext for dev).
+	transport := NewTCPTransport(nil, aead)
+
+	// Set peer addresses (simplified — would be looked up from config).
+	for _, peerID := range peers {
+		transport.SetPeerAddr(peerID, string(peerID)) // Placeholder.
+	}
+
+	// Create Raft node.
 	node := NewNode(config, peers, transport)
 
-	// Create RPC server (nil TLS config = plaintext for development)
-	rpcServer, err := NewRPCServer(addr, node, nil)
+	// Create RPC server with AEAD encryption.
+	rpcServer, err := NewRPCServer(addr, node, nil, aead)
 	if err != nil {
 		return nil, fmt.Errorf("rpc server: %w", err)
 	}
 
-	// Create WAL
+	// Create WAL.
 	wal, err := NewWAL(dataDir + "/raft-wal")
 	if err != nil {
 		return nil, fmt.Errorf("wal: %w", err)
 	}
 
-	// Load WAL entries into node
+	// Load WAL entries into node.
 	if entries, err := wal.ReadAll(); err == nil && len(entries) > 0 {
-		// Replay entries into node's log
+		// Replay entries into node's log.
 		node.log = append(node.log, entries...)
 	}
 
-	// Create snapshotter
+	// Create snapshotter.
 	snapshotter, err := NewSnapshotter(dataDir + "/snapshots")
 	if err != nil {
 		return nil, fmt.Errorf("snapshotter: %w", err)

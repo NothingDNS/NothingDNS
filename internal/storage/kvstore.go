@@ -1,6 +1,10 @@
 package storage
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/binary"
 	"encoding/gob"
 	"encoding/json"
 	"errors"
@@ -25,6 +29,13 @@ const (
 	DataFile       = "data.db"
 )
 
+// TLV file magic and version for integrity-protected format.
+const (
+	fileMagic    = 0xDB
+	fileVersion  = 1
+	hmacLenBytes = 32 // SHA-256 HMAC
+)
+
 // Store errors
 var (
 	ErrKeyTooLarge     = errors.New("key is too large")
@@ -35,6 +46,7 @@ var (
 	ErrTxNotWritable   = errors.New("transaction is not writable")
 	ErrDatabaseClosed  = errors.New("database is closed")
 	ErrKVValueTooLarge = errors.New("value is too large")
+	ErrDataTampered    = errors.New("data file integrity check failed — possible tampering")
 )
 
 // KVStore represents the main database
@@ -49,6 +61,7 @@ type KVStore struct {
 	rwtx     *Tx
 	txs      []*Tx
 	stats    StoreStats
+	hmacKey  []byte // nil means no integrity protection (legacy mode)
 }
 
 // StoreStats contains database statistics
@@ -88,8 +101,20 @@ type Tx struct {
 	commitHandlers []func()
 }
 
-// OpenKVStore opens or creates a key-value store
-func OpenKVStore(path string) (*KVStore, error) {
+// OpenKVStore opens or creates a key-value store.
+// An optional hmacKey may be passed as the second argument (must be 32 bytes
+// if provided) for integrity protection (SHA-256 HMAC). Without a key the store
+// falls back to legacy JSON format on load and saves without HMAC.
+// This signature is backward-compatible: existing callers that pass only path
+// continue to work.
+func OpenKVStore(path string, hmacKey ...[]byte) (*KVStore, error) {
+	var key []byte
+	if len(hmacKey) > 0 {
+		key = hmacKey[0]
+	}
+	if key != nil && len(key) != 32 {
+		return nil, fmt.Errorf("hmac key must be 32 bytes (%d provided)", len(key))
+	}
 	store := &KVStore{
 		path:     path,
 		dataFile: filepath.Join(path, DataFile),
@@ -97,6 +122,7 @@ func OpenKVStore(path string) (*KVStore, error) {
 			Entries: make(map[string][]byte),
 			Buckets: make(map[string]*bucketData),
 		},
+		hmacKey: key,
 	}
 
 	// Create directory if needed
@@ -146,16 +172,73 @@ func (s *KVStore) readFrom(f *os.File) error {
 		return fmt.Errorf("cannot seek data file: %w", err)
 	}
 
-	// JSON files start with '{', GOB files start with GOB type encoding
+	// JSON files start with '{', TLV files start with fileMagic (0xDB)
 	if n > 0 && header[0] == '{' {
-		// JSON format
+		// Legacy JSON format (no HMAC)
 		decoder := json.NewDecoder(f)
 		return decoder.Decode(&s.root)
 	}
 
+	if n > 0 && header[0] == fileMagic {
+		// TLV+HMAC format: read HMAC, then payload
+		if err := s.readTLV(f); err != nil {
+			return fmt.Errorf("tlv read: %w", err)
+		}
+		return nil
+	}
+
 	// GOB format (legacy) — decode and convert to JSON-compatible structure
+	// Only attempted for files without a recognized magic byte.
+	if err := s.readGOB(f); err != nil {
+		return fmt.Errorf("failed to decode data file (tried JSON, TLV, GOB): %w", err)
+	}
+	return nil
+}
+
+// readTLV reads the TLV+HMAC format: [magic(1) version(2) payloadLen(4) payload(payloadLen) hmac(32)].
+func (s *KVStore) readTLV(r io.Reader) error {
+	var hdr [7]byte
+	if _, err := io.ReadFull(r, hdr[:]); err != nil {
+		return err
+	}
+	if hdr[0] != fileMagic {
+		return fmt.Errorf("invalid magic: 0x%x", hdr[0])
+	}
+	version := binary.BigEndian.Uint16(hdr[1:3])
+	if version != fileVersion {
+		return fmt.Errorf("unsupported TLV version: %d", version)
+	}
+	payloadLen := binary.BigEndian.Uint32(hdr[3:7])
+
+	// Read payload + HMAC in one read.
+	recordLen := int(payloadLen) + hmacLenBytes
+	record := make([]byte, recordLen)
+	if _, err := io.ReadFull(r, record); err != nil {
+		return err
+	}
+
+	storedHMAC := record[payloadLen:]
+	payload := record[:payloadLen]
+
+	// Verify HMAC if we have a key.
+	if s.hmacKey != nil {
+		expectedHMAC := hmac.New(sha256.New, s.hmacKey).Sum(payload)
+		if subtle.ConstantTimeCompare(storedHMAC, expectedHMAC) != 1 {
+			return ErrDataTampered
+		}
+	}
+
+	// Decode JSON payload.
+	if err := json.Unmarshal(payload, &s.root); err != nil {
+		return fmt.Errorf("json decode: %w", err)
+	}
+	return nil
+}
+
+// readGOB reads legacy GOB format (deprecated).
+func (s *KVStore) readGOB(f *os.File) error {
 	if err := gob.NewDecoder(f).Decode(&s.root); err != nil {
-		return fmt.Errorf("failed to decode data file (tried JSON and GOB): %w", err)
+		return err
 	}
 	return nil
 }
@@ -177,10 +260,19 @@ func (s *KVStore) save() error {
 		}
 	}()
 
-	encoder := json.NewEncoder(tmpFile)
-	if err := encoder.Encode(s.root); err != nil {
-		tmpFile.Close()
-		return fmt.Errorf("encode data: %w", err)
+	if s.hmacKey != nil {
+		// Write TLV+HMAC format: [magic(1) version(2) payloadLen(4) payload(n) hmac(32)]
+		if err := s.writeTLV(tmpFile); err != nil {
+			tmpFile.Close()
+			return fmt.Errorf("write tlv: %w", err)
+		}
+	} else {
+		// Legacy JSON format (no HMAC)
+		encoder := json.NewEncoder(tmpFile)
+		if err := encoder.Encode(s.root); err != nil {
+			tmpFile.Close()
+			return fmt.Errorf("encode data: %w", err)
+		}
 	}
 
 	if err := tmpFile.Sync(); err != nil {
@@ -200,6 +292,32 @@ func (s *KVStore) save() error {
 	renamed = true
 
 	return nil
+}
+
+// writeTLV writes the store in TLV+HMAC format.
+func (s *KVStore) writeTLV(w io.Writer) error {
+	// Marshal JSON payload.
+	payload, err := json.Marshal(s.root)
+	if err != nil {
+		return fmt.Errorf("json marshal: %w", err)
+	}
+
+	// Frame: magic + version + length + payload + hmac.
+	frameLen := 1 + 2 + 4 + len(payload) + hmacLenBytes
+	frame := make([]byte, frameLen)
+	frame[0] = fileMagic
+	binary.BigEndian.PutUint16(frame[1:3], fileVersion)
+	binary.BigEndian.PutUint32(frame[3:7], uint32(len(payload)))
+	copy(frame[7:7+len(payload)], payload)
+
+	// HMAC is computed over the payload only.
+	hm := hmac.New(sha256.New, s.hmacKey)
+	hm.Write(payload)
+	sum := hm.Sum(nil) // 32 bytes
+	copy(frame[7+len(payload):], sum)
+
+	_, err = w.Write(frame)
+	return err
 }
 
 // Begin starts a new transaction.

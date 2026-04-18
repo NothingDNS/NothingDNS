@@ -283,6 +283,7 @@ func (c *Cluster) initRaft() error {
 		peerIDs,
 		raftAddr,
 		dataDir,
+		c.config.EncryptionKey,
 	)
 	if err != nil {
 		return fmt.Errorf("creating Raft node: %w", err)

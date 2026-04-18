@@ -1,9 +1,9 @@
 package raft
 
 import (
+	"crypto/cipher"
 	"crypto/tls"
 	"encoding/binary"
-	"encoding/gob"
 	"fmt"
 	"io"
 	"net"
@@ -48,12 +48,14 @@ type RPCServer struct {
 	mu        sync.RWMutex
 	stopCh    chan struct{}
 	wg        sync.WaitGroup
-	tlsConfig *tls.Config // nil means plain TCP
+	tlsConfig *tls.Config // nil means plain TCP (dev-only; AEAD must be set in production)
+	aead      cipher.AEAD // AEAD for encrypted framing; nil is plaintext
 }
 
-// NewRPCServer creates a new RPC server with optional TLS.
-// Pass nil for tlsConfig to use plain TCP (for development only).
-func NewRPCServer(addr string, handler RPCHandler, tlsConfig *tls.Config) (*RPCServer, error) {
+// NewRPCServer creates a new RPC server with optional TLS and AEAD encryption.
+// tlsConfig is for the TCP listener. aead is for message-level encryption (nil = plaintext).
+// In production, either TLS or AEAD (or both) must be configured.
+func NewRPCServer(addr string, handler RPCHandler, tlsConfig *tls.Config, aead cipher.AEAD) (*RPCServer, error) {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("listen: %w", err)
@@ -69,6 +71,7 @@ func NewRPCServer(addr string, handler RPCHandler, tlsConfig *tls.Config) (*RPCS
 		conns:    make(map[NodeID]net.Conn),
 		stopCh:   make(chan struct{}),
 		tlsConfig: tlsConfig,
+		aead:     aead,
 	}, nil
 }
 
@@ -137,6 +140,10 @@ func (s *RPCServer) handleConn(conn net.Conn, nodeID NodeID) {
 		s.mu.Unlock()
 	}()
 
+	fw := newFrameWriter(conn, s.aead)
+	fr := newFrameReader(conn, s.aead)
+	buf := &voteReqBuf{}
+
 	for {
 		select {
 		case <-s.stopCh:
@@ -148,68 +155,67 @@ func (s *RPCServer) handleConn(conn net.Conn, nodeID NodeID) {
 			return
 		}
 
-		// Read message type
-		var msgType uint8
-		if err := binary.Read(conn, binary.BigEndian, &msgType); err != nil {
+		msgType, err := fr.readFramed(buf)
+		if err != nil {
 			return
 		}
 
 		switch msgType {
 		case msgTypeVoteRequest:
-			var req VoteRequest
-			if err := s.readMessage(conn, &req); err != nil {
-				return
-			}
-			resp := s.handler.HandleVoteRequest(req)
-			if err := s.writeMessage(conn, msgTypeVoteResponse, resp); err != nil {
+			resp := s.handler.HandleVoteRequest(buf.VoteRequest)
+			buf.VoteResponse = resp
+			if err := fw.writeFramed(msgTypeVoteResponse, &buf.VoteResponse); err != nil {
 				return
 			}
 		case msgTypeAppendRequest:
-			var req AppendRequest
-			if err := s.readMessage(conn, &req); err != nil {
-				return
-			}
-			resp := s.handler.HandleAppendRequest(req)
-			if err := s.writeMessage(conn, msgTypeAppendResponse, resp); err != nil {
+			resp := s.handler.HandleAppendRequest(buf.AppendRequest)
+			buf.AppendResponse = resp
+			if err := fw.writeFramed(msgTypeAppendResponse, &buf.AppendResponse); err != nil {
 				return
 			}
 		case msgTypeSnapshot:
-			var req SnapshotRequest
-			if err := s.readMessage(conn, &req); err != nil {
+			if _, err := fr.readFramed(&buf.SnapshotRequest); err != nil {
 				return
 			}
-			s.handler.HandleSnapshotRequest(req)
+			s.handler.HandleSnapshotRequest(buf.SnapshotRequest)
 		}
 	}
 }
 
+// voteReqBuf pools per-connection buffers to avoid per-message allocation.
+// Each field is a named struct to avoid ambiguity in the type switch.
+type voteReqBuf struct {
+	VoteRequest    VoteRequest
+	VoteResponse  VoteResponse
+	AppendRequest AppendRequest
+	AppendResponse AppendResponse
+	SnapshotRequest SnapshotRequest
+}
+
 // writeMessage writes a message with type prefix.
 func (s *RPCServer) writeMessage(w io.Writer, msgType uint8, msg any) error {
-	return writeRPCMessage(w, msgType, msg)
+	fw := newFrameWriter(w, s.aead)
+	return fw.writeFramed(msgType, msg)
 }
 
 // readMessage reads a message.
 func (s *RPCServer) readMessage(r io.Reader, msg any) error {
-	return readRPCMessage(r, msg)
+	fr := newFrameReader(r, s.aead)
+	_, err := fr.readFramed(msg)
+	return err
 }
 
-func writeRPCMessage(w io.Writer, msgType uint8, msg any) error {
-	if err := binary.Write(w, binary.BigEndian, msgType); err != nil {
-		return err
-	}
-	return gob.NewEncoder(w).Encode(msg)
+// writeRPCMessage and readRPCMessage are low-level helpers used by TCPTransport.
+// They use the server's AEAD when available (shared secret derived from cluster key).
+func writeRPCMessage(w io.Writer, msgType uint8, msg any, aead cipher.AEAD) error {
+	fw := newFrameWriter(w, aead)
+	return fw.writeFramed(msgType, msg)
 }
 
-// maxRPCMessageBytes caps a single gob-framed Raft RPC payload. encoding/gob
-// is documented as unsafe against untrusted input — a crafted slice/map length
-// prefix makes the decoder pre-allocate before reading, so without this cap a
-// single attacker-controlled connection can OOM-kill the leader (VULN-001).
-// The cap is deliberately generous for large AppendEntries batches but still
-// bounds per-message allocation.
-const maxRPCMessageBytes = 16 * 1024 * 1024 // 16 MiB
-
-func readRPCMessage(r io.Reader, msg any) error {
-	return gob.NewDecoder(io.LimitReader(r, maxRPCMessageBytes)).Decode(msg)
+func readRPCMessage(r io.Reader, msg any, aead cipher.AEAD) error {
+	fr := newFrameReader(r, aead)
+	_, err := fr.readFramed(msg)
+	return err
 }
 
 // TCPTransport is a TCP-based Raft transport.
@@ -219,16 +225,18 @@ type TCPTransport struct {
 	peerAddrs   map[NodeID]string
 	mu          sync.RWMutex
 	tlsConfig   *tls.Config // nil means plain TCP
+	aead        cipher.AEAD // AEAD for encrypted framing; nil is plaintext
 }
 
-// NewTCPTransport creates a new TCP transport with optional TLS.
-// Pass nil for tlsConfig to use plain TCP (for development only).
-func NewTCPTransport(tlsConfig *tls.Config) *TCPTransport {
+// NewTCPTransport creates a new TCP transport with optional TLS and AEAD.
+// Pass nil for both to use plain TCP (for development only; insecure).
+func NewTCPTransport(tlsConfig *tls.Config, aead cipher.AEAD) *TCPTransport {
 	return &TCPTransport{
 		dialTimeout: 5 * time.Second,
 		conns:       make(map[NodeID]net.Conn),
 		peerAddrs:   make(map[NodeID]string),
 		tlsConfig:   tlsConfig,
+		aead:        aead,
 	}
 }
 
@@ -239,7 +247,7 @@ func (t *TCPTransport) SendRequestVote(peerID NodeID, req VoteRequest) (*VoteRes
 		return nil, err
 	}
 
-	if err := writeRPCMessage(conn, msgTypeVoteRequest, req); err != nil {
+	if err := writeRPCMessage(conn, msgTypeVoteRequest, req, t.aead); err != nil {
 		return nil, err
 	}
 
@@ -252,7 +260,7 @@ func (t *TCPTransport) SendRequestVote(peerID NodeID, req VoteRequest) (*VoteRes
 	}
 
 	var resp VoteResponse
-	if err := readRPCMessage(conn, &resp); err != nil {
+	if err := readRPCMessage(conn, &resp, t.aead); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -265,7 +273,7 @@ func (t *TCPTransport) SendAppendEntries(peerID NodeID, req AppendRequest) (*App
 		return nil, err
 	}
 
-	if err := writeRPCMessage(conn, msgTypeAppendRequest, req); err != nil {
+	if err := writeRPCMessage(conn, msgTypeAppendRequest, req, t.aead); err != nil {
 		return nil, err
 	}
 
@@ -278,7 +286,7 @@ func (t *TCPTransport) SendAppendEntries(peerID NodeID, req AppendRequest) (*App
 	}
 
 	var resp AppendResponse
-	if err := readRPCMessage(conn, &resp); err != nil {
+	if err := readRPCMessage(conn, &resp, t.aead); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -291,7 +299,7 @@ func (t *TCPTransport) SendSnapshot(peerID NodeID, req SnapshotRequest) error {
 		return err
 	}
 
-	return writeRPCMessage(conn, msgTypeSnapshot, req)
+	return writeRPCMessage(conn, msgTypeSnapshot, req, t.aead)
 }
 
 // getConn gets or creates a connection to a peer.

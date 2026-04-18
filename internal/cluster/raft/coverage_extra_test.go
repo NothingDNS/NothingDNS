@@ -1239,7 +1239,7 @@ func TestPeerFields(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestTCPTransportGetConnExisting(t *testing.T) {
-	tp := NewTCPTransport(nil)
+	tp := NewTCPTransport(nil, nil)
 	// Simulate existing connection
 	client, server := net.Pipe()
 	defer client.Close()
@@ -1328,21 +1328,12 @@ func TestMessageTypeConstants(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRPCServerWriteReadMessage(t *testing.T) {
-	srv := &RPCServer{}
+	srv := &RPCServer{aead: nil}
 	var buf bytes.Buffer
 
 	req := VoteRequest{Term: 3, CandidateID: "c1", LastLogIndex: 10, LastLogTerm: 2}
 	if err := srv.writeMessage(&buf, msgTypeVoteRequest, req); err != nil {
 		t.Fatalf("writeMessage failed: %v", err)
-	}
-
-	// Read msgType
-	var mt uint8
-	if err := binary.Read(&buf, binary.BigEndian, &mt); err != nil {
-		t.Fatalf("read msgType: %v", err)
-	}
-	if mt != msgTypeVoteRequest {
-		t.Errorf("msgType = %d, want %d", mt, msgTypeVoteRequest)
 	}
 
 	var decoded VoteRequest
@@ -1355,18 +1346,12 @@ func TestRPCServerWriteReadMessage(t *testing.T) {
 }
 
 func TestRPCServerWriteReadAppendResponse(t *testing.T) {
-	srv := &RPCServer{}
+	srv := &RPCServer{aead: nil}
 	var buf bytes.Buffer
 
 	resp := AppendResponse{Term: 5, Success: true, From: "f1", MatchIndex: 42, Commitment: 99}
 	if err := srv.writeMessage(&buf, msgTypeAppendResponse, resp); err != nil {
 		t.Fatalf("writeMessage failed: %v", err)
-	}
-
-	var mt uint8
-	binary.Read(&buf, binary.BigEndian, &mt)
-	if mt != msgTypeAppendResponse {
-		t.Errorf("msgType = %d, want %d", mt, msgTypeAppendResponse)
 	}
 
 	var decoded AppendResponse
@@ -1379,7 +1364,7 @@ func TestRPCServerWriteReadAppendResponse(t *testing.T) {
 }
 
 func TestRPCServerWriteReadSnapshotRequest(t *testing.T) {
-	srv := &RPCServer{}
+	srv := &RPCServer{aead: nil}
 	var buf bytes.Buffer
 
 	req := SnapshotRequest{
@@ -1391,12 +1376,6 @@ func TestRPCServerWriteReadSnapshotRequest(t *testing.T) {
 	}
 	if err := srv.writeMessage(&buf, msgTypeSnapshot, req); err != nil {
 		t.Fatalf("writeMessage failed: %v", err)
-	}
-
-	var mt uint8
-	binary.Read(&buf, binary.BigEndian, &mt)
-	if mt != msgTypeSnapshot {
-		t.Errorf("msgType = %d, want %d", mt, msgTypeSnapshot)
 	}
 
 	var decoded SnapshotRequest

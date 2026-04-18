@@ -336,6 +336,7 @@ func run() error {
 		slaveManager:  transferManager.Result().SlaveManager,
 		aclChecker:    aclChecker,
 		rateLimiter:   rateLimiter,
+		rrl:           securityManager.Result().RRL,
 		splitHorizon:  splitHorizon,
 		viewZones:     viewZones,
 		auditLogger:   auditLogger,

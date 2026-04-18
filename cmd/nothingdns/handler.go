@@ -65,6 +65,7 @@ type integratedHandler struct {
 	slaveManager  *transfer.SlaveManager
 	aclChecker    *filter.ACLChecker
 	rateLimiter   *filter.RateLimiter
+	rrl           *filter.RRL
 	splitHorizon  *filter.SplitHorizon
 	viewZones     map[string]map[string]*zone.Zone // view name -> origin -> Zone
 	auditLogger   *audit.AuditLogger
@@ -720,6 +721,35 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 			h.metrics.RecordResponse(resp.Header.Flags.RCODE)
 		}
 		recordRcode(resp.Header.Flags.RCODE)
+
+		// RRL check (VULN-063): detect reflected amplification and rate-violating responses.
+		// Done post-cache-build so resp is complete; superlative detection uses full response size.
+		if h.rrl != nil {
+			clientIP := net.IP(nil)
+			if ci := w.ClientInfo(); ci != nil {
+				clientIP = ci.IP()
+			}
+			if clientIP != nil {
+				qtype := uint16(0)
+				if len(resp.Questions) > 0 {
+					qtype = resp.Questions[0].QType
+				}
+				queryLen := wireLen(r)
+				responseLen := wireLen(resp)
+
+				// Check superlative (amplification) first — accelerates token drain.
+				h.rrl.LogSuperlative(clientIP, qtype, resp.Header.Flags.RCODE, queryLen, responseLen)
+
+				if allowed, suppressed := h.rrl.Allow(clientIP, qtype, resp.Header.Flags.RCODE); !allowed {
+					if suppressed {
+						// Suppressed: return REFUSED per RFC 8231 §4.
+						h.sendRefused(w, r)
+						return
+					}
+				}
+			}
+		}
+
 		reply(w, r, resp)
 		return
 	}
@@ -801,6 +831,26 @@ func (h *integratedHandler) checkRPZResponseIP(w server.ResponseWriter, r *proto
 		return h.applyRPZRule(w, r, q, rule)
 	}
 	return false
+}
+
+// wireLen returns the wire-format byte length of a DNS message.
+// Used by RRL to compute amplification ratios.
+func wireLen(m *protocol.Message) int {
+	if m == nil {
+		return 0
+	}
+	buf := make([]byte, 512) // typical query is < 512 bytes
+	n, _ := m.Pack(buf)
+	return n
+}
+
+// sendRefused returns a REFUSED response without forwarding to upstream.
+// Used by RRL suppression (RFC 8231 §4) and for policy-denied responses.
+func (h *integratedHandler) sendRefused(w server.ResponseWriter, r *protocol.Message) {
+	if h.metrics != nil {
+		h.metrics.RecordResponse(protocol.RcodeRefused)
+	}
+	sendErrorWithEDE(w, r, protocol.RcodeRefused, protocol.EDEOtherError, "rate limited")
 }
 
 // reply sends a response message.

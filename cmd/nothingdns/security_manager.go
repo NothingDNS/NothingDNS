@@ -21,6 +21,7 @@ type SecurityManagerResult struct {
 	DNS64Synth  *dns64.Synthesizer
 	ACLChecher  *filter.ACLChecker
 	RateLimiter *filter.RateLimiter
+	RRL        *filter.RRL
 }
 
 // SecurityManager manages DNS security features: blocklist, RPZ, GeoDNS, ACL, and rate limiting.
@@ -127,11 +128,21 @@ func NewSecurityManager(cfg *config.Config, logger *util.Logger) (*SecurityManag
 		logger.Warnf("Recursive resolver enabled with no ACL rules and acl_allow_unrestricted_recursion=false; defaulting to deny-by-default (all clients blocked). Set explicit ACL rules or set acl_allow_unrestricted_recursion=true to allow unrestricted access.")
 	}
 
-	// Initialize rate limiter
+	// Initialize rate limiter (client-side token bucket).
 	if cfg.RRL.Enabled {
 		mgr.result.RateLimiter = filter.NewRateLimiter(cfg.RRL)
 		logger.Infof("RRL enabled: %d qps/client, burst %d", cfg.RRL.Rate, cfg.RRL.Burst)
 	}
+
+	// Initialize RRL (response-side rate limiting per RFC 8231).
+	mgr.result.RRL = filter.NewRRL(filter.RRLConfig{
+		Enabled:       cfg.RRL.Enabled,
+		Rate:          cfg.RRL.Rate,
+		Burst:         cfg.RRL.Burst,
+		Window:        10,
+		MaxBuckets:    cfg.RRL.MaxBuckets,
+		ResponsesOnly: true,
+	})
 
 	return mgr, nil
 }
@@ -140,6 +151,9 @@ func NewSecurityManager(cfg *config.Config, logger *util.Logger) (*SecurityManag
 func (m *SecurityManager) Stop() {
 	if m.result.RateLimiter != nil {
 		m.result.RateLimiter.Stop()
+	}
+	if m.result.RRL != nil {
+		m.result.RRL.Stop()
 	}
 }
 

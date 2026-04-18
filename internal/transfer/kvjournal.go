@@ -1,8 +1,13 @@
 package transfer
 
 import (
-	"encoding/gob"
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/binary"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -12,28 +17,35 @@ import (
 // KVJournalStore implements JournalStore using a file-based journal.
 // Each zone has its own directory under dataDir/ixfr-journals/.
 // Each journal entry is stored as a separate file named <serial>.journal.
+// VULN-066 fix: replaced gob with JSON+HMAC for on-disk integrity protection.
 type KVJournalStore struct {
 	dataDir        string
 	maxJournalSize int
 	mu             sync.RWMutex
+	hmacKey        []byte // nil = no integrity protection
 }
 
 // NewKVJournalStore creates a new file-based IXFR journal store.
-func NewKVJournalStore(dataDir string) *KVJournalStore {
-	// Ensure the journals directory exists
+// Pass a 32-byte hmacKey for integrity protection, or nil for legacy mode.
+func NewKVJournalStore(dataDir string, hmacKey ...[]byte) *KVJournalStore {
 	journalDir := filepath.Join(dataDir, "ixfr-journals")
 	os.MkdirAll(journalDir, 0755)
+	var key []byte
+	if len(hmacKey) > 0 {
+		key = hmacKey[0]
+	}
 	return &KVJournalStore{
 		dataDir:        journalDir,
 		maxJournalSize: 100,
+		hmacKey:        key,
 	}
 }
 
 // SetMaxJournalSize sets the maximum number of entries to keep per zone.
 func (s *KVJournalStore) SetMaxJournalSize(size int) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.maxJournalSize = size
-	s.mu.Unlock()
 }
 
 // zoneDir returns the directory for a zone's journal files.
@@ -56,18 +68,50 @@ func (s *KVJournalStore) SaveEntry(zoneName string, entry *IXFRJournalEntry) err
 	if err != nil {
 		return fmt.Errorf("creating journal file: %w", err)
 	}
-	defer f.Close()
 
-	enc := gob.NewEncoder(f)
-	if err := enc.Encode(entry); err != nil {
-		os.Remove(filename)
-		return fmt.Errorf("encoding journal entry: %w", err)
+	if s.hmacKey != nil {
+		if err := s.writeEntry(f, entry); err != nil {
+			f.Close()
+			os.Remove(filename)
+			return fmt.Errorf("write entry: %w", err)
+		}
+	} else {
+		enc := json.NewEncoder(f)
+		if err := enc.Encode(entry); err != nil {
+			f.Close()
+			os.Remove(filename)
+			return fmt.Errorf("encoding journal entry: %w", err)
+		}
 	}
 
-	// Trim if needed
-	s.trimJournalLocked(zoneName)
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close file: %w", err)
+	}
 
+	s.trimJournalLocked(zoneName)
 	return nil
+}
+
+// writeEntry writes a single journal entry in TLV+HMAC format.
+func (s *KVJournalStore) writeEntry(f *os.File, entry *IXFRJournalEntry) error {
+	payload, err := json.Marshal(entry)
+	if err != nil {
+		return err
+	}
+
+	// Frame: magic(1) + version(2) + payloadLen(4) + payload(n) + hmac(32)
+	frameLen := 1 + 2 + 4 + len(payload) + 32
+	frame := make([]byte, frameLen)
+	frame[0] = 0xDB // magic
+	binary.BigEndian.PutUint16(frame[1:3], 1) // version
+	binary.BigEndian.PutUint32(frame[3:7], uint32(len(payload)))
+	copy(frame[7:], payload)
+	hm := hmac.New(sha256.New, s.hmacKey)
+	hm.Write(payload)
+	copy(frame[7+len(payload):], hm.Sum(nil))
+
+	_, err = f.Write(frame)
+	return err
 }
 
 // LoadEntries loads all journal entries for a zone from disk.
@@ -76,12 +120,11 @@ func (s *KVJournalStore) LoadEntries(zoneName string) ([]*IXFRJournalEntry, erro
 	defer s.mu.RUnlock()
 
 	dir := s.zoneDir(zoneName)
-	entries, err := loadEntriesFromDir(dir)
+	entries, err := loadEntriesFromDir(dir, s.hmacKey)
 	if err != nil {
 		return nil, err
 	}
 
-	// Sort by serial number ascending (chronological order)
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].Serial < entries[j].Serial
 	})
@@ -99,21 +142,19 @@ func (s *KVJournalStore) Truncate(zoneName string, keepCount int) error {
 // trimJournalLocked removes old journal entries (caller must hold mu).
 func (s *KVJournalStore) trimJournalLocked(zoneName string) error {
 	dir := s.zoneDir(zoneName)
-	entries, err := loadEntriesFromDir(dir)
+	entries, err := loadEntriesFromDir(dir, s.hmacKey)
 	if err != nil {
-		return nil // No entries to trim
+		return nil
 	}
 
 	if len(entries) <= s.maxJournalSize {
 		return nil
 	}
 
-	// Sort by serial descending to keep newest entries
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].Serial > entries[j].Serial
 	})
 
-	// Remove entries beyond keepCount
 	toRemove := entries[s.maxJournalSize:]
 	for _, entry := range toRemove {
 		filename := filepath.Join(dir, fmt.Sprintf("%d.journal", entry.Serial))
@@ -124,7 +165,7 @@ func (s *KVJournalStore) trimJournalLocked(zoneName string) error {
 }
 
 // loadEntriesFromDir reads all .journal files from a directory.
-func loadEntriesFromDir(dir string) ([]*IXFRJournalEntry, error) {
+func loadEntriesFromDir(dir string, hmacKey []byte) ([]*IXFRJournalEntry, error) {
 	var entries []*IXFRJournalEntry
 
 	files, err := os.ReadDir(dir)
@@ -142,18 +183,22 @@ func loadEntriesFromDir(dir string) ([]*IXFRJournalEntry, error) {
 		filename := filepath.Join(dir, f.Name())
 		file, err := os.Open(filename)
 		if err != nil {
-			continue // Skip files we can't open
+			continue
 		}
 
-		// Use defer to ensure file is always closed, even on panic
 		var entry IXFRJournalEntry
 		func() {
 			defer file.Close()
-			dec := gob.NewDecoder(file)
-			if err := dec.Decode(&entry); err != nil {
-				// Remove corrupt entries to prevent them from causing issues later
-				os.Remove(filename)
-				return
+			if hmacKey != nil {
+				if err := readEntryHMAC(file, &entry, hmacKey); err != nil {
+					os.Remove(filename)
+					return
+				}
+			} else {
+				if err := json.NewDecoder(file).Decode(&entry); err != nil {
+					os.Remove(filename)
+					return
+				}
 			}
 			entries = append(entries, &entry)
 		}()
@@ -162,9 +207,40 @@ func loadEntriesFromDir(dir string) ([]*IXFRJournalEntry, error) {
 	return entries, nil
 }
 
+// readEntryHMAC reads and verifies a TLV+HMAC journal entry.
+func readEntryHMAC(f *os.File, entry *IXFRJournalEntry, key []byte) error {
+	var hdr [7]byte
+	if _, err := io.ReadFull(f, hdr[:]); err != nil {
+		return err
+	}
+	if hdr[0] != 0xDB {
+		return fmt.Errorf("invalid magic: 0x%x", hdr[0])
+	}
+	version := binary.BigEndian.Uint16(hdr[1:3])
+	if version != 1 {
+		return fmt.Errorf("unsupported version: %d", version)
+	}
+	payloadLen := binary.BigEndian.Uint32(hdr[3:7])
+
+	recordLen := int(payloadLen) + 32
+	record := make([]byte, recordLen)
+	if _, err := io.ReadFull(f, record); err != nil {
+		return err
+	}
+
+	storedHMAC := record[payloadLen:]
+	payload := record[:payloadLen]
+
+	expectedHMAC := hmac.New(sha256.New, key).Sum(payload)
+	if subtle.ConstantTimeCompare(storedHMAC, expectedHMAC) != 1 {
+		return fmt.Errorf("integrity check failed")
+	}
+
+	return json.Unmarshal(payload, entry)
+}
+
 // sanitizeFilename converts a zone name to a safe directory name.
 func sanitizeFilename(name string) string {
-	// Replace characters that are problematic in file paths
 	result := make([]byte, 0, len(name))
 	for i := 0; i < len(name); i++ {
 		c := name[i]
