@@ -89,7 +89,7 @@ Qualitative: **MEDIUM-RISK** for cluster deployments — VULN-037 is partially m
 | VULN-065 | No RFC 8482 ANY handling; no TC-forcing for DNSKEY/TXT over UDP | handler.go | FIXED — TypeANY queries over UDP now return TC=1 (truncated), forcing TCP retry per RFC 8482 §3; TCP proceeds normally |
 | VULN-066 | gob-decode of local-disk KV / journal legacy formats | `internal/storage/kvstore.go:157`; `internal/transfer/kvjournal.go:152` |
 | VULN-067 | Blocklist admin `{"file":"/abs/path"}` has no path-confinement; follows symlinks | `internal/api/api_blocklist.go:309` | FIXED — BaseDir confinement in blocklist.go |
-| VULN-068 | Login lockout permits free username DoS (no IP cost on unknown user) | `internal/api/api_auth.go` | PARTIAL — IP tracked on all attempts; username budget not charged on invalid user |
+| VULN-068 | Login lockout permits free username DoS (no IP cost on unknown user) | `internal/api/api_auth.go` | FIXED — username lockout now keyed by (IP, username) pair; an attacker's IP cannot trigger a victim's username lockout |
 | VULN-069 | No singleflight / request-coalescing → cold-cache thundering herd | resolver / cache paths | FIXED — generic singleflight added to `Resolver.Resolve()`, keyed by `name:qtype`, using stdlib `sync` only |
 | VULN-070 | Operator role can cache-flush, zone-reload, list DNSSEC keys | RBAC wiring | FIXED — cache-flush, zone-reload, DNSSEC keys now require admin |
 | VULN-071 | Config PUT and zone writes skip `MaxBytesReader` | `/api/v1/config/*`, zone handlers | FIXED — MaxBytesReader on all JSON body handlers |
