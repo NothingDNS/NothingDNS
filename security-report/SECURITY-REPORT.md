@@ -103,7 +103,7 @@ Qualitative: **MEDIUM-RISK** for cluster deployments — VULN-037 is partially m
 | VULN-074 | SPA catch-all serves `index.html` for unknown `/api/*` |
 | VULN-075 | Legacy fallback dashboard sets `ndns_token` without Secure/HttpOnly | FIXED — `Secure` flag added to cookie; HttpOnly requires server-side SetCookie (fallback unreachable in production when React SPA is bundled) |
 | VULN-076 | Length-check-before-ConstantTimeCompare leaks legacy token length | FIXED — `VerifyPassword` now zero-pads both hash and expected to 96 bytes before constant-time compare; PBKDF2 cost is paid on all code paths |
-| VULN-077 | Username enumeration via 401-vs-429 (lockout returns 429 only for real users) |
+| VULN-077 | Username enumeration via 401-vs-429 (lockout returns 429 only for real users) | FIXED — VULN-068 fix (pair-based lockout) prevents username enumeration: lockout is keyed by (IP, username) so an attacker cannot trigger a victim's username lockout from their own IP |
 | VULN-078 | `.dockerignore` missing `dnssec-keys/`, `data/`, `zones/`, `*.db`, `cache.json` | FIXED — entries added to .dockerignore |
 | VULN-079 | Missing `Referrer-Policy`, `Cache-Control: no-store`, `Permissions-Policy`, `COOP` | `internal/api/server.go:706-716` | FIXED — all five headers added to securityHeadersMiddleware |
 | VULN-080 | SHA-1 DS digests still accepted in DNSSEC validator | `internal/dnssec/validator.go:870` | DESIGN — SHA-1 required for legacy DS compatibility per RFC 8624; warn in logs |
@@ -160,7 +160,7 @@ Goal: reduce residual risk and attack surface.
 - ~~**VULN-065** (ANY / amplification)~~ — **FIXED** (TypeANY over UDP returns TC=1 per RFC 8482).
 - **VULN-066** (on-disk gob) — replace with TLV + HMAC.
 - ~~**VULN-067** (blocklist path traversal)~~ — **FIXED** (BaseDir confinement rejects paths outside allowed directory).
-- **VULN-068** (username DoS) — charge IP-budget on all 401s.
+- ~~**VULN-068** (username DoS)~~ — **FIXED** (lockout keyed by (IP, username) pair; prevents username lockout DoS and username enumeration).
 - ~~**VULN-069** (singleflight)~~ — **FIXED** (generic singleflight added to resolver).
 - **VULN-070** (operator RBAC scope) — elevate cache-flush/DNSSEC-keys to admin.
 - ~~**VULN-071** (MaxBytesReader)~~ — **FIXED** (config PUT handlers now use `http.MaxBytesReader`).
