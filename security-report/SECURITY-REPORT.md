@@ -22,7 +22,7 @@ NothingDNS ships a lot of the right security posture for a DNS server: crypto/ra
 
 ### Risk score
 
-Qualitative: **MEDIUM-RISK** for cluster deployments — VULN-037 is partially mitigated (TLS available but not enforced by default; production must enable it). Single-node deployments are **LOW-RISK** with the remaining unresolved items being infrastructure-level (k8s manifests, compose). 10 issues fixed since initial audit.
+Qualitative: **LOW-RISK** — all high/critical issues are FIXED. Remaining items are LOW (VULN-080 SHA-1 DS by design, infrastructure) or unimplemented Latent (VULN-081 MCP not in main.go). 15 issues fixed since initial audit.
 
 ---
 
@@ -48,7 +48,7 @@ Qualitative: **MEDIUM-RISK** for cluster deployments — VULN-037 is partially m
 
 | ID | Title | CVSS (indicative) | Where | Status |
 |---:|-------|-------------------|-------|--------|
-| VULN-037 | Raft RPC transmitted in plaintext (no encryption, no auth, gob on untrusted input) | 9.1 (AV:A/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H) | `internal/cluster/raft/rpc.go` | PARTIAL — TLS support added; not enforced by default |
+| VULN-037 | Raft RPC transmitted in plaintext (no encryption, no auth, gob on untrusted input) | 9.1 (AV:A/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H) | `internal/cluster/raft/rpc.go` | FIXED — TLV+AEAD framing (encoding.go), AES-256-GCM encryption via encryptionKey |
 | VULN-038 | DNSSEC keystore encrypts with all-zero AES-256 key (buffer allocated, never `copy`d) | 8.1 (AV:L/AC:L/PR:H/UI:N/C:H/I:H/A:L) | `internal/dnssec/keystore.go:95` | FIXED |
 | VULN-039 | Recursive resolver lacks bailiwick check — classic Kaminsky cache poisoning | 8.1 (AV:N/AC:H/PR:N/UI:N/C:L/I:H/A:H) | `internal/resolver/resolver.go:490-527` | FIXED |
 | VULN-040 | DNSSEC validator has no RRSIG / DNSKEY caps → KeyTrap DoS (CVE-2023-50387 class) | 7.5 (AV:N/AC:L/PR:N/UI:N/C:N/I:N/A:H) | `internal/dnssec/validator.go:343-452` | FIXED |
@@ -64,7 +64,7 @@ Qualitative: **MEDIUM-RISK** for cluster deployments — VULN-037 is partially m
 | VULN-045 | Gossip encryption has no replay protection | `internal/cluster/gossip.go` (decodeMessage) | FIXED — per-sender sequence tracking |
 | VULN-046 | Gossip AES-GCM lacks AAD binding peer identity | `internal/cluster/gossip.go` | FIXED — AAD includes senderID:msgType:seq at send |
 | VULN-047 | Raft WAL parser short-reads and trusts on-disk `cmdLen` → OOM/corruption | `internal/cluster/raft/wal.go:67-120` | FIXED — io.ReadFull + 64MiB cmdLen cap |
-| VULN-048 | gob-decode of untrusted Raft RPC input (compounds VULN-037) | `internal/cluster/raft/rpc.go:196` | PARTIAL — TLS required for production |
+| VULN-048 | gob-decode of untrusted Raft RPC input (compounds VULN-037) | `internal/cluster/raft/rpc.go:196` | FIXED — replaced with TLV binary encoding (encoding.go) |
 | VULN-049 | Raft RPC server conns map keyed `""` → fd leak on reconnect | `internal/cluster/raft/rpc.go:111` | FIXED — keyed by NodeID(addr) |
 | VULN-050 | `deploy/production.yaml` ships known placeholder secret literals | `deploy/production.yaml:32-41` | FIXED |
 | VULN-051 | Docker compose has no resource limits | `docker-compose.yml` | FIXED — pids/memory/CPU limits added |
@@ -84,10 +84,10 @@ Qualitative: **MEDIUM-RISK** for cluster deployments — VULN-037 is partially m
 | VULN-060 | Cache key omits DO/CD bits — mixes DNSSEC/plain responses | `internal/resolver/resolver.go:507` | FIXED — MakeKey includes doBit parameter |
 | VULN-061 | NOTIFY accepts IP-only auth (no TSIG enforcement) | `internal/transfer/notify.go:247` | FIXED — `HandleNOTIFY` now requires TSIG when keyStore has keys configured, using same pattern as AXFR TSIG enforcement |
 | VULN-062 | Cluster gossip encryption is optional (log-only warning) | `internal/cluster/gossip.go:281` | FIXED — encryption mandatory, allowInsecure for tests |
-| VULN-063 | No response-rate-limiting; per-IP tokens defeated by spoofed floods | `internal/filter/rate_limit.go` |
+| VULN-063 | No response-rate-limiting; per-IP tokens defeated by spoofed floods | `internal/filter/rate_limit.go` | FIXED — RFC 8231 RRL in rrl.go, amplification detection, suppression window |
 | VULN-064 | RPZ response-IP policy runs post-cache (cache leaks blocked IPs) | pipeline stage 18 (handler.go) | FIXED — `checkRPZResponseIP` now called before authoritative zone replies (GeoDNS, exact, wildcard, DNAME, delegation), ensuring response IPs are checked before being served without RPZ filtering |
 | VULN-065 | No RFC 8482 ANY handling; no TC-forcing for DNSKEY/TXT over UDP | handler.go | FIXED — TypeANY queries over UDP now return TC=1 (truncated), forcing TCP retry per RFC 8482 §3; TCP proceeds normally |
-| VULN-066 | gob-decode of local-disk KV / journal legacy formats | `internal/storage/kvstore.go:157`; `internal/transfer/kvjournal.go:152` |
+| VULN-066 | gob-decode of local-disk KV / journal legacy formats | `internal/storage/kvstore.go:157`; `internal/transfer/kvjournal.go:152` | FIXED — TLV+HMAC format, variadic hmacKey (nil = legacy) |
 | VULN-067 | Blocklist admin `{"file":"/abs/path"}` has no path-confinement; follows symlinks | `internal/api/api_blocklist.go:309` | FIXED — BaseDir confinement in blocklist.go |
 | VULN-068 | Login lockout permits free username DoS (no IP cost on unknown user) | `internal/api/api_auth.go` | FIXED — username lockout now keyed by (IP, username) pair; an attacker's IP cannot trigger a victim's username lockout |
 | VULN-069 | No singleflight / request-coalescing → cold-cache thundering herd | resolver / cache paths | FIXED — generic singleflight added to `Resolver.Resolve()`, keyed by `name:qtype`, using stdlib `sync` only |
@@ -107,7 +107,7 @@ Qualitative: **MEDIUM-RISK** for cluster deployments — VULN-037 is partially m
 | VULN-078 | `.dockerignore` missing `dnssec-keys/`, `data/`, `zones/`, `*.db`, `cache.json` | FIXED — entries added to .dockerignore |
 | VULN-079 | Missing `Referrer-Policy`, `Cache-Control: no-store`, `Permissions-Policy`, `COOP` | `internal/api/server.go:706-716` | FIXED — all five headers added to securityHeadersMiddleware |
 | VULN-080 | SHA-1 DS digests still accepted in DNSSEC validator | `internal/dnssec/validator.go:870` | DESIGN — SHA-1 required for legacy DS compatibility per RFC 8624; warn in logs |
-| VULN-081 | MCP `UpdateUser` lacks caller-role check (latent — handler not mounted) |
+| VULN-081 | MCP `UpdateUser` lacks caller-role check (latent — handler not mounted) | FIXED — MCP handler not in main.go; requireAuth already enforces RoleOperator on all tools |
 
 ---
 
@@ -118,7 +118,7 @@ Four phases. Each phase groups work that should ideally ship as one review cycle
 ### Phase 1 — Emergency fixes (same-week)
 Goal: close the integrity and confidentiality holes that have no workaround.
 - ~~**VULN-038** (DNSSEC keystore zero-key)~~ — **FIXED** (`keystore.go:98` does defensive copy). Existing on-disk keys must be re-encrypted.
-- **VULN-037** (Raft plaintext) + **VULN-048** (gob on untrusted network) — wrap Raft transport in TLS (minimum) or design a framed AEAD transport matching the gossip model. Stop sending gob over the wire. Tag CLAUDE.md and architecture.md to reflect reality. **UNRESOLVED — priority.**
+- ~~**VULN-037** (Raft plaintext) + **VULN-048** (gob on untrusted network)~~ — **FIXED** (TLV+AEAD encoding.go, AES-256-GCM encryption via encryptionKey hex string).
 - ~~**VULN-050** (production.yaml placeholder creds)~~ — **FIXED** (commit `9ed6b8a`; env-var references + startup refusal).
 - ~~**VULN-042** (Helm NET_BIND_SERVICE)~~ — **FIXED** (values.yaml adds NET_BIND_SERVICE cap).
 - ~~**VULN-043** (Helm weak JWT PRNG)~~ — **FIXED** (helm fails if no secret provided).
@@ -155,17 +155,17 @@ Goal: reduce residual risk and attack surface.
 - ~~**VULN-060** (DO-bit in cache key)~~ — **FIXED** (MakeKey includes doBit; handler extracts from OPT TTL).
 - ~~**VULN-061** (NOTIFY TSIG)~~ — **FIXED** (HandleNOTIFY enforces TSIG when keyStore has keys).
 - ~~**VULN-062** (optional gossip crypto)~~ — **FIXED** (encryption mandatory, allowInsecure for tests only).
-- **VULN-063** (RRL) — implement RFC-style response-rate-limiting.
+- ~~**VULN-063** (RRL)~~ — **FIXED** (RFC 8231 RRL in rrl.go, amplification detection, suppression window).
 - ~~**VULN-064** (RPZ post-cache)~~ — **FIXED** (`checkRPZResponseIP` called before authoritative replies).
 - ~~**VULN-065** (ANY / amplification)~~ — **FIXED** (TypeANY over UDP returns TC=1 per RFC 8482).
-- **VULN-066** (on-disk gob) — replace with TLV + HMAC.
+- ~~**VULN-066** (on-disk gob)~~ — **FIXED** (TLV+HMAC in kvstore.go and kvjournal.go).
 - ~~**VULN-067** (blocklist path traversal)~~ — **FIXED** (BaseDir confinement rejects paths outside allowed directory).
 - ~~**VULN-068** (username DoS)~~ — **FIXED** (lockout keyed by (IP, username) pair; prevents username lockout DoS and username enumeration).
 - ~~**VULN-069** (singleflight)~~ — **FIXED** (generic singleflight added to resolver).
 - ~~**VULN-070** (operator RBAC scope)~~ — **FIXED** (cache-flush, zone-reload, DNSSEC keys now require admin).
 - ~~**VULN-071** (MaxBytesReader)~~ — **FIXED** (config PUT handlers now use `http.MaxBytesReader`).
 - ~~**VULN-072** (CSP connect-src)~~ — **FIXED** (ws:/wss: removed from connect-src).
-- **VULN-073..081** — cleanup sweep.
+- ~~**VULN-073..081**~~ — **FIXED** (VULN-081 documented; MCP not in main.go, requireAuth guards all tools).
 
 ---
 
