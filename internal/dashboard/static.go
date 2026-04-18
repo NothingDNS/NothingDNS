@@ -141,7 +141,7 @@ var loginHTML = `<!DOCTYPE html>
             try {
                 var resp = await fetch('/api/v1/status', { headers: { 'Authorization': 'Bearer ' + token } });
                 if (resp.ok) {
-                    document.cookie = 'ndns_token=' + encodeURIComponent(token) + '; path=/; max-age=86400; SameSite=Strict';
+                    document.cookie = 'ndns_token=' + encodeURIComponent(token) + '; path=/; max-age=86400; SameSite=Strict; Secure';
                     window.location.href = '/';
                     return;
                 }
