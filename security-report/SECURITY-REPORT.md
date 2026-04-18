@@ -99,8 +99,8 @@ Qualitative: **MEDIUM-RISK** for cluster deployments — VULN-037 is partially m
 
 | ID | Title |
 |---:|-------|
-| VULN-073 | Upstream client goroutine leak on ctx cancellation |
-| VULN-074 | SPA catch-all serves `index.html` for unknown `/api/*` |
+| VULN-073 | Upstream client goroutine leak on ctx cancellation | NOT A BUG — `Close()` properly calls `healthCheckCancel()` and `wg.Wait()`; goroutine exits cleanly on context cancellation |
+| VULN-074 | SPA catch-all serves `index.html` for unknown `/api/*` | NOT EXPLOITABLE — `/api/*` routes explicitly excluded from SPA fallback; handler checks `strings.HasPrefix(r.URL.Path, "/api/")` first |
 | VULN-075 | Legacy fallback dashboard sets `ndns_token` without Secure/HttpOnly | FIXED — `Secure` flag added to cookie; HttpOnly requires server-side SetCookie (fallback unreachable in production when React SPA is bundled) |
 | VULN-076 | Length-check-before-ConstantTimeCompare leaks legacy token length | FIXED — `VerifyPassword` now zero-pads both hash and expected to 96 bytes before constant-time compare; PBKDF2 cost is paid on all code paths |
 | VULN-077 | Username enumeration via 401-vs-429 (lockout returns 429 only for real users) | FIXED — VULN-068 fix (pair-based lockout) prevents username enumeration: lockout is keyed by (IP, username) so an attacker cannot trigger a victim's username lockout from their own IP |
@@ -154,7 +154,7 @@ Goal: reduce residual risk and attack surface.
 - ~~**VULN-058** (log injection)~~ — **FIXED** (formatText sanitizes all field values).
 - ~~**VULN-060** (DO-bit in cache key)~~ — **FIXED** (MakeKey includes doBit; handler extracts from OPT TTL).
 - ~~**VULN-061** (NOTIFY TSIG)~~ — **FIXED** (HandleNOTIFY enforces TSIG when keyStore has keys).
-- **VULN-062** (optional gossip crypto) — make cluster encryption mandatory.
+- ~~**VULN-062** (optional gossip crypto)~~ — **FIXED** (encryption mandatory, allowInsecure for tests only).
 - **VULN-063** (RRL) — implement RFC-style response-rate-limiting.
 - ~~**VULN-064** (RPZ post-cache)~~ — **FIXED** (`checkRPZResponseIP` called before authoritative replies).
 - ~~**VULN-065** (ANY / amplification)~~ — **FIXED** (TypeANY over UDP returns TC=1 per RFC 8482).
@@ -162,7 +162,7 @@ Goal: reduce residual risk and attack surface.
 - ~~**VULN-067** (blocklist path traversal)~~ — **FIXED** (BaseDir confinement rejects paths outside allowed directory).
 - ~~**VULN-068** (username DoS)~~ — **FIXED** (lockout keyed by (IP, username) pair; prevents username lockout DoS and username enumeration).
 - ~~**VULN-069** (singleflight)~~ — **FIXED** (generic singleflight added to resolver).
-- **VULN-070** (operator RBAC scope) — elevate cache-flush/DNSSEC-keys to admin.
+- ~~**VULN-070** (operator RBAC scope)~~ — **FIXED** (cache-flush, zone-reload, DNSSEC keys now require admin).
 - ~~**VULN-071** (MaxBytesReader)~~ — **FIXED** (config PUT handlers now use `http.MaxBytesReader`).
 - ~~**VULN-072** (CSP connect-src)~~ — **FIXED** (ws:/wss: removed from connect-src).
 - **VULN-073..081** — cleanup sweep.
