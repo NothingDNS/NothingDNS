@@ -36,8 +36,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check account-based rate limit (username lockout)
-	if rejected, delay := s.loginLimiter.checkUserRateLimit(req.Username); rejected {
+	// Check account-based rate limit (username lockout) — keyed by (IP, username) pair
+	if rejected, delay := s.loginLimiter.checkUserRateLimit(ip, req.Username); rejected {
 		w.Header().Set("Retry-After", strconv.Itoa(int(delay.Seconds())))
 		s.writeError(w, http.StatusTooManyRequests, "Account locked due to too many failed attempts")
 		return

@@ -77,11 +77,11 @@ type Server struct {
 // It applies both IP-based and account-based rate limiting to prevent brute force attacks.
 type loginRateLimiter struct {
 	mu           sync.Mutex
-	ipAttempts   map[string]*loginAttempt // IP-based tracking
-	userAttempts map[string]*loginAttempt // Username-based tracking (account lockout)
+	ipAttempts   map[string]*loginAttempt       // IP-based tracking
+	userAttempts map[string]*loginAttempt       // (IP, username) pair tracking — prevents username lockout DoS from other IPs
 }
 
-// loginAttempt tracks failed attempts for a single IP or username.
+// loginAttempt tracks failed attempts for a single IP or (IP, username) pair.
 type loginAttempt struct {
 	count       int
 	lastTry     time.Time
@@ -126,14 +126,17 @@ func (l *loginRateLimiter) checkRateLimit(ip string) (bool, time.Duration) {
 	return false, 0
 }
 
-// checkUserRateLimit checks if the given username is rate-limited (account lockout).
-// Returns true if the account should be locked, and the delay to apply.
-func (l *loginRateLimiter) checkUserRateLimit(username string) (bool, time.Duration) {
+// checkUserRateLimit checks if the given (IP, username) pair is rate-limited (account lockout).
+// The pair key prevents an attacker from triggering someone else's username lockout
+// by using the target username from their own IP (VULN-068).
+// Returns true if the pair should be rejected, and the delay to apply.
+func (l *loginRateLimiter) checkUserRateLimit(ip, username string) (bool, time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	now := time.Now()
-	attempt, exists := l.userAttempts[username]
+	key := ip + ":" + username
+	attempt, exists := l.userAttempts[key]
 
 	if !exists {
 		return false, 0
@@ -186,8 +189,11 @@ func (l *loginRateLimiter) recordFailedAttempt(ip, username string) {
 		}
 	}
 
-	// Track by username (account lockout)
-	userAttempt, userExists := l.userAttempts[username]
+	// Track by (IP, username) pair — locks out only this specific attacker→target pair.
+	// This prevents an attacker from using random IPs to lock out a victim's username
+	// (old behavior: username lockout was shared across all IPs for the same username).
+	pairKey := ip + ":" + username
+	userAttempt, userExists := l.userAttempts[pairKey]
 	if !userExists {
 		// Enforce max entries to prevent unbounded memory growth
 		if len(l.userAttempts) >= loginMaxUserEntries {
@@ -201,7 +207,7 @@ func (l *loginRateLimiter) recordFailedAttempt(ip, username string) {
 			}
 			delete(l.userAttempts, oldestUser)
 		}
-		l.userAttempts[username] = &loginAttempt{
+		l.userAttempts[pairKey] = &loginAttempt{
 			count:   1,
 			lastTry: now,
 		}
@@ -219,12 +225,12 @@ func (l *loginRateLimiter) recordFailedAttempt(ip, username string) {
 	}
 }
 
-// recordSuccess removes the IP and username from rate limiting on successful login.
+// recordSuccess removes the IP and (IP, username) pair from rate limiting on successful login.
 func (l *loginRateLimiter) recordSuccess(ip, username string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.ipAttempts, ip)
-	delete(l.userAttempts, username)
+	delete(l.userAttempts, ip+":"+username)
 }
 
 // cleanup removes stale lockout entries to prevent memory growth.

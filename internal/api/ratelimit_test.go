@@ -63,9 +63,9 @@ func TestCheckRateLimit_AfterLockoutExpires(t *testing.T) {
 
 func TestCheckUserRateLimit_NoEntry(t *testing.T) {
 	l := newTestLimiter()
-	limited, delay := l.checkUserRateLimit("admin")
+	limited, delay := l.checkUserRateLimit("192.0.2.1", "admin")
 	if limited {
-		t.Error("new user should not be rate limited")
+		t.Error("new (IP, user) pair should not be rate limited")
 	}
 	if delay != 0 {
 		t.Errorf("expected 0 delay, got %v", delay)
@@ -75,16 +75,17 @@ func TestCheckUserRateLimit_NoEntry(t *testing.T) {
 func TestCheckUserRateLimit_LockedOut(t *testing.T) {
 	l := newTestLimiter()
 	l.mu.Lock()
-	l.userAttempts["admin"] = &loginAttempt{
+	// Key format is ip:username
+	l.userAttempts["192.0.2.1:admin"] = &loginAttempt{
 		count:       loginMaxAttempts,
 		lastTry:     time.Now(),
 		lockedUntil: time.Now().Add(loginLockoutPeriod),
 	}
 	l.mu.Unlock()
 
-	limited, delay := l.checkUserRateLimit("admin")
+	limited, delay := l.checkUserRateLimit("192.0.2.1", "admin")
 	if !limited {
-		t.Error("locked user should be rate limited")
+		t.Error("locked (IP, user) pair should be rate limited")
 	}
 	if delay <= 0 {
 		t.Errorf("expected positive delay, got %v", delay)
@@ -94,16 +95,16 @@ func TestCheckUserRateLimit_LockedOut(t *testing.T) {
 func TestCheckUserRateLimit_ExpiredLockout(t *testing.T) {
 	l := newTestLimiter()
 	l.mu.Lock()
-	l.userAttempts["admin"] = &loginAttempt{
+	l.userAttempts["192.0.2.1:admin"] = &loginAttempt{
 		count:       loginMaxAttempts,
 		lastTry:     time.Now().Add(-10 * time.Minute),
 		lockedUntil: time.Now().Add(-5 * time.Minute),
 	}
 	l.mu.Unlock()
 
-	limited, _ := l.checkUserRateLimit("admin")
+	limited, _ := l.checkUserRateLimit("192.0.2.1", "admin")
 	if limited {
-		t.Error("expired user lockout should not rate limit")
+		t.Error("expired (IP, user) pair lockout should not rate limit")
 	}
 }
 
@@ -147,7 +148,7 @@ func TestRecordFailedAttempt_TriggersLockout(t *testing.T) {
 
 	l.mu.Lock()
 	ipEntry := l.ipAttempts["1.2.3.4"]
-	userEntry := l.userAttempts["user"]
+	userEntry := l.userAttempts["1.2.3.4:user"] // new pair-based key
 	l.mu.Unlock()
 
 	if ipEntry.lockedUntil.IsZero() {
@@ -193,9 +194,13 @@ func TestRecordFailedAttempt_MultipleIPs(t *testing.T) {
 	if len(l.ipAttempts) != 2 {
 		t.Errorf("expected 2 IP entries, got %d", len(l.ipAttempts))
 	}
-	// Both IPs tracked for same user
-	if l.userAttempts["admin"].count != 2 {
-		t.Errorf("expected user count 2, got %d", l.userAttempts["admin"].count)
+	// VULN-068 fix: each (IP, username) pair is tracked separately.
+	// An attacker's IP cannot trigger a victim's username lockout.
+	if l.userAttempts["1.2.3.4:admin"].count != 1 {
+		t.Errorf("expected pair count 1, got %d", l.userAttempts["1.2.3.4:admin"].count)
+	}
+	if l.userAttempts["5.6.7.8:admin"].count != 1 {
+		t.Errorf("expected pair count 1, got %d", l.userAttempts["5.6.7.8:admin"].count)
 	}
 }
 
@@ -213,8 +218,8 @@ func TestRecordSuccess_ClearsEntries(t *testing.T) {
 	if _, exists := l.ipAttempts["1.2.3.4"]; exists {
 		t.Error("IP entry should be removed after success")
 	}
-	if _, exists := l.userAttempts["admin"]; exists {
-		t.Error("user entry should be removed after success")
+	if _, exists := l.userAttempts["1.2.3.4:admin"]; exists {
+		t.Error("(IP, user) pair entry should be removed after success")
 	}
 }
 
@@ -241,14 +246,14 @@ func TestCleanup_RemovesStale(t *testing.T) {
 		lastTry:     time.Now(),
 		lockedUntil: time.Time{},
 	}
-	// Expired user lockout
-	l.userAttempts["admin"] = &loginAttempt{
+	// Expired user lockout (pair-based)
+	l.userAttempts["1.2.3.4:admin"] = &loginAttempt{
 		count:       5,
 		lastTry:     time.Now().Add(-10 * time.Minute),
 		lockedUntil: time.Now().Add(-5 * time.Minute),
 	}
-	// Active user lockout
-	l.userAttempts["root"] = &loginAttempt{
+	// Active user lockout (pair-based)
+	l.userAttempts["5.6.7.8:root"] = &loginAttempt{
 		count:       5,
 		lastTry:     time.Now(),
 		lockedUntil: time.Now().Add(5 * time.Minute),
@@ -265,11 +270,11 @@ func TestCleanup_RemovesStale(t *testing.T) {
 	if _, exists := l.ipAttempts["5.6.7.8"]; !exists {
 		t.Error("active IP entry should NOT be cleaned up")
 	}
-	if _, exists := l.userAttempts["admin"]; exists {
-		t.Error("expired user lockout should be cleaned up")
+	if _, exists := l.userAttempts["1.2.3.4:admin"]; exists {
+		t.Error("expired (IP, user) pair lockout should be cleaned up")
 	}
-	if _, exists := l.userAttempts["root"]; !exists {
-		t.Error("active user lockout should NOT be cleaned up")
+	if _, exists := l.userAttempts["5.6.7.8:root"]; !exists {
+		t.Error("active (IP, user) pair lockout should NOT be cleaned up")
 	}
 }
 
@@ -308,7 +313,7 @@ func TestLoginRateLimiter_FullFlow(t *testing.T) {
 	}
 
 	// User should also be locked
-	userLimited, _ := l.checkUserRateLimit(username)
+	userLimited, _ := l.checkUserRateLimit(ip, username)
 	if !userLimited {
 		t.Error("user should be locked after max attempts")
 	}
