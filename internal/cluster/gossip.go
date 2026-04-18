@@ -36,15 +36,16 @@ const (
 )
 
 // Message is the envelope for all gossip messages.
-// Sequence is NOT transmitted on the wire — it is reconstructed from the
-// per-sender high-water mark map at decode time. This preserves backwards
-// compatibility with pre-sequence nodes that send ProtocolVersion 0.
+// Sequence is transmitted on the wire for replay protection.
+// Receivers use it to detect and reject replayed messages.
+// Backwards compatible with pre-sequence nodes (ProtocolVersion 0 sends Sequence=0).
 type Message struct {
 	Type            MessageType
 	From            string
 	Timestamp       time.Time
 	Payload         []byte
 	ProtocolVersion uint32
+	Sequence        uint64 // monotonic sequence for replay protection
 }
 
 // PingPayload is sent to check node liveness.
@@ -1614,16 +1615,15 @@ func encodePayload(payload any) ([]byte, error) {
 // This prevents downgrade attacks where an attacker strips encryption.
 // If the message protocol version is incompatible, it is logged and skipped.
 func (gp *GossipProtocol) decodeMessage(data []byte, msg *Message) error {
+	// VULN-045/046: AAD binding requires decrypt-with-AAD + sequence on wire.
+	// Preserve original ciphertext so we can re-verify with the reconstructed AAD.
+	ciphertext := data
+
 	// Try decryption first if encryption is enabled.
-	// Use decryptWithAAD to verify AAD binding (VULN-046).
 	if gp.aead != nil {
-		// Decrypt to get the JSON payload first so we can read msg fields
+		// Decrypt to get the JSON payload so we can read msg fields for AAD reconstruction.
 		decrypted, err := gp.decrypt(data)
 		if err != nil {
-			// Encryption is enabled but decryption failed - reject the message.
-			// This prevents man-in-the-middle attacks that strip encryption.
-			// During a rolling upgrade, both sender and receiver must be upgraded
-			// before encrypted communication can begin.
 			return fmt.Errorf("gossip decrypt: message appears unencrypted but encryption is enabled: %w", err)
 		}
 		data = decrypted
@@ -1633,29 +1633,27 @@ func (gp *GossipProtocol) decodeMessage(data []byte, msg *Message) error {
 		return err
 	}
 
-	// VULN-045 (follow-up pending): Replay protection requires Sequence on the wire,
-	// which is not yet transmitted (Message struct doesn't include Sequence to keep
-	// backwards compatibility with pre-sequence nodes). The infrastructure is in place:
-	// gp.sequences map (per-sender high-water mark) and gp.nextSequence counter.
-	// When Sequence is added to the wire format, uncomment the block below.
-	// if msg.ProtocolVersion != 0 {
-	// 	gp.sequenceMu.Lock()
-	// 	lastSeq, seen := gp.sequences[msg.From]
-	// 	if seen && msg.Sequence <= lastSeq {
-	// 		gp.sequenceMu.Unlock()
-	// 		return fmt.Errorf("gossip: replay detected from node %s (seq %d <= last %d)", msg.From, msg.Sequence, lastSeq)
-	// 	}
-	// 	gp.sequences[msg.From] = msg.Sequence
-	// 	gp.sequenceMu.Unlock()
-	// }
+	// VULN-046: Re-verify ciphertext with AAD binding (senderID:msgType:sequence).
+	// AAD binds the message to a specific sender and type to prevent cross-peer replay.
+	if gp.aead != nil {
+		aad := []byte(fmt.Sprintf("%s:%d:%d", msg.From, msg.Type, msg.Sequence))
+		if _, err := gp.decryptWithAAD(ciphertext, aad); err != nil {
+			return fmt.Errorf("gossip AAD verification failed: %w", err)
+		}
+	}
 
-	// VULN-046 (partial): AAD binding is computed at send time as
-	// "senderID:msgType:sequence" and passed to encryptWithAAD. On receive,
-	// the plaintext is verified but the full AEAD tag is not re-checked with the AAD
-	// (decryptWithAAD is defined but not yet wired into decodeMessage).
-	// The sequence check + mandatory encrypted-layer rejection block the primary
-	// cross-peer replay scenarios. Full AAD binding verification is tracked as a
-	// follow-up (VULN-046-complete).
+	// VULN-045: Replay protection via per-sender high-water mark.
+	if msg.ProtocolVersion != 0 {
+		gp.sequenceMu.Lock()
+		lastSeq, seen := gp.sequences[msg.From]
+		if seen && msg.Sequence <= lastSeq {
+			gp.sequenceMu.Unlock()
+			return fmt.Errorf("gossip: replay detected from node %s (seq %d <= last %d)", msg.From, msg.Sequence, lastSeq)
+		}
+		gp.sequences[msg.From] = msg.Sequence
+		gp.sequenceMu.Unlock()
+	}
+
 	if msg.ProtocolVersion != 0 && msg.ProtocolVersion != gp.config.ProtocolVersion {
 		util.Warnf("gossip: dropped message from node %s: protocol version %d != our version %d",
 			msg.From, msg.ProtocolVersion, gp.config.ProtocolVersion)
@@ -1674,6 +1672,7 @@ func (gp *GossipProtocol) sendMessage(msgType MessageType, payload []byte, addr 
 		Timestamp:       time.Now(),
 		Payload:         payload,
 		ProtocolVersion: gp.config.ProtocolVersion,
+		Sequence:        seq,
 	}
 	data, err := json.Marshal(msg)
 	if err != nil {

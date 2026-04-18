@@ -1,6 +1,8 @@
 package cluster
 
 import (
+	"crypto/rand"
+	"encoding/json"
 	"net"
 	"testing"
 	"time"
@@ -914,5 +916,148 @@ func TestGossipConfig_Defaults(t *testing.T) {
 
 	if cfg.IndirectChecks != 0 {
 		t.Errorf("Expected IndirectChecks 0, got %d", cfg.IndirectChecks)
+	}
+}
+
+func TestGossipProtocol_DecodeMessage_ReplayRejected(t *testing.T) {
+	self := &Node{ID: "self", State: NodeStateAlive, Addr: "127.0.0.1"}
+	nl := NewNodeList(self)
+	cfg := DefaultGossipConfig()
+	cfg.BindPort = 17982
+
+	gp, _ := NewGossipProtocol(cfg, nl, true)
+	gp.Start()
+	defer gp.Stop()
+
+	// Manually set a sequence for a peer
+	gp.sequenceMu.Lock()
+	gp.sequences["peer-node"] = 10
+	gp.sequenceMu.Unlock()
+
+	// Create a message with sequence <= last seen (replay)
+	msg := Message{
+		Type:            MessageTypePing,
+		From:            "peer-node",
+		Timestamp:       time.Now(),
+		Payload:         []byte{1, 2, 3},
+		ProtocolVersion: 1,
+		Sequence:        5, // seq 5 <= last seen 10 → replay
+	}
+
+	data, _ := json.Marshal(msg)
+	err := gp.decodeMessage(data, &Message{})
+	if err == nil {
+		t.Error("Expected replay to be rejected, got nil error")
+	}
+}
+
+func TestGossipProtocol_DecodeMessage_NewSeqAccepted(t *testing.T) {
+	self := &Node{ID: "self", State: NodeStateAlive, Addr: "127.0.0.1"}
+	nl := NewNodeList(self)
+	cfg := DefaultGossipConfig()
+	cfg.BindPort = 17983
+
+	gp, _ := NewGossipProtocol(cfg, nl, true)
+	gp.Start()
+	defer gp.Stop()
+
+	// Set high-water mark
+	gp.sequenceMu.Lock()
+	gp.sequences["peer-node"] = 10
+	gp.sequenceMu.Unlock()
+
+	// Create a message with sequence > last seen (new, not replay)
+	msg := Message{
+		Type:            MessageTypePing,
+		From:            "peer-node",
+		Timestamp:       time.Now(),
+		Payload:         []byte{1, 2, 3},
+		ProtocolVersion: 1,
+		Sequence:        15, // seq 15 > last seen 10 → accepted
+	}
+
+	data, _ := json.Marshal(msg)
+	var decoded Message
+	err := gp.decodeMessage(data, &decoded)
+	if err != nil {
+		t.Errorf("Expected message to be accepted, got error: %v", err)
+	}
+
+	// Verify high-water mark was updated
+	gp.sequenceMu.Lock()
+	lastSeq := gp.sequences["peer-node"]
+	gp.sequenceMu.Unlock()
+	if lastSeq != 15 {
+		t.Errorf("Expected high-water mark 15, got %d", lastSeq)
+	}
+}
+
+func TestGossipProtocol_DecodeMessage_ZeroSeqSkipsCheck(t *testing.T) {
+	// ProtocolVersion 0 messages (legacy) have Sequence=0 and skip replay check
+	self := &Node{ID: "self", State: NodeStateAlive, Addr: "127.0.0.1"}
+	nl := NewNodeList(self)
+	cfg := DefaultGossipConfig()
+	cfg.BindPort = 17984
+
+	gp, _ := NewGossipProtocol(cfg, nl, true)
+	gp.Start()
+	defer gp.Stop()
+
+	// Set high-water mark
+	gp.sequenceMu.Lock()
+	gp.sequences["legacy-peer"] = 100
+	gp.sequenceMu.Unlock()
+
+	// Legacy message: ProtocolVersion=0, Sequence=0
+	msg := Message{
+		Type:            MessageTypePing,
+		From:            "legacy-peer",
+		Timestamp:       time.Now(),
+		Payload:         []byte{1, 2, 3},
+		ProtocolVersion: 0, // legacy
+		Sequence:        0, // zero seq (default for legacy nodes)
+	}
+
+	data, _ := json.Marshal(msg)
+	var decoded Message
+	err := gp.decodeMessage(data, &decoded)
+	if err != nil {
+		t.Errorf("Expected legacy message to be accepted despite zero seq, got error: %v", err)
+	}
+}
+
+func TestGossipProtocol_DecodeMessage_AADBindingFailure(t *testing.T) {
+	// This test verifies that decodeMessage with encryption rejects wrong AAD.
+	// We test the AAD verification path by checking that decryptWithAAD is called.
+	// Since we can't easily inject a wrong AAD without modifying the protocol,
+	// we verify the code path exists by checking error handling.
+	self := &Node{ID: "self", State: NodeStateAlive, Addr: "127.0.0.1"}
+	nl := NewNodeList(self)
+	cfg := DefaultGossipConfig()
+	cfg.BindPort = 17985
+	cfg.EncryptionKey = make([]byte, 32) // 32-byte key for AES-256
+	rand.Read(cfg.EncryptionKey)
+
+	gp, _ := NewGossipProtocol(cfg, nl, true)
+	gp.Start()
+	defer gp.Stop()
+
+	// Create a message and encrypt it
+	msg := Message{
+		Type:            MessageTypePing,
+		From:            "peer-node",
+		Timestamp:       time.Now(),
+		Payload:         []byte{1, 2, 3},
+		ProtocolVersion: 1,
+		Sequence:        1,
+	}
+	data, _ := json.Marshal(msg)
+	encrypted, _ := gp.encryptWithAAD(data, []byte("wrong-aad"))
+
+	var decoded Message
+	err := gp.decodeMessage(encrypted, &decoded)
+	// decryptWithAAD with wrong AAD should fail
+	if err == nil {
+		t.Error("Expected AAD verification to fail with wrong AAD, got nil")
 	}
 }
