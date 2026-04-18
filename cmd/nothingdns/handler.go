@@ -253,6 +253,17 @@ func (h *integratedHandler) ServeDNS(w server.ResponseWriter, r *protocol.Messag
 		}
 	}
 
+	// Handle RFC 8482 ANY query: for UDP, set TC=1 to force TCP retry.
+	// TypeANY can be used for amplification; forcing TCP adds connection
+	// cost that dampens spoofed-source attacks (VULN-065).
+	if qtype == protocol.TypeANY {
+		if w.ClientInfo().Protocol == "udp" {
+			h.handleANYTruncated(w, r, q)
+			return
+		}
+		// Over TCP, proceed normally — TCP can handle large responses.
+	}
+
 	// Handle AXFR (zone transfer) requests
 	if qtype == protocol.TypeAXFR {
 		h.handleAXFR(w, r, q)
@@ -816,6 +827,24 @@ func sendError(w server.ResponseWriter, query *protocol.Message, rcode uint8) {
 	}
 	if _, err := w.Write(resp); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to write error response: %v\n", err)
+	}
+}
+
+// handleANYTruncated responds to a TypeANY query over UDP with TC=1,
+// per RFC 8482 §3. This forces the client to retry over TCP, which
+// prevents TypeANY amplification attacks (VULN-065).
+func (h *integratedHandler) handleANYTruncated(w server.ResponseWriter, r *protocol.Message, q *protocol.Question) {
+	h.logger.Debugf("TypeANY over UDP — forcing TCP retry for %s", q.Name.String())
+	resp := &protocol.Message{
+		Header: protocol.Header{
+			ID:    r.Header.ID,
+			Flags: protocol.NewResponseFlags(protocol.RcodeSuccess),
+		},
+		Questions: r.Questions,
+	}
+	resp.Header.Flags.TC = true // Truncated — retry over TCP
+	if _, err := w.Write(resp); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to write TC response: %v\n", err)
 	}
 }
 
