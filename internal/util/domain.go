@@ -298,16 +298,55 @@ func LongestCommonSuffix(a, b string) int {
 }
 
 // IsSubdomain returns true if child is a subdomain of parent.
+// Performs case-insensitive comparison without heap allocation.
 func IsSubdomain(child, parent string) bool {
-	childDomain, err := ParseDomain(child)
-	if err != nil {
+	// Remove trailing dots for comparison
+	child = strings.TrimSuffix(child, ".")
+	parent = strings.TrimSuffix(parent, ".")
+
+	// Quick length check: child must be longer than parent
+	if len(child) < len(parent) {
 		return false
 	}
-	parentDomain, err := ParseDomain(parent)
-	if err != nil {
+
+	// Find the dot before the parent part in child
+	offset := len(child) - len(parent)
+
+	// If offset > 0, there are additional labels before parent
+	// The character immediately before the parent portion must be a dot
+	// (ensuring parent starts at a label boundary)
+	if offset > 0 && child[offset-1] != '.' {
 		return false
 	}
-	return childDomain.HasParent(parentDomain)
+
+	// Compare the parent portion (case-insensitive)
+	if !equalFold(child[offset:], parent) {
+		return false
+	}
+
+	return true
+}
+
+// equalFold is a case-insensitive string comparison without allocations.
+// Converts ASCII uppercase to lowercase for comparison (0x20 OR trick).
+func equalFold(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		ac, bc := a[i], b[i]
+		// Convert uppercase ASCII to lowercase (A-Z: 0x41-0x5A)
+		if ac >= 'A' && ac <= 'Z' {
+			ac |= 0x20
+		}
+		if bc >= 'A' && bc <= 'Z' {
+			bc |= 0x20
+		}
+		if ac != bc {
+			return false
+		}
+	}
+	return true
 }
 
 // EscapeLabel escapes a domain label for use in zone files.

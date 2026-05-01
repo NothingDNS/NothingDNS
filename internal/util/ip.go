@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
-	"strings"
 )
 
 // IsIPv4 returns true if the IP address is an IPv4 address.
@@ -252,14 +251,19 @@ func ReverseDNS(ip net.IP) string {
 	if v6 == nil {
 		return ""
 	}
-	// IPv6: each byte becomes 2 hex nibbles
-	var parts []string
+	// Pre-allocate: 32 nibbles + 31 dots + ".ip6.arpa" = 72 bytes
+	buf := make([]byte, 0, 72)
 	for i := len(v6) - 1; i >= 0; i-- {
-		parts = append(parts, fmt.Sprintf("%x", v6[i]&0x0f))
-		parts = append(parts, fmt.Sprintf("%x", v6[i]>>4))
+		buf = append(buf, hexUpper[v6[i]&0x0f], '.', hexUpper[v6[i]>>4])
+		if i > 0 {
+			buf = append(buf, '.')
+		}
 	}
-	return strings.Join(parts, ".") + ".ip6.arpa"
+	return string(buf) + ".ip6.arpa"
 }
+
+// hexUpper is a lookup table for uppercase hex digits (0-15).
+var hexUpper = [16]byte{'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'}
 
 // MaskIP masks an IP address with the given prefix length.
 func MaskIP(ip net.IP, prefixLen int) net.IP {
