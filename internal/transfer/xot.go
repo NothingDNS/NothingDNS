@@ -203,7 +203,11 @@ func (s *XoTServer) Serve(addr string) error {
 func (s *XoTServer) AcceptLoop() {
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Printf("XoT AcceptLoop panic recovered: %v\n", r)
+			if s.logger != nil {
+				s.logger.Errorf("XoT AcceptLoop panic recovered: %v", r)
+			} else {
+				fmt.Printf("XoT AcceptLoop panic recovered: %v\n", r)
+			}
 		}
 	}()
 
@@ -221,7 +225,11 @@ func (s *XoTServer) handleConnection(conn net.Conn) {
 	defer func() {
 		if r := recover(); r != nil {
 			// Log panic but don't crash the server
-			fmt.Printf("XoT handleConnection panic recovered: %v\n", r)
+			if s.logger != nil {
+				s.logger.Errorf("XoT handleConnection panic recovered: %v", r)
+			} else {
+				fmt.Printf("XoT handleConnection panic recovered: %v\n", r)
+			}
 		}
 		conn.Close()
 	}()

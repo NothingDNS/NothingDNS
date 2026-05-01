@@ -14,9 +14,12 @@ import (
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
+	"github.com/nothingdns/nothingdns/internal/util"
 )
 
 // Algorithm constants for TSIG
+var tsigLogger = util.NewLogger(util.WARN, util.TextFormat, nil)
+
 const (
 	// HMAC-MD5 is deprecated but included for compatibility
 	HmacMD5    = "hmac-md5.sig-alg.reg.int"
@@ -505,7 +508,7 @@ func calculateMAC(key, data []byte, algorithm string) ([]byte, error) {
 		return nil, fmt.Errorf("HMAC-MD5 is no longer supported for TSIG (cryptographically broken). Use hmac-sha256 or hmac-sha512")
 	case HmacSHA1:
 		// SHA-1 is deprecated, log warning but support for compatibility
-		fmt.Printf("WARNING: HMAC-SHA1 is deprecated for TSIG. Consider using SHA-256 or SHA-512.\n")
+		tsigLogger.Warnf("HMAC-SHA1 is deprecated for TSIG. Consider using SHA-256 or SHA-512.")
 		h := hmac.New(sha1.New, key)
 		h.Write(data)
 		mac = h.Sum(nil)
