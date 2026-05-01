@@ -254,10 +254,11 @@ func TestRecordQuery_TrimRecentQueries(t *testing.T) {
 
 func TestServeHTTP_PostRequest(t *testing.T) {
 	server := NewServer()
+	server.SetAuthToken("test-token")
 	defer server.Stop()
 
-	// POST to stats endpoint should still work (no method check)
 	req := httptest.NewRequest("POST", "/api/dashboard/stats", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
 	w := httptest.NewRecorder()
 	server.ServeHTTP(w, req)
 

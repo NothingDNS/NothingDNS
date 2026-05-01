@@ -138,15 +138,18 @@ func (m *MetricsCollector) Start() error {
 		return nil
 	}
 
+	// SECURITY: Refuse to serve metrics without auth. Operators must set
+	// auth_token when enabling the metrics endpoint on any non-loopback bind.
+	if m.config.AuthToken == "" {
+		return fmt.Errorf("metrics enabled but auth_token not configured: " +
+			"refusing to serve sensitive operational metrics without authentication; " +
+			"set metrics.auth_token in config or bind metrics to localhost only")
+	}
+
 	mux := http.NewServeMux()
 
-	// Wrap with authentication if token is configured
-	var metricsHandler http.HandlerFunc = m.handleMetrics
-	var healthHandler http.HandlerFunc = m.handleHealth
-	if m.config.AuthToken != "" {
-		metricsHandler = m.requireMetricsAuth(m.handleMetrics)
-		healthHandler = m.requireMetricsAuth(m.handleHealth)
-	}
+	metricsHandler := m.requireMetricsAuth(m.handleMetrics)
+	healthHandler := m.requireMetricsAuth(m.handleHealth)
 	mux.HandleFunc(m.config.Path, metricsHandler)
 	mux.HandleFunc("/health", healthHandler)
 

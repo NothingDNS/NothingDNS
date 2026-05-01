@@ -200,17 +200,68 @@ func (s *Server) SetAuthToken(token string) {
 	s.mu.Unlock()
 }
 
+// authenticateRequest checks for a valid auth token in the request.
+// Returns true if auth is not configured (permissive), or if a valid token
+// is present. Writes a 401 only when auth IS configured but token is missing/invalid.
+func (s *Server) authenticateRequest(w http.ResponseWriter, r *http.Request) bool {
+	s.mu.RLock()
+	authStore := s.authStore
+	authToken := s.authToken
+	s.mu.RUnlock()
+
+	// No auth configured — allow all requests (legacy permissive behavior)
+	if authToken == "" && authStore == nil {
+		return true
+	}
+
+	token := r.Header.Get("Authorization")
+	token = strings.TrimPrefix(token, "Bearer ")
+	if token == "" {
+		if c, err := r.Cookie("ndns_token"); err == nil {
+			token = c.Value
+		}
+	}
+
+	if token == "" {
+		http.Error(w, "authentication required", http.StatusUnauthorized)
+		return false
+	}
+
+	valid := false
+	if authToken != "" && len(token) == len(authToken) {
+		if subtle.ConstantTimeCompare([]byte(token), []byte(authToken)) == 1 {
+			valid = true
+		}
+	}
+	if !valid && authStore != nil {
+		if _, err := authStore.ValidateToken(token); err == nil {
+			valid = true
+		}
+	}
+	if !valid {
+		http.Error(w, "invalid token", http.StatusUnauthorized)
+		return false
+	}
+	return true
+}
+
 // ServeHTTP handles HTTP requests
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 
 	switch path {
 	case "/api/dashboard/stats":
-		s.handleStats(w, r)
+		if s.authenticateRequest(w, r) {
+			s.handleStats(w, r)
+		}
 	case "/api/dashboard/queries":
-		s.handleQueryStream(w, r)
+		if s.authenticateRequest(w, r) {
+			s.handleQueryStream(w, r)
+		}
 	case "/api/dashboard/zones":
-		s.handleZones(w, r)
+		if s.authenticateRequest(w, r) {
+			s.handleZones(w, r)
+		}
 	case "/ws":
 		s.handleWebSocket(w, r)
 	default:

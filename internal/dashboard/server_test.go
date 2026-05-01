@@ -28,6 +28,7 @@ func TestNewServer(t *testing.T) {
 
 func TestHandleStats(t *testing.T) {
 	server := NewServer()
+	server.SetAuthToken("test-token")
 
 	// Update some stats
 	server.UpdateStats(UpdateStatsRequest{
@@ -38,6 +39,7 @@ func TestHandleStats(t *testing.T) {
 	})
 
 	req := httptest.NewRequest("GET", "/api/dashboard/stats", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
 	w := httptest.NewRecorder()
 
 	server.ServeHTTP(w, req)
@@ -62,6 +64,7 @@ func TestHandleStats(t *testing.T) {
 
 func TestHandleQueryStream(t *testing.T) {
 	server := NewServer()
+	server.SetAuthToken("test-token")
 
 	// Record some queries
 	for i := 0; i < 5; i++ {
@@ -77,6 +80,7 @@ func TestHandleQueryStream(t *testing.T) {
 	}
 
 	req := httptest.NewRequest("GET", "/api/dashboard/queries", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
 	w := httptest.NewRecorder()
 
 	server.ServeHTTP(w, req)
@@ -213,8 +217,10 @@ func TestBroadcastLoop(t *testing.T) {
 
 func TestHandleZones(t *testing.T) {
 	server := NewServer()
+	server.SetAuthToken("test-token")
 
 	req := httptest.NewRequest("GET", "/api/dashboard/zones", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
 	w := httptest.NewRecorder()
 
 	server.ServeHTTP(w, req)
@@ -744,6 +750,7 @@ func TestClient_ConcurrentOperations(t *testing.T) {
 // Test ServeHTTP all routes
 func TestServeHTTP_AllRoutes(t *testing.T) {
 	server := NewServer()
+	server.SetAuthToken("test-token") // Auth required on HTTP endpoints
 	defer server.Stop()
 
 	tests := []struct {
@@ -753,13 +760,16 @@ func TestServeHTTP_AllRoutes(t *testing.T) {
 		{"/api/dashboard/stats", http.StatusOK},
 		{"/api/dashboard/queries", http.StatusOK},
 		{"/api/dashboard/zones", http.StatusOK},
-		{"/ws", http.StatusUnauthorized}, // Auth required - returns 401 when no auth store configured
+		{"/ws", http.StatusBadRequest}, // Non-websocket request gets 400 before auth check
 		{"/unknown", http.StatusNotFound},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
 			req := httptest.NewRequest("GET", tt.path, nil)
+			if tt.path != "/unknown" {
+				req.Header.Set("Authorization", "Bearer test-token")
+			}
 			w := httptest.NewRecorder()
 			server.ServeHTTP(w, req)
 
@@ -773,9 +783,11 @@ func TestServeHTTP_AllRoutes(t *testing.T) {
 // Test handleStats response content type
 func TestHandleStats_ContentType(t *testing.T) {
 	server := NewServer()
+	server.SetAuthToken("test-token")
 	defer server.Stop()
 
 	req := httptest.NewRequest("GET", "/api/dashboard/stats", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
 	w := httptest.NewRecorder()
 	server.ServeHTTP(w, req)
 
@@ -787,9 +799,11 @@ func TestHandleStats_ContentType(t *testing.T) {
 // Test handleQueryStream response content type
 func TestHandleQueryStream_ContentType(t *testing.T) {
 	server := NewServer()
+	server.SetAuthToken("test-token")
 	defer server.Stop()
 
 	req := httptest.NewRequest("GET", "/api/dashboard/queries", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
 	w := httptest.NewRecorder()
 	server.ServeHTTP(w, req)
 
@@ -801,9 +815,11 @@ func TestHandleQueryStream_ContentType(t *testing.T) {
 // Test handleZones response content type
 func TestHandleZones_ContentType(t *testing.T) {
 	server := NewServer()
+	server.SetAuthToken("test-token")
 	defer server.Stop()
 
 	req := httptest.NewRequest("GET", "/api/dashboard/zones", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
 	w := httptest.NewRecorder()
 	server.ServeHTTP(w, req)
 

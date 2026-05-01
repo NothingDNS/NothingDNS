@@ -12,9 +12,10 @@ import (
 
 func TestMetricsCollector(t *testing.T) {
 	cfg := Config{
-		Enabled: true,
-		Bind:    "127.0.0.1:19153",
-		Path:    "/metrics",
+		Enabled:   true,
+		Bind:      "127.0.0.1:19153",
+		Path:      "/metrics",
+		AuthToken: "test-token",
 	}
 
 	m := New(cfg)
@@ -27,8 +28,10 @@ func TestMetricsCollector(t *testing.T) {
 	// Give server time to start
 	time.Sleep(100 * time.Millisecond)
 
-	// Test metrics endpoint
-	resp, err := http.Get("http://127.0.0.1:19153/metrics")
+	// Test metrics endpoint (with auth header)
+	req, _ := http.NewRequest("GET", "http://127.0.0.1:19153/metrics", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("Failed to get metrics: %v", err)
 	}
@@ -85,9 +88,10 @@ func TestMetricsCollectorDisabled(t *testing.T) {
 
 func TestRecordMetrics(t *testing.T) {
 	cfg := Config{
-		Enabled: true,
-		Bind:    "127.0.0.1:19155",
-		Path:    "/metrics",
+		Enabled:   true,
+		Bind:      "127.0.0.1:19155",
+		Path:      "/metrics",
+		AuthToken: "test-token",
 	}
 
 	m := New(cfg)
@@ -110,8 +114,10 @@ func TestRecordMetrics(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	// Fetch metrics
-	resp, err := http.Get("http://127.0.0.1:19155/metrics")
+	// Fetch metrics with auth header
+	req, _ := http.NewRequest("GET", "http://127.0.0.1:19155/metrics", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("Failed to get metrics: %v", err)
 	}
@@ -154,9 +160,10 @@ func TestRecordMetrics(t *testing.T) {
 
 func TestHealthEndpoint(t *testing.T) {
 	cfg := Config{
-		Enabled: true,
-		Bind:    "127.0.0.1:19156",
-		Path:    "/metrics",
+		Enabled:   true,
+		Bind:      "127.0.0.1:19156",
+		Path:      "/metrics",
+		AuthToken: "test-token",
 	}
 
 	m := New(cfg)
@@ -164,7 +171,9 @@ func TestHealthEndpoint(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	resp, err := http.Get("http://127.0.0.1:19156/health")
+	req, _ := http.NewRequest("GET", "http://127.0.0.1:19156/health", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("Failed to get health: %v", err)
 	}
@@ -182,7 +191,7 @@ func TestHealthEndpoint(t *testing.T) {
 	m.Stop()
 }
 
-func TestRecordMetricsWhenDisabled(t *testing.T) {
+func TestSetClusterMetricsWhenDisabled(t *testing.T) {
 	cfg := Config{
 		Enabled: false,
 	}
@@ -201,9 +210,10 @@ func TestRecordMetricsWhenDisabled(t *testing.T) {
 
 func TestSetClusterMetrics(t *testing.T) {
 	cfg := Config{
-		Enabled: true,
-		Bind:    "127.0.0.1:19158",
-		Path:    "/metrics",
+		Enabled:   true,
+		Bind:      "127.0.0.1:19158",
+		Path:      "/metrics",
+		AuthToken: "test-token",
 	}
 
 	m := New(cfg)
@@ -218,7 +228,9 @@ func TestSetClusterMetrics(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	resp, err := http.Get("http://127.0.0.1:19158/metrics")
+	req, _ := http.NewRequest("GET", "http://127.0.0.1:19158/metrics", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("Failed to get metrics: %v", err)
 	}
@@ -261,9 +273,10 @@ func TestSetClusterMetrics(t *testing.T) {
 
 func TestSetClusterMetricsUnhealthy(t *testing.T) {
 	cfg := Config{
-		Enabled: true,
-		Bind:    "127.0.0.1:19159",
-		Path:    "/metrics",
+		Enabled:   true,
+		Bind:      "127.0.0.1:19159",
+		Path:      "/metrics",
+		AuthToken: "test-token",
 	}
 
 	m := New(cfg)
@@ -278,7 +291,9 @@ func TestSetClusterMetricsUnhealthy(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	resp, err := http.Get("http://127.0.0.1:19159/metrics")
+	req, _ := http.NewRequest("GET", "http://127.0.0.1:19159/metrics", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("Failed to get metrics: %v", err)
 	}
@@ -434,9 +449,10 @@ func TestRecordQueryLatency_PrometheusOutput(t *testing.T) {
 	ln.Close()
 
 	cfg := Config{
-		Enabled: true,
-		Bind:    ln.Addr().String(),
-		Path:    "/metrics",
+		Enabled:   true,
+		Bind:      ln.Addr().String(),
+		Path:      "/metrics",
+		AuthToken: "test-token",
 	}
 	m := New(cfg)
 
@@ -450,7 +466,9 @@ func TestRecordQueryLatency_PrometheusOutput(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	resp, err := http.Get("http://" + cfg.Bind + "/metrics")
+	req, _ := http.NewRequest("GET", "http://"+cfg.Bind+"/metrics", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("Failed to get metrics: %v", err)
 	}
@@ -482,9 +500,10 @@ func TestRecordQueryLatency_PrometheusOutput(t *testing.T) {
 
 func TestRecordRateLimited(t *testing.T) {
 	cfg := Config{
-		Enabled: true,
-		Bind:    "127.0.0.1:19161",
-		Path:    "/metrics",
+		Enabled:   true,
+		Bind:      "127.0.0.1:19161",
+		Path:      "/metrics",
+		AuthToken: "test-token",
 	}
 	m := New(cfg)
 
@@ -497,7 +516,9 @@ func TestRecordRateLimited(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	resp, err := http.Get("http://127.0.0.1:19161/metrics")
+	req, _ := http.NewRequest("GET", "http://127.0.0.1:19161/metrics", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("Failed to get metrics: %v", err)
 	}

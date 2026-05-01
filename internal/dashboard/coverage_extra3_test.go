@@ -114,6 +114,7 @@ func TestRecordQuery_AllFieldsPopulated(t *testing.T) {
 
 func TestServeHTTP_StatsEndpointValidJSON(t *testing.T) {
 	server := NewServer()
+	server.SetAuthToken("test-token")
 	defer server.Stop()
 
 	// Record some queries to populate stats
@@ -125,6 +126,7 @@ func TestServeHTTP_StatsEndpointValidJSON(t *testing.T) {
 	}
 
 	req := httptest.NewRequest("GET", "/api/dashboard/stats", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
 	w := httptest.NewRecorder()
 	server.ServeHTTP(w, req)
 
