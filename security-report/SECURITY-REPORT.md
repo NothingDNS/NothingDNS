@@ -1,3 +1,13 @@
+## Patched (committed)
+
+| ID | Severity | CWE | Title | Commit |
+|----|----------|-----|-------|--------|
+| P1 | CRITICAL | CWE-639 | Privilege escalation in user creation API | `00a736b` |
+| P2 | HIGH | CWE-285 | ACL default-allow when rules configured | `00a736b` |
+| P3 | MEDIUM | CWE-400 | NSEC3 iteration bounds (max=150) | `00a736b` |
+| P4 | MEDIUM | CWE-306 | Dashboard HTTP endpoints wired to auth | `735b3c3` |
+| P5 | MEDIUM | CWE-306 | Metrics fail-fast when AuthToken unset | `735b3c3` |
+
 # NothingDNS Security Audit Report
 
 **Date:** 2026-05-01
@@ -9,15 +19,17 @@
 
 ## Executive Summary
 
-| Severity | Count |
-|----------|-------|
-| CRITICAL | 1 |
-| HIGH | 2 |
-| MEDIUM | 8 |
-| LOW | 4 |
-| INFO / Protected | 11 |
+| Severity | Original | Patched | Remaining |
+|----------|----------|---------|-----------|
+| CRITICAL | 1 | 1 | 0 |
+| HIGH | 2 | 1 | 1 |
+| MEDIUM | 8 | 3 | 5 |
+| LOW | 4 | 0 | 4 |
+| INFO / Protected | 11 | 0 | 11 |
 
-**No critical infrastructure vulnerabilities found.** The codebase uses strong crypto (AES-256-GCM, ECDSA P-256/P-384, Ed25519, HMAC-SHA512, PBKDF2 310k), stdlib-only deps, and TLS 1.3 by default. The most actionable finding is a **privilege escalation** in the user creation API. Key hardening opportunities exist in unauthenticated endpoint exposure, cluster plaintext mode, and DNSSEC NSEC3 iteration bounds.
+**Patched count:** 5 of 15 findings (1 CRITICAL, 1 HIGH, 3 MEDIUM).
+
+The codebase uses strong crypto (AES-256-GCM, ECDSA P-256/P-384, Ed25519, HMAC-SHA512, PBKDF2 310k), stdlib-only deps, and TLS 1.3 by default.
 
 ---
 
