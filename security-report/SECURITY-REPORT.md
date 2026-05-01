@@ -6,7 +6,7 @@
 | P2 | HIGH | CWE-285 | ACL default-allow when rules configured | `00a736b` |
 | P3 | MEDIUM | CWE-400 | NSEC3 iteration bounds (max=150) | `00a736b` |
 | P4 | MEDIUM | CWE-306 | Dashboard HTTP endpoints wired to auth | `735b3c3` |
-| P5 | MEDIUM | CWE-306 | Metrics fail-fast when AuthToken unset | `735b3c3` |
+| P6 | MEDIUM | CWE-319 | Warn when allow_insecure cluster used with non-loopback seeds | `1b53b60` |
 
 # NothingDNS Security Audit Report
 
@@ -23,7 +23,7 @@
 |----------|----------|---------|-----------|
 | CRITICAL | 1 | 1 | 0 |
 | HIGH | 2 | 1 | 1 |
-| MEDIUM | 8 | 3 | 5 |
+| MEDIUM | 8 | 4 | 4 |
 | LOW | 4 | 0 | 4 |
 | INFO / Protected | 11 | 0 | 11 |
 
