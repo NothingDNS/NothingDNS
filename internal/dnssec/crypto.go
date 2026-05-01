@@ -496,6 +496,13 @@ func NSEC3Hash(name string, algorithm uint8, iterations uint16, salt []byte) ([]
 		return nil, fmt.Errorf("unsupported NSEC3 hash algorithm: %d", algorithm)
 	}
 
+	// SECURITY (CWE-400): Bound iterations to prevent CPU exhaustion via crafted NSEC3
+	// records. RFC 9276 recommends ≤150 for SHA-1 at typical DNS record counts.
+	const maxNSEC3Iterations uint16 = 150
+	if iterations > maxNSEC3Iterations {
+		return nil, fmt.Errorf("NSEC3 iterations too high: %d (max %d)", iterations, maxNSEC3Iterations)
+	}
+
 	// Convert name to wire format (lowercase, no trailing dot)
 	wireName, err := toWireFormat(name)
 	if err != nil {

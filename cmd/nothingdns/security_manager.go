@@ -112,7 +112,7 @@ func NewSecurityManager(cfg *config.Config, logger *util.Logger) (*SecurityManag
 	// Initialize ACL checker
 	if len(cfg.ACL) > 0 {
 		var err error
-		mgr.result.ACLChecher, err = filter.NewACLChecker(cfg.ACL, false)
+		mgr.result.ACLChecher, err = filter.NewACLChecker(cfg.ACL, true)
 		if err != nil {
 			return nil, err
 		}

@@ -1,223 +1,241 @@
-# Security Report — NothingDNS
+# NothingDNS Security Audit Report
 
-**Date**: 2026-04-25
-**Scanner**: security-check (AI-powered 4-phase pipeline)
-**Scope**: Full codebase (372 Go files, 58 TypeScript files, deployment manifests, CI/CD)
-**Risk Rating**: LOW–MEDIUM
+**Date:** 2026-05-01
+**Branch:** main
+**Tool:** security-check (Phase 1–2: Recon + Hunt)
+**Scope:** Full codebase audit — 4 agent threads, 48 skill categories
 
 ---
 
 ## Executive Summary
 
-NothingDNS was subjected to a comprehensive security audit covering 48 vulnerability categories across injection, authentication, cryptography, infrastructure, and business logic. **No critical or high-severity vulnerabilities were identified.** The project demonstrates strong security hygiene: modern cryptography, robust authentication, minimal dependencies, and extensive defense-in-depth.
+| Severity | Count |
+|----------|-------|
+| CRITICAL | 1 |
+| HIGH | 2 |
+| MEDIUM | 8 |
+| LOW | 4 |
+| INFO / Protected | 11 |
 
-| Severity | Count | Status |
-|----------|-------|--------|
-| Critical | 0 | — |
-| High | 0 | — |
-| Medium | 16 | Hardening recommended |
-| Low | 36 | Defense-in-depth / documentation |
-
-**Top Concerns**:
-1. Custom cryptographic implementations (PBKDF2, HKDF-like key derivation) increase audit surface.
-2. Missing security headers (CSP) on the embedded React dashboard.
-3. Kubernetes Helm defaults inadvertently expose `/metrics` via Ingress.
-4. Test configuration file contains a hardcoded auth token that could be accidentally deployed.
+**No critical infrastructure vulnerabilities found.** The codebase uses strong crypto (AES-256-GCM, ECDSA P-256/P-384, Ed25519, HMAC-SHA512, PBKDF2 310k), stdlib-only deps, and TLS 1.3 by default. The most actionable finding is a **privilege escalation** in the user creation API. Key hardening opportunities exist in unauthenticated endpoint exposure, cluster plaintext mode, and DNSSEC NSEC3 iteration bounds.
 
 ---
 
-## Scan Statistics
+## CRITICAL
 
-| Phase | Skills Run | Findings | False Positives Eliminated |
-|-------|-----------|----------|---------------------------|
-| Phase 1: Recon | 2 | Architecture mapped, 4 deps identified | 0 |
-| Phase 2: Hunt | 35+ | 208 raw findings | 156 |
-| Phase 3: Verify | 1 | 52 verified findings | 0 |
-| Phase 4: Report | 1 | This report | 0 |
+### CWE-639 — Privilege Escalation: Any Authenticated User Can Create Admin Accounts
 
-**Languages Scanned**:
-- Go (98% of codebase) — sc-lang-go
-- TypeScript/React (1.5%) — sc-lang-typescript
-- YAML/Markdown (remainder)
+**File:** `internal/api/api_auth.go:269–290`
 
-**Infrastructure Scanned**:
-- Dockerfile
-- GitHub Actions (3 workflows)
-- Kubernetes manifests + Helm charts
+The create-user endpoint (`POST /api/v1/users`) requires the `admin` role to call. However, the role requested in the request body (`req.Role`) is **not validated against the caller's role**. An Operator or Viewer token can create an account with `RoleAdmin`, escalating privileges without authorization.
+
+**Remediation:** Validate `req.Role <= caller's.Role` or restrict role field to only allow roles ≤ the caller's own role.
 
 ---
 
-## Findings by Severity
+## HIGH
 
-### Medium (16)
+### CWE-306 — DoH/ODoH Endpoints Skip Auth Entirely
 
-| ID | Finding | File | CWE |
-|----|---------|------|-----|
-| MED-001 | Custom PBKDF2-HMAC-SHA512 implementation | `internal/auth/auth.go:152–216` | CWE-327 |
-| MED-002 | Custom HKDF-like AES key derivation | `internal/auth/auth.go:691–696` | CWE-327 |
-| MED-003 | Missing CSP header on dashboard | `web/index.html` | CWE-1021 |
-| MED-004 | Missing CSRF defense-in-depth on mutating requests | `web/src/lib/api.ts` | CWE-352 |
-| MED-005 | Vite dev server CORS proxy exposure | `web/vite.config.ts:18–23` | CWE-942 |
-| MED-006 | Panic recovery logs raw panic value | `cmd/nothingdns/handler.go:88–89` | CWE-209 |
-| MED-007 | gob deserialization of cache persistence | `cmd/nothingdns/cache_manager.go:234` | CWE-502 |
-| MED-008 | DNSSEC trust anchor XML parsing | `internal/dnssec/trustanchor.go` | CWE-611 |
-| MED-009 | DoH GET endpoint amplification risk | `internal/doh/doh.go` | CWE-770 |
-| MED-010 | Config hot reload may expose partial state | `internal/config/reload.go` | CWE-362 |
-| MED-011 | Global RBAC only — no per-zone authorization | `internal/api/api_zones.go` | CWE-284 |
-| MED-012 | Basic auth over Ingress without explicit TLS | `deploy/k8s/ingress.yaml:10–11` | CWE-319 |
-| MED-013 | Helm defaults expose `/metrics` via Ingress | `deploy/helm/nothingdns/values.yaml:75–78` | CWE-200 |
-| MED-014 | Missing HEALTHCHECK in Dockerfile | `Dockerfile` | CWE-1037 |
-| MED-015 | Workflow expression injection risk | `.github/workflows/container.yml:62–68` | CWE-94 |
-| MED-016 | Hardcoded test auth token in local-test.yaml | `local-test.yaml:8` | CWE-798 |
+**File:** `internal/api/server.go:824–846`
 
-### Low (36)
+Browsers and stub resolvers don't send Bearer tokens for DoH queries, so these endpoints intentionally skip auth. However, when `auth_token` or `authStore` is configured, there is no mechanism to restrict DoH/ODoH to authenticated users. Any client can use the encrypted DNS path without credentials.
 
-See `verified-findings.md` for the complete low-severity list. Key themes:
-- **Auth/Session**: No refresh tokens, no concurrent session limit, role cached in tokens, password policy gaps.
-- **API/Web**: Slightly different auth error messages, MCP scope audit needed, DoH error info leak.
-- **Crypto**: `InsecureSkipVerify` struct field, SHA-1 in NSEC3 (RFC-mandated).
-- **Infrastructure**: No `.dockerignore`, `latest` tag in K8s, overly permissive NetworkPolicy egress, unpinned `busybox` in Helm test.
-- **Frontend**: `Math.random` for notification IDs, duplicate auth token retrieval from cookie.
+**Remediation:** Add optional DoH/ODoH authentication via client certificates or configure IP allowlisting for the encrypted DNS path.
 
 ---
 
-## Architecture Security Assessment
+### CWE-319 — AllowInsecureCluster Permits Plaintext Gossip
 
-NothingDNS is a **Go-based DNS server** with the following security-relevant architecture:
+**File:** `internal/cluster/cluster.go:75–79`, `internal/cluster/gossip.go:287–296`
 
-- **21-stage request pipeline** with panic recovery, ACL, rate limiting, DNS cookies, blocklist, cache, zone lookup, recursive resolver, DNSSEC validation, and RPZ response checks.
-- **Zero external dependencies** (except `quic-go` and `golang.org/x/*` extensions), minimizing supply-chain attack surface.
-- **Custom protocol parsers** for DNS wire format, YAML config, and TLV serialization — all audited for overflow and injection.
-- **Multi-plane authentication**: DNS plane (cookies, TSIG, ACL), management plane (JWT/HMAC tokens with RBAC), cluster plane (AES-256-GCM gossip, optional TLS Raft).
+When `allow_insecure=true`, cluster gossip traffic is sent in plaintext with no node authentication. Any node on the network can join, receive zone updates, cache invalidations, and config sync payloads. This is dangerous in multi-tenant environments.
 
-**Trust Boundaries**:
-1. Public DNS (UDP/TCP/DoH/DoT/DoQ) → handler → cache/zone/resolver
-2. Management API (HTTP/WebSocket) → auth middleware → RBAC → handlers
-3. Cluster internal (gossip/Raft) → encrypted + authenticated
+**Remediation:** Require `encryption_key` whenever `seed_nodes` are configured. Warn loudly if `allow_insecure=true` is set with non-loopback seed nodes.
 
 ---
 
-## Dependency Audit Summary
+## MEDIUM
 
-| Dependency | Version | Risk |
-|------------|---------|------|
-| `github.com/quic-go/quic-go` | v0.59.0 | Low — actively maintained, no known critical CVEs |
-| `golang.org/x/sys` | v0.43.0 | Low — official Go extension |
-| `golang.org/x/crypto` | v0.45.0 | Low — official Go extension (indirect) |
-| `golang.org/x/net` | v0.47.0 | Low — official Go extension (indirect) |
+### CWE-285 — ACL Default-Allow Without Rules
 
-**Supply Chain**: Minimal attack surface. No vendoring. `go.sum` pins exact versions. Dockerfile uses multi-stage `FROM scratch` with static binary.
+**File:** `internal/filter/acl.go:79–92`
 
-**Recommendation**: Pin GitHub Actions to SHA hashes (already done), consider adding SBOM generation to build pipeline.
+If `denyByDefault=false` (the default) and no ACL rules are configured, all traffic is allowed. Accidentally clearing ACL rules exposes the resolver to unauthorized use.
+
+**Remediation:** Change the default to `denyByDefault=true`.
 
 ---
 
-## Remediation Roadmap
+### CWE-306 — Dashboard HTTP Endpoints Unauthenticated
 
-### Phase 1: Immediate (1–2 weeks)
-1. **MED-016**: Remove hardcoded test token from `local-test.yaml` and add to `.gitignore`.
-2. **MED-012**: Add explicit `tls:` section to `deploy/k8s/ingress.yaml`.
-3. **MED-013**: Remove `/metrics` path from default Helm `values.yaml` ingress paths.
-4. **MED-006**: Sanitize panic value before logging in `cmd/nothingdns/handler.go`.
-5. **LOW-023**: Return generic error messages for DoH failures.
+**File:** `internal/dashboard/server.go:207–218`
 
-### Phase 2: Short-term (1 month)
-6. **MED-001 / MED-002**: Replace custom PBKDF2 and HKDF-like derivation with standard library implementations (`golang.org/x/crypto/pbkdf2`, `crypto/hkdf`).
-7. **MED-003**: Add CSP and security headers (`X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`) in Go static file server.
-8. **MED-011**: Document single-tenant design constraint or add per-zone ownership.
-9. **LOW-009**: Require bootstrap token from file/env for localhost bootstrap.
-10. **LOW-011**: Enforce minimum password length (8–12 chars) in `ValidatePassword`.
+`/api/dashboard/stats`, `/api/dashboard/queries`, and `/api/dashboard/zones` serve without checking credentials. The dashboard server has `SetAuthStore`/`SetAuthToken` but only the WebSocket handler uses them.
 
-### Phase 3: Medium-term (1–3 months)
-11. **MED-007**: Migrate cache persistence from `gob` to JSON or protobuf.
-12. **MED-010**: Implement atomic config pointer swap for hot reload.
-13. **LOW-013 / LOW-015**: Revoke tokens on role change and re-validate role from user store.
-14. **LOW-016 / LOW-017**: Implement refresh tokens and concurrent session limits if long-lived sessions are required.
-15. **MED-014**: Add `HEALTHCHECK` or document orchestrator-level health checks.
-
-### Phase 4: Long-term / Continuous
-16. **LOW-025**: Audit MCP handlers for secret redaction.
-17. **LOW-034**: Tighten NetworkPolicy egress rules to required CIDRs/ports.
-18. **LOW-035 / LOW-036**: Pin all container images to digests in K8s manifests.
-19. Establish periodic dependency audits (quarterly) and CVE monitoring for `quic-go`.
-20. Add NIST test vectors for any retained custom crypto.
+**Remediation:** Wire auth middleware to all dashboard HTTP endpoints.
 
 ---
 
-## Positive Security Controls
+### CWE-306 — Metrics & Health Endpoints Open Without Auth Token
 
-The following controls were verified and are working correctly:
+**File:** `internal/metrics/metrics.go:144–148`
 
-| Control | Evidence |
-|---------|----------|
-| **Modern Cryptography** | AES-256-GCM, Ed25519/ECDSA/RSA, TLS 1.3, ChaCha20-Poly1305, `crypto/rand` |
-| **Timing Attack Mitigation** | `subtle.ConstantTimeCompare` in auth, `dummyHash` for non-existent users (VULN-017) |
-| **Rate Limiting** | Per-IP token bucket for DNS, dual-track (IP + username) login rate limiting |
-| **Input Validation** | `http.MaxBytesReader` on API, DNS message length checks, EDNS0 buffer limits |
-| **Anti-DoS** | Max password length (128 bytes), max CNAME depth, max recursion depth, max blocklist size (100MB / 10M entries) |
-| **CSRF Protection** | `SameSite=Strict`, cookie auth restricted to safe methods, Bearer tokens for mutations |
-| **XSS Mitigation** | JSON-only API responses, no `dangerouslySetInnerHTML`, React client-side rendering |
-| **Secret Redaction** | Config endpoint redacts `AuthToken`, `EncryptionKey`, `PrivateKey`, `TSIGSecret` |
-| **Container Security** | `FROM scratch`, static binary, non-root user (`USER 1000`), dropped capabilities |
-| **K8s Security** | `runAsNonRoot`, `readOnlyRootFilesystem`, `seccompProfile: RuntimeDefault`, `automountServiceAccountToken: false`, NetworkPolicies |
-| **CI/CD Security** | All actions pinned to SHA, no hardcoded secrets, PR builds do not push images |
-
----
-
-## Appendix A: Methodology
-
-1. **Phase 1 — Reconnaissance**: Architecture mapping, tech stack detection, entry point catalog, data flow tracing.
-2. **Phase 2 — Vulnerability Hunting**: 35+ security skills run in parallel, covering OWASP Top 10, language-specific scanners, and infrastructure audits.
-3. **Phase 3 — Verification**: Reachability analysis, sanitization verification, context analysis (test vs production), duplicate detection, confidence scoring.
-4. **Phase 4 — Reporting**: CVSS-style severity assignment, executive summary, remediation roadmap.
-
-## Appendix B: Files Generated
-
-```
-security-report/
-├── architecture.md                  # Phase 1: Architecture map
-├── dependency-audit.md              # Phase 1: Dependency analysis
-├── sc-lang-go-results.md            # Phase 2: Go language scan
-├── sc-lang-typescript-results.md    # Phase 2: TypeScript scan
-├── sc-auth-results.md               # Phase 2: Auth flaws
-├── sc-authz-results.md              # Phase 2: Authorization flaws
-├── sc-privilege-escalation-results.md
-├── sc-session-results.md
-├── sc-jwt-results.md
-├── sc-sqli-results.md               # Phase 2: SQL injection
-├── sc-nosqli-results.md             # Phase 2: NoSQL injection
-├── sc-cmdi-results.md               # Phase 2: Command injection
-├── sc-ldap-results.md               # Phase 2: LDAP injection
-├── sc-header-injection-results.md   # Phase 2: Header injection
-├── sc-xss-results.md                # Phase 2: XSS
-├── sc-ssti-results.md               # Phase 2: SSTI
-├── sc-xxe-results.md                # Phase 2: XXE
-├── sc-graphql-results.md            # Phase 2: GraphQL
-├── sc-csrf-results.md               # Phase 2: CSRF
-├── sc-cors-results.md               # Phase 2: CORS
-├── sc-clickjacking-results.md       # Phase 2: Clickjacking
-├── sc-websocket-results.md          # Phase 2: WebSocket
-├── sc-secrets-results.md            # Phase 2: Secrets
-├── sc-data-exposure-results.md      # Phase 2: Data exposure
-├── sc-crypto-results.md             # Phase 2: Cryptography
-├── sc-ssrf-results.md               # Phase 2: SSRF
-├── sc-path-traversal-results.md     # Phase 2: Path traversal
-├── sc-file-upload-results.md        # Phase 2: File upload
-├── sc-open-redirect-results.md      # Phase 2: Open redirect
-├── sc-rce-results.md                # Phase 2: RCE
-├── sc-deserialization-results.md    # Phase 2: Deserialization
-├── sc-business-logic-results.md     # Phase 2: Business logic
-├── sc-race-condition-results.md     # Phase 2: Race conditions
-├── sc-mass-assignment-results.md    # Phase 2: Mass assignment
-├── sc-api-security-results.md       # Phase 2: API security
-├── sc-rate-limiting-results.md      # Phase 2: Rate limiting
-├── sc-docker-results.md             # Phase 2: Docker
-├── sc-ci-cd-results.md              # Phase 2: CI/CD
-├── sc-iac-results.md                # Phase 2: IaC
-├── verified-findings.md             # Phase 3: Verified findings
-└── SECURITY-REPORT.md               # Phase 4: This report
+```go
+if m.config.AuthToken != "" {
+    metricsHandler = m.requireMetricsAuth(m.handleMetrics)
+    healthHandler = m.requireMetricsAuth(m.handleHealth)
+}
 ```
 
+If `AuthToken` is not configured, metrics (cache hits, upstream latency, query counts) and health probes are fully open.
+
+**Remediation:** Fail-fast if `AuthToken` is not set when metrics are enabled, or bind to localhost only.
+
 ---
 
-*Report generated by security-check skill. For questions or corrections, open an issue in the NothingDNS repository.*
+### CWE-307 — No Failed Login Tracking or Account Lockout
+
+**File:** `internal/auth/auth.go:505–518`
+
+Failed login attempts are not logged or tracked. No progressive delay, no attempt counter, no lockout. Brute-force attacks against credentials go undetected.
+
+**Remediation:** Add failed login tracking with exponential backoff per account after N failed attempts.
+
+---
+
+### CWE-307 — Unlimited Concurrent Sessions
+
+**File:** `internal/auth/auth.go:256–259`
+
+No per-user concurrent session limit. A compromised token can be used alongside the legitimate token indefinitely.
+
+**Remediation:** Add optional per-user session limit with configurable max tokens.
+
+---
+
+### CWE-312 — TSIG Secret Stored in Plaintext YAML
+
+**File:** `internal/config/config.go:295`
+
+`TSIGSecret` is stored in plaintext in the YAML config file with no minimum length or entropy check. Placeholder detection is the only validation.
+
+**Remediation:** Require TSIG secrets to be at least 32 bytes and warn if they appear to be low-entropy.
+
+---
+
+### CWE-312 — Cluster Encryption Key in Plaintext YAML
+
+**File:** `internal/config/config.go:431`
+
+Cluster encryption key is stored in plaintext in config. `validateSecrets` only checks for placeholder patterns, not cryptographic strength of the actual key value.
+
+**Remediation:** Same as TSIG — enforce minimum entropy/length for cluster encryption key in config validation.
+
+---
+
+### CWE-400 — NSEC3 Iterations Not Bounds-Checked (CPU DoS)
+
+**File:** `internal/dnssec/crypto.go:494–519`
+
+`NSEC3Hash(iterations uint16)` accepts any value 0–65535 without validation. RFC 9276 recommends ≤150 for SHA-1. An attacker could craft an NSEC3 record with max iterations to cause CPU exhaustion during validation.
+
+KeyTrap mitigation (`maxDelegationOps = 32`) limits DS x DNSKEY comparisons, but not NSEC3 hash iterations per record. `maxNSECValidations = 16` limits the number of NSEC3 records evaluated, but each still runs its full iteration count.
+
+**Remediation:** Validate NSEC3 iterations against a maximum (e.g., 150) during validation. Reject zones with excessive NSEC3 iterations.
+
+---
+
+### CWE-613 — Tokens In-Memory Only, No Persistence Across Restarts
+
+**File:** `internal/auth/auth.go:710–716`
+
+`cmd/nothingdns` never calls `SetTokenFilePath`, so all tokens are invalidated on server restart. While documented, this means session continuity is broken for all users on any restart or crash.
+
+**Remediation:** Wire `SaveTokensSigned`/`LoadTokensSigned` in the server lifecycle or warn prominently in the config if token persistence is not configured.
+
+---
+
+### CWE-345 — No Node Identity Verification in Gossip Protocol
+
+**File:** `internal/cluster/gossip.go:506–543`
+
+The `handleMessage` function processes messages from any UDP source without cryptographically verifying that a message originated from the claimed node. Sequence numbers protect against replay, but an attacker in plaintext mode can send fake gossip messages.
+
+**Remediation:** In encrypted mode, bind messages to sender identity via AEAD AAD (already partially done). Consider adding a MAC over the sender identity field.
+
+---
+
+## LOW
+
+### CWE-327 — HMAC-SHA1 Accepted for TSIG with Warning
+
+**File:** `internal/transfer/tsig.go:474–479`
+
+HMAC-SHA1 for TSIG produces a deprecation warning but is not rejected. SHA-1 is weakened but not broken for HMAC.
+
+**Remediation:** Log at WARN level and consider requiring a config flag to reject SHA-1 in production.
+
+---
+
+### CWE-672 — Auto-Generated Auth Secret Invalidated on Restart
+
+**File:** `internal/auth/auth.go:100–108`
+
+When no `auth_secret` is configured, a random 32-byte secret is generated in-memory. All outstanding tokens are invalidated on every restart.
+
+**Remediation:** Warn more prominently. Consider generating a persistent secret file on first boot.
+
+---
+
+### CWE-290 — TSIG Not Bound to Source IP
+
+**File:** `internal/transfer/axfr.go:149–217`
+
+TSIG key validation does not verify the client's source IP matches any IP associated with the TSIG key. Keys are not bound to client addresses.
+
+**Remediation:** Bind TSIG keys to source IP CIDRs in the config and validate on each AXFR/IXFR request.
+
+---
+
+### CWE-200 — DoH Audit Logging May Contain PII
+
+**File:** `internal/audit/audit.go:22–32`
+
+`QueryAuditEntry` captures `ClientIP` and `QueryName`. When audit logging is enabled and DNS queries touch privacy-sensitive domains, this may constitute PII under GDPR and similar frameworks.
+
+**Remediation:** Add a privacy mode that redacts query names or client IPs from audit logs. Provide GDPR-compliant data minimization guidance in docs.
+
+---
+
+## INFO / Protected
+
+| Area | Status |
+|------|--------|
+| RNG (crypto/rand only) | GOOD |
+| AES-256-GCM (fresh nonce per msg) | GOOD |
+| TLS 1.3 default, RFC 7525 suites | GOOD |
+| Password hashing (PBKDF2 310k) | GOOD |
+| Auth token format (opaque, HMAC-SHA512) | GOOD |
+| DNSSEC algorithm strength (RSA 2048/4096, ECDSA, Ed25519) | GOOD |
+| Cache poisoning mitigation (DO bit in key, maphash shards) | GOOD |
+| Response Rate Limiting with superlative detection | GOOD |
+| AXFR deny-by-default + TSIG enforcement | GOOD |
+| UDP record-boundary-aware truncation | GOOD |
+| DNS Cookie HMAC-SHA256 with rotation | GOOD |
+| ODoH independent keys per RFC 9230 | GOOD |
+| DNSSEC KeyTrap mitigation (maxRRsets, maxNSEC) | GOOD |
+
+---
+
+## Remediation Priority
+
+| Priority | Finding | Effort |
+|----------|---------|--------|
+| P1 | Privilege escalation in user creation API | Low |
+| P2 | ACL default-allow → deny-by-default | Low |
+| P3 | NSEC3 iteration bounds validation | Medium |
+| P4 | Dashboard + metrics auth wiring | Medium |
+| P5 | Cluster encryption key enforcement | Medium |
+| P6 | Failed login tracking | Medium |
+| P7 | Token persistence across restarts | Medium |

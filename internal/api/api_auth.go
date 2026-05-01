@@ -287,6 +287,13 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 		if req.Role != "" {
 			switch auth.Role(req.Role) {
 			case auth.RoleViewer, auth.RoleOperator, auth.RoleAdmin:
+				// SECURITY: req.Role must not exceed caller's own privilege level.
+				// hasRole already confirmed caller is Admin; compare privilege levels.
+				caller := GetUser(r.Context())
+				if caller != nil && roleOrder[auth.Role(req.Role)] > roleOrder[caller.Role] {
+					s.writeError(w, http.StatusForbidden, "Cannot assign a role higher than your own")
+					return
+				}
 				role = auth.Role(req.Role)
 			default:
 				s.writeError(w, http.StatusBadRequest, "Invalid role")
