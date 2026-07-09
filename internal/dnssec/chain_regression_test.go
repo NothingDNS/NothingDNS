@@ -215,7 +215,7 @@ func TestCanonicalNameCompare(t *testing.T) {
 	}{
 		{"example.com.", "example.com.", 0},
 		{"EXAMPLE.com.", "example.COM.", 0},
-		{"com.", "example.com.", -1},          // parent sorts before child
+		{"com.", "example.com.", -1}, // parent sorts before child
 		{"a.example.com.", "b.example.com.", -1},
 		// Plain string order gets this one wrong: "sub.a.example." >
 		// "b.example." bytewise, but canonically everything under
