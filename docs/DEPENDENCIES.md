@@ -8,11 +8,11 @@ NothingDNS follows a **minimal external dependencies** philosophy for the core s
 
 | Go Version | Support Status |
 |------------|----------------|
-| 1.26.4+ | **Required** (primary development) |
+| 1.26.5+ | **Required** (primary development) |
 | 1.25.x | May work, not tested |
 | < 1.25 | Not supported |
 
-The `go` directive in the root `go.mod` and `web/go.mod` specifies `1.26.4`.
+The `go` directive in the root `go.mod` and `web/go.mod` specifies `1.26.5`.
 
 ## Direct Dependencies
 
@@ -226,12 +226,12 @@ github.com/nothingdns/nothingdns
 
 | Feature | Go Version | Notes |
 |---------|------------|-------|
-| QUIC/DoQ | 1.26.4+ | Requires quic-go |
-| AES-GCM (cluster) | 1.26.4+ | stdlib crypto |
-| Ed25519 | 1.26.4+ | stdlib crypto |
-| RFC 8439 (chacha20) | 1.26.4+ | stdlib crypto |
-| SO_REUSEPORT | 1.26.4+ | x/sys Linux only |
-| Link-local IPv6 | 1.26.4+ | stdlib net |
+| QUIC/DoQ | 1.26.5+ | Requires quic-go |
+| AES-GCM (cluster) | 1.26.5+ | stdlib crypto |
+| Ed25519 | 1.26.5+ | stdlib crypto |
+| RFC 8439 (chacha20) | 1.26.5+ | stdlib crypto |
+| SO_REUSEPORT | 1.26.5+ | x/sys Linux only |
+| Link-local IPv6 | 1.26.5+ | stdlib net |
 
 ## License Compatibility
 

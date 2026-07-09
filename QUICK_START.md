@@ -5,7 +5,7 @@ Get NothingDNS up and running in 5 minutes.
 ## Prerequisites
 
 - Linux/macOS/Windows with Docker **or**
-- Go 1.26.4+ (for building from source)
+- Go 1.26.5+ (for building from source)
 
 ## Option 1: Docker (Fastest)
 

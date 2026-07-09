@@ -19,7 +19,7 @@ Violation of any rule is a blocking issue.
 ### Language & Tooling
 
 - Language: Go
-- Min version: Go 1.26.4 (per root `go.mod` and `web/go.mod`)
+- Min version: Go 1.26.5 (per root `go.mod` and `web/go.mod`)
 - Build: `go build ./...`
 - Lint: `go vet ./...`
 - Test: `go test ./... -count=1 -short`

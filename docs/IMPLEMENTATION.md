@@ -39,12 +39,12 @@
 go mod init github.com/nothingdns/nothingdns
 ```
 
-The root module currently targets Go 1.26.4 and keeps the runtime dependency set intentionally small.
+The root module currently targets Go 1.26.5 and keeps the runtime dependency set intentionally small.
 
 ```go
 module github.com/nothingdns/nothingdns
 
-go 1.26.4
+go 1.26.5
 
 require (
     github.com/quic-go/quic-go v0.60.0
@@ -52,7 +52,7 @@ require (
 )
 ```
 
-`web/go.mod` is a separate tiny module that also declares `go 1.26.4`.
+`web/go.mod` is a separate tiny module that also declares `go 1.26.5`.
 
 ### 1.2 Binary Entry Points
 

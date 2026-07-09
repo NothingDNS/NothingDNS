@@ -9,9 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Go toolchain bump 1.26.4 → 1.26.5** across the root module,
+  embedded web module, and Docker builder to pull in the patched
+  `crypto/tls` stdlib release for GO-2026-5856. `govulncheck` is
+  expected to pass on CI with the patched toolchain.
 - **Go toolchain bump 1.26.2 → 1.26.4** across the root module and
-  embedded web module to pull in patched stdlib releases. `govulncheck`
-  and OSV scanning now report no Go vulnerabilities.
+  embedded web module to pull in patched stdlib releases.
 - **Web tooling Babel pin**: `web/package.json` now overrides transitive
   `@babel/core` to `7.29.7`, resolving GHSA-4x5r-pxfx-6jf8 /
   CVE-2026-49356 in development/build tooling. `npm audit --audit-level=low`

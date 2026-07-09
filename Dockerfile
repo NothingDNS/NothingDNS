@@ -9,7 +9,7 @@
 # Renovate / Dependabot can keep a digest-pinned tag in sync. The
 # final image is FROM scratch so build-stage drift only affects the
 # binary, never the runtime surface.
-FROM golang:1.26.4-alpine AS builder
+FROM golang:1.26.5-alpine AS builder
 
 # Install build dependencies (ca-certificates for TLS/DoH in final image)
 RUN apk add --no-cache git make ca-certificates

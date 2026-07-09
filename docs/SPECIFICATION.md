@@ -23,7 +23,7 @@ NothingDNS is a modern, production-grade DNS server that combines authoritative 
 - **Binary:** `nothingdns` (server) + `dnsctl` (CLI management tool)
 - **Default Ports:** 53 (UDP/TCP), 853 (DoT/DoQ when enabled), 8080 (API/Dashboard/DoH when configured), 9153 (Metrics), 7946 (cluster gossip/Raft RPC)
 - **License:** MIT
-- **Language:** Go 1.26.4+
+- **Language:** Go 1.26.5+
 - **Repository:** github.com/nothingdns/nothingdns
 
 ---

@@ -4,7 +4,7 @@
   <img src="assets/banner.jpeg" alt="NothingDNS" width="100%">
 </p>
 
-[![Go Version](https://img.shields.io/badge/Go-1.26.4%2B-00ADD8?style=flat&logo=go)](https://golang.org)
+[![Go Version](https://img.shields.io/badge/Go-1.26.5%2B-00ADD8?style=flat&logo=go)](https://golang.org)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Go Report Card](https://goreportcard.com/badge/github.com/nothingdns/nothingdns)](https://goreportcard.com/report/github.com/nothingdns/nothingdns)
 [![CI](https://github.com/NothingDNS/NothingDNS/actions/workflows/go.yml/badge.svg?branch=main)](https://github.com/NothingDNS/NothingDNS/actions/workflows/go.yml)
@@ -22,7 +22,7 @@ NothingDNS is a self-contained DNS server written in Go. It includes authoritati
 ## Quick start
 
 ```bash
-# Build the server and CLI with Go 1.26.4+
+# Build the server and CLI with Go 1.26.5+
 make build
 
 # Run using the example configuration
