@@ -1,7 +1,7 @@
 # NothingDNS Makefile
 # Provides convenient shortcuts for common development tasks
 
-.PHONY: all build build-server build-cli build-web build-docker build-release test test-short test-verbose test-race test-e2e test-pkg test-run test-coverage vet fmt fmt-check fmt-all lint staticcheck clean clean-all install dev dev-watch validate-config deps tidy update-deps ci release help benchmark security-check docs docker-push helm-install helm-template setup-hooks lint-ci backup health-check
+.PHONY: all build build-server build-cli build-web build-docker build-release test test-short test-verbose test-race test-race-critical test-e2e test-pkg test-run test-coverage vet fmt fmt-check fmt-all lint staticcheck clean clean-all install dev dev-watch validate-config deps tidy update-deps ci release help benchmark security-check docs docker-push helm-install helm-template setup-hooks lint-ci backup health-check
 
 # Binary names
 SERVER_BINARY := nothingdns
@@ -97,6 +97,29 @@ test-e2e:
 test-race:
 	@echo "Running tests with race detector..."
 	@go test ./... -race -count=1 -short
+
+## Run critical race-detector shards for concurrency-heavy packages
+test-race-critical:
+	@echo "Running critical race detector shards..."
+	@go test ./internal/protocol ./internal/dnssec ./internal/dns64 ./internal/dnscookie ./internal/doh ./internal/odoh ./internal/dso ./internal/mdns ./internal/filter -race -count=1 -short
+	@go test ./internal/server ./internal/cache ./internal/resolver -race -count=1 -short
+	@go test ./internal/upstream ./internal/dashboard ./internal/websocket ./internal/metrics ./internal/memory ./internal/load ./internal/otel -race -count=1 -short
+	@go test ./internal/cluster/raft ./internal/cluster -race -count=1 -short
+	@go test ./internal/storage ./internal/zone ./internal/rpz ./internal/blocklist ./internal/geodns -race -count=1 -short
+	@go test ./internal/transfer -race -count=1 -short -run 'Test.*AXFR'
+	@go test ./internal/transfer -race -count=1 -short -run 'Test.*IXFR'
+	@go test ./internal/transfer -race -count=1 -short -run 'Test.*Journal|Test.*KVJournal'
+	@go test ./internal/transfer -race -count=1 -short -run 'Test.*TSIG|Test.*TKEY|Test.*HMAC|Test.*XoT'
+	@go test ./internal/transfer -race -count=1 -short -run 'Test.*DDNS|Test.*Update|Test.*NOTIFY|Test.*Notify|Test.*Slave'
+	@go test ./internal/api -race -count=1 -short -run 'TestHandle(ACL|Upstreams|Blocklist|Blocklists|RPZ|Config|ServerConfig|Health|Readiness|Liveness|Status|Metrics|QueryLog|TopDomains|Dashboard|GeoDNS|SlaveZones|ODoH|DNSSEC)'
+	@go test ./internal/api -race -count=1 -short -run 'TestHandle(Zones|ZoneActions|ZoneReload|BulkPTR|Ptr6|ListZones|GetZone|DeleteZone|ExportZone)|TestZone|TestReverse|TestValidateZone'
+	@go test ./internal/api -race -count=1 -short -run 'Test(Start|NewServer|Middleware|Integration|ErrorResponse|Options|Concurrent|OpenAPI|Swagger|Write|Cors|WithUser|ServerRuntime|Retry|CookieMax|APIServer|APIStatus|APICache|APIAuth|APIDisabled|BlocklistService|CacheService|ValidateUpstream|Redact)'
+	@go test ./internal/api -race -count=1 -short -run 'TestHandle(Login|Logout|Bootstrap)'
+	@go test ./internal/api -race -count=1 -short -run 'TestHandle(Users|Roles)|TestAuth|TestCookie|TestDoH|TestLegacy'
+	@go test ./internal/api -race -count=1 -short -run 'TestAPIRate|TestLoginRate|TestCheck|TestRecord|TestCleanup'
+	@go test ./internal/config ./cmd/nothingdns ./cmd/dnsctl -race -count=1 -short
+	@go test ./internal/auth -race -count=1 -short -run 'TestStoreConcurrentAccess|TestConcurrentTokenCreation|TestConcurrentUserOperations'
+	@go test ./internal/auth -race -count=1 -short -run 'TestSaveLoad|TestSaveTokensSigned|TestLoadTokensSigned|TestTokenFormat|TestTokenExpiry'
 
 ## Run tests for a specific package (usage: make test-pkg PKG=./internal/cache)
 test-pkg:

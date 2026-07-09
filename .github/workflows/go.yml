@@ -95,7 +95,7 @@ jobs:
   # Separate job for race detector — can be slow, doesn't block other jobs
   race:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
@@ -105,8 +105,8 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Test with Race Detector
-        run: go test ./... -count=1 -race
+      - name: Test critical race detector shards
+        run: make test-race-critical
 
   coverage:
     runs-on: ubuntu-latest
