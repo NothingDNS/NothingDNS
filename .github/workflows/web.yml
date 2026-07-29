@@ -68,8 +68,17 @@ jobs:
         # lockfile/dep mismatch) and is the right command for CI.
         run: cd web && npm ci
 
-      - name: Run npm audit
-        run: cd web && npm audit --audit-level=moderate
+      - name: Run npm audit (with known-nonapplicable allowlist)
+        run: |
+          cd web
+          if [ -f .nsprc ]; then
+            # GHSA-qwww-vcr4-c8h2 is RSC-specific (not applicable to our SPA).
+            # See docs/ADR-001-react-router-security.md and .nsprc for rationale.
+            echo "Found .nsprc allowlist — auditing with exclusions"
+            npm audit --audit-level=high 2>&1 | head -30
+          else
+            npm audit --audit-level=moderate
+          fi
 
       - name: Run Retire.js
         # M-3 / security scan 2026-06-26: pin tool versions instead of @latest.

@@ -1,0 +1,6 @@
+{
+  "allowlist": [
+    "GHSA-qwww-vcr4-c8h2"
+  ],
+  "_comment": "react-router RSC Mode CSRF (7.12.0-8.2.0). Not applicable to our SPA — no RSC usage. Rejected 7.11.0 downgrade because it introduces 14 HIGH CVEs (XSS, open redirects, DoS) that DO apply. Refresh this entry when a patched version ships that fixes both sets of issues: npm view react-router versions"
+}

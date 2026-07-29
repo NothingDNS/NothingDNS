@@ -1,0 +1,90 @@
+name: Advisory Monitor
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'  # Monday 06:00 UTC
+  # Manual trigger for ad-hoc checks
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write  # to file an issue when a new advisory appears
+
+jobs:
+  check-deps:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Check react-router advisories
+        id: advisories
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Query GitHub Advisory DB for npm advisories updated in the last 7 days
+          # that mention react-router.
+          gh api graphql -f query='
+            query {
+              securityAdvisories(first: 10, classifications: GENERAL,
+                updatedSince: "'"$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)"'",
+                ecosystems: [NPM]) {
+                nodes {
+                  ghsaId
+                  summary
+                  severity
+                  publishedAt
+                  updatedAt
+                  identifiers { value }
+                  references { url }
+                  vulnerabilities(first: 5) {
+                    nodes { package { name } vulnerableVersionRange }
+                  }
+                }
+              }
+            }' --jq '
+              [.data.securityAdvisories.nodes[]
+              | select(.vulnerabilities.nodes[].package.name == "react-router" or
+                       .vulnerabilities.nodes[].package.name == "react-router-dom")]
+              | .[].ghsaId
+            ' > /tmp/new-advisories.txt 2>/dev/null || true
+
+          count=$(wc -l < /tmp/new-advisories.txt)
+          echo "count=${count}" >> "${GITHUB_OUTPUT}"
+
+          if [ "${count}" -gt 0 ]; then
+            echo "=== NEW REACT-ROUTER ADVISORIES ===" >> "${GITHUB_STEP_SUMMARY}"
+            cat /tmp/new-advisories.txt >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "No new react-router advisories this week." >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - name: File issue if new advisories found
+        if: steps.advisories.outputs.count > 0
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create \
+            --title "Weekly advisory scan: ${{ steps.advisories.outputs.count }} new react-router advisory(ies)" \
+            --body "$(cat <<'ISSUE'
+        The weekly advisory monitor found new GitHub Security Advisories affecting
+        react-router or react-router-dom. Review each one and decide whether to
+        update the `.nsprc` allowlist or bump the dependency.
+
+        New advisories:
+        $(cat /tmp/new-advisories.txt | while read -r id; do echo "- https://github.com/advisories/${id}"; done)
+
+        Current state: react-router-dom@7.18.2
+        Allowlist: see web/.nsprc
+
+        Action:
+        1. Check each advisory for SPA applicability
+        2. If none apply, add to .nsprc allowlist
+        3. If one applies and is fixed upstream, bump the dependency
+        ISSUE
+        )" \
+            --label "security" \
+            --label "dependencies"
+
+      - name: Run npm audit for awareness
+        run: |
+          cd web && npm audit --audit-level=high 2>&1 | head -30

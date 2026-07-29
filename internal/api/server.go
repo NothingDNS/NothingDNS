@@ -755,6 +755,9 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/openapi.json", s.handleOpenAPISpec)
 	mux.HandleFunc("/api/docs", s.handleSwaggerUI)
 
+	// CSP violation reporting
+	mux.HandleFunc("/api/v1/csp-report", s.handleCSPReport)
+
 	// WebSocket endpoint. Guard against a nil dashboard server: production
 	// always wires one (WithDashboard), but a Server built without it would
 	// otherwise register a method value bound to a nil receiver and panic on
@@ -874,6 +877,31 @@ func (s *Server) rateLimitCleanupLoop() {
 	}
 }
 
+// handleCSPReport receives Content Security Policy violation reports
+// POSTed by browsers. Logs each violation at Info level for monitoring
+// without storing or forwarding. Intentionally lightweight — no auth,
+// no body size enforcement beyond the server-level ReadLimit (10MB).
+// Endpoint path: POST /api/v1/csp-report
+func (s *Server) handleCSPReport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErrorJSON(w, http.StatusMethodNotAllowed, "use POST")
+		return
+	}
+	var report CSPReportRequest
+	if err := json.NewDecoder(r.Body).Decode(&report); err != nil {
+		// Body too large, malformed JSON, or empty — nothing actionable.
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	util.Infof("CSP violation: directive=%q blocked=%q document=%q disposition=%s",
+		report.ViolatedDirective,
+		report.BlockedURI,
+		report.DocumentURI,
+		report.Disposition,
+	)
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // securityHeadersMiddleware adds security headers to all responses.
 func securityHeadersMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -883,6 +911,8 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
 		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, private")
 		w.Header().Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+		w.Header().Set("X-DNS-Prefetch-Control", "off")
+		w.Header().Set("X-Permitted-Cross-Domain-Policies", "none")
 		if r.TLS != nil {
 			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}
@@ -900,7 +930,8 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 				"frame-ancestors 'none'; "+
 				"object-src 'none'; "+
 				"base-uri 'self'; "+
-				"form-action 'self'")
+				"form-action 'self'; "+
+				"report-uri /api/v1/csp-report")
 		next.ServeHTTP(w, r)
 	})
 }
