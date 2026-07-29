@@ -73,6 +73,35 @@ sudo chmod 644 /etc/nothingdns/nothingdns.yaml
 ./nothingdns -config /path/to/config.yaml 2>&1 | grep -i error
 ```
 
+### Config Parse Error: "unexpected token COLON"
+
+**Problem**: `parse error: unexpected token COLON at line N` when starting or
+validating a config file.
+
+**Diagnosis**: The custom YAML parser interprets `::` (consecutive colons) as a
+mapping separator. This happens when an **unquoted IPv6 CIDR** appears in a
+value, typically in an ACL `networks` list.
+
+**Examples that fail**:
+```yaml
+# WRONG — :: interpreted as YAML syntax
+networks:
+  - ::1/128
+
+# WRONG — unquoted IPv6
+networks:
+  - 2001:db8::/32
+```
+
+**Fix**: Quote IPv6 CIDR values:
+```yaml
+# RIGHT
+networks:
+  - "::1/128"
+  - "2001:db8::/32"
+  - 127.0.0.0/8        # IPv4 works without quotes
+```
+
 ---
 
 ## 2. DNS Resolution Problems

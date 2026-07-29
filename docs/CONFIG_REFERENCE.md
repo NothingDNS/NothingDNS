@@ -12,6 +12,10 @@ Notlar:
   anlamına gelir.
 - YAML parser anchor/alias ve multiline string'leri **desteklemez** — düz
   YAML kullanın.
+- **IPv6 CIDR'leri tırnak içine alın**: Özel YAML parser'ımız `::`
+  karakterini mapping separator olarak yorumlar. Doğru: `"::1/128"`,
+  yanlış: `::1/128`. Bu özellikle ACL `networks` listesinde önemlidir.
+  IPv4 CIDR'leri (`192.168.0.0/16`) tırnaksız çalışır.
 
 ## `server`
 
@@ -34,8 +38,8 @@ DNS dinleyicileri ve yönetim arayüzleri.
 | `xot.bind` | string | `:853` | hayır | XoT dinleme adresi |
 | `xot.min_tls_version` | int | `12` | evet | `12` = TLS 1.2, `13` = TLS 1.3 |
 | `http.enabled` | bool | `true` | hayır | HTTP API ve dashboard |
-| `http.bind` | string | `:8080` | hayır | HTTP dinleme adresi. **Güvenlik:** `0.0.0.0:8080` tüm ağ arayüzlerini dinler. Production'da reverse proxy arkasında `127.0.0.1:8080` kullanın veya TLS etkinleştirin. Bkz: `docs/SECURITY.md` |
-| `http.allowed_origins` | `[]string` | — | evet | CORS izin verilen originler. **Güvenlik:** Public bind'da wildcard (`["*"]`) production validator tarafından reddedilir. Production'da açık liste kullanın: `["https://dns.example.com"]` |
+| `http.bind` | string | `:8080` | hayır | HTTP dinleme adresi. **⚠️ GÜVENLİK RİSKİ:** `0.0.0.0:8080` tüm ağ arayüzlerini dinler — aynı ağdaki herhangi bir saldırgan API'ye ve dashboard'a erişebilir. Production'da: (1) reverse proxy arkasında `127.0.0.1:8080` kullanın, (2) TLS etkinleştirin, veya (3) firewall ile kısıtlayın. Ayrıntılar: `docs/SECURITY.md#api-security` |
+| `http.allowed_origins` | `[]string` | — | evet | CORS izin verilen originler. **⚠️ GÜVENLİK:** Public bind'da wildcard (`["*"]`) production validator tarafından **reddedilir**. Production'da açık liste kullanın: `["https://dns.example.com"]` |
 | `http.auth_token` | string | "" | evet | API bearer token (boş = auth yok) |
 | `http.users` | []object | — | evet | Çoklu kullanıcı: `username`, `password`, `role` (admin/operator/viewer) |
 | `http.auth_secret` | string | otomatik | hayır | JWT imzalama anahtarı (boşsa otomatik üretilir, restart'ta korunur) |
@@ -159,7 +163,7 @@ acl:
     action: allow      # allow | deny
     networks:
       - 127.0.0.0/8
-      - ::1/128
+      - "::1/128"      # ⚠️ IPv6 CIDR'leri tırnak içine alın!
     types:
       - ANY            # spesifik QTYPE'lar veya ANY
 ```
@@ -197,6 +201,12 @@ transfer:
 Yerel authoritative zone'ları AXFR/IXFR ile secondary sunuculara servis eder.
 `allow_list` boşsa transfer istekleri deny-by-default reddedilir.
 `require_tsig: true`, IP allow-list eşleşse bile TSIG doğrulamasını zorunlu kılar.
+
+| Alan | Tip | Varsayılan | Açıklama |
+|---|---|---|---|
+| `allow_list` | `[]string` | `[]` | İzin verilen IP/CIDR listesi (boş = tüm transferler reddedilir) |
+| `require_tsig` | bool | `false` | TSIG doğrulamasını zorunlu kıl |
+| `journal_dir` | string | `storage.data_dir/ixfr-journals` | IXFR journal dizini. Storage'dan bağımsız bir volume'a taşımak için override edin |
 
 ## `views` — Split-Horizon DNS
 
