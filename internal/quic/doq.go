@@ -271,11 +271,22 @@ func (s *DoQServer) ListenWithConn(conn *net.UDPConn) {
 
 // Serve starts the DoQ server loop.
 func (s *DoQServer) Serve() error {
+	// Register the root accept goroutine while holding the same lock Stop uses
+	// to close the listener. This keeps WaitGroup.Add ordered before Stop's
+	// Wait and prevents the listener from being cleared during the startup
+	// check.
+	s.closeMu.Lock()
 	if s.listener == nil {
+		s.closeMu.Unlock()
 		return errors.New("doq: server not listening")
 	}
-
+	if s.ctx.Err() != nil {
+		s.closeMu.Unlock()
+		return nil
+	}
 	s.wg.Add(1)
+	s.closeMu.Unlock()
+
 	go s.acceptLoop()
 
 	<-s.ctx.Done()
@@ -513,6 +524,8 @@ func (s *DoQServer) closePacketConn() error {
 
 // Addr returns the server's listener address.
 func (s *DoQServer) Addr() net.Addr {
+	s.closeMu.Lock()
+	defer s.closeMu.Unlock()
 	if s.conn == nil {
 		return nil
 	}
