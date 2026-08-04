@@ -44,8 +44,13 @@ spec:
               containerPort: 53
               protocol: TCP
             - name: dot
-              containerPort: 853
+              containerPort: {{ .Values.service.dotPort }}
               protocol: TCP
+            {{- if .Values.config.xot.enabled }}
+            - name: xot
+              containerPort: {{ .Values.service.xotPort }}
+              protocol: TCP
+            {{- end }}
             - name: api
               containerPort: 8080
               protocol: TCP

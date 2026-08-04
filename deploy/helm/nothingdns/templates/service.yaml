@@ -26,6 +26,12 @@ spec:
       protocol: TCP
       name: dot
     {{- end }}
+    {{- if .Values.config.xot.enabled }}
+    - port: {{ .Values.service.xotPort }}
+      targetPort: xot
+      protocol: TCP
+      name: xot
+    {{- end }}
   selector:
     {{- include "nothingdns.selectorLabels" . | nindent 4 }}
 ---
