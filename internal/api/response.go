@@ -504,15 +504,15 @@ type PTRLookupResponse struct {
 // Policy is violated. Only the relevant fields are decoded; the full spec
 // defines ~30 fields (see W3C CSP Level 2 §5).
 type CSPReportRequest struct {
-	DocumentURI        string `json:"document-uri"`
-	Referrer           string `json:"referrer"`
-	BlockedURI         string `json:"blocked-uri"`
-	ViolatedDirective  string `json:"violated-directive"`
-	OriginalPolicy     string `json:"original-policy"`
-	Disposition        string `json:"disposition"`
-	ScriptSample       string `json:"script-sample"`
-	StatusCode         int    `json:"status-code"`
-	SourceFile         string `json:"source-file"`
-	LineNumber         int    `json:"line-number"`
-	ColumnNumber       int    `json:"column-number"`
+	DocumentURI       string `json:"document-uri"`
+	Referrer          string `json:"referrer"`
+	BlockedURI        string `json:"blocked-uri"`
+	ViolatedDirective string `json:"violated-directive"`
+	OriginalPolicy    string `json:"original-policy"`
+	Disposition       string `json:"disposition"`
+	ScriptSample      string `json:"script-sample"`
+	StatusCode        int    `json:"status-code"`
+	SourceFile        string `json:"source-file"`
+	LineNumber        int    `json:"line-number"`
+	ColumnNumber      int    `json:"column-number"`
 }

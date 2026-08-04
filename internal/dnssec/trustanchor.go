@@ -487,7 +487,7 @@ func calculateDSDigestSHA256(zone string, dnskey *protocol.RDataDNSKEY) ([]byte,
 
 // calculateDSDigestSHA1 computes SHA-1 digest for DS record.
 func calculateDSDigestSHA1(zone string, dnskey *protocol.RDataDNSKEY) ([]byte, error) {
-	return calculateDSDigestWithHash(zone, dnskey, sha1.New())
+	return calculateDSDigestWithHash(zone, dnskey, sha1.New()) // #nosec G401,G505 -- DS digest type 1 per RFC 4034
 }
 
 // calculateDSDigestSHA384 computes SHA-384 digest for DS record.

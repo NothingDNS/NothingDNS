@@ -3,7 +3,7 @@ package transfer
 import (
 	"bytes"
 	"crypto/hmac"
-	"crypto/sha1"
+	"crypto/sha1" // #nosec G505 -- HMAC-SHA1 required for TSIG algorithm hmac-sha1 (RFC 4635)
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base64"
@@ -616,7 +616,7 @@ func calculateMAC(key, data []byte, algorithm string) ([]byte, error) {
 	case HmacSHA1:
 		// SHA-1 is deprecated, log warning but support for compatibility
 		tsigLogger.Warnf("HMAC-SHA1 is deprecated for TSIG. Consider using SHA-256 or SHA-512.")
-		h := hmac.New(sha1.New, key)
+		h := hmac.New(sha1.New, key) // #nosec G401,G505 -- hmac-sha1 TSIG algorithm, RFC 4635
 		h.Write(data)
 		mac = h.Sum(nil)
 	case HmacSHA256:

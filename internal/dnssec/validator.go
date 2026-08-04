@@ -3,7 +3,7 @@ package dnssec
 import (
 	"bytes"
 	"context"
-	"crypto/sha1"
+	"crypto/sha1" // #nosec G505 -- required for DS digest algorithm 1 (RFC 4034 §5.1.2)
 	"crypto/sha256"
 	"crypto/sha512"
 	"errors"
@@ -1795,7 +1795,7 @@ func calculateDSDigestFromDNSKEY(zone string, dnskey *protocol.RDataDNSKEY, dige
 	// Hash the data based on digest type
 	switch digestType {
 	case 1: // SHA-1 (NOT RECOMMENDED but supported for compatibility)
-		h := sha1.New()
+		h := sha1.New() // #nosec G401,G505 -- DS digest type 1, mandated by RFC 4034
 		h.Write(data)
 		return h.Sum(nil)
 	case 2: // SHA-256 (MUST implement per RFC 8624)

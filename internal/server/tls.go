@@ -136,7 +136,7 @@ func BuildTLSConfigForProfile(profile *TLSProfileConfig, certFile, keyFile strin
 	}
 
 	config := &tls.Config{
-		MinVersion: profile.MinimumTLSVersion,
+		MinVersion: profile.MinimumTLSVersion, /* #nosec G402 -- ValidateTLSProfile ensures MinVersion >= 1.2 */
 		MaxVersion: tls.VersionTLS13,
 		ServerName: profile.Hostname,
 		NextProtos: profile.Profile.GetNextProtos(), // Enforce ALPN protocols (RFC 7301)
@@ -413,7 +413,7 @@ func (s *TLSServer) handleConnection(conn net.Conn) {
 		atomic.AddUint64(&s.errors, 1)
 		return
 	}
-	tlsConn.SetDeadline(time.Time{}) // Clear deadline
+	_ = tlsConn.SetDeadline(time.Time{}) // best-effort: clear deadline after handshake
 
 	// Handle DNS messages over the TLS connection
 	for {

@@ -127,7 +127,7 @@ func (r *Runner) runWorker(ctx context.Context, workerID int) {
 		}
 		conn, err = tls.DialWithDialer(dialer, "tcp", r.cfg.Server, &tls.Config{
 			ServerName:         host,
-			InsecureSkipVerify: r.cfg.TLSInsecureSkipVerify, // lab use, see Config
+			InsecureSkipVerify: r.cfg.TLSInsecureSkipVerify, /* #nosec G402 -- opt-in for lab/load-testing only, disabled by default */
 			MinVersion:         tls.VersionTLS12,
 		})
 	default: // "tcp"
@@ -178,7 +178,7 @@ func (r *Runner) sendQuery(conn net.Conn) {
 	queryStart := time.Now()
 
 	// Send with deadline
-	conn.SetDeadline(queryStart.Add(r.cfg.Timeout))
+	_ = conn.SetDeadline(queryStart.Add(r.cfg.Timeout)) // best-effort; exchange() will timeout naturally
 	resp, err := r.exchange(conn, buf[:n])
 	latency := time.Since(queryStart)
 
