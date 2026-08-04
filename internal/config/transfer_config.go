@@ -8,6 +8,10 @@ type TransferConfig struct {
 
 	// RequireTSIG requires TSIG authentication for zone transfers.
 	RequireTSIG bool `yaml:"require_tsig"`
+
+	// JournalDir is the directory for IXFR journal storage.
+	// When empty, defaults to storage.data_dir/ixfr-journals.
+	JournalDir string `yaml:"journal_dir"`
 }
 
 // SlaveZoneConfig represents configuration for a slave zone.

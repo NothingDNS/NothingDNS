@@ -31,6 +31,14 @@ server:
     # tls_cert_file: /etc/nothingdns/tls/server.crt
     # tls_key_file: /etc/nothingdns/tls/server.key
 
+    # CORS allowed origins for the API and dashboard.
+    # SECURITY: Do NOT use ["*"] in production when bind is 0.0.0.0.
+    # The production config validator rejects wildcard origins on public binds.
+    # Use explicit origins instead:
+    # allowed_origins:
+    #   - "https://dns.example.com"
+    #   - "https://dns.internal"
+
     # DoH endpoint served from the HTTP listener when TLS is configured.
     doh_enabled: false
     doh_path: /dns-query
@@ -368,6 +376,9 @@ geodns:
 transfer:
   allow_list: []
   require_tsig: false
+  # IXFR journal directory. Defaults to storage.data_dir/ixfr-journals
+  # when unset. Override to store journals on a separate volume.
+  # journal_dir: /var/lib/nothingdns/ixfr-journals
   # allow_list:
   #   - 192.0.2.0/24
   #   - 2001:db8::/32

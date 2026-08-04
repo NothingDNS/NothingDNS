@@ -54,7 +54,11 @@ func NewTransferManager(cfg *config.Config, zones map[string]*zone.Zone, zonesMu
 	// Wire KV journal store for persistent IXFR journals. Prefer the same
 	// explicit data directory used by the embedded zone DB so production does
 	// not depend on the daemon's working directory when zone_dir is unset.
-	journalDataDir := cfg.Storage.DataDir
+	// If transfer.journal_dir is configured, use it directly.
+	journalDataDir := cfg.Transfer.JournalDir
+	if journalDataDir == "" {
+		journalDataDir = cfg.Storage.DataDir
+	}
 	if journalDataDir == "" {
 		journalDataDir = cfg.ZoneDir
 	}

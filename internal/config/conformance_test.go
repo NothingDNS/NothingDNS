@@ -323,6 +323,35 @@ func TestParser_MixedSequenceAndMapping(t *testing.T) {
 	}
 }
 
+func TestDeploymentConfigsPreserveOperationalInvariants(t *testing.T) {
+	t.Setenv("NOTHINGDNS_AUTH_TOKEN", "Staging1!Token2@Secure3#Value4$")
+	t.Setenv("NOTHINGDNS_METRICS_AUTH_TOKEN", "Metrics1!Token2@Secure3#Value4$")
+
+	stagingData, err := os.ReadFile("../../deploy/staging.yaml")
+	if err != nil {
+		t.Fatalf("read staging config: %v", err)
+	}
+	staging, err := UnmarshalYAML(string(stagingData))
+	if err != nil {
+		t.Fatalf("parse staging config: %v", err)
+	}
+	if staging.Metrics.AuthToken != "Metrics1!Token2@Secure3#Value4$" {
+		t.Fatalf("staging metrics auth token was not sourced from the environment")
+	}
+
+	productionData, err := os.ReadFile("../../deploy/production.yaml")
+	if err != nil {
+		t.Fatalf("read production config: %v", err)
+	}
+	production, err := UnmarshalYAMLWithEnv(string(productionData), false)
+	if err != nil {
+		t.Fatalf("parse production config: %v", err)
+	}
+	if effectiveTLSBind(production.Server.TLS.Bind) == effectiveTLSBind(production.Server.XoT.Bind) {
+		t.Fatalf("production DoT and XoT listeners collide on %q", effectiveTLSBind(production.Server.TLS.Bind))
+	}
+}
+
 func TestParser_EmptyValues(t *testing.T) {
 	input := `empty_key:
 bool_key: true

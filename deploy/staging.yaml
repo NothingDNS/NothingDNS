@@ -47,6 +47,9 @@ metrics:
   enabled: true
   bind: ":9153"
   path: /metrics
+  # Staging is often reachable from shared networks; protect operational data
+  # with a secret supplied by the deployment environment.
+  auth_token: "${NOTHINGDNS_METRICS_AUTH_TOKEN}"
 
 dnssec:
   enabled: false       # Disable DNSSEC in staging

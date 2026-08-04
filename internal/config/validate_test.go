@@ -1450,6 +1450,42 @@ func TestValidate_AtRestEncryptionKeys(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsDoTAndXoTBindCollision(t *testing.T) {
+	tests := []struct {
+		name    string
+		dotBind string
+		xotBind string
+	}{
+		{name: "explicit_same_bind", dotBind: ":853", xotBind: ":853"},
+		{name: "shared_default_bind"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := DefaultConfig()
+			c.Server.TLS = TLSConfig{
+				Enabled:  true,
+				CertFile: "/etc/nothingdns/tls.crt",
+				KeyFile:  "/etc/nothingdns/tls.key",
+				Bind:     tc.dotBind,
+			}
+			c.Server.XoT = XoTConfig{
+				Enabled:       true,
+				CertFile:      "/etc/nothingdns/xot.crt",
+				KeyFile:       "/etc/nothingdns/xot.key",
+				CAFile:        "/etc/nothingdns/xot-ca.crt",
+				Bind:          tc.xotBind,
+				MinTLSVersion: 13,
+			}
+
+			joined := strings.Join(c.Validate(), "\n")
+			if !strings.Contains(joined, "server.xot.bind conflicts with server.tls.bind") {
+				t.Fatalf("Validate missing DoT/XoT bind collision error. errors:\n%s", joined)
+			}
+		})
+	}
+}
+
 func TestValidateProduction_AcceptsHardenedConfig(t *testing.T) {
 	c := productionReadyTestConfig()
 
