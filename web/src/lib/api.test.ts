@@ -171,6 +171,9 @@ describe('downloadAuthenticated', () => {
     });
     // Mock document.createElement
     document.body.innerHTML = '';
+    // Prevent jsdom's "Not implemented: navigation to another Document"
+    // warning when downloadAuthenticated creates and clicks an <a> element.
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
   });
 
   it('triggers download with auth header', async () => {
