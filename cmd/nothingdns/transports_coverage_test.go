@@ -11,8 +11,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"testing"
 	"strings"
+	"testing"
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/config"
@@ -21,9 +21,9 @@ import (
 
 // stubMetricsCollector implements the metricsTransport interface for tests.
 type stubMetricsCollector struct {
-	called                                        int
-	lastUR, lastUT, lastUE                        uint64
-	lastTA, lastTC, lastTM, lastTE                uint64
+	called                         int
+	lastUR, lastUT, lastUE         uint64
+	lastTA, lastTC, lastTM, lastTE uint64
 }
 
 func (s *stubMetricsCollector) SetTransportStats(udpRx, udpTx, udpErrors, tcpConnAccepted, tcpConnClosed, tcpMsgRx, tcpErrors uint64) {

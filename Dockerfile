@@ -61,10 +61,11 @@ USER 1000
 # 53/udp - Standard DNS (UDP)
 # 53/tcp - Standard DNS (TCP)
 # 853/tcp - DNS over TLS (DoT)
+# 8853/tcp - DNS Zone Transfer over TLS (XoT; separate listener from DoT)
 # 443/tcp - DNS over HTTPS (DoH)
 # 8080/tcp - REST API and Web Dashboard
 # 9153/tcp - Prometheus metrics
-EXPOSE 53/udp 53/tcp 853/tcp 443/tcp 8080/tcp 9153/tcp
+EXPOSE 53/udp 53/tcp 853/tcp 8853/tcp 443/tcp 8080/tcp 9153/tcp
 
 # Set working directory
 WORKDIR /data
