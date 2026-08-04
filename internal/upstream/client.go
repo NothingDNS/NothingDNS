@@ -526,7 +526,7 @@ func (c *Client) queryUDPBuf(server *Server, msg *protocol.Message, buf []byte) 
 
 	// Send query
 	start := time.Now()
-	if _, err := writePacket(conn, packed); err != nil {
+	if err := writePacket(conn, packed); err != nil {
 		return nil, fmt.Errorf("send query: %w", err)
 	}
 
@@ -723,15 +723,15 @@ func (c *Client) queryTCPBuf(server *Server, msg *protocol.Message, buf []byte) 
 	return resp, nil
 }
 
-func writePacket(conn net.Conn, data []byte) (int, error) {
+func writePacket(conn net.Conn, data []byte) error {
 	n, err := conn.Write(data)
 	if err != nil {
-		return n, err
+		return err
 	}
 	if n != len(data) {
-		return n, io.ErrShortWrite
+		return io.ErrShortWrite
 	}
-	return n, nil
+	return nil
 }
 
 // healthCheckLoop periodically checks server health.

@@ -425,10 +425,7 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 	logger.Infof("Starting %s v%s", Name, util.Version)
 
 	// Initialize cache manager
-	cacheManager, err := NewCacheManager(cfg, logger)
-	if err != nil {
-		return fmt.Errorf("creating cache manager: %w", err)
-	}
+	cacheManager := NewCacheManager(cfg, logger)
 	dnsCache := cacheManager.Cache
 
 	// Load cache from persistent storage

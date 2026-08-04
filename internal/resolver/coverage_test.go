@@ -1225,12 +1225,9 @@ func TestReadFull_ExactRead(t *testing.T) {
 	}()
 
 	buf := make([]byte, 4)
-	n, err := readFull(client, buf)
+	err := readFull(client, buf)
 	if err != nil {
 		t.Fatalf("readFull error: %v", err)
-	}
-	if n != 4 {
-		t.Errorf("readFull n = %d, want 4", n)
 	}
 	if !bytes.Equal(buf, data) {
 		t.Errorf("readFull buf = %v, want %v", buf, data)
@@ -1251,12 +1248,12 @@ func TestReadFull_PartialReads(t *testing.T) {
 	}()
 
 	buf := make([]byte, 4)
-	n, err := readFull(client, buf)
+	err := readFull(client, buf)
 	if err != nil {
 		t.Fatalf("readFull error: %v", err)
 	}
-	if n != 4 {
-		t.Errorf("readFull n = %d, want 4", n)
+	if !bytes.Equal(buf, []byte{1, 2, 3, 4}) {
+		t.Errorf("readFull buf = %v, want [1 2 3 4]", buf)
 	}
 }
 
@@ -1271,7 +1268,7 @@ func TestReadFull_ConnectionClose(t *testing.T) {
 	}()
 
 	buf := make([]byte, 4)
-	_, err := readFull(client, buf)
+	err := readFull(client, buf)
 	if err == nil {
 		t.Error("readFull should error when connection closes before buf is full")
 	}
@@ -1283,12 +1280,9 @@ func TestReadFull_EmptyBuffer(t *testing.T) {
 	defer client.Close()
 
 	buf := make([]byte, 0)
-	n, err := readFull(client, buf)
+	err := readFull(client, buf)
 	if err != nil {
 		t.Errorf("readFull with empty buffer should succeed, got error: %v", err)
-	}
-	if n != 0 {
-		t.Errorf("readFull n = %d, want 0", n)
 	}
 }
 

@@ -106,9 +106,9 @@ func TestNewClusterManager_RPCTLSError(t *testing.T) {
 		Cluster: config.ClusterConfig{
 			Enabled: true,
 			RPC: config.RPCConfig{
-				Enabled:      true,
-				TLSCertFile:  "/nonexistent/cert.pem",
-				TLSKeyFile:   "/nonexistent/key.pem",
+				Enabled:     true,
+				TLSCertFile: "/nonexistent/cert.pem",
+				TLSKeyFile:  "/nonexistent/key.pem",
 			},
 		},
 	}
@@ -162,7 +162,7 @@ func TestMgr_NewDNSSECManager_Disabled(t *testing.T) {
 // TestNewTransferManager_HappyPath exercises the success branch.
 func TestNewTransferManager_HappyPath(t *testing.T) {
 	cfg := &config.Config{
-		Storage: config.StorageConfig{DataDir: t.TempDir()},
+		Storage:  config.StorageConfig{DataDir: t.TempDir()},
 		Transfer: config.TransferConfig{},
 	}
 	tm, err := NewTransferManager(cfg, nil, nil, newMgrLogger())
@@ -182,7 +182,7 @@ func TestNewTransferManager_IXFRJournalInitError(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 	cfg := &config.Config{
-		Storage: config.StorageConfig{DataDir: tmpFile},
+		Storage:  config.StorageConfig{DataDir: tmpFile},
 		Transfer: config.TransferConfig{},
 	}
 	tm, err := NewTransferManager(cfg, nil, nil, newMgrLogger())
@@ -243,10 +243,7 @@ func TestNewUpstreamManager_Disabled(t *testing.T) {
 // branches are unreachable, so we can only cover the success path.)
 func TestNewCacheManager_HappyPath(t *testing.T) {
 	cfg := &config.Config{}
-	cm, err := NewCacheManager(cfg, newMgrLogger())
-	if err != nil {
-		t.Fatalf("NewCacheManager error: %v", err)
-	}
+	cm := NewCacheManager(cfg, newMgrLogger())
 	if cm == nil || cm.Cache == nil {
 		t.Fatal("expected non-nil CacheManager with non-nil Cache")
 	}

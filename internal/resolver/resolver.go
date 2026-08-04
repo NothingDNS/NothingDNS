@@ -1390,13 +1390,13 @@ func (t *StdioTransport) queryTCP(ctx context.Context, msg *protocol.Message, ad
 	}
 
 	// Read length prefix
-	if _, err := readFull(conn, lenBuf); err != nil {
+	if err := readFull(conn, lenBuf); err != nil {
 		return nil, fmt.Errorf("resolver: TCP read length: %w", err)
 	}
 	respLen := int(protocol.Uint16(lenBuf))
 
 	recvBuf := make([]byte, respLen)
-	if _, err := readFull(conn, recvBuf); err != nil {
+	if err := readFull(conn, recvBuf); err != nil {
 		return nil, fmt.Errorf("resolver: TCP read body: %w", err)
 	}
 
@@ -1435,17 +1435,17 @@ func questionMatches(query, resp *protocol.Message) bool {
 	)
 }
 
-// readFull reads exactly len(buf) bytes. Uses io.ReadFull equivalent.
-func readFull(conn net.Conn, buf []byte) (int, error) {
+// readFull reads exactly len(buf) bytes.
+func readFull(conn net.Conn, buf []byte) error {
 	got := 0
 	for got < len(buf) {
 		n, err := conn.Read(buf[got:])
 		got += n
 		if err != nil {
-			return got, err
+			return err
 		}
 	}
-	return got, nil
+	return nil
 }
 
 func writePacket(conn net.Conn, data []byte) (int, error) {

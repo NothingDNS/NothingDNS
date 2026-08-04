@@ -719,7 +719,7 @@ func (lb *LoadBalancer) queryUDP(address string, msg *protocol.Message) (*protoc
 	}
 
 	start := time.Now()
-	if _, err := writePacket(conn, packed); err != nil {
+	if err := writePacket(conn, packed); err != nil {
 		return nil, fmt.Errorf("send query: %w", err)
 	}
 

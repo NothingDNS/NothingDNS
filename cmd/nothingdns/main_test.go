@@ -12,10 +12,10 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"syscall"
 	"reflect"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 	"unsafe"
@@ -4807,10 +4807,7 @@ func TestCheckRPZResponseIP_Match(t *testing.T) {
 func TestNewCacheManager(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.ZoneDir = t.TempDir()
-	mgr, err := NewCacheManager(cfg, util.NewLogger(util.ERROR, util.TextFormat, nil))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	mgr := NewCacheManager(cfg, util.NewLogger(util.ERROR, util.TextFormat, nil))
 	if mgr == nil {
 		t.Fatal("expected non-nil manager")
 	}
@@ -4823,10 +4820,7 @@ func TestNewCacheManager(t *testing.T) {
 func TestCacheManager_FullLifecycle(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.ZoneDir = t.TempDir()
-	mgr, err := NewCacheManager(cfg, util.NewLogger(util.ERROR, util.TextFormat, nil))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	mgr := NewCacheManager(cfg, util.NewLogger(util.ERROR, util.TextFormat, nil))
 
 	msg, _ := protocol.NewQuery(1, "example.com.", protocol.TypeA)
 	mgr.Cache.Set(cache.MakeKey("example.com.", protocol.TypeA, false), msg, 300)
@@ -4834,10 +4828,7 @@ func TestCacheManager_FullLifecycle(t *testing.T) {
 	mgr.StartPersistence(time.Hour)
 	mgr.Stop()
 
-	mgr2, err := NewCacheManager(cfg, util.NewLogger(util.ERROR, util.TextFormat, nil))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	mgr2 := NewCacheManager(cfg, util.NewLogger(util.ERROR, util.TextFormat, nil))
 	mgr2.LoadCache()
 
 	entry := mgr2.Cache.Get(cache.MakeKey("example.com.", protocol.TypeA, false))
@@ -4850,10 +4841,7 @@ func TestCacheManager_FullLifecycle(t *testing.T) {
 func TestCacheManager_KVStore(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.ZoneDir = t.TempDir()
-	mgr, err := NewCacheManager(cfg, util.NewLogger(util.ERROR, util.TextFormat, nil))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	mgr := NewCacheManager(cfg, util.NewLogger(util.ERROR, util.TextFormat, nil))
 
 	msg, _ := protocol.NewQuery(1, "example.com.", protocol.TypeA)
 	mgr.Cache.Set(cache.MakeKey("example.com.", protocol.TypeA, false), msg, 300)
@@ -4868,7 +4856,7 @@ func TestCacheManager_KVStore(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	mgr2, _ := NewCacheManager(cfg, util.NewLogger(util.ERROR, util.TextFormat, nil))
+	mgr2 := NewCacheManager(cfg, util.NewLogger(util.ERROR, util.TextFormat, nil))
 	if err := mgr2.LoadCacheFromKV(kvStore); err != nil {
 		t.Fatalf("LoadCacheFromKV failed: %v", err)
 	}
@@ -5307,7 +5295,7 @@ func TestServeDNS_Wildcard_DNSSEC(t *testing.T) {
 func TestCacheManager_SetInvalidateFunc(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.ZoneDir = t.TempDir()
-	mgr, _ := NewCacheManager(cfg, util.NewLogger(util.ERROR, util.TextFormat, nil))
+	mgr := NewCacheManager(cfg, util.NewLogger(util.ERROR, util.TextFormat, nil))
 
 	called := false
 	mgr.SetInvalidateFunc(func(key string) {
@@ -6496,10 +6484,7 @@ func TestSaveToFile_ErrorPaths(t *testing.T) {
 	cfg.ZoneDir = tmpDir
 	cfg.Cache.Size = 10
 	logger := util.NewLogger(util.ERROR, util.TextFormat, nil)
-	mgr, err := NewCacheManager(cfg, logger)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	mgr := NewCacheManager(cfg, logger)
 
 	mgr.Cache.Set("test.example.com.", &protocol.Message{
 		Header: protocol.Header{Flags: protocol.NewResponseFlags(protocol.RcodeSuccess)},
@@ -7007,10 +6992,7 @@ func TestNewCacheManager_MemMonitor(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.MemoryLimitMB = 100
 	logger := util.NewLogger(util.ERROR, util.TextFormat, nil)
-	mgr, err := NewCacheManager(cfg, logger)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	mgr := NewCacheManager(cfg, logger)
 	if mgr.MemMonitor == nil {
 		t.Fatal("expected memory monitor")
 	}
@@ -7022,10 +7004,7 @@ func TestNewCacheManager_LoadCache(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.ZoneDir = tmpDir
 	logger := util.NewLogger(util.ERROR, util.TextFormat, nil)
-	mgr, err := NewCacheManager(cfg, logger)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	mgr := NewCacheManager(cfg, logger)
 	data := `[{"key":"test","wire":"AAAA","ttl":300,"rcode":0,"negative":false,"expire_time":"2099-01-01T00:00:00Z"}]`
 	os.WriteFile(filepath.Join(tmpDir, "cache.json"), []byte(data), 0644)
 	mgr.LoadCache()
@@ -7262,10 +7241,7 @@ func TestLoadCache_InvalidJSON(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.ZoneDir = tmpDir
 	logger := util.NewLogger(util.ERROR, util.TextFormat, nil)
-	mgr, err := NewCacheManager(cfg, logger)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	mgr := NewCacheManager(cfg, logger)
 	os.WriteFile(filepath.Join(tmpDir, "cache.json"), []byte("not json"), 0644)
 	mgr.LoadCache()
 	mgr.Stop()
@@ -7292,10 +7268,7 @@ func TestLoadCache_OversizedWire(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.ZoneDir = tmpDir
 	logger := util.NewLogger(util.ERROR, util.TextFormat, nil)
-	mgr, err := NewCacheManager(cfg, logger)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	mgr := NewCacheManager(cfg, logger)
 	data := `[{"key":"test","wire":"` + strings.Repeat("AA", 32768*2) + `","ttl":300,"rcode":0,"negative":false,"expire_time":"2099-01-01T00:00:00Z"}]`
 	os.WriteFile(filepath.Join(tmpDir, "cache.json"), []byte(data), 0644)
 	mgr.LoadCache()
@@ -7309,7 +7282,7 @@ func TestLoadCacheFromKV_InvalidData(t *testing.T) {
 
 	cfg := config.DefaultConfig()
 	logger := util.NewLogger(util.ERROR, util.TextFormat, nil)
-	mgr, _ := NewCacheManager(cfg, logger)
+	mgr := NewCacheManager(cfg, logger)
 
 	// Put invalid JSON into KV store
 	if err := kv.Update(func(tx *storage.Tx) error {
@@ -7340,7 +7313,7 @@ func TestLoadCacheFromKV_ViewError(t *testing.T) {
 
 	cfg := config.DefaultConfig()
 	logger := util.NewLogger(util.ERROR, util.TextFormat, nil)
-	mgr, _ := NewCacheManager(cfg, logger)
+	mgr := NewCacheManager(cfg, logger)
 	defer mgr.Stop()
 
 	err = mgr.LoadCacheFromKV(kv)
