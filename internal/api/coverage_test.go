@@ -680,6 +680,22 @@ func TestValidateAndPinUpstream_Loopback(t *testing.T) {
 	}
 }
 
+func TestValidateAndPinUpstream_UnspecifiedIP(t *testing.T) {
+	// 0.0.0.0 routes to localhost on Linux — must be rejected.
+	_, err := validateAndPinUpstream("0.0.0.0:53")
+	if err == nil {
+		t.Error("0.0.0.0 should be rejected (routes to localhost)")
+	}
+}
+
+func TestValidateAndPinUpstream_CGNAT(t *testing.T) {
+	// 100.64.0.0/10 is CGNAT (RFC 6598) — not routable externally.
+	_, err := validateAndPinUpstream("100.64.0.1:53")
+	if err == nil {
+		t.Error("CGNAT 100.64.0.0/10 should be rejected")
+	}
+}
+
 func TestValidateAndPinUpstream_IPWithoutPort(t *testing.T) {
 	// No port — SplitHostPort fails, so entire string is treated as host
 	pinned, err := validateAndPinUpstream("8.8.8.8")

@@ -190,6 +190,15 @@ func IsPrivateIP(ip net.IP) bool {
 		if v4[0] == 169 && v4[1] == 254 {
 			return true
 		}
+		// 0.0.0.0/8 (unspecified — on Linux, dialing 0.0.0.0 routes to
+		// 127.0.0.1, so it must be treated as private for SSRF protection)
+		if v4[0] == 0 {
+			return true
+		}
+		// 100.64.0.0/10 (CGNAT, RFC 6598)
+		if v4[0] == 100 && v4[1] >= 64 && v4[1] <= 127 {
+			return true
+		}
 	}
 	// IPv6 private ranges
 	if IsIPv6(ip) {
@@ -203,6 +212,10 @@ func IsPrivateIP(ip net.IP) bool {
 		}
 		// ::1 (loopback)
 		if ip.Equal(net.ParseIP("::1")) {
+			return true
+		}
+		// :: (unspecified — IPv6 equivalent of 0.0.0.0)
+		if ip.Equal(net.ParseIP("::")) {
 			return true
 		}
 	}
