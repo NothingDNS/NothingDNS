@@ -47,6 +47,12 @@ irm https://raw.githubusercontent.com/NothingDNS/NothingDNS/main/install.ps1 | i
 
 For Docker and Kubernetes examples, see [QUICK_START.md](QUICK_START.md) and [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
+> **Docker / GHCR:** The container image is published to
+> `ghcr.io/nothingdns/nothingdns:latest`. The package is currently **private** —
+> to pull it, authenticate with a GitHub PAT that has `read:packages` scope:
+> `echo "$GITHUB_TOKEN" | docker login ghcr.io -u USERNAME --password-stdin`
+> (see [docs/DEPLOYMENT_CHECKLIST.md](docs/DEPLOYMENT_CHECKLIST.md) for details).
+
 ## Repository map
 
 | Path | Purpose |

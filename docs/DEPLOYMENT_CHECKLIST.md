@@ -62,6 +62,17 @@ dnsctl -version
 
 ### 2. Docker Installation
 
+> **Note:** The GHCR container image is currently published as a **private**
+> package. To pull it, you need a GitHub Personal Access Token (PAT) with
+> `read:packages` scope. If the package is later made public, the `docker
+> login` step can be skipped.
+>
+> ```bash
+> # Create a PAT at: GitHub Settings → Developer settings → Personal access
+> # tokens → Fine-grained tokens (or classic) with read:packages scope.
+> echo "$GITHUB_TOKEN" | docker login ghcr.io -u USERNAME --password-stdin
+> ```
+
 ```bash
 # Pull image
 docker pull ghcr.io/nothingdns/nothingdns:latest
