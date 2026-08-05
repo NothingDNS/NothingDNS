@@ -5,6 +5,70 @@ All notable changes to NothingDNS are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] — 2026-08-05
+
+### Security
+
+- **SSRF fail-closed + DNS rebinding pinning** in upstream API
+  (`validateAndPinUpstream`): the PUT `/api/v1/upstreams` handler
+  previously allowed unresolvable hostnames through (fail-open),
+  enabling DNS rebinding attacks. Now resolves once, validates all IPs,
+  and pins the resolved IP literal into `Server.Address` so `net.Dial`
+  never re-resolves the hostname.
+- **`IsPrivateIP` gaps fixed**: `0.0.0.0/8` (routes to localhost on
+  Linux), `100.64.0.0/10` (CGNAT, RFC 6598), and IPv6 `::` (unspecified)
+  were missing from the private-IP check, allowing SSRF bypass via
+  `0.0.0.0:53`.
+- **gosec annotations** added for all protocol-mandated SHA-1 usage
+  (NSEC3 RFC 5155, DS digest RFC 4034, WebSocket RFC 6455, TSIG
+  RFC 4635) and TLS configs (validated by `ValidateTLSProfile`).
+
+### Fixed
+
+- **DoQ `Serve()`/`Addr()` data race**: the root accept goroutine was
+  registered (`wg.Add`) without holding `closeMu`, racing against
+  `Stop()` which clears the listener under the lock. Classic
+  `Add`/`Wait` panic. Now holds `closeMu` across the startup check.
+- **`Truncate()` O(n²)→O(n)**: the DNS message truncation algorithm
+  called `WireLength()` (full re-serialization) on every loop
+  iteration. Replaced with a running byte counter that subtracts each
+  removed record's cached `WireLength()`.
+- **bodyclose**: 5 unclosed `http.Response.Body` leaks in integration
+  tests.
+- **errcheck**: 2 unhandled `SetDeadline` calls in load-tester and TLS
+  server.
+- **advisory-monitor CI workflow**: YAML heredoc indentation caused
+  `actionlint` to fail parsing the workflow file.
+
+### Added
+
+- **XoT port separation**: DoT (:853) and XoT now have distinct
+  listeners (XoT defaults to :8853) with a config validator that
+  rejects bind collisions. Wired across Dockerfile, Helm, and deploy
+  configs.
+- **`transfer.journal_dir`** config option for custom IXFR journal path.
+- **Backup/restore scripts**: `scripts/backup.sh`, `scripts/restore.sh`,
+  and `scripts/backup-restore-smoke.sh` (CI round-trip verification).
+  Makefile targets: `backup`, `restore`, `backup-restore-test`.
+- **Helm PodMonitor** template for Prometheus Operator.
+- **ServiceMonitor hardening**: fail guards that validate
+  `config.metrics.enabled` and namespace scoping before rendering.
+- **Config parser conformance tests** (634 lines) covering YAML scalar,
+  sequence, comment, and nesting edge cases.
+- **Web page tests** (9 files, 1,364 lines) covering all dashboard pages.
+- **CI**: `go mod verify` step, helm template validation for monitoring
+  and XoT, backup/restore smoke test.
+
+### Changed
+
+- **`NewCacheManager`**: removed misleading always-nil error return;
+  updated all callers.
+- **`writePacket`** / **`readFull`**: removed unused `int` return values;
+  simplified to return `error` only.
+- **`react-router-dom`** bumped 7.17.0 → 7.18.2.
+- **Dialog accessibility**: `aria-describedby` is now conditional,
+  preserving Radix auto-linking when a `DialogDescription` is present.
+
 ## [1.0.0] — 2026-07-15
 
 ### Security
