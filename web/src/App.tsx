@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, useLocation, Link } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, useLocation, Link } from 'react-router';
 import { ThemeProvider } from '@/hooks/useTheme';
 import { useTheme } from '@/hooks/useThemeHook';
 import { QueryClientProvider } from '@tanstack/react-query';

@@ -5,6 +5,18 @@ All notable changes to NothingDNS are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] — 2026-08-05
+
+### Security
+
+- **react-router 7.18.2 → 8.3.0**: closes GHSA-qwww-vcr4-c8h2 (RSC mode
+  CSRF bypass). React Router v8 removes the `react-router-dom` re-export
+  package — all imports now source from `react-router` directly.
+- **undici 7.28.0 → 7.29.0**: closes 5 advisories (CRLF injection, cookie
+  attribute injection, cross-user info disclosure ×2, response
+  desynchronization).
+- **brace-expansion**: closes DoS bypass (GHSA-rgw5-rvv9-x895).
+
 ## [1.1.0] — 2026-08-05
 
 ### Security

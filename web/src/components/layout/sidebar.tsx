@@ -27,7 +27,7 @@ import {
 	X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { NavLink, useLocation } from "react-router-dom";
+import { NavLink, useLocation } from "react-router";
 import { useTheme } from "@/hooks/useThemeHook";
 import { api } from "@/lib/api";
 import { hasMinRole, type Role } from "@/lib/roles";

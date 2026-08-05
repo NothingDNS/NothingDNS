@@ -10,4 +10,4 @@ package util
 // so release artifacts get the precise git tag baked in. Tracks the
 // most recently released line in docs/CHANGELOG.md; bump this together
 // with the matching changelog entry when cutting a new release.
-var Version = "1.1.0"
+var Version = "1.1.1"
