@@ -36,7 +36,7 @@ type CacheManager struct {
 }
 
 // NewCacheManager creates a new cache manager with the given configuration.
-func NewCacheManager(cfg *config.Config, logger *util.Logger) (*CacheManager, error) {
+func NewCacheManager(cfg *config.Config, logger *util.Logger) *CacheManager {
 	cacheConfig := cache.Config{
 		Capacity:          cfg.Cache.Size,
 		MinTTL:            time.Duration(cfg.Cache.MinTTL) * time.Second,
@@ -75,7 +75,7 @@ func NewCacheManager(cfg *config.Config, logger *util.Logger) (*CacheManager, er
 	}
 	m.persistPath = filepath.Join(persistDir, cachePersistFile)
 
-	return m, nil
+	return m
 }
 
 // Stop stops the cache manager and its components.

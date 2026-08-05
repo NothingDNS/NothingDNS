@@ -144,6 +144,9 @@ config:
 | `config.http.enabled` | Enable HTTP API and dashboard | `true` |
 | `config.http.bind` | HTTP API / dashboard / DoH bind address | `0.0.0.0:8080` |
 | `config.http.doh_enabled` | Enable DoH on the HTTP bind | `false` |
+| `service.dotPort` | DNS over TLS service port | `853` |
+| `config.xot.enabled` | Enable XoT on a distinct TCP listener | `false` |
+| `config.xot.bind` / `service.xotPort` | XoT bind/service port | `:8853` / `8853` |
 | `auth.authSecret` | HTTP session signing secret | required when HTTP is enabled |
 | `auth.adminPassword` | Default admin password when no explicit users are configured | required when HTTP is enabled |
 | `auth.storageEncryptionKey` | Persistent zone DB encryption key | required |
@@ -217,7 +220,9 @@ The embedded React dashboard is served at the HTTP port (default: 8080). It prov
 Prometheus metrics use the dedicated metrics listener configured by
 `config.metrics.port` and `config.metrics.path`. When metrics are enabled,
 set `auth.metricsAuthToken` or provide `metrics-auth-token` in
-`auth.existingSecret`.
+`auth.existingSecret`. Enabling `monitoring.serviceMonitor` or
+`monitoring.podMonitor` renders Secret-backed scrape authorization; either
+monitor fails rendering when `config.metrics.enabled=false`.
 
 ### Recommended Prometheus Rules
 

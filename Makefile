@@ -1,7 +1,7 @@
 # NothingDNS Makefile
 # Provides convenient shortcuts for common development tasks
 
-.PHONY: all build build-server build-cli build-web build-docker build-release test test-short test-verbose test-race test-race-critical test-e2e test-pkg test-run test-coverage vet fmt fmt-check fmt-all lint staticcheck clean clean-all install dev dev-watch validate-config deps tidy update-deps ci release help benchmark security-check docs docker-push helm-install helm-template setup-hooks lint-ci backup health-check
+.PHONY: all build build-server build-cli build-web build-docker build-release test test-short test-verbose test-race test-race-critical test-e2e test-pkg test-run test-coverage vet fmt fmt-check fmt-all lint staticcheck clean clean-all install dev dev-watch validate-config deps tidy update-deps ci release help benchmark security-check docs docker-push helm-install helm-template setup-hooks lint-ci backup backup-restore-test restore health-check
 
 # Binary names
 SERVER_BINARY := nothingdns
@@ -319,10 +319,18 @@ lint-ci:
 	@which golangci-lint > /dev/null 2>&1 || (echo "Installing golangci-lint..."; go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest)
 	@golangci-lint run ./...
 
-## Run backup script
+## Run backup script (stop the daemon or snapshot its volume first)
 backup:
-	@chmod +x scripts/backup.sh
 	@./scripts/backup.sh /var/backups/nothingdns
+
+## Verify backup/restore integrity with isolated fixture data
+backup-restore-test:
+	@./scripts/backup-restore-smoke.sh
+
+## Restore an archive (usage: make restore BACKUP=/path/to/archive.tar.gz)
+restore:
+	@test -n "$(BACKUP)" || (echo "Usage: make restore BACKUP=/path/to/nothingdns-backup-*.tar.gz"; exit 1)
+	@./scripts/restore.sh "$(BACKUP)"
 
 ## Run health check script
 health-check:
@@ -379,6 +387,9 @@ help:
 	@echo "  make validate-config - Validate a config file"
 	@echo "  make setup-hooks     - Install git hooks"
 	@echo "  make lint-ci         - Run golangci-lint"
+	@echo "  make backup          - Create a fail-closed backup archive"
+	@echo "  make backup-restore-test - Verify backup/restore round trip"
+	@echo "  make restore BACKUP=... - Restore a verified backup archive"
 	@echo "  make health-check    - Run health checks"
 	@echo ""
 	@echo "Docker & Helm:"

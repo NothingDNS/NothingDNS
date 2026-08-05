@@ -3,7 +3,7 @@
 package websocket
 
 import (
-	"crypto/sha1"
+	"crypto/sha1" // #nosec G505 -- SHA-1 is mandatory for WebSocket handshake (RFC 6455 §1.3)
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
@@ -91,7 +91,7 @@ func Handshake(w http.ResponseWriter, r *http.Request, allowedOrigins ...string)
 	}
 
 	// Compute accept value
-	h := sha1.New()
+	h := sha1.New() // #nosec G401,G505 -- WebSocket handshake requires SHA-1 (RFC 6455 §1.3)
 	h.Write([]byte(key))
 	h.Write([]byte(wsGUID))
 	accept := base64.StdEncoding.EncodeToString(h.Sum(nil))

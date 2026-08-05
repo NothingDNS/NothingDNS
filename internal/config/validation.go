@@ -282,6 +282,9 @@ func (c *Config) validateServer() []string {
 		if c.Server.XoT.MinTLSVersion != 0 && c.Server.XoT.MinTLSVersion != 12 && c.Server.XoT.MinTLSVersion != 13 {
 			errors = append(errors, fmt.Sprintf("server.xot: invalid min_tls_version %d (must be 12 or 13)", c.Server.XoT.MinTLSVersion))
 		}
+		if c.Server.TLS.Enabled && effectiveTLSBind(c.Server.TLS.Bind) == effectiveTLSBind(c.Server.XoT.Bind) {
+			errors = append(errors, "server.xot.bind conflicts with server.tls.bind; DoT and XoT require distinct TCP listen addresses")
+		}
 	}
 
 	// Validate worker counts
@@ -294,6 +297,13 @@ func (c *Config) validateServer() []string {
 	errors = appendDurationValidation(errors, "server", "shutdown_timeout", c.ShutdownTimeout)
 
 	return errors
+}
+
+func effectiveTLSBind(bind string) string {
+	if strings.TrimSpace(bind) == "" {
+		return ":853"
+	}
+	return strings.TrimSpace(bind)
 }
 
 func effectiveQUICCertificate(c *Config) (string, string) {

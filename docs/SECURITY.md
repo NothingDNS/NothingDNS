@@ -66,21 +66,58 @@ All cryptographic operations use Go's standard library `crypto/*` packages. No t
 
 ### API Security
 
-- **HTTP bind address**: The default `http.bind` in `config.example.yaml` is
-  `"0.0.0.0:8080"`, which listens on every network interface. In production,
-  bind to `"127.0.0.1:8080"` behind a reverse proxy (nginx, Caddy), enable
-  TLS for HTTPS encryption, or restrict access with a firewall.
-- **CORS wildcard origins**: The production config validator
-  (`validateProduction`) rejects `allowed_origins: ["*"]` when `http.bind`
-  is a public (`0.0.0.0` / `::`) address. Use explicit origin lists in
-  production (`allowed_origins: ["https://dns.example.com"]`).
-- **Rate limiting**: Login endpoints are rate-limited per-IP and per-account
-  with configurable lockout thresholds. Unauthenticated requests consume rate
-  limit budget before authentication (prevents tie-to-IP bypass via brute
-  force).
-- **Auth token storage**: Bearer tokens are held in memory only
-  (Zustand store), never written to localStorage. The backend HttpOnly cookie
-  is never read from JavaScript.
+#### ⚠️ HTTP Bind Address (HIGH SEVERITY)
+
+The default `http.bind` in `config.example.yaml` is `"0.0.0.0:8080"`, which
+listens on **every network interface**. An attacker on the same network can
+reach the REST API, dashboard, and DoH endpoint without authentication for
+read endpoints, and can attempt brute-force login.
+
+**Remediation (choose one)**:
+
+1. **Recommended**: Bind to `127.0.0.1:8080` behind a reverse proxy
+   (nginx, Caddy, HAProxy) that handles TLS termination and access control.
+2. Enable TLS (`http.tls_cert_file` + `http.tls_key_file`) for HTTPS
+   encryption on the public interface.
+3. Use a firewall to restrict access to trusted networks (e.g. management
+   VLAN). If using Kubernetes, apply a `NetworkPolicy` that limits ingress
+   to the management CIDR.
+
+The production config validator (`validateProduction`) warns when `http.bind`
+is set to a public address (`0.0.0.0` / `::`) without TLS. See
+`docs/DEPLOYMENT_CHECKLIST.md` for a full production checklist.
+
+#### CORS Wildcard Origins
+
+The management API and dashboard respect CORS `allowed_origins`. A wildcard
+configuration (`["*"]`) allows any website to make authenticated requests
+from a user's browser, which is a **credential-forwarding risk** when the API
+is bound to a public address.
+
+**Production requirement**: The config validator **rejects**
+`allowed_origins: ["*"]` when `http.bind` is a public (`0.0.0.0` / `::`)
+address. Always use explicit origin lists:
+
+```yaml
+http:
+  bind: "127.0.0.1:8080"          # or behind reverse proxy
+  allowed_origins:
+    - "https://dns.example.com"    # explicit, not "*"
+```
+
+#### Rate Limiting
+
+Login endpoints are rate-limited per-IP and per-account with configurable
+lockout thresholds (default 5 attempts / 5-minute lockout). Unauthenticated
+requests consume rate limit budget before authentication (prevents
+tie-to-IP bypass via brute force).
+
+#### Auth Token Storage
+
+Bearer tokens are held in memory only (Zustand store), never written to
+localStorage. The backend HttpOnly cookie is never read from JavaScript.
+On page reload the in-memory token is lost, so the app redirects to login;
+the backend cookie remains available for safe-method requests.
 
 ## Authorization Model
 

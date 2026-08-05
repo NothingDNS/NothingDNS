@@ -1,33 +1,41 @@
 # NothingDNS Production Readiness Report
 
-Last updated: 2026-06-11
+Last updated: 2026-07-20
 
 ## Verdict
 
-NothingDNS is production-ready after the current hardening pass, provided the release candidate is built from the checked-in source plus the generated dashboard assets and all release gates below pass in CI.
+**Repository status: ready for a release candidate; deployment status: READY WITH GAPS until target-environment proof is attached.**
 
-No known HIGH or MEDIUM production blockers remain in the audited surface. The remaining items are operational choices or non-blocking tuning work.
+The current tree passes the local build, vet, formatting, full Go test, focused race, frontend lint/unit/build/smoke, dependency, workflow, config-invariant, and backup/restore gates listed below. The 2026-07-20 audit also fixed a real DoQ shutdown race, a frontend production-build type failure, a DoT/XoT listener collision, staging metrics exposure, and non-functional backup/restore/Prometheus-monitoring paths.
+
+Do not translate repository health into an unconditional production claim. A promotion still requires the environment-specific evidence in `PRODUCTION_PROOF_CHECKLIST.md`: rendered/applied manifests, real secrets/files, image scan, restore drill, deployed smoke, load budget, and (when HA is in scope) three-node failover/snapshot proof.
 
 ## Release Gates
 
 Run these before tagging or promoting an image:
 
 ```bash
-npm --prefix web run lint
+npm --prefix web run lint -- --max-warnings=0
+npm --prefix web test
 npm --prefix web run build
 npm --prefix web run smoke
+npm --prefix web audit --audit-level=moderate
 
 git diff --check
 go build ./...
 go vet ./...
-/tmp/nothingdns-tools/actionlint
+govulncheck ./...
+actionlint .github/workflows/*.yml
+make backup-restore-test
 
-/tmp/nothingdns-helm-bin/helm lint deploy/helm/nothingdns \
+helm lint deploy/helm/nothingdns \
   --set-string auth.authSecret='AuthSecret-1234567890-ABCDEFGHIJKLMNOPQRSTUVWXYZ' \
-  --set-string auth.adminPassword='AdminPassword-1234567890-ABCDE'
+  --set-string auth.adminPassword='AdminPassword-1234567890-ABCDE' \
+  --set-string auth.storageEncryptionKey='a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90'
 
 go test ./... -count=1 -short
-go test -race ./internal/cluster ./internal/cluster/raft ./internal/server ./internal/dashboard ./internal/upstream ./internal/cache -count=1 -short
+go test -race ./internal/quic ./cmd/nothingdns -count=1 -short
+make test-race-critical
 ```
 
 Validate rendered deployment configs:
@@ -139,19 +147,37 @@ openssl rand -hex 32     # cluster snapshot encryption key
 
 Do not commit literal secret values to any config file. The config validator rejects common placeholder secret strings and low-entropy secrets.
 
-## Residual Non-Blockers
+## Residual roadmap (ordered)
 
-- Visual browser regression tests are not currently part of the release gate. Add Playwright or screenshot checks later if pixel-level UI coverage is required.
-- Dashboard code splitting creates many small chunks. The current build is acceptable, but chunk grouping can be tuned later if request overhead matters for a specific deployment path.
-- `security-report/` may contain local ignored scan artifacts in a developer workspace. They are intentionally excluded from git except the main ledger.
-- Production TLS certificate files, zone files, root trust anchor files, and runtime secrets must exist on target hosts or be provided by Kubernetes/Helm before startup; `scripts/production-smoke.sh` verifies only the running service surface after those inputs are present.
+### P0 — Promotion blockers for a specific environment
+
+- Render and validate Helm locally/in CI, then server-side dry-run the manifests against the target cluster CRDs and policies. The 2026-07-20 local environment did not have a Helm binary, so only template source review plus CI assertions were available locally.
+- Build/scan the final image by digest and verify its signature, SBOM, provenance, non-root runtime, probes, persistence, and network policy in the target registry/cluster.
+- Run an off-host backup plus destructive restore drill and record achieved RPO/RTO; the repository round-trip test proves the archive mechanism, not cloud retention or volume-snapshot orchestration.
+- Run `production-smoke.sh` against the deployed target with real DNS/API/metrics/TLS inputs.
+- If Raft HA is release scope, attach three-node election, replication, restart, partition/failover, and snapshot catch-up evidence.
+- Capture a target-hardware load test with explicit QPS, P95/P99 latency, error-rate, CPU, memory, and saturation budgets.
+
+### P1 — Near-term hardening
+
+- Replace the custom tracing exporter with the official OpenTelemetry SDK/OTLP pipeline and W3C TraceContext propagation.
+- Ship a versioned Grafana dashboard and validate PrometheusRule queries against real emitted metric names.
+- Add scheduled recovery drills, container vulnerability scans, and benchmark regression budgets to CI/release automation.
+- Decide whether production environments require progressive delivery (canary/blue-green) and codify rollback criteria in the deployment platform rather than the application chart.
+
+### P2 — Non-blocking maintenance
+
+- Add visual browser regression tests if pixel-level dashboard stability is a release requirement.
+- Tune dashboard chunk grouping only if measured request overhead justifies it.
+- Continue simplifying legacy/dead paths such as the unused Raft `sendCommitted` helper; do not treat them as runtime data-loss paths without reproducing the active apply-loop behavior.
 
 ## Promotion Checklist
 
 - All release gates above pass on a clean checkout.
-- `npm --prefix web run test` passes (51 unit tests, 0 failures).
+- `npm --prefix web test` passes (89 unit tests in the 2026-07-20 baseline, 0 failures).
 - `npm --prefix web run build` output is committed under `internal/dashboard/static/dist/`.
-- Container image is built from the verified tree and includes SBOM/provenance.
-- Deployment config validates with real secret values in the target environment.
+- `make backup-restore-test` passes, and a target-storage restore drill has separate evidence.
+- Container image is built from the verified tree and includes SBOM/provenance plus a clean vulnerability scan.
+- Deployment config validates with real secret values in the target environment; Helm monitor/XoT templates render and apply against installed CRDs.
 - DNS, DoH, metrics, health, readiness, liveness, cluster, and dashboard endpoints are smoke-tested after rollout with `scripts/production-smoke.sh`.
 - Binary version reports `NothingDNS version 1.0.0` (or the tagged release version).

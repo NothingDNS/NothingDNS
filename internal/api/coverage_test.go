@@ -646,56 +646,109 @@ func TestHandlePtr6Lookup_NotFound(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// validateUpstreamAddress
+// validateAndPinUpstream
 // ---------------------------------------------------------------------------
 
-func TestValidateUpstreamAddress_PublicIP(t *testing.T) {
-	err := validateUpstreamAddress("8.8.8.8:53")
+func TestValidateAndPinUpstream_PublicIP(t *testing.T) {
+	pinned, err := validateAndPinUpstream("8.8.8.8:53")
 	if err != nil {
 		t.Errorf("public IP should be valid: %v", err)
 	}
+	if pinned != "8.8.8.8:53" {
+		t.Errorf("IP literal should be returned as-is, got %q", pinned)
+	}
 }
 
-func TestValidateUpstreamAddress_PrivateIP(t *testing.T) {
-	err := validateUpstreamAddress("192.168.1.1:53")
+func TestValidateAndPinUpstream_PrivateIP(t *testing.T) {
+	_, err := validateAndPinUpstream("192.168.1.1:53")
 	if err == nil {
 		t.Error("private IP should be rejected")
 	}
 }
 
-func TestValidateUpstreamAddress_PrivateIP10(t *testing.T) {
-	err := validateUpstreamAddress("10.0.0.1:53")
+func TestValidateAndPinUpstream_PrivateIP10(t *testing.T) {
+	_, err := validateAndPinUpstream("10.0.0.1:53")
 	if err == nil {
 		t.Error("10.x.x.x should be rejected")
 	}
 }
 
-func TestValidateUpstreamAddress_Loopback(t *testing.T) {
-	err := validateUpstreamAddress("127.0.0.1:53")
+func TestValidateAndPinUpstream_Loopback(t *testing.T) {
+	_, err := validateAndPinUpstream("127.0.0.1:53")
 	if err == nil {
 		t.Error("loopback should be rejected")
 	}
 }
 
-func TestValidateUpstreamAddress_IPWithoutPort(t *testing.T) {
-	// No port — SplitHostPort fails, so entire string is treated as host
-	err := validateUpstreamAddress("8.8.8.8")
-	if err != nil {
-		t.Errorf("public IP without port should be valid: %v", err)
+func TestValidateAndPinUpstream_UnspecifiedIP(t *testing.T) {
+	// 0.0.0.0 routes to localhost on Linux — must be rejected.
+	_, err := validateAndPinUpstream("0.0.0.0:53")
+	if err == nil {
+		t.Error("0.0.0.0 should be rejected (routes to localhost)")
 	}
 }
 
-func TestValidateUpstreamAddress_BracketIPv6(t *testing.T) {
-	err := validateUpstreamAddress("[::1]:53")
+func TestValidateAndPinUpstream_CGNAT(t *testing.T) {
+	// 100.64.0.0/10 is CGNAT (RFC 6598) — not routable externally.
+	_, err := validateAndPinUpstream("100.64.0.1:53")
+	if err == nil {
+		t.Error("CGNAT 100.64.0.0/10 should be rejected")
+	}
+}
+
+func TestValidateAndPinUpstream_IPWithoutPort(t *testing.T) {
+	// No port — SplitHostPort fails, so entire string is treated as host
+	pinned, err := validateAndPinUpstream("8.8.8.8")
+	if err != nil {
+		t.Errorf("public IP without port should be valid: %v", err)
+	}
+	if pinned != "8.8.8.8" {
+		t.Errorf("IP literal should be returned as-is, got %q", pinned)
+	}
+}
+
+func TestValidateAndPinUpstream_BracketIPv6(t *testing.T) {
+	_, err := validateAndPinUpstream("[::1]:53")
 	if err == nil {
 		t.Error("loopback IPv6 should be rejected")
 	}
 }
 
-func TestValidateUpstreamAddress_PublicIPv6(t *testing.T) {
-	err := validateUpstreamAddress("[2001:4860:4860::8888]:53")
+func TestValidateAndPinUpstream_PublicIPv6(t *testing.T) {
+	pinned, err := validateAndPinUpstream("[2001:4860:4860::8888]:53")
 	if err != nil {
 		t.Errorf("public IPv6 should be valid: %v", err)
+	}
+	if pinned != "[2001:4860:4860::8888]:53" {
+		t.Errorf("IPv6 literal should be returned as-is, got %q", pinned)
+	}
+}
+
+func TestValidateAndPinUpstream_UnresolvableHostname(t *testing.T) {
+	// Fail-closed: unresolvable hostnames must be rejected, not allowed.
+	// This prevents SSRF via DNS rebinding and avoids adding dead upstreams.
+	_, err := validateAndPinUpstream("this-hostname-definitely-does-not-exist.invalid.:53")
+	if err == nil {
+		t.Error("unresolvable hostname should be rejected (fail-closed)")
+	}
+}
+
+func TestValidateAndPinUpstream_PinsHostnameToIP(t *testing.T) {
+	// A resolvable public hostname must be pinned to an IP literal so that
+	// subsequent dial calls bypass DNS entirely (closes rebinding TOCTOU).
+	pinned, err := validateAndPinUpstream("dns.google:53")
+	if err != nil {
+		t.Skipf("dns.google did not resolve in this environment: %v", err)
+	}
+	host, _, splitErr := net.SplitHostPort(pinned)
+	if splitErr != nil {
+		host = pinned // no port — entire string is the host
+	}
+	if net.ParseIP(host) == nil {
+		t.Errorf("pinned address should be an IP literal, got %q", pinned)
+	}
+	if !strings.HasSuffix(pinned, ":53") {
+		t.Errorf("pinned address should preserve port :53, got %q", pinned)
 	}
 }
 

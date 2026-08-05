@@ -66,22 +66,22 @@ jobs:
           gh issue create \
             --title "Weekly advisory scan: ${{ steps.advisories.outputs.count }} new react-router advisory(ies)" \
             --body "$(cat <<'ISSUE'
-        The weekly advisory monitor found new GitHub Security Advisories affecting
-        react-router or react-router-dom. Review each one and decide whether to
-        update the `.nsprc` allowlist or bump the dependency.
+          The weekly advisory monitor found new GitHub Security Advisories affecting
+          react-router or react-router-dom. Review each one and decide whether to
+          update the `.nsprc` allowlist or bump the dependency.
 
-        New advisories:
-        $(cat /tmp/new-advisories.txt | while read -r id; do echo "- https://github.com/advisories/${id}"; done)
+          New advisories:
+          $(cat /tmp/new-advisories.txt | while read -r id; do echo "- https://github.com/advisories/${id}"; done)
 
-        Current state: react-router-dom@7.18.2
-        Allowlist: see web/.nsprc
+          Current state: react-router-dom@7.18.2
+          Allowlist: see web/.nsprc
 
-        Action:
-        1. Check each advisory for SPA applicability
-        2. If none apply, add to .nsprc allowlist
-        3. If one applies and is fixed upstream, bump the dependency
-        ISSUE
-        )" \
+          Action:
+          1. Check each advisory for SPA applicability
+          2. If none apply, add to .nsprc allowlist
+          3. If one applies and is fixed upstream, bump the dependency
+          ISSUE
+          )" \
             --label "security" \
             --label "dependencies"
 

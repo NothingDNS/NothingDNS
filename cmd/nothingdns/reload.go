@@ -135,4 +135,3 @@ func reloadConfig(configPath string, s *reloadableState) (reloadedZones int, err
 // ============================================================================
 // Hot-reload test helpers — exposed for testing only
 // ============================================================================
-

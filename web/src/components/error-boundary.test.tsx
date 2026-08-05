@@ -10,7 +10,7 @@ function CrashChild({ shouldCrash = false }: { shouldCrash?: boolean }) {
 }
 
 // A child that throws an error with empty message
-function EmptyMessageCrash() {
+function EmptyMessageCrash(): never {
   throw new Error('');
 }
 

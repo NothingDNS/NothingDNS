@@ -138,3 +138,6 @@ Thumbs.db
 
 # Frontend coverage output directory
 web/coverage/
+!/.wrongstack/
+/.wrongstack/*
+!/.wrongstack/project.json

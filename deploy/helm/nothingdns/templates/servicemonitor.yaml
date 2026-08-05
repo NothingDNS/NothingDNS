@@ -1,4 +1,11 @@
 {{- if .Values.monitoring.serviceMonitor.enabled }}
+{{- if not .Values.config.metrics.enabled }}
+{{- fail "monitoring.serviceMonitor.enabled requires config.metrics.enabled=true" }}
+{{- end }}
+{{- if and .Values.monitoring.serviceMonitor.namespace (ne .Values.monitoring.serviceMonitor.namespace .Release.Namespace) }}
+{{- fail "monitoring.serviceMonitor.namespace must match the release namespace because scrape credentials are namespace-scoped" }}
+{{- end }}
+{{- $secretName := default (include "nothingdns.fullname" .) .Values.auth.existingSecret }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -18,7 +25,12 @@ spec:
     - port: metrics
       interval: {{ .Values.monitoring.serviceMonitor.interval }}
       scrapeTimeout: {{ .Values.monitoring.serviceMonitor.scrapeTimeout }}
-      path: /metrics
+      path: {{ .Values.config.metrics.path }}
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ $secretName }}
+          key: metrics-auth-token
   namespaceSelector:
     matchNames:
       - {{ .Release.Namespace }}

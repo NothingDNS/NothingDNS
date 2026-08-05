@@ -415,7 +415,6 @@ func TestRunWithContext_InvalidBlocklist(t *testing.T) {
 	}
 }
 
-
 // TestRunWithContext_TransferInitError extends the runWithContext error
 // path coverage to the NewTransferManager journal-store init failure
 // branch. We point Storage.DataDir at a regular file (not a directory)

@@ -712,81 +712,83 @@ curl -X DELETE -H "Authorization: Bearer $TOKEN" \
 
 ## 10. Backup & Recovery
 
-### Backup Commands
+### Recovery objectives
+
+Set these targets in the deployment change record and alert when they are missed:
+
+- **RPO:** 24 hours by default (daily backup). Use hourly snapshots for zones with frequent dynamic updates.
+- **RTO:** 60 minutes for a single-node restore; 120 minutes for a three-node cluster rebuild.
+- Keep at least one encrypted, immutable copy outside the failure domain (another account/region or offline storage).
+- Run `make backup-restore-test` in CI and perform a real restore drill at least quarterly.
+
+### Create and verify a consistent backup
+
+The archive contains the daemon config, the complete zone tree, and all files under `storage.data_dir`. The script fails when the required config is absent, writes atomically, and creates a SHA-256 sidecar. It does **not** make live WAL/KV writes transactionally consistent by itself.
 
 ```bash
-# Config backup
-cp /etc/nothingdns/nothingdns.yaml /var/backups/nothingdns/config-$(date +%Y%m%d).yaml
-
-# Zone backup
-tar -czf /var/backups/nothingdns/zones-$(date +%Y%m%d).tar.gz /etc/nothingdns/zones/
-
-# KVStore backup
-cp /data/nothingdns/*.kv /var/backups/nothingdns/
-
-# Using script
-./scripts/backup.sh /var/backups/nothingdns
-```
-
-### Automated Backup
-
-```bash
-# Cron job for daily backup
-# Edit crontab: crontab -e
-0 2 * * * /path/to/scripts/backup.sh /var/backups/nothingdns
-
-# Or systemd timer
-# /etc/systemd/system/nothingdns-backup.timer
-[Unit]
-Description=NothingDNS backup
-
-[Timer]
-OnCalendar=daily
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-```
-
-### Recovery Procedures
-
-```bash
-# 1. Stop server
+# 1. Stop the daemon, or take a storage/volume snapshot first.
 sudo systemctl stop nothingdns
 
-# 2. Restore config
-cp /var/backups/nothingdns/config-20240501.yaml /etc/nothingdns/nothingdns.yaml
+# 2. Create the archive (defaults shown).
+sudo env \
+  NOTHINGDNS_CONFIG_FILE=/etc/nothingdns/nothingdns.yaml \
+  NOTHINGDNS_ZONES_DIR=/etc/nothingdns/zones \
+  NOTHINGDNS_DATA_DIR=/var/lib/nothingdns \
+  ./scripts/backup.sh /var/backups/nothingdns
 
-# 3. Restore zones
-tar -xzf /var/backups/nothingdns/zones-20240501.tar.gz -C /
+# 3. Verify immediately, then copy both files off-host.
+cd /var/backups/nothingdns
+sha256sum -c nothingdns-backup-YYYYmmdd_HHMMSS.tar.gz.sha256
 
-# 4. Restore KVStore
-cp /var/backups/nothingdns/*.kv /data/nothingdns/
-
-# 5. Start server
+# 4. Restart after the snapshot/archive is complete.
 sudo systemctl start nothingdns
-
-# 6. Verify
-dnsctl server health
-curl http://localhost:8080/health
 ```
 
-### Disaster Recovery
+For Kubernetes, quiesce the pod before a `VolumeSnapshot`, snapshot the PVC, and retain the matching ConfigMap/Secret versions. Do not set `NOTHINGDNS_BACKUP_ALLOW_LIVE=1` unless the underlying volume snapshot already guarantees point-in-time consistency.
+
+### Automated backup
 
 ```bash
-# Complete rebuild from backup
-# 1. Install NothingDNS on new server
-# 2. Copy backed up config
-# 3. Copy backed up zones
-# 4. Copy backed up KVStore
-# 5. Start service
-# 6. Verify cluster state
-
-# If cluster is lost:
-# 1. Remove cluster config
-# 2. Restart as single node
-# 3. Re-form cluster with new nodes
+# Daily local archive; the surrounding job must stop/snapshot and restart safely.
+0 2 * * * /usr/local/sbin/nothingdns-consistent-backup
 ```
+
+The wrapper should upload the `.tar.gz` and `.sha256` together to encrypted object storage, apply retention/immutability policy, and alert on any non-zero exit. Local retention defaults to seven archives and is configurable with `NOTHINGDNS_BACKUP_RETENTION`.
+
+### Restore procedure
+
+```bash
+# 1. Isolate the node and stop the daemon.
+sudo systemctl stop nothingdns
+
+# 2. Verify and restore. Existing targets are never overwritten implicitly.
+sudo env NOTHINGDNS_RESTORE_OVERWRITE=1 \
+  NOTHINGDNS_CONFIG_FILE=/etc/nothingdns/nothingdns.yaml \
+  NOTHINGDNS_ZONES_DIR=/etc/nothingdns/zones \
+  NOTHINGDNS_DATA_DIR=/var/lib/nothingdns \
+  ./scripts/restore.sh /var/backups/nothingdns/nothingdns-backup-YYYYmmdd_HHMMSS.tar.gz
+
+# 3. Validate before opening traffic.
+sudo -u nobody nothingdns \
+  -config /etc/nothingdns/nothingdns.yaml \
+  -validate-production-config
+
+# 4. Start and run service checks.
+sudo systemctl start nothingdns
+dnsctl server health
+./scripts/production-smoke.sh
+```
+
+`restore.sh` verifies SHA-256, rejects traversal/link/special-file archive entries, stages files before replacement, and rolls back a partial install. Keep the generated pre-restore copy until the smoke test is green.
+
+### Cluster disaster recovery
+
+1. Declare the incident, record the last known healthy commit/index, and stop writes/automation.
+2. Select the newest backup whose SHA-256 and timestamp meet the RPO; never merge state from multiple backups.
+3. Restore one isolated node with cluster joins disabled and validate authoritative zones, DNSSEC material, and API-created state.
+4. Start that node as the recovery source, then create fresh peers and join them one at a time.
+5. Confirm Raft term/leader/member state and compare zone digests before returning traffic.
+6. Run `production-smoke.sh`, verify alerts and backup scheduling, then document actual RPO/RTO and corrective actions.
 
 ---
 

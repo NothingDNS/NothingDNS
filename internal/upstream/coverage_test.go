@@ -1642,7 +1642,7 @@ func TestWriteFullRejectsZeroByteWrite(t *testing.T) {
 
 func TestWritePacketRejectsPartialDatagramWrite(t *testing.T) {
 	conn := &partialWriteConn{maxWrite: 2}
-	_, err := writePacket(conn, []byte{1, 2, 3})
+	err := writePacket(conn, []byte{1, 2, 3})
 	if err != io.ErrShortWrite {
 		t.Fatalf("writePacket error = %v, want %v", err, io.ErrShortWrite)
 	}

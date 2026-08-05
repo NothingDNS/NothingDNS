@@ -19,7 +19,7 @@ server:
     cert_file: /etc/nothingdns/tls/prod.crt
     key_file: /etc/nothingdns/tls/prod.key
     ca_file: /etc/nothingdns/tls/prod-ca.crt    # mTLS client auth
-    bind: ":853"
+    bind: ":8853"                              # Separate listener from DoT on :853
     min_tls_version: 13                         # TLS 1.3 only in production
   http:
     enabled: true

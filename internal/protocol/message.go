@@ -647,46 +647,55 @@ func (m *Message) Truncate(maxSize int) {
 	if m == nil {
 		return
 	}
-	if m.WireLength() <= maxSize {
+	currentLength := m.WireLength()
+	if currentLength <= maxSize {
 		return
+	}
+
+	removeLast := func(records []*ResourceRecord) []*ResourceRecord {
+		last := len(records) - 1
+		if records[last] != nil {
+			currentLength -= records[last].WireLength()
+		}
+		return records[:last]
 	}
 
 	// Try removing additional records first. These are optional data, so
 	// dropping them does not set the TC bit (RFC 2181 §9).
-	for len(m.Additionals) > 0 && m.WireLength() > maxSize {
-		m.Additionals = m.Additionals[:len(m.Additionals)-1]
+	for len(m.Additionals) > 0 && currentLength > maxSize {
+		m.Additionals = removeLast(m.Additionals)
 	}
 	m.Header.ARCount = uint16(len(m.Additionals))
 
-	if m.WireLength() <= maxSize {
+	if currentLength <= maxSize {
 		return
 	}
 
 	truncated := false
 
-	// Try removing authority records
-	for len(m.Authorities) > 0 && m.WireLength() > maxSize {
-		m.Authorities = m.Authorities[:len(m.Authorities)-1]
+	// Try removing authority records.
+	for len(m.Authorities) > 0 && currentLength > maxSize {
+		m.Authorities = removeLast(m.Authorities)
 		truncated = true
 	}
 	m.Header.NSCount = uint16(len(m.Authorities))
 
-	if m.WireLength() <= maxSize {
+	if currentLength <= maxSize {
 		if truncated {
 			m.Header.SetTruncated(true)
 		}
 		return
 	}
 
-	// Try removing answer records
-	for len(m.Answers) > 0 && m.WireLength() > maxSize {
-		m.Answers = m.Answers[:len(m.Answers)-1]
+	// Try removing answer records.
+	for len(m.Answers) > 0 && currentLength > maxSize {
+		m.Answers = removeLast(m.Answers)
 		truncated = true
 	}
 	m.Header.ANCount = uint16(len(m.Answers))
 
 	// If required records were removed or we still do not fit, set TC bit.
-	if truncated || m.WireLength() > maxSize {
+	if truncated || currentLength > maxSize {
 		m.Header.SetTruncated(true)
 	}
 }

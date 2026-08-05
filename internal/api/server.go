@@ -1355,7 +1355,7 @@ var roleOrder = map[auth.Role]int{
 // authenticated via the legacy shared `auth_token`. Chosen to be distinct
 // from any realistic real username so audit logs and rate-limit keys separate
 // legacy-token traffic from real user traffic.
-const legacyTokenUsername = "__legacy_auth_token__"
+const legacyTokenUsername = "__legacy_auth_token__" /* #nosec G101 -- synthetic username marker, not a credential */
 
 // legacyTokenUser returns the synthetic user bound to the legacy auth_token.
 // The role is taken from config.AuthTokenRole (default "viewer"); unknown or

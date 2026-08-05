@@ -55,6 +55,8 @@ service:
   tcpPort: 53
   # DNS over TLS port
   dotPort: 853
+  # Zone Transfer over TLS port; separate from DoT when both listeners are enabled
+  xotPort: 8853
   # API/WebSocket port
   apiPort: 8080
 
@@ -278,7 +280,7 @@ config:
   # XoT (Zone Transfer over TLS)
   xot:
     enabled: false
-    bind: ":853"
+    bind: ":8853"
     cert_file: ""
     key_file: ""
     ca_file: ""
@@ -332,6 +334,14 @@ monitoring:
     scrapeTimeout: 10s
     labels: {}
 
+  # Prometheus Operator PodMonitor (useful with service meshes/sidecars)
+  podMonitor:
+    enabled: false
+    namespace: ""
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+
   # Prometheus Operator PrometheusRule for alerts
   prometheusRule:
     enabled: false
@@ -355,10 +365,6 @@ networkPolicy:
         - protocol: TCP
           port: 853
         - protocol: TCP
+          port: 8853
+        - protocol: TCP
           port: 8080
-
-# PodMonitor for Prometheus scraping
-podMonitor:
-  enabled: false
-  namespace: ""
-  interval: 30s

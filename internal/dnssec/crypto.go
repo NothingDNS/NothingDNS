@@ -7,7 +7,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha1" // #nosec G505 - Required for NSEC3 hash, not for security
+	"crypto/sha1" // #nosec G505 -- NSEC3 hash per RFC 5155, DS digest type 1 per RFC 4034
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base64"
@@ -592,14 +592,14 @@ func NSEC3Hash(name string, algorithm uint8, iterations uint16, salt []byte) ([]
 	}
 
 	// Initial hash: SHA-1(wireName + salt)
-	h := sha1.New() // #nosec G505 - NSEC3 requires SHA-1 per RFC 5155
+	h := sha1.New() // #nosec G401,G505 -- NSEC3 requires SHA-1 per RFC 5155
 	h.Write(wireName)
 	h.Write(salt)
 	hash := h.Sum(nil)
 
 	// Additional iterations
 	for i := uint16(0); i < iterations; i++ {
-		h = sha1.New() // #nosec G505
+		h = sha1.New() // #nosec G401,G505 -- NSEC3 iteration hash per RFC 5155
 		h.Write(hash)
 		h.Write(salt)
 		hash = h.Sum(nil)

@@ -34,6 +34,13 @@ spec:
           port: {{ .Values.service.dotPort }}
       from: []
     {{- end }}
+    {{- if .Values.config.xot.enabled }}
+    # XoT
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.service.xotPort }}
+      from: []
+    {{- end }}
     # API
     - ports:
         - protocol: TCP

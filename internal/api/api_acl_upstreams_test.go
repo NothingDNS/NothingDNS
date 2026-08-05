@@ -388,8 +388,8 @@ func TestHandleUpstreams_PutAddServer(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&msgResp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if msgResp.Message != "Server added: 1.1.1.1:53" {
-		t.Errorf("expected 'Server added: 1.1.1.1:53', got %q", msgResp.Message)
+	if msgResp.Message != "Server added: 1.1.1.1:53 (resolved from 1.1.1.1:53)" {
+		t.Errorf("expected 'Server added: 1.1.1.1:53 (resolved from 1.1.1.1:53)', got %q", msgResp.Message)
 	}
 }
 

@@ -61,11 +61,17 @@ jobs:
             exit 1
           fi
 
+      - name: Verify Go module integrity
+        run: go mod verify
+
       - name: Build
         run: go build -o nothingdns ./cmd/nothingdns
 
       - name: Test
         run: go test ./... -count=1 -short
+
+      - name: Verify backup and restore round trip
+        run: ./scripts/backup-restore-smoke.sh
 
   binaries:
     runs-on: ubuntu-latest
@@ -210,6 +216,27 @@ jobs:
 
           test -s /tmp/nothingdns-helm-config.yaml
           go run ./cmd/nothingdns -config /tmp/nothingdns-helm-config.yaml -validate-config
+
+      - name: Validate monitoring and XoT templates
+        run: |
+          helm template nothingdns deploy/helm/nothingdns \
+            --set-string auth.authSecret='AuthSecret-1234567890-ABCDEFGHIJKLMNOPQRSTUVWXYZ' \
+            --set-string auth.adminPassword='AdminPassword-1234567890-ABCDE' \
+            --set-string auth.metricsAuthToken='MetricsToken-1234567890-ABCDEFGHIJKLMNOPQRSTUVWXYZ' \
+            --set-string auth.storageEncryptionKey='a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90' \
+            --set config.metrics.enabled=true \
+            --set monitoring.serviceMonitor.enabled=true \
+            --set monitoring.podMonitor.enabled=true \
+            --set config.xot.enabled=true \
+            --set-string config.xot.cert_file='/etc/nothingdns/tls/xot.crt' \
+            --set-string config.xot.key_file='/etc/nothingdns/tls/xot.key' \
+            > /tmp/nothingdns-observability.yaml
+
+          grep -Fxq 'kind: ServiceMonitor' /tmp/nothingdns-observability.yaml
+          grep -Fxq 'kind: PodMonitor' /tmp/nothingdns-observability.yaml
+          test "$(grep -c 'key: metrics-auth-token' /tmp/nothingdns-observability.yaml)" -ge 3
+          grep -q 'name: xot' /tmp/nothingdns-observability.yaml
+          grep -q 'port: 8853' /tmp/nothingdns-observability.yaml
 
   security:
     runs-on: ubuntu-latest

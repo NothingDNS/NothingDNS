@@ -1,0 +1,40 @@
+{{- if .Values.monitoring.podMonitor.enabled }}
+{{- if not .Values.config.metrics.enabled }}
+{{- fail "monitoring.podMonitor.enabled requires config.metrics.enabled=true" }}
+{{- end }}
+{{- if and .Values.monitoring.podMonitor.namespace (ne .Values.monitoring.podMonitor.namespace .Release.Namespace) }}
+{{- fail "monitoring.podMonitor.namespace must match the release namespace because scrape credentials are namespace-scoped" }}
+{{- end }}
+{{- $secretName := default (include "nothingdns.fullname" .) .Values.auth.existingSecret }}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "nothingdns.fullname" . }}
+  {{- if .Values.monitoring.podMonitor.namespace }}
+  namespace: {{ .Values.monitoring.podMonitor.namespace }}
+  {{- else }}
+  namespace: {{ .Release.Namespace }}
+  {{- end }}
+  labels:
+    {{- include "nothingdns.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.podMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  podMetricsEndpoints:
+    - port: metrics
+      interval: {{ .Values.monitoring.podMonitor.interval }}
+      scrapeTimeout: {{ .Values.monitoring.podMonitor.scrapeTimeout }}
+      path: {{ .Values.config.metrics.path }}
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ $secretName }}
+          key: metrics-auth-token
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    matchLabels:
+      {{- include "nothingdns.selectorLabels" . | nindent 6 }}
+{{- end }}

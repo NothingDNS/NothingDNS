@@ -5,6 +5,7 @@
 set -euo pipefail
 
 HOST="${1:-localhost:8080}"
+METRICS_URL="${NOTHINGDNS_METRICS_URL:-http://localhost:9153/metrics}"
 FAILED=0
 
 echo "Running NothingDNS health checks on $HOST..."
@@ -96,9 +97,13 @@ else
     fi
 fi
 
-# 7. Metrics
+# 7. Metrics (dedicated listener, optionally Bearer-protected)
 echo -n "Metrics: "
-if curl -sf "http://$HOST/metrics" > /dev/null 2>&1; then
+metrics_auth_args=()
+if [ -n "${NOTHINGDNS_METRICS_AUTH_TOKEN:-}" ]; then
+    metrics_auth_args=(-H "Authorization: Bearer ${NOTHINGDNS_METRICS_AUTH_TOKEN}")
+fi
+if curl -sf "${metrics_auth_args[@]}" "$METRICS_URL" > /dev/null 2>&1; then
     echo "OK"
 else
     echo "FAIL"
