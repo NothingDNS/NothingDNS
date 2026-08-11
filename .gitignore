@@ -115,9 +115,6 @@ ixfr-journals/
 # Web coverage output
 web/coverage.out
 
-# Binary backups
-*.exe~
-
 # OS specific files
 Thumbs.db
 .DS_Store
