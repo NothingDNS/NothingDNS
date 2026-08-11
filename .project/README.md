@@ -18,6 +18,6 @@ For up-to-date documentation, see [docs/](../docs/).
 
 ## Related documents
 
-- [PROJECT_AUDIT_REPORT.md](../PROJECT_AUDIT_REPORT.md) — comprehensive v1.0.0 audit
+- [PROJECT_AUDIT_REPORT.md](../docs/legacy/PROJECT_AUDIT_REPORT.md) — comprehensive v1.0.0 audit
 - [docs/PRODUCTION_READINESS.md](../docs/PRODUCTION_READINESS.md) — current production readiness
 - [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) — system architecture

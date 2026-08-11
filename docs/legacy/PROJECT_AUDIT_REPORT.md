@@ -10,7 +10,7 @@
 >
 > **Snapshot date:** 2026-07-15 (this report is a single point in time).
 > **Quick-win items** (QW-1 … QW-4, CR-1, H-1) were resolved in commits
-> `1459c26` and `e15f174`; see `REMEDIATION_PLAN.md` "Completed" section.
+> `1459c26` and `e15f174`; see `./REMEDIATION_PLAN.md` "Completed" section.
 > **CR-1** (extract `run()` reload logic) and **H-1** (group handler fields
 > into sub-structs) shipped in commits `768a4bf` and `e15f174` respectively.
 >

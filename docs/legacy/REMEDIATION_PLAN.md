@@ -1,7 +1,7 @@
 # NothingDNS — Remediation & Execution Plan
 
 **Status:** Active — see completion notes below  
-**Derived from:** `PROJECT_AUDIT_REPORT.md` (2026-07-15)  
+**Derived from:** `./PROJECT_AUDIT_REPORT.md` (2026-07-15)  
 
 ---
 
@@ -14,7 +14,7 @@
 > superseded by post-2026-07-15 work.
 >
 > **For the current state of the project**, see:
-> - `PROJECT_AUDIT_REPORT.md` (the historical snapshot this plan was derived from — also bannered as historical)
+> - `./PROJECT_AUDIT_REPORT.md` (the historical snapshot this plan was derived from — also bannered as historical)
 > - `security-report/SECURITY-REPORT.md` (security findings & remediation status)
 > - `docs/PRODUCTION_READINESS.md` (current production-readiness checklist)
 > - `docs/CHANGELOG.md` (post-2026-07-15 changes)
