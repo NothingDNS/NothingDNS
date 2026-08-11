@@ -11,5 +11,5 @@
 # fallback itself. If the native tool is also denied, stop and ask the
 # user.
 #
-# See full rules in AGENTS.md.
+# See full rules in CLAUDE.md.
 # dfmt:v1 end
