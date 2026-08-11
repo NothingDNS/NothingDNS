@@ -71,9 +71,8 @@ coverage.out
 # Database files
 *.db
 
-# Zone/runtime data (test fixtures can be tracked with force-add when needed)
+# Zone data files (covered by global *.zone and *.db rules above)
 *.zone
-/zones/
 /zones-db/
 
 # AI assistant config (personal)
