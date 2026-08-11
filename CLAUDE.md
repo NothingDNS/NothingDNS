@@ -2,10 +2,6 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with this repository.
 
-## Mandatory Pre-Work
-
-Before any work in this project, read and obey `AGENT_DIRECTIVES.md` in the project root. It contains hard rules that override default LLM behavior: phased execution, forced verification, edit safety, commit discipline, and more. Violation of any rule is a blocking issue.
-
 ## Build, Lint & Test
 
 ```bash
