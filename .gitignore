@@ -127,13 +127,15 @@ Thumbs.db
 /web/yarn.lock
 
 .dfmt/
-.wrongstack/
+# Track only .wrongstack/project.json; ignore all other session/agent data
+/.wrongstack/*
+!/.wrongstack/project.json
 
 # Local temp files (per CLAUDE.md / repo convention)
 .temp_files/
 
 # Frontend coverage output directory
 web/coverage/
+
+.wrongstack/
 !/.wrongstack/
-/.wrongstack/*
-!/.wrongstack/project.json
