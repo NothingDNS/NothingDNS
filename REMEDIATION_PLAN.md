@@ -3,6 +3,28 @@
 **Status:** Active — see completion notes below  
 **Derived from:** `PROJECT_AUDIT_REPORT.md` (2026-07-15)  
 
+---
+
+> ## ⚠️ HISTORICAL — DO NOT TREAT AS ACTIVE WORK
+>
+> **Derived-from date:** 2026-07-15 (single-point-in-time audit).
+> Every Phase 0 (Quick-Wins) item in the table below shipped before this
+> banner was added. The longer-phase items (Phase 1+ structural refactors,
+> fuzz campaigns, etc.) were either completed in subsequent commits or
+> superseded by post-2026-07-15 work.
+>
+> **For the current state of the project**, see:
+> - `PROJECT_AUDIT_REPORT.md` (the historical snapshot this plan was derived from — also bannered as historical)
+> - `security-report/SECURITY-REPORT.md` (security findings & remediation status)
+> - `docs/PRODUCTION_READINESS.md` (current production-readiness checklist)
+> - `docs/CHANGELOG.md` (post-2026-07-15 changes)
+>
+> The plan body below is preserved unchanged for the historical record.
+> Nothing here is expected to be picked up as new work without independent
+> verification against the current codebase.
+
+---
+
 ## Completed
 
 | ID | Task | Status | Commit |

@@ -6,6 +6,40 @@
 
 ---
 
+> ## ⚠️ HISTORICAL — DO NOT TREAT AS THE CURRENT STATE
+>
+> **Snapshot date:** 2026-07-15 (this report is a single point in time).
+> **Quick-win items** (QW-1 … QW-4, CR-1, H-1) were resolved in commits
+> `1459c26` and `e15f174`; see `REMEDIATION_PLAN.md` "Completed" section.
+> **CR-1** (extract `run()` reload logic) and **H-1** (group handler fields
+> into sub-structs) shipped in commits `768a4bf` and `e15f174` respectively.
+>
+> **Several issue rows in §16 (Issues & Recommendations) are now stale** —
+> the conditions they describe no longer hold in `main` as of 2026-08-05.
+> Specifically:
+>
+> | Row | Original claim (2026-07-15) | Current state (verified 2026-08-05) |
+> |-----|-----------------------------|--------------------------------------|
+> | H-2 | "`web/go.mod` is an accidental artifact" | File no longer exists in the tree (removed in `1459c26`). |
+> | H-3 | "`pnpm-workspace.yaml` exists alongside `package-lock.json`" | `pnpm-workspace.yaml` no longer exists; npm is the only package manager. |
+> | H-4 | "Web frontend has no unit tests" | 176 Vitest tests now present across 20 files, all passing in `web/`. |
+> | O-1 | "Go 1.26.5 is very new; CI may break" | Go 1.26.5 is current stable; `go build` / `go vet` / tests confirm it works in CI. |
+>
+> The remediations for **C1, H1-H4, M1-M4** (security findings) were tracked
+> in `security-report/SECURITY-REPORT.md` (2026-07-08) and are all merged
+> to `main`.
+>
+> **For the current state of the project**, see:
+> - `security-report/SECURITY-REPORT.md` (security findings & remediation status)
+> - `docs/PRODUCTION_READINESS.md` (current production-readiness checklist)
+> - `docs/CHANGELOG.md` (post-2026-07-15 changes)
+>
+> The original report body (§1–§17) below is preserved unchanged for the
+> historical record. Where §16 ("Issues & Recommendations") contradicts the
+> table above, the table is authoritative.
+
+---
+
 ## Table of Contents
 
 1. [Executive Summary](#1-executive-summary)

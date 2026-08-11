@@ -82,6 +82,23 @@ For pre-created Kubernetes Secrets, set `auth.existingSecret` to a Secret
 containing `auth-secret`, `admin-password`, and, when enabled,
 `metrics-auth-token`, `storage-encryption-key`, and `cluster-encryption-key`.
 
+### Secret material substitution
+
+The rendered ConfigMap writes secret-backed values as literal
+`${NOTHINGDNS_AUTH_SECRET}`, `${NOTHINGDNS_ADMIN_PASSWORD}`,
+`${NOTHINGDNS_STORAGE_ENCRYPTION_KEY}`, `${NOTHINGDNS_CLUSTER_ENCRYPTION_KEY}`,
+and `${NOTHINGDNS_METRICS_AUTH_TOKEN}` placeholders (depending on which
+features are enabled). This is **intentional, not a missing
+substitution**: those env vars are wired into the Pod via
+`secretKeyRef` (see `templates/deployment.yaml`), and NothingDNS's
+custom YAML parser resolves `${VAR}` references at server startup via
+`os.LookupEnv` (`internal/config/config.go`). Operators inspecting the
+rendered ConfigMap with `kubectl get cm -o yaml` will see the placeholder
+strings — that is the source-of-truth design, not a Helm templating bug.
+If the env var is unset, the parser logs a warning and substitutes the
+empty string, so verify the Secret keys you declared actually map onto
+the pod's env vars before treating the deployment as healthy.
+
 #### Production Configuration with DNSSEC
 
 ```yaml

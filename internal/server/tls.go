@@ -88,11 +88,17 @@ type TLSProfileConfig struct {
 	// TrustedCACertPool is the CA cert pool for certificate validation.
 	TrustedCACertPool *x509.CertPool
 
-	// InsecureSkipVerify skips certificate verification (for testing only).
-	// SECURITY (LOW-001): Setting this in production config disables all cert
-	// validation. This field exists for test environments; operators must ensure
-	// it is never enabled in production YAML.
-	InsecureSkipVerify bool
+	// insecureSkipVerify skips certificate verification. This field is
+	// unexported: any caller trying to set it from outside this package gets
+	// a compile error rather than a foot-gun. The only path that constructs
+	// and validates a profile is ValidateTLSProfile, which unconditionally
+	// rejects the insecure-true case.
+	//
+	// SECURITY: enabling this field disables all cert validation (TOFU/MITM
+	// protection). It exists solely for the rejection test
+	// TestValidateTLSProfile_RejectsInsecureSkipVerify; production callers
+	// cannot reach it.
+	insecureSkipVerify bool
 }
 
 // DefaultTLSProfileConfig returns the default profile configuration.
@@ -174,7 +180,7 @@ func BuildTLSConfigForProfile(profile *TLSProfileConfig, certFile, keyFile strin
 		config.ClientAuth = tls.RequireAndVerifyClientCert
 	}
 
-	config.InsecureSkipVerify = profile.InsecureSkipVerify
+	config.InsecureSkipVerify = profile.insecureSkipVerify
 
 	return config, nil
 }
@@ -195,7 +201,7 @@ func ValidateTLSProfile(profile *TLSProfileConfig) error {
 		return errors.New("minimum TLS version must be at least 1.2")
 	}
 
-	if profile.InsecureSkipVerify {
+	if profile.insecureSkipVerify {
 		return errors.New("insecure skip verify is not allowed in TLS profiles")
 	}
 

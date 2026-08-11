@@ -3115,7 +3115,7 @@ func TestValidateTLSProfile_OldTLSVersion(t *testing.T) {
 
 func TestValidateTLSProfile_RejectsInsecureSkipVerify(t *testing.T) {
 	cfg := DefaultTLSProfileConfig()
-	cfg.InsecureSkipVerify = true
+	cfg.insecureSkipVerify = true
 	err := ValidateTLSProfile(cfg)
 	if err == nil {
 		t.Error("expected error for insecure skip verify")
@@ -3218,7 +3218,7 @@ func TestBuildTLSConfigForProfile_InvalidCert(t *testing.T) {
 
 func TestBuildTLSConfigForProfile_RejectsInvalidProfile(t *testing.T) {
 	cfg := DefaultTLSProfileConfig()
-	cfg.InsecureSkipVerify = true
+	cfg.insecureSkipVerify = true
 	if _, err := BuildTLSConfigForProfile(cfg, "", ""); err == nil {
 		t.Error("expected invalid TLS profile error")
 	}

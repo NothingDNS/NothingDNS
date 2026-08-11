@@ -724,6 +724,37 @@ func TestValidateAndPinUpstream_PublicIPv6(t *testing.T) {
 	}
 }
 
+// TestValidateAndPinUpstream_IPv4MappedIPv6 locks in the SSRF defense for
+// IPv4-mapped IPv6 addresses like `[::ffff:127.0.0.1]`. Without the
+// `ip.To4()` normalization in util.IsPrivateIP, `[::ffff:127.0.0.1]:53`
+// would be accepted as a "public IPv6 address" because IsIPv6 returns false
+// for it but `net.ParseIP` recognises it as a v4 address — leading the
+// strict v6 branch (fc00::/7, fe80::/10, ::1, ::) to miss the loopback.
+// This pair of tests would fail loudly if anyone "simplifies" IsPrivateIP
+// to drop the v4-in-v6 normalization.
+func TestValidateAndPinUpstream_IPv4MappedIPv6(t *testing.T) {
+	cases := []struct {
+		name string
+		addr string
+	}{
+		{"loopback-v4-mapped-v6", "[::ffff:127.0.0.1]:53"},
+		{"private-10-v4-mapped-v6", "[::ffff:10.0.0.1]:53"},
+		{"private-192-v4-mapped-v6", "[::ffff:192.168.1.1]:53"},
+		// 169.254.169.254 is the link-local AWS/Azure/GCP instance metadata
+		// service — the canonical SSRF target. v4-mapped link-local must be
+		// rejected even though the pure-v6 fe80::/10 branch never sees it.
+		{"cloud-metadata-v4-mapped-v6", "[::ffff:169.254.169.254]:53"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := validateAndPinUpstream(tc.addr)
+			if err == nil {
+				t.Errorf("IPv4-mapped IPv6 %q should be rejected (would bypass strict-v6 SSRF check)", tc.addr)
+			}
+		})
+	}
+}
+
 func TestValidateAndPinUpstream_UnresolvableHostname(t *testing.T) {
 	// Fail-closed: unresolvable hostnames must be rejected, not allowed.
 	// This prevents SSRF via DNS rebinding and avoids adding dead upstreams.
