@@ -366,9 +366,14 @@ func MakeKey(name string, qtype uint16, doBit bool) string {
 	if len(name) > maxKeyNameLen {
 		// RFC 1035 §2.3.3 case-fold while hashing so "Example.com…"
 		// and "example.com…" hit the same cache entry, matching the
-		// short-name path below. DNS names cap at 255 bytes so a
-		// stack-sized buffer is sufficient.
-		var lower [256]byte
+		// short-name path below.
+		//
+		// Wire-parsed names cap at 255 bytes, but MakeKey is also reached
+		// with names that never went through wire validation (zone-file
+		// records, CNAME targets, API-supplied names). A fixed [256]byte
+		// stack buffer therefore panicked with "index out of range [256]"
+		// on any name of 257+ bytes, so the buffer is sized to the input.
+		lower := make([]byte, len(name))
 		for i := 0; i < len(name); i++ {
 			c := name[i]
 			if c >= 'A' && c <= 'Z' {
@@ -376,7 +381,7 @@ func MakeKey(name string, qtype uint16, doBit bool) string {
 			}
 			lower[i] = c
 		}
-		h := maphash.Bytes(keyNameHashSeed, lower[:len(name)])
+		h := maphash.Bytes(keyNameHashSeed, lower)
 		b.WriteString(strconv.FormatUint(h, 10))
 	} else {
 		// RFC 1035 §2.3.3: domain names are case-insensitive. Lower-case here
@@ -891,14 +896,10 @@ func (c *Cache) InvalidatePattern(pattern string) []string {
 	for i := range c.shards {
 		s := &c.shards[i]
 		s.mu.Lock()
-		for key := range s.entries {
-			// Extract domain from key (format: "domain:type")
-			domain, _ := ExtractQueryInfo(key)
-			if invalidationPatternMatches(domain, pattern) {
-				if entry, exists := s.entries[key]; exists {
-					s.removeEntry(entry)
-					invalidated = append(invalidated, key)
-				}
+		for key, entry := range s.entries {
+			if invalidationPatternMatches(entryDomain(key, entry), pattern) {
+				s.removeEntry(entry)
+				invalidated = append(invalidated, key)
 			}
 		}
 		s.mu.Unlock()
@@ -921,6 +922,32 @@ func normalizeInvalidatePattern(pattern string) string {
 	pattern = strings.ToLower(strings.TrimSpace(pattern))
 	pattern = strings.TrimSuffix(pattern, ".")
 	return pattern
+}
+
+// entryDomain resolves the query name an entry was cached under.
+//
+// MakeKey replaces names longer than maxKeyNameLen with a keyed hash, so the
+// key alone cannot be parsed back into a domain for those entries and
+// ExtractQueryInfo returns the hash digits. Pattern invalidation therefore
+// silently skipped every long-name entry. The cached response still carries
+// the real name in its question section, so prefer that and fall back to the
+// key only when no message is retained.
+//
+// Residual gap: negative entries created without a message (Cache.SetNegative)
+// and keyed by a long name still cannot be resolved back to a domain; those
+// expire on their (short) negative TTL instead.
+func entryDomain(key string, entry *Entry) string {
+	if entry != nil && entry.Message != nil {
+		for _, q := range entry.Message.Questions {
+			if q != nil && q.Name != nil {
+				if name := q.Name.String(); name != "" {
+					return name
+				}
+			}
+		}
+	}
+	domain, _ := ExtractQueryInfo(key)
+	return domain
 }
 
 func invalidationPatternMatches(domain, pattern string) bool {

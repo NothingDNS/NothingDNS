@@ -1274,3 +1274,63 @@ func TestSetNegativeMessage(t *testing.T) {
 		t.Fatalf("ttl=0 negative entry expires in %v, want ~negative_ttl (60s)", remaining)
 	}
 }
+
+// TestMakeKeyOversizedName is a regression test: MakeKey previously wrote into
+// a fixed [256]byte stack buffer bounded by len(name), so any name of 257+
+// bytes panicked with "index out of range [256] with length 256". Wire-parsed
+// names cap at 255 bytes, but zone-file records, CNAME targets and
+// API-supplied names reach MakeKey without wire validation.
+func TestMakeKeyOversizedName(t *testing.T) {
+	for _, n := range []int{255, 256, 257, 300, 1024, 4096} {
+		name := strings.Repeat("a", n)
+		if key := MakeKey(name, 1, false); key == "" {
+			t.Fatalf("empty cache key for name length %d", n)
+		}
+	}
+}
+
+// TestMakeKeyOversizedNameCaseFold verifies the hashed long-name path stays
+// case-insensitive per RFC 1035 section 2.3.3.
+func TestMakeKeyOversizedNameCaseFold(t *testing.T) {
+	lower := strings.Repeat("a", 300)
+	upper := strings.Repeat("A", 300)
+	if MakeKey(lower, 1, false) != MakeKey(upper, 1, false) {
+		t.Fatal("long-name cache keys are not case-folded")
+	}
+}
+
+// TestInvalidatePatternLongName is a regression test: MakeKey hashes names
+// longer than maxKeyNameLen (128), so InvalidatePattern — which recovered the
+// domain via ExtractQueryInfo(key) — saw hash digits instead of a domain and
+// silently never matched those entries. Such entries survived an explicit
+// flush and kept being served until their TTL expired.
+func TestInvalidatePatternLongName(t *testing.T) {
+	c := New(Config{Capacity: 100, DefaultTTL: time.Hour})
+
+	// A name comfortably past the 128-byte hashing threshold.
+	longName := strings.Repeat("sub.", 40) + "example.com"
+	if len(longName) <= 128 {
+		t.Fatalf("test name is %d bytes, expected >128", len(longName))
+	}
+
+	msg := protocol.NewMessage(protocol.Header{ID: 1, QDCount: 1})
+	q, err := protocol.NewQuestion(longName, protocol.TypeA, protocol.ClassIN)
+	if err != nil {
+		t.Fatalf("NewQuestion(%q): %v", longName, err)
+	}
+	msg.AddQuestion(q)
+
+	key := MakeKey(longName, protocol.TypeA, false)
+	c.Set(key, msg, 3600)
+	if c.Get(key) == nil {
+		t.Fatal("entry not cached")
+	}
+
+	invalidated := c.InvalidatePattern("example.com")
+	if len(invalidated) != 1 {
+		t.Fatalf("InvalidatePattern removed %d entries, want 1 (long-name entry was skipped)", len(invalidated))
+	}
+	if c.Get(key) != nil {
+		t.Fatal("long-name entry survived InvalidatePattern")
+	}
+}

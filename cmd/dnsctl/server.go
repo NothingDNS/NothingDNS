@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 )
@@ -208,7 +207,7 @@ func cmdServer(args []string) error {
 			return fmt.Errorf("server unhealthy: %w", err)
 		}
 		defer resp.Body.Close()
-		body, err := io.ReadAll(resp.Body)
+		body, err := readAPIResponseBody(resp.Body)
 		if err != nil {
 			return fmt.Errorf("reading health response: %w", err)
 		}
