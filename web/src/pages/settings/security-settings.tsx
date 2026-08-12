@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { Shield, Lock, Activity, Globe } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -25,6 +25,12 @@ export function SecuritySettings({ config, onReload }: { config: ServerConfig; o
   const acl = config.ACL;
   const rrl = config.RRL;
   const updateRRL = useUpdateRRLConfig();
+  // useId gives a collision-safe prefix per component instance, so these ids
+  // stay unique even if the panel is ever rendered twice.
+  const fieldId = useId();
+  const rrlEnabledId = `${fieldId}-rrl-enabled`;
+  const rrlRateId = `${fieldId}-rrl-rate`;
+  const rrlBurstId = `${fieldId}-rrl-burst`;
   const [rrlEnabled, setRrlEnabled] = useState(rrl?.Enabled ?? false);
   const [rrlRate, setRrlRate] = useState(String(rrl?.Rate ?? 5));
   const [rrlBurst, setRrlBurst] = useState(String(rrl?.Burst ?? 20));
@@ -100,17 +106,17 @@ export function SecuritySettings({ config, onReload }: { config: ServerConfig; o
         <SectionHeader title="Rate Limiting (RRL)" description="Response rate limiting" icon={<Activity className="h-4 w-4" />} badge="Live edit" />
         <CardContent className="space-y-4">
           <div className="flex items-center justify-between">
-            <Label>Enabled</Label>
-            <Switch checked={rrlEnabled} onCheckedChange={setRrlEnabled} />
+            <Label htmlFor={rrlEnabledId}>Enabled</Label>
+            <Switch id={rrlEnabledId} checked={rrlEnabled} onCheckedChange={setRrlEnabled} />
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Rate (resp/s)</Label>
-              <Input type="number" value={rrlRate} onChange={(e) => setRrlRate(e.target.value)} />
+              <Label htmlFor={rrlRateId}>Rate (resp/s)</Label>
+              <Input id={rrlRateId} type="number" value={rrlRate} onChange={(e) => setRrlRate(e.target.value)} />
             </div>
             <div className="space-y-2">
-              <Label>Burst</Label>
-              <Input type="number" value={rrlBurst} onChange={(e) => setRrlBurst(e.target.value)} />
+              <Label htmlFor={rrlBurstId}>Burst</Label>
+              <Input id={rrlBurstId} type="number" value={rrlBurst} onChange={(e) => setRrlBurst(e.target.value)} />
             </div>
           </div>
           <SaveBar dirty={rrlDirty} saving={updateRRL.isPending} onSave={handleSaveRRL} onReset={resetRRLForm} />

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useId } from 'react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -24,6 +24,11 @@ export function AddRecordDialog({ open, onClose, zoneName, initialType, onSaved 
   initialType: string;
   onSaved: () => void;
 }) {
+  // useId gives a stable, collision-free prefix so multiple mounted instances
+  // of this dialog never emit duplicate DOM ids for their form controls.
+  const fieldId = useId();
+  const nameId = `${fieldId}-name`;
+  const ttlId = `${fieldId}-ttl`;
   const [name, setName] = useState('');
   const [type, setType] = useState('A');
   const [ttl, setTtl] = useState('3600');
@@ -88,8 +93,9 @@ export function AddRecordDialog({ open, onClose, zoneName, initialType, onSaved 
 
         <div className="grid gap-4 sm:grid-cols-[1fr_150px]">
           <div className="space-y-1.5">
-            <label className="block text-xs font-medium uppercase tracking-wide text-muted-foreground">Name</label>
+            <label htmlFor={nameId} className="block text-xs font-medium uppercase tracking-wide text-muted-foreground">Name</label>
             <Input
+              id={nameId}
               placeholder="@ or subdomain"
               value={name}
               onChange={e => setName(e.target.value)}
@@ -97,8 +103,8 @@ export function AddRecordDialog({ open, onClose, zoneName, initialType, onSaved 
             />
           </div>
           <div className="space-y-1.5">
-            <label className="block text-xs font-medium uppercase tracking-wide text-muted-foreground">TTL</label>
-            <Input type="number" value={ttl} onChange={e => setTtl(e.target.value)} />
+            <label htmlFor={ttlId} className="block text-xs font-medium uppercase tracking-wide text-muted-foreground">TTL</label>
+            <Input id={ttlId} type="number" value={ttl} onChange={e => setTtl(e.target.value)} />
           </div>
         </div>
 
@@ -259,6 +265,11 @@ export function BulkPTRDialog({ open, onClose, zoneName, onSaved }: {
   zoneName: string;
   onSaved: () => void;
 }) {
+  // useId gives a stable, collision-free prefix so multiple mounted instances
+  // of this dialog never emit duplicate DOM ids for their form controls.
+  const fieldId = useId();
+  const cidrId = `${fieldId}-cidr`;
+  const patternId = `${fieldId}-pattern`;
   const [cidr, setCidr] = useState('');
   const [pattern, setPattern] = useState('ip-[A]-[B]-[C]-[D].example.com');
   const [override, setOverride] = useState(false);
@@ -391,8 +402,9 @@ export function BulkPTRDialog({ open, onClose, zoneName, onSaved }: {
         )}
 
         <div>
-          <label className="text-sm font-medium mb-1.5 block">CIDR Range</label>
+          <label htmlFor={cidrId} className="text-sm font-medium mb-1.5 block">CIDR Range</label>
           <Input
+            id={cidrId}
             placeholder="192.168.1.0/24"
             value={cidr}
             onChange={e => { setCidr(e.target.value); setPreview(null); }}
@@ -402,8 +414,9 @@ export function BulkPTRDialog({ open, onClose, zoneName, onSaved }: {
         </div>
 
         <div>
-          <label className="text-sm font-medium mb-1.5 block">Pattern</label>
+          <label htmlFor={patternId} className="text-sm font-medium mb-1.5 block">Pattern</label>
           <Input
+            id={patternId}
             placeholder="ip-[A]-[B]-[C]-[D].example.com"
             value={pattern}
             onChange={e => { setPattern(e.target.value); setPreview(null); }}

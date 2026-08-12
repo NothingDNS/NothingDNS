@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -83,6 +83,13 @@ export function ZonesPage() {
 }
 
 function CreateZoneDialog({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: () => void }) {
+  // useId gives a stable, collision-free prefix so multiple mounted instances
+  // of this dialog never emit duplicate DOM ids for their form controls.
+  const fieldId = useId();
+  const nameId = `${fieldId}-name`;
+  const ttlId = `${fieldId}-ttl`;
+  const emailId = `${fieldId}-email`;
+  const nsId = `${fieldId}-ns`;
   const [name, setName] = useState('');
   const [ttl, setTTL] = useState('3600');
   const [email, setEmail] = useState(defaultAdminEmailFor(''));
@@ -105,9 +112,9 @@ function CreateZoneDialog({ open, onClose, onCreated }: { open: boolean; onClose
   };
   return (<Dialog open={open} onClose={onClose}><DialogTitle>Create New Zone</DialogTitle><div className="space-y-4 mt-5">
     {error && <div className="text-sm text-destructive bg-destructive/10 px-3 py-2 rounded-lg">{error}</div>}
-    <div><label className="text-sm font-medium mb-1.5 block">Zone Name</label><Input placeholder="example.com." value={name} onChange={(e) => setName(e.target.value)} autoFocus /></div>
-    <div className="grid grid-cols-2 gap-4"><div><label className="text-sm font-medium mb-1.5 block">Default TTL</label><Input type="number" value={ttl} onChange={(e) => setTTL(e.target.value)} /></div><div><label className="text-sm font-medium mb-1.5 block">Admin Email</label><Input placeholder="admin.example.com." value={email} onChange={(e) => { setEmailTouched(true); setEmail(e.target.value); }} /></div></div>
-    <div><label className="text-sm font-medium mb-1.5 block">Nameservers (one per line)</label><Textarea rows={3} placeholder={"ns1.example.com.\nns2.example.com."} value={ns} onChange={(e) => { setNsTouched(true); setNs(e.target.value); }} /></div>
+    <div><label htmlFor={nameId} className="text-sm font-medium mb-1.5 block">Zone Name</label><Input id={nameId} placeholder="example.com." value={name} onChange={(e) => setName(e.target.value)} autoFocus /></div>
+    <div className="grid grid-cols-2 gap-4"><div><label htmlFor={ttlId} className="text-sm font-medium mb-1.5 block">Default TTL</label><Input id={ttlId} type="number" value={ttl} onChange={(e) => setTTL(e.target.value)} /></div><div><label htmlFor={emailId} className="text-sm font-medium mb-1.5 block">Admin Email</label><Input id={emailId} placeholder="admin.example.com." value={email} onChange={(e) => { setEmailTouched(true); setEmail(e.target.value); }} /></div></div>
+    <div><label htmlFor={nsId} className="text-sm font-medium mb-1.5 block">Nameservers (one per line)</label><Textarea id={nsId} rows={3} placeholder={"ns1.example.com.\nns2.example.com."} value={ns} onChange={(e) => { setNsTouched(true); setNs(e.target.value); }} /></div>
     <div className="flex justify-end gap-2 pt-2"><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={handle} disabled={saving}>{saving ? 'Creating...' : 'Create Zone'}</Button></div>
   </div></Dialog>);
 }

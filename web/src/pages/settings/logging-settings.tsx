@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { FileText, Shield, Activity } from 'lucide-react';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -10,6 +10,8 @@ import { Card, CardContent, SectionHeader, KVRow, SaveBar } from './shared';
 export function LoggingSettings({ config, onReload }: { config: ServerConfig; onReload: () => Promise<void> }) {
   const logging = config.Logging;
   const updateLogging = useUpdateLoggingConfig();
+  const fieldId = useId();
+  const levelId = `${fieldId}-level`;
   const [level, setLevel] = useState(logging?.Level || 'info');
 
   useEffect(() => {
@@ -38,9 +40,9 @@ export function LoggingSettings({ config, onReload }: { config: ServerConfig; on
         <SectionHeader title="Logging" description="Log level can be changed live; output settings are file-backed" icon={<FileText className="h-4 w-4" />} badge="Live edit" />
         <CardContent className="space-y-4">
           <div className="space-y-2">
-            <Label>Level</Label>
+            <Label htmlFor={levelId}>Level</Label>
             <Select value={level} onValueChange={setLevel}>
-              <SelectTrigger className="w-40">
+              <SelectTrigger id={levelId} className="w-40">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

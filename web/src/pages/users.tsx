@@ -89,11 +89,13 @@ export function UsersPage() {
           {error && <p className="text-destructive text-sm mb-3">{error}</p>}
           <div className="grid gap-3 sm:grid-cols-4">
             <Input
+              aria-label="Username"
               placeholder="Username"
               value={newUser.username}
               onChange={e => setNewUser(u => ({ ...u, username: e.target.value }))}
             />
             <Input
+              aria-label="Password"
               type="password"
               placeholder="Password"
               autoComplete="new-password"
@@ -101,6 +103,7 @@ export function UsersPage() {
               onChange={e => setNewUser(u => ({ ...u, password: e.target.value }))}
             />
             <select
+              aria-label="Role"
               value={newUser.role}
               onChange={e => setNewUser(u => ({ ...u, role: e.target.value }))}
               className="flex h-10 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"

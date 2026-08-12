@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { Database, Zap } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -18,6 +18,17 @@ const intOr = (x: string, def: number): number => {
 export function CacheSettings({ config, onReload }: { config: ServerConfig; onReload: () => Promise<void> }) {
   const cache = config.Cache;
   const updateCache = useUpdateCacheConfig();
+  const fieldId = useId();
+  const enabledId = `${fieldId}-enabled`;
+  const maxSizeId = `${fieldId}-max-size`;
+  const defaultTtlId = `${fieldId}-default-ttl`;
+  const maxTtlId = `${fieldId}-max-ttl`;
+  const minTtlId = `${fieldId}-min-ttl`;
+  const negativeTtlId = `${fieldId}-negative-ttl`;
+  const prefetchId = `${fieldId}-prefetch`;
+  const prefetchThresholdId = `${fieldId}-prefetch-threshold`;
+  const serveStaleId = `${fieldId}-serve-stale`;
+  const staleGraceId = `${fieldId}-stale-grace`;
   const [cacheEnabled, setCacheEnabled] = useState(cache?.Enabled ?? true);
   const [cacheSize, setCacheSize] = useState(String(cache?.Size ?? 10000));
   const [defaultTTL, setDefaultTTL] = useState(String(cache?.DefaultTTL ?? 300));
@@ -100,29 +111,29 @@ export function CacheSettings({ config, onReload }: { config: ServerConfig; onRe
         <SectionHeader title="Cache Configuration" description="DNS response caching" icon={<Database className="h-4 w-4" />} badge="Live edit" />
         <CardContent className="space-y-4">
           <div className="flex items-center justify-between">
-            <Label>Enabled</Label>
-            <Switch checked={cacheEnabled} onCheckedChange={setCacheEnabled} />
+            <Label htmlFor={enabledId}>Enabled</Label>
+            <Switch id={enabledId} checked={cacheEnabled} onCheckedChange={setCacheEnabled} />
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Max Size</Label>
-              <Input type="number" min="0" value={cacheSize} onChange={(e) => setCacheSize(e.target.value)} />
+              <Label htmlFor={maxSizeId}>Max Size</Label>
+              <Input id={maxSizeId} type="number" min="0" value={cacheSize} onChange={(e) => setCacheSize(e.target.value)} />
             </div>
             <div className="space-y-2">
-              <Label>Default TTL (seconds)</Label>
-              <Input type="number" min="0" value={defaultTTL} onChange={(e) => setDefaultTTL(e.target.value)} />
+              <Label htmlFor={defaultTtlId}>Default TTL (seconds)</Label>
+              <Input id={defaultTtlId} type="number" min="0" value={defaultTTL} onChange={(e) => setDefaultTTL(e.target.value)} />
             </div>
             <div className="space-y-2">
-              <Label>Max TTL (seconds)</Label>
-              <Input type="number" min="0" value={maxTTL} onChange={(e) => setMaxTTL(e.target.value)} />
+              <Label htmlFor={maxTtlId}>Max TTL (seconds)</Label>
+              <Input id={maxTtlId} type="number" min="0" value={maxTTL} onChange={(e) => setMaxTTL(e.target.value)} />
             </div>
             <div className="space-y-2">
-              <Label>Min TTL (seconds)</Label>
-              <Input type="number" min="0" value={minTTL} onChange={(e) => setMinTTL(e.target.value)} />
+              <Label htmlFor={minTtlId}>Min TTL (seconds)</Label>
+              <Input id={minTtlId} type="number" min="0" value={minTTL} onChange={(e) => setMinTTL(e.target.value)} />
             </div>
             <div className="space-y-2">
-              <Label>Negative TTL (seconds)</Label>
-              <Input type="number" min="0" value={negativeTTL} onChange={(e) => setNegativeTTL(e.target.value)} />
+              <Label htmlFor={negativeTtlId}>Negative TTL (seconds)</Label>
+              <Input id={negativeTtlId} type="number" min="0" value={negativeTTL} onChange={(e) => setNegativeTTL(e.target.value)} />
             </div>
           </div>
         </CardContent>
@@ -131,20 +142,20 @@ export function CacheSettings({ config, onReload }: { config: ServerConfig; onRe
         <SectionHeader title="Prefetch & Stale" description="Cache optimization features" icon={<Zap className="h-4 w-4" />} badge="Live edit" />
         <CardContent className="space-y-4">
           <div className="flex items-center justify-between">
-            <Label>Prefetch</Label>
-            <Switch checked={prefetch} onCheckedChange={setPrefetch} />
+            <Label htmlFor={prefetchId}>Prefetch</Label>
+            <Switch id={prefetchId} checked={prefetch} onCheckedChange={setPrefetch} />
           </div>
           <div className="space-y-2">
-            <Label>Prefetch Threshold (seconds)</Label>
-            <Input type="number" min="0" value={prefetchThreshold} onChange={(e) => setPrefetchThreshold(e.target.value)} disabled={!prefetch} />
+            <Label htmlFor={prefetchThresholdId}>Prefetch Threshold (seconds)</Label>
+            <Input id={prefetchThresholdId} type="number" min="0" value={prefetchThreshold} onChange={(e) => setPrefetchThreshold(e.target.value)} disabled={!prefetch} />
           </div>
           <div className="flex items-center justify-between">
-            <Label>Serve Stale</Label>
-            <Switch checked={serveStale} onCheckedChange={setServeStale} />
+            <Label htmlFor={serveStaleId}>Serve Stale</Label>
+            <Switch id={serveStaleId} checked={serveStale} onCheckedChange={setServeStale} />
           </div>
           <div className="space-y-2">
-            <Label>Stale Grace Period (seconds)</Label>
-            <Input type="number" min="0" value={staleGrace} onChange={(e) => setStaleGrace(e.target.value)} disabled={!serveStale} />
+            <Label htmlFor={staleGraceId}>Stale Grace Period (seconds)</Label>
+            <Input id={staleGraceId} type="number" min="0" value={staleGrace} onChange={(e) => setStaleGrace(e.target.value)} disabled={!serveStale} />
           </div>
           <SaveBar dirty={cacheDirty} saving={updateCache.isPending} onSave={handleSave} onReset={resetCacheForm} />
         </CardContent>

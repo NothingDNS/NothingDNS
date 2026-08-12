@@ -115,6 +115,7 @@ export function BlocklistPage() {
         <CardContent>
           <div className="flex gap-3">
             <Input
+              aria-label="Blocklist file path"
               placeholder="/etc/nothingdns/blocklist.txt"
               value={newFile}
               onChange={e => setNewFile(e.target.value)}
