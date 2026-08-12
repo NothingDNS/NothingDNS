@@ -40,6 +40,22 @@ type negativeTTLCache interface {
 	SetNegativeWithTTL(key string, rcode uint8, ttl uint32)
 }
 
+// namedNegativeCache and namedNegativeTTLCache are optional Cache extensions
+// that retain the query name alongside a negative entry.
+//
+// The resolver keys negatives with cacheKey ("name:qtype"), which the cache's
+// own key parser cannot decode, so without these the cached name is
+// unrecoverable and operator-driven pattern invalidation silently skips every
+// resolver negative. Preferred over the unnamed variants whenever the cache
+// implements them.
+type namedNegativeCache interface {
+	SetNegativeNamed(key, name string, rcode uint8)
+}
+
+type namedNegativeTTLCache interface {
+	SetNegativeWithTTLNamed(key, name string, rcode uint8, ttl uint32)
+}
+
 // negativeMessageCache is an optional Cache extension that stores the full
 // negative response (Authority SOA + NSEC/NSEC3 denial proofs) instead of
 // just the rcode. Without it, negative cache hits are re-synthesized as
@@ -1026,10 +1042,18 @@ func (r *Resolver) cacheNegative(name string, qtype uint16, rcode uint8, msgs ..
 		}
 	}
 	if hasTTL {
+		if c, ok := r.cache.(namedNegativeTTLCache); ok {
+			c.SetNegativeWithTTLNamed(key, name, rcode, ttl)
+			return
+		}
 		if c, ok := r.cache.(negativeTTLCache); ok {
 			c.SetNegativeWithTTL(key, rcode, ttl)
 			return
 		}
+	}
+	if c, ok := r.cache.(namedNegativeCache); ok {
+		c.SetNegativeNamed(key, name, rcode)
+		return
 	}
 	r.cache.SetNegative(key, rcode)
 }

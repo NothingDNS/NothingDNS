@@ -121,6 +121,21 @@ func (a *resolverCacheAdapter) SetNegativeWithTTL(key string, rcode uint8, ttl u
 	a.cache.SetNegativeWithTTL(key, rcode, ttl)
 }
 
+// SetNegativeNamed and SetNegativeWithTTLNamed retain the query name on the
+// cached negative. The resolver keys negatives as "name:qtype", which
+// cache.ExtractQueryInfo cannot parse, so without these the entry's domain is
+// unrecoverable and InvalidatePattern silently skips it. These satisfy the
+// resolver's optional namedNegativeCache / namedNegativeTTLCache interfaces;
+// dropping them makes the resolver fall back to the unnamed variants and
+// silently reopens that gap.
+func (a *resolverCacheAdapter) SetNegativeNamed(key, name string, rcode uint8) {
+	a.cache.SetNegativeNamed(key, name, rcode)
+}
+
+func (a *resolverCacheAdapter) SetNegativeWithTTLNamed(key, name string, rcode uint8, ttl uint32) {
+	a.cache.SetNegativeWithTTLNamed(key, name, rcode, ttl)
+}
+
 // SetNegativeMessage keeps the full negative response (SOA + NSEC/NSEC3
 // denial proofs) so DNSSEC chain building can validate cached negatives.
 func (a *resolverCacheAdapter) SetNegativeMessage(key string, rcode uint8, msg *protocol.Message, ttl uint32) {

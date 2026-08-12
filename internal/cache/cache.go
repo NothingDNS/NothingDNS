@@ -16,6 +16,15 @@ type Entry struct {
 	// Query key
 	Key string
 
+	// QName is the query name this entry was cached under, retained so that
+	// pattern invalidation keeps working when the key alone cannot yield a
+	// domain. Two cases need it: MakeKey substitutes a keyed hash for names
+	// longer than maxKeyNameLen, and the resolver keys entries as
+	// "name:qtype", which the pipe-based ExtractQueryInfo cannot parse.
+	// Empty when the caller supplied no name; entryDomain then falls back to
+	// the message question and finally to parsing the key.
+	QName string
+
 	// Response message
 	Message *protocol.Message
 
@@ -548,6 +557,7 @@ func (c *Cache) GetStale(key string) *Entry {
 
 	staleEntry := &Entry{
 		Key:        entry.Key,
+		QName:      entry.QName,
 		RCode:      entry.RCode,
 		TTL:        30, // RFC 8767: stale TTL
 		ExpireTime: entry.ExpireTime,
@@ -592,8 +602,20 @@ func (c *Cache) Set(key string, msg *protocol.Message, ttl uint32) {
 }
 
 // SetNegative adds a negative cache entry (NXDOMAIN or NODATA).
+//
+// The key alone cannot always be mapped back to a domain (MakeKey hashes
+// names over maxKeyNameLen, and the resolver uses a "name:qtype" key that
+// ExtractQueryInfo cannot parse), so entries stored through this method are
+// invisible to InvalidatePattern. Callers that know the query name should
+// use SetNegativeNamed instead.
 func (c *Cache) SetNegative(key string, rcode uint8) {
-	c.setNegative(key, rcode, c.negativeTTL)
+	c.setNegative(key, "", rcode, c.negativeTTL)
+}
+
+// SetNegativeNamed is SetNegative with the query name retained on the entry
+// so that InvalidatePattern can match it regardless of key encoding.
+func (c *Cache) SetNegativeNamed(key, name string, rcode uint8) {
+	c.setNegative(key, name, rcode, c.negativeTTL)
 }
 
 // SetNegativeWithTTL adds a negative cache entry with an RFC 2308 TTL in
@@ -602,15 +624,28 @@ func (c *Cache) SetNegative(key string, rcode uint8) {
 // extend it, so a hostile or misconfigured zone cannot pin NXDOMAIN/NODATA
 // answers beyond what the operator allowed.
 func (c *Cache) SetNegativeWithTTL(key string, rcode uint8, ttl uint32) {
+	c.setNegative(key, "", rcode, c.clampNegativeTTL(ttl))
+}
+
+// SetNegativeWithTTLNamed is SetNegativeWithTTL with the query name retained
+// on the entry so that InvalidatePattern can match it regardless of key
+// encoding.
+func (c *Cache) SetNegativeWithTTLNamed(key, name string, rcode uint8, ttl uint32) {
+	c.setNegative(key, name, rcode, c.clampNegativeTTL(ttl))
+}
+
+// clampNegativeTTL applies the operator-configured negative TTL as a ceiling
+// on an RFC 2308 SOA-derived TTL in seconds.
+func (c *Cache) clampNegativeTTL(ttl uint32) time.Duration {
 	d := time.Duration(ttl) * time.Second
 	if c.negativeTTL > 0 && d > c.negativeTTL {
 		d = c.negativeTTL
 	}
-	c.setNegative(key, rcode, d)
+	return d
 }
 
-func (c *Cache) setNegative(key string, rcode uint8, ttl time.Duration) {
-	c.setNegativeEntry(key, rcode, nil, ttl)
+func (c *Cache) setNegative(key, name string, rcode uint8, ttl time.Duration) {
+	c.setNegativeEntry(key, name, rcode, nil, ttl)
 }
 
 // SetNegativeMessage adds a negative cache entry that keeps the full response
@@ -629,10 +664,10 @@ func (c *Cache) SetNegativeMessage(key string, rcode uint8, msg *protocol.Messag
 	if c.negativeTTL > 0 && d > c.negativeTTL {
 		d = c.negativeTTL
 	}
-	c.setNegativeEntry(key, rcode, msg.Copy(), d)
+	c.setNegativeEntry(key, "", rcode, msg.Copy(), d)
 }
 
-func (c *Cache) setNegativeEntry(key string, rcode uint8, msg *protocol.Message, ttl time.Duration) {
+func (c *Cache) setNegativeEntry(key, name string, rcode uint8, msg *protocol.Message, ttl time.Duration) {
 	// Apply min/max TTL constraints to negative TTL.
 	// maxTTL == 0 means "no upper bound" — only clamp when a positive ceiling
 	// has been configured (otherwise zero-clamp expires the entry immediately).
@@ -648,6 +683,7 @@ func (c *Cache) setNegativeEntry(key string, rcode uint8, msg *protocol.Message,
 
 	entry := &Entry{
 		Key:        key,
+		QName:      name,
 		RCode:      rcode,
 		Message:    msg,
 		ExpireTime: expireTime,
@@ -929,14 +965,24 @@ func normalizeInvalidatePattern(pattern string) string {
 // MakeKey replaces names longer than maxKeyNameLen with a keyed hash, so the
 // key alone cannot be parsed back into a domain for those entries and
 // ExtractQueryInfo returns the hash digits. Pattern invalidation therefore
-// silently skipped every long-name entry. The cached response still carries
-// the real name in its question section, so prefer that and fall back to the
-// key only when no message is retained.
+// silently skipped every long-name entry.
 //
-// Residual gap: negative entries created without a message (Cache.SetNegative)
-// and keyed by a long name still cannot be resolved back to a domain; those
-// expire on their (short) negative TTL instead.
+// Three sources are tried in decreasing order of authority:
+//
+//  1. Entry.QName, set when the caller passed the name explicitly
+//     (SetNegativeNamed and friends). This is the only source that works for
+//     negative entries with no retained message.
+//  2. The cached response's question section, which carries the real name
+//     even when the key holds a hash.
+//  3. The key itself, valid only for short names in MakeKey encoding.
+//
+// Entries stored through the unnamed SetNegative/SetNegativeWithTTL with a
+// long or non-MakeKey key still resolve to "" and are skipped by pattern
+// invalidation; they expire on their (short) negative TTL instead.
 func entryDomain(key string, entry *Entry) string {
+	if entry != nil && entry.QName != "" {
+		return entry.QName
+	}
 	if entry != nil && entry.Message != nil {
 		for _, q := range entry.Message.Questions {
 			if q != nil && q.Name != nil {
