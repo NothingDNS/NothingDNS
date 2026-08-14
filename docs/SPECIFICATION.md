@@ -1176,7 +1176,7 @@ After=network.target
 
 [Service]
 Type=notify
-ExecStart=/usr/local/bin/nothingdns --config /etc/nothingdns/nothingdns.yaml
+ExecStart=/usr/local/bin/nothingdns -config /etc/nothingdns/nothingdns.yaml
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=5
@@ -1187,6 +1187,14 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/nothingdns /var/log/nothingdns
+# Pin stdout/stderr to a file under /var/log/nothingdns so the
+# /etc/logrotate.d/nothingdns rule (which globs /var/log/nothingdns/*.log)
+# actually catches the running app's log stream, not just the query log.
+# `append:` (systemd >= 246) preserves the file across restarts and matches
+# the audit logger's O_APPEND open mode.
+StandardOutput=append:/var/log/nothingdns/server.log
+StandardError=append:/var/log/nothingdns/server.log
+SyslogIdentifier=nothingdns
 
 [Install]
 WantedBy=multi-user.target

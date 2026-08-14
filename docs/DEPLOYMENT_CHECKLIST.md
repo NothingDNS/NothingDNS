@@ -223,15 +223,25 @@ curl http://localhost:8080/readyz
 
 ```bash
 # /etc/logrotate.d/nothingdns
+# Match the rule written by install.sh / setup.sh verbatim. Pin the app's
+# stdout/stderr to /var/log/nothingdns/server.log via the systemd unit's
+# StandardOutput/StandardError directives so this glob catches real app logs
+# and not just the query log.
+#
+# Note: deploy/nothingdns.service writes the log file with `nobody:nogroup`
+# ownership (matching the user/group the systemd unit runs under); the rule
+# below recreates rotated files with that same ownership.
 /var/log/nothingdns/*.log {
     daily
-    rotate 14
+    rotate 7
     compress
     delaycompress
     notifempty
-    create 0640 root root
+    missingok
+    create 0644 nobody nogroup
+    sharedscripts
     postrotate
-        kill -HUP $(pidof nothingdns)
+        systemctl reload nothingdns > /dev/null 2>&1 || true
     endscript
 }
 ```

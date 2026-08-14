@@ -36,8 +36,17 @@ ProtectControlGroups=true
 PrivateTmp=true
 PrivateDevices=true
 
-# Allow write access to data directory
-ReadWritePaths=/var/lib/nothingdns
+# Allow write access to data and log directories
+ReadWritePaths=/var/lib/nothingdns /var/log/nothingdns
+
+# Pin stdout/stderr to a file under /var/log/nothingdns so the logrotate
+# rule written by install.sh/setup.sh (which globs /var/log/nothingdns/*.log)
+# actually catches the running app's log stream, not just the query log.
+# `append:` (systemd >= 246) preserves the existing file across restarts and
+# matches the O_APPEND open mode used by the audit logger.
+StandardOutput=append:/var/log/nothingdns/server.log
+StandardError=append:/var/log/nothingdns/server.log
+SyslogIdentifier=nothingdns
 
 # Environment
 Environment=NOTHINGDNS_CONFIG=/etc/nothingdns/nothingdns.yaml

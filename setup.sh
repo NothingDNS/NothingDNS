@@ -364,9 +364,13 @@ ProtectHome=true
 ReadWritePaths=/etc/nothingdns /var/lib/nothingdns /var/log/nothingdns
 PrivateTmp=true
 
-# Logging
-StandardOutput=journal
-StandardError=journal
+# Pin stdout/stderr to a file under /var/log/nothingdns so the logrotate
+# rule below (which globs /var/log/nothingdns/*.log) actually catches the
+# running app's log stream, not just the query log. `append:` (systemd >= 246)
+# preserves the file across restarts and matches the audit logger's O_APPEND
+# open mode.
+StandardOutput=append:/var/log/nothingdns/server.log
+StandardError=append:/var/log/nothingdns/server.log
 SyslogIdentifier=nothingdns
 
 [Install]
