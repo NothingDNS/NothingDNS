@@ -5,6 +5,18 @@ All notable changes to NothingDNS are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`transfer.allow_list` now also authorizes RFC 1996 NOTIFY**: the NOTIFY
+  handler's allow list was never populated in production (only tests called
+  `AddNotifyAllowed`), so every incoming NOTIFY was refused and NOTIFY-triggered
+  slave-zone replication was silently broken. The transfer allow list is now
+  shared authorization for AXFR/IXFR and NOTIFY — a master permitted for
+  transfers may send NOTIFY, and sources not in the list are refused
+  (deny-by-default when the list is empty).
+
 ## [1.1.1] — 2026-08-05
 
 ### Security

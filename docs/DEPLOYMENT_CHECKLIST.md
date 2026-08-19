@@ -14,7 +14,7 @@
 | Port | Protocol | Purpose | Required |
 |------|----------|---------|----------|
 | 53 | UDP/TCP | DNS queries | Yes |
-| 53 | TCP | DNS TCP fallback; AXFR only when `transfer.allow_list` permits it | Yes |
+| 53 | TCP | DNS TCP fallback; AXFR/IXFR and RFC 1996 NOTIFY only when `transfer.allow_list` permits it | Yes |
 | 853 | TCP | DNS over TLS (DoT) | Optional |
 | 8080 | TCP | HTTP API + Dashboard + DoH by default | Yes |
 | 443 | TCP | External HTTPS/DoH load balancer or ingress | Optional |
@@ -275,7 +275,7 @@ dig @localhost example.com +dnssec
 # Test TCP
 dig @localhost example.com +tcp
 
-# Test zone transfer only after transfer.allow_list permits this client
+# Test zone transfer only after transfer.allow_list permits this client (the list also authorizes NOTIFY)
 dig @localhost example.com AXFR +tcp
 ```
 

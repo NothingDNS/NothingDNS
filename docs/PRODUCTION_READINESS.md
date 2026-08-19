@@ -96,7 +96,7 @@ scripts/production-smoke.sh
 ### Security Behavior
 
 - Metrics endpoints support auth token wiring in deployment manifests.
-- Zone transfer is deny-by-default through `transfer.allow_list`; AXFR serving no longer depends on stale doc-only `allow-transfer` wording.
+- Zone transfer is deny-by-default through `transfer.allow_list`; the same list also authorizes RFC 1996 NOTIFY (a master permitted for AXFR/IXFR may send NOTIFY, others are refused). AXFR serving no longer depends on stale doc-only `allow-transfer` wording.
 - Cluster startup no longer fails open. If `cluster.enabled=true` and cluster init/start fails, the daemon startup fails instead of silently running standalone.
 - DSO session IDs now fail closed if `crypto/rand` is unavailable instead of falling back to predictable sequential IDs.
 - DNSSEC `RRSIGForRRSet` now canonicalizes RRSet ordering and propagates RDATA packing errors.

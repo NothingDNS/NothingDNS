@@ -533,6 +533,9 @@ Implementation: All using Go's `crypto/rsa`, `crypto/ecdsa`, `crypto/ed25519` â€
 - Primary notifies secondaries on zone change
 - Configurable notify targets per zone
 - Retry with exponential backoff
+- Incoming NOTIFY is authorized by `transfer.allow_list` â€” the same list that
+  authorizes AXFR/IXFR. A master permitted for transfers may also send NOTIFY;
+  sources not in the list are refused (deny-by-default when the list is empty).
 
 ### 7.4 TSIG Authentication (RFC 2845)
 - HMAC-MD5, HMAC-SHA256, HMAC-SHA512

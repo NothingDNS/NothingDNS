@@ -75,6 +75,17 @@ func NewTransferManager(cfg *config.Config, zones map[string]*zone.Zone, zonesMu
 
 	// Initialize NOTIFY handler for slave servers
 	mgr.result.NotifyHandler = transfer.NewNOTIFYSlaveHandler(zones)
+	// NOTIFY is the trigger for slave zone transfers (RFC 1996), so the
+	// same transfer allow list must authorize it. Previously the NOTIFY
+	// allow list was never populated in production — only in tests —
+	// and since isNOTIFYAllowed fails closed on an empty list, every
+	// incoming NOTIFY was REFUSED and slave replication via NOTIFY was
+	// silently broken.
+	for _, cidr := range cfg.Transfer.AllowList {
+		if err := mgr.result.NotifyHandler.AddNotifyAllowed(cidr); err != nil {
+			logger.Warnf("NOTIFY: invalid allowlist CIDR %q: %v", cidr, err)
+		}
+	}
 	logger.Infof("NOTIFY handler initialized for %d zones", len(zones))
 
 	// Initialize Dynamic DNS handler

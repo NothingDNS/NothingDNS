@@ -200,11 +200,15 @@ transfer:
 
 Yerel authoritative zone'ları AXFR/IXFR ile secondary sunuculara servis eder.
 `allow_list` boşsa transfer istekleri deny-by-default reddedilir.
+`allow_list`, RFC 1996 NOTIFY isteklerini de yetkilendirir: NOTIFY, slave zone
+replikasyonunu tetikleyen sinyal olduğundan, AXFR/IXFR için yetkili bir master'ın
+NOTIFY göndermesine de izin verilir; listede olmayan kaynaklardan gelen NOTIFY
+reddedilir.
 `require_tsig: true`, IP allow-list eşleşse bile TSIG doğrulamasını zorunlu kılar.
 
 | Alan | Tip | Varsayılan | Açıklama |
 |---|---|---|---|
-| `allow_list` | `[]string` | `[]` | İzin verilen IP/CIDR listesi (boş = tüm transferler reddedilir) |
+| `allow_list` | `[]string` | `[]` | İzin verilen IP/CIDR listesi (boş = tüm transferler ve NOTIFY istekleri reddedilir); AXFR/IXFR ve RFC 1996 NOTIFY için ortak yetkilendirme |
 | `require_tsig` | bool | `false` | TSIG doğrulamasını zorunlu kıl |
 | `journal_dir` | string | `storage.data_dir/ixfr-journals` | IXFR journal dizini. Storage'dan bağımsız bir volume'a taşımak için override edin |
 

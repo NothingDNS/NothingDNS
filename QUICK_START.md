@@ -198,7 +198,7 @@ dig @localhost example.com TXT     # Text records
 dig @localhost example.com NS      # Nameservers
 dig @localhost example.com CNAME    # Alias
 dig @localhost example.com SOA     # Start of authority
-dig @localhost example.com AXFR +tcp # Zone transfer; requires transfer.allow_list
+dig @localhost example.com AXFR +tcp # Zone transfer; requires transfer.allow_list (the list also authorizes NOTIFY)
 ```
 
 ### Options

@@ -5429,8 +5429,36 @@ func TestNewTransferManager(t *testing.T) {
 	if mgr.Result().AXFRServer.IsAllowed(net.ParseIP("198.51.100.53")) {
 		t.Fatal("expected transfer.allow_list to reject unconfigured AXFR client")
 	}
+	// The same transfer.allow_list must authorize NOTIFY (RFC 1996): NOTIFY
+	// is the trigger for slave zone transfers, so a master permitted to AXFR
+	// must also be permitted to NOTIFY. Regression: the NOTIFY allow list was
+	// never populated in production, so every incoming NOTIFY was REFUSED.
+	notifyReq := &protocol.Message{
+		Header: protocol.Header{
+			ID:    1,
+			Flags: protocol.Flags{Opcode: protocol.OpcodeNotify},
+		},
+		Questions: []*protocol.Question{
+			{Name: mustParseTestName("example.com."), QType: protocol.TypeSOA, QClass: protocol.ClassIN},
+		},
+	}
+	if resp, _ := mgr.Result().NotifyHandler.HandleNOTIFY(notifyReq, net.ParseIP("192.0.2.53")); resp == nil || resp.Header.Flags.RCODE == protocol.RcodeRefused {
+		t.Fatal("expected configured allow_list to permit NOTIFY from 192.0.2.53")
+	}
+	if resp, _ := mgr.Result().NotifyHandler.HandleNOTIFY(notifyReq, net.ParseIP("198.51.100.53")); resp == nil || resp.Header.Flags.RCODE != protocol.RcodeRefused {
+		t.Fatal("expected NOTIFY from unconfigured 198.51.100.53 to be refused")
+	}
 	mgr.SetZonesMu(zonesMu)
 	mgr.Stop()
+}
+
+// mustParseTestName parses a DNS name for tests, failing the test on error.
+func mustParseTestName(name string) *protocol.Name {
+	n, err := protocol.ParseName(name)
+	if err != nil {
+		panic(fmt.Sprintf("mustParseTestName(%q): %v", name, err))
+	}
+	return n
 }
 
 func TestNewTransferManager_JournalStoreInitError(t *testing.T) {
