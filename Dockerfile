@@ -28,14 +28,21 @@ COPY . .
 
 # Build binaries (uses TARGETARCH from buildx for multi-arch)
 ARG TARGETARCH=amd64
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
+# Release version baked into the binaries via -X, matching
+# scripts/build-release.sh. Defaults to the VERSION file in the build
+# context (bumped in the release-prep commit that the release tag
+# points at); an explicit --build-arg VERSION overrides it. Without
+# this, published images reported the stale compile-time default
+# (util.Version = "1.1.1") instead of the released version.
+ARG VERSION=""
+RUN VERS="${VERSION:-$(cat ./VERSION)}" && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
     -trimpath \
-    -ldflags "-s -w -extldflags '-static'" \
+    -ldflags "-s -w -extldflags '-static' -X github.com/nothingdns/nothingdns/internal/util.Version=${VERS}" \
     -o nothingdns ./cmd/nothingdns
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
+RUN VERS="${VERSION:-$(cat ./VERSION)}" && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
     -trimpath \
-    -ldflags "-s -w -extldflags '-static'" \
+    -ldflags "-s -w -extldflags '-static' -X github.com/nothingdns/nothingdns/internal/util.Version=${VERS}" \
     -o dnsctl ./cmd/dnsctl
 
 # Final stage - minimal scratch image
