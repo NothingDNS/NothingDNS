@@ -216,7 +216,7 @@ var knownTopLevelConfigKeys = map[string]struct{}{
 	"blocklist": {}, "rpz": {}, "geodns": {}, "dns64": {},
 	"cookie": {}, "cluster": {}, "storage": {}, "slave_zones": {},
 	"transfer": {}, "views": {}, "dso": {}, "idna": {}, "mdns": {}, "odoh": {},
-	"catalog": {}, "yang": {},
+	"catalog": {}, "yang": {}, "tracing": {},
 }
 
 // documentedButUnwiredKeys lists stale documented keys that operators
