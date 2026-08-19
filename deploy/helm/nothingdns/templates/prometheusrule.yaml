@@ -28,7 +28,7 @@ spec:
             description: "NothingDNS instance {{`{{ $labels.instance }}`}} has been down for more than 1 minute"
 
         - alert: NothingDNSHighErrorRate
-          expr: rate(nothingdns_dns_requests_total{rcode="SERVFAIL"}[5m]) / rate(nothingdns_dns_requests_total[5m]) > 0.1
+          expr: sum(rate(nothingdns_responses_total{rcode="2"}[5m])) / sum(rate(nothingdns_responses_total[5m])) > 0.1
           for: 5m
           labels:
             severity: warning
@@ -37,7 +37,7 @@ spec:
             description: "SERVFAIL rate is above 10% for {{`{{ $labels.instance }}`}}"
 
         - alert: NothingDNSHighLatency
-          expr: histogram_quantile(0.95, rate(nothingdns_dns_request_duration_seconds_bucket[5m])) > 1
+          expr: histogram_quantile(0.95, sum by (le) (rate(nothingdns_query_duration_seconds_bucket[5m]))) > 1
           for: 5m
           labels:
             severity: warning
@@ -65,7 +65,7 @@ spec:
 
         {{- if .Values.config.cluster.enabled }}
         - alert: NothingDNSClusterNodeDown
-          expr: nothingdns_cluster_nodes < 2
+          expr: nothingdns_cluster_nodes_alive < 2
           for: 2m
           labels:
             severity: critical

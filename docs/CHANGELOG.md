@@ -19,6 +19,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Helm PrometheusRule alert expressions validated against live metrics;
+  three stale metric names corrected**: the error-rate, latency, and
+  cluster-node alerts referenced metric names the server never emits, so
+  they could never fire (or would misfire). `nothingdns_dns_requests_total{rcode="SERVFAIL"}`
+  → `nothingdns_responses_total{rcode="2"}` (SERVFAIL is rcode 2; the label
+  is numeric), `nothingdns_dns_request_duration_seconds_bucket` →
+  `nothingdns_query_duration_seconds_bucket`, and `nothingdns_cluster_nodes`
+  → `nothingdns_cluster_nodes_alive`. The error-rate expression was also
+  fixed for vector matching: `sum(rate(...))` on both sides, since dividing
+  the rcode-filtered series by the unfiltered one divides SERVFAIL by
+  itself. All alert expressions verified against a live production
+  `/metrics` scrape.
+
 - **dnsctl `dnssec status` and `dnssec keys` now under test**: the last two
   dnsctl DNSSEC subcommands with zero coverage (`cmdDNSSECStatus`,
   `cmdDNSSECKeys`) gain success, error, empty-list, and table-rendering
