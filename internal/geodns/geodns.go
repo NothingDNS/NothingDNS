@@ -282,18 +282,18 @@ func (e *Engine) mmdbLookup(ip net.IP) map[string]interface{} {
 	// Decode the data-section record at the absolute file offset returned
 	// by mmdbLookup. dataStart is the start of the data section, used by
 	// the decoder to resolve internal pointers relative to it.
+	//
+	// mmdbLookup already returns an absolute file offset computed per the
+	// MaxMind spec ($offset_in_file = (record_value - node_count) +
+	// search_tree_size), so a single decode attempt is correct — a retry
+	// with identical arguments would only duplicate the same failure.
 	dec := &mmdbDecoder{
 		buf:       e.mmdbData,
 		dataStart: int(treeBytes) + 16,
 	}
 	v, _, err := dec.decodeValue(int(dataOff), 32)
 	if err != nil {
-		// Some DBs encode pointers; if the absolute calculation above
-		// is off by a section boundary, try the offset as already absolute.
-		v, _, err = dec.decodeValue(int(dataOff), 32)
-		if err != nil {
-			return nil
-		}
+		return nil
 	}
 	m, _ := v.(map[string]interface{})
 	return m
