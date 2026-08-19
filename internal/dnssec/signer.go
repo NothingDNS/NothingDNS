@@ -674,9 +674,11 @@ func (s *Signer) generateNSEC(records []*protocol.ResourceRecord) []*protocol.Re
 func (s *Signer) generateNSEC3(records []*protocol.ResourceRecord) []*protocol.ResourceRecord {
 	// Collect unique owner names and their record types
 	type nameInfo struct {
-		original  string
-		hasNS     bool
-		hasSecure bool // has records that require proof (not just NS)
+		original string
+		hasNS    bool // delegation point (or apex) — has NS records
+		hasSOA   bool // zone apex — never opt-out
+		hasDS    bool // signed delegation — never opt-out
+		hasOther bool // other records requiring authenticated denial
 	}
 	nameInfos := make(map[string]*nameInfo)
 
@@ -690,11 +692,20 @@ func (s *Signer) generateNSEC3(records []*protocol.ResourceRecord) []*protocol.R
 		switch rr.Type {
 		case protocol.TypeNS:
 			ni.hasNS = true
-		case protocol.TypeNSEC3:
-			// NSEC3 doesn't count as a "secure" record type
+		case protocol.TypeSOA:
+			ni.hasSOA = true
+		case protocol.TypeDS:
+			ni.hasDS = true
+		case protocol.TypeNSEC3, protocol.TypeRRSIG:
+			// Neither NSEC3 nor RRSIG indicates a secure delegation.
+			// NSEC3 records live at hashed owner names, and RRSIGs cover
+			// every RRset in a signed zone — including the delegation NS
+			// RRset that the parent always signs. Counting RRSIG would
+			// mark every delegation "secure" and opt-out would never
+			// engage for unsigned children (RFC 5155 §6.1.1).
 		default:
 			// Any other record type means this is a secure delegation
-			ni.hasSecure = true
+			ni.hasOther = true
 		}
 	}
 
@@ -708,9 +719,13 @@ func (s *Signer) generateNSEC3(records []*protocol.ResourceRecord) []*protocol.R
 
 	var hashes []hashedName
 	for name, ni := range nameInfos {
-		// Determine if this name should use opt-out
-		// Opt-out applies to delegation points (has NS) that don't have secure records
-		isOptOut := s.config.NSEC3OptOut && ni.hasNS && !ni.hasSecure
+		// Determine if this name should use opt-out.
+		// Opt-out applies to UNSIGNED delegations only (RFC 5155 §6.1.1):
+		// delegation points (has NS) that are not the zone apex (no SOA)
+		// and carry no DS record. The apex must never be opt-out, and a
+		// delegation with a DS record proves a signed child — neither may
+		// be skipped in the denial chain.
+		isOptOut := s.config.NSEC3OptOut && ni.hasNS && !ni.hasSOA && !ni.hasDS && !ni.hasOther
 
 		hash, err := NSEC3Hash(name, s.config.NSEC3Algorithm, s.config.NSEC3Iterations, s.config.NSEC3Salt)
 		if err != nil {
@@ -745,13 +760,17 @@ func (s *Signer) generateNSEC3(records []*protocol.ResourceRecord) []*protocol.R
 			// The opt-out flag indicates there may be unsigned delegations
 			types = nil
 		} else {
-			// Full proof: list all record types at this name
+			// Full proof: list all record types at this name. RRSIG is
+			// present at the original owner name and stays in the bitmap;
+			// the NSEC3 type MUST NOT be listed here — RFC 5155 §3.2.1:
+			// "the NSEC3 type itself will never be present in the Type
+			// Bit Maps" (NSEC3 records live at hashed owner names, not at
+			// the original name).
 			for _, rr := range records {
 				if rr.Name.String() == hn.original {
 					types = append(types, rr.Type)
 				}
 			}
-			types = append(types, protocol.TypeNSEC3)
 			sort.Slice(types, func(i, j int) bool { return types[i] < types[j] })
 		}
 
