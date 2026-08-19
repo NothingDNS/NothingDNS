@@ -433,6 +433,27 @@ metrics:
   # auth_token: ""
 
 # =============================================================================
+# TRACING (OpenTelemetry)
+# =============================================================================
+tracing:
+  # Disabled by default. When enabled, spans are batch-exported over
+  # OTLP/HTTP+protobuf to `endpoint`, and the HTTP API extracts/injects
+  # W3C Trace Context (traceparent) so requests join upstream traces.
+  enabled: false
+
+  # Trace verbosity: none | basic | detailed | verbose
+  level: basic
+
+  # Fraction of traces kept (0.0-1.0). Uses the OpenTelemetry SDK's
+  # ParentBased(TraceIDRatioBased) sampler — consistent per trace ID.
+  sample_rate: 1.0
+
+  # OTLP collector endpoint (e.g. http://localhost:4318). When empty, falls
+  # back to the OTEL_EXPORTER_OTLP_TRACES_ENDPOINT / OTEL_EXPORTER_OTLP_ENDPOINT
+  # environment variables; if those are unset too, spans are not exported.
+  # endpoint: "http://localhost:4318"
+
+# =============================================================================
 # LOGGING
 # =============================================================================
 logging:

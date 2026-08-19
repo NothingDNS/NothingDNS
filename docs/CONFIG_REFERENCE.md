@@ -109,6 +109,23 @@ LRU cache ayarları.
 | `bind` | string | `:9153` | hayır | Metrik dinleme adresi |
 | `path` | string | `/metrics` | hayır | Metrik HTTP yolu |
 
+## `tracing`
+
+| Alan | Tip | Varsayılan | Hot-reload | Açıklama |
+|---|---|---|---|---|
+| `enabled` | bool | `false` | hayır | OpenTelemetry tracing'i etkinleştir |
+| `level` | string | `basic` | hayır | `none`, `basic`, `detailed`, `verbose` |
+| `sample_rate` | float | `1.0` | hayır | Tutulan trace oranı (0.0–1.0; SDK `ParentBased(TraceIDRatioBased)` sampler) |
+| `endpoint` | string | "" | hayır | OTLP collector endpoint'i (ör. `http://localhost:4318`); boşsa `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_ENDPOINT` env değişkenlerine düşer |
+
+Span'ler `BatchSpanProcessor` ile **OTLP/HTTP+protobuf** üzerinden collector'a
+gönderilir; graceful shutdown'da flush edilir. HTTP API middleware'i **W3C Trace
+Context** (`traceparent`/`tracestate`) extract/inject yapar — gelen istekler
+upstream trace'ine katılır, downstream çağrılar trace'i devam ettirir. Endpoint
+yoksa ve env değişkenleri de boşsa span'ler dışa aktarılmaz (yalnızca sınırlı
+in-memory kayıt). Tracer yalnızca başlangıçta oluşturulur — değişiklik için
+yeniden başlatma gerekir.
+
 ## `dnssec`
 
 | Alan | Tip | Varsayılan | Hot-reload | Açıklama |
