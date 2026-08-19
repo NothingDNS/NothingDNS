@@ -540,6 +540,70 @@ func TestNOTIFYSender_SendNOTIFY_Success(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// SendNOTIFY - server responds with a mismatched transaction ID
+// ---------------------------------------------------------------------------
+
+func TestNOTIFYSender_SendNOTIFY_IDMismatch(t *testing.T) {
+	serverAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("ResolveUDPAddr: %v", err)
+	}
+
+	serverConn, err := net.ListenUDP("udp", serverAddr)
+	if err != nil {
+		t.Fatalf("ListenUDP: %v", err)
+	}
+	defer serverConn.Close()
+
+	go func() {
+		buf := make([]byte, 65535)
+		n, clientAddr, err := serverConn.ReadFromUDP(buf)
+		if err != nil {
+			return
+		}
+
+		msg, err := protocol.UnpackMessage(buf[:n])
+		if err != nil {
+			return
+		}
+
+		// Echo a DIFFERENT transaction ID than the request carried. The
+		// response must be rejected: a random TXID exists to bind the
+		// reply to this request, and accepting a mismatched ID lets a
+		// spoofed or stale reply pass as success.
+		resp := &protocol.Message{
+			Header: protocol.Header{
+				ID: msg.Header.ID + 1,
+				Flags: protocol.Flags{
+					QR:     true,
+					Opcode: protocol.OpcodeNotify,
+				},
+			},
+			Questions: msg.Questions,
+		}
+
+		respBuf := make([]byte, 65535)
+		rn, err := resp.Pack(respBuf)
+		if err != nil {
+			return
+		}
+
+		serverConn.WriteToUDP(respBuf[:rn], clientAddr)
+	}()
+
+	sender := NewNOTIFYSender(":0")
+	sender.SetTimeout(2 * time.Second)
+
+	err = sender.SendNOTIFY("example.com.", 2024010101, serverConn.LocalAddr().String())
+	if err == nil {
+		t.Fatal("Expected error for response ID mismatch")
+	}
+	if !strings.Contains(err.Error(), "ID mismatch") {
+		t.Errorf("Expected ID mismatch error, got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // SendNOTIFY - server returns error RCODE
 // ---------------------------------------------------------------------------
 

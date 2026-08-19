@@ -96,6 +96,14 @@ func (s *NOTIFYSender) SendNOTIFY(zoneName string, serial uint32, slaveAddr stri
 		return fmt.Errorf("NOTIFY failed with rcode: %d", resp.Header.Flags.RCODE)
 	}
 
+	// Verify the response ID matches the request ID. The request uses a
+	// random transaction ID (RFC 1996 §3.2.2 / RFC 1035 §4.1.1) precisely
+	// so a response can be bound to its request; without this check a
+	// spoofed or stale reply (mismatched ID) is accepted as success.
+	if resp.Header.ID != req.Header.ID {
+		return fmt.Errorf("NOTIFY response ID mismatch: got %d, want %d", resp.Header.ID, req.Header.ID)
+	}
+
 	// Verify it's a NOTIFY response (QR=1, Opcode=NOTIFY)
 	if !resp.Header.Flags.QR {
 		return fmt.Errorf("invalid NOTIFY response: QR bit not set")
