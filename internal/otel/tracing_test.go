@@ -94,7 +94,7 @@ func TestNilTracerSafe(t *testing.T) {
 	if span != nil || ctx == nil {
 		t.Error("nil Tracer must behave like disabled")
 	}
-	tr.EndSpan(nil, nil)     // must not panic
+	tr.EndSpan(nil, nil) // must not panic
 	_ = tr.Shutdown(context.Background())
 }
 

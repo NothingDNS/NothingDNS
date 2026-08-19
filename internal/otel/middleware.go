@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/util"
-	"go.opentelemetry.io/otel/propagation"
 	gootel "go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 )
 
 // Middleware returns an HTTP middleware that adds tracing. Incoming
