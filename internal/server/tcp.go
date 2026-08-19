@@ -497,7 +497,13 @@ func packFramedDNSPayload(msg *protocol.Message, frameBuf []byte, maxSize int, t
 		// Record-boundary-aware truncation (sets TC, drops whole RRs).
 		// The truncated message can only shrink, so it fits in the frame
 		// that just held the full response.
-		msg.Header.Flags.TC = true
+		//
+		// Do NOT pre-set TC here: Truncate decides per RFC 2181 §9 — TC
+		// is set only when required Answer/Authority records are dropped
+		// (or the message still does not fit); dropping only Additional
+		// records (OPT, glue) must not set it. The UDP writer calls
+		// Truncate directly and relies on this logic; pre-setting TC
+		// here made the TCP path inconsistent.
 		msg.Truncate(maxSize)
 		n, err = msg.Pack(frameBuf[2:])
 		if err != nil {

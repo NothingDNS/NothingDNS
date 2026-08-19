@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"io"
 	"net"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -434,6 +435,56 @@ func TestPackFramedDNSPayloadFallbackLargerThanFrameBuf(t *testing.T) {
 	}
 	if len(got.Answers) != 300 {
 		t.Fatalf("answer count = %d, want 300", len(got.Answers))
+	}
+}
+
+// TestPackFramedDNSPayloadNoTCForAdditionalOnly verifies RFC 2181 §9:
+// dropping only Additional-section records (OPT, glue) must NOT set the TC
+// bit. Regression: packFramedDNSPayload pre-set msg.Header.Flags.TC = true
+// before calling Truncate, so any TCP response that needed only its
+// Additional section trimmed went out with TC=1 even though no required
+// data was omitted — inconsistent with the UDP writer, which relies on
+// Truncate's own RFC 2181 logic.
+func TestPackFramedDNSPayloadNoTCForAdditionalOnly(t *testing.T) {
+	msg := newLargeTestResponse(t, 3)
+	// Add a large Additional record so the message exceeds maxSize only
+	// once the Additional section is included; the question + 3 answers
+	// must fit on their own.
+	bigName := mustParseName("additional.example.com.")
+	// TXT rdata strings are capped at 255 bytes each and labels at 63;
+	// build a record that is large on the wire but valid.
+	var bigStrings []string
+	for i := 0; i < 12; i++ {
+		bigStrings = append(bigStrings, strings.Repeat("x", 63))
+	}
+	msg.AddAdditional(&protocol.ResourceRecord{
+		Name:  bigName,
+		Type:  protocol.TypeTXT,
+		Class: protocol.ClassIN,
+		TTL:   60,
+		Data:  &protocol.RDataTXT{Strings: bigStrings},
+	})
+
+	frameBuf := make([]byte, defaultFrameBufSize)
+	// maxSize large enough for question + answers but not + additional.
+	maxSize := msg.WireLength() - 500
+	frame, n, err := packFramedDNSPayload(msg, frameBuf, maxSize, "TCP")
+	if err != nil {
+		t.Fatalf("packFramedDNSPayload failed: %v", err)
+	}
+	if n > maxSize {
+		t.Fatalf("payload length %d exceeds maxSize %d", n, maxSize)
+	}
+
+	got, err := protocol.UnpackMessage(frame[2 : 2+n])
+	if err != nil {
+		t.Fatalf("packed response unpack failed: %v", err)
+	}
+	if got.Header.Flags.TC {
+		t.Fatal("TC bit set after dropping only Additional records (RFC 2181 §9)")
+	}
+	if len(got.Answers) != 3 {
+		t.Fatalf("answer count = %d, want 3 (answers must survive)", len(got.Answers))
 	}
 }
 
