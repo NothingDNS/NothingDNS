@@ -20,6 +20,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its leadership or send heartbeats (`msg.From == payload.LeaderID`),
   mirroring the impostor checks already present in
   handlePing/handleAck/handleZoneUpdate.
+- **Go toolchain 1.26.5 → 1.26.6**: clears all six Go standard-library
+  vulnerabilities flagged by `govulncheck` (GO-2026-5972 `encoding/asn1`
+  unbounded recursion via DNSSEC private-key parsing, GO-2026-5026
+  IDNA/punycode validation, plus four more reachable through `net/http`,
+  `crypto/x509`, and the standard library). Applies to the root `go.mod`,
+  `web/go.mod`, and the Dockerfile build stage (`golang:1.26.6-alpine`).
+  Post-upgrade scan: 0 vulnerabilities affecting code paths.
+- **AXFR/IXFR clients now enforce a 512 MiB aggregate transfer cap**:
+  `receiveAXFRResponse`/`receiveIXFRResponse` tracked only a 1M-record
+  safety limit, which admitted gigabytes of RDATA from a hostile or
+  misbehaving master before tripping — unbounded memory growth on the
+  slave. The wire-byte total is now capped at `maxTransferBytes`
+  (512 MiB, comfortably above the largest real-world zones) and the
+  transfer aborts with a descriptive error when exceeded.
 
 ### Fixed
 
@@ -59,6 +73,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Helm chart: preStop hook + 45s termination grace period**: the
+  Deployment now sleeps 5s in preStop before SIGTERM reaches the
+  process, letting Kubernetes deregister the endpoint first so in-flight
+  DNS queries finish and TCP/DoT/DoH sessions close cleanly instead of
+  truncating client transfers on rollout. `terminationGracePeriodSeconds: 45`
+  accommodates the 5s hook plus the default 30s `shutdown_timeout`
+  with headroom.
 - **geodns: removed a dead identical-argument retry in `mmdbLookup`**: the
   retry re-ran the MMDB decode with the same arguments after a failure — a
   duplicate of the same error, never a recovery. A single decode at the
