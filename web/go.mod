@@ -13,4 +13,4 @@
 // npm/Vite/TypeScript stack declared in web/package.json.
 module web
 
-go 1.26.5
+go 1.26.6

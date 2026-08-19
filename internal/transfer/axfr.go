@@ -15,6 +15,15 @@ import (
 	"github.com/nothingdns/nothingdns/internal/zone"
 )
 
+// maxTransferBytes caps the aggregate wire bytes a client will accept from a
+// master during a single AXFR/IXFR. Without it a hostile or misbehaving
+// master can stream messages forever (each ≤65535 bytes) and grow the
+// in-memory record slice without bound — the 1M-record guard alone admits
+// dozens of GiB of RDATA before tripping. 512 MiB comfortably fits the
+// largest real-world zones (.nz AXFR ≈ 140 MiB) while bounding worst-case
+// memory to a known ceiling.
+const maxTransferBytes = 512 << 20
+
 // AXFRRequest represents an AXFR request
 // Wire format: Question section with QTYPE=AXFR, QCLASS=IN
 type AXFRRequest struct {
@@ -583,6 +592,7 @@ func (c *AXFRClient) sendMessage(conn net.Conn, msg *protocol.Message) error {
 func (c *AXFRClient) receiveAXFRResponse(conn net.Conn, key *TSIGKey) ([]*protocol.ResourceRecord, error) {
 	var records []*protocol.ResourceRecord
 	var soaCount int
+	var totalBytes int
 	previousMAC := []byte{}
 
 	for {
@@ -604,6 +614,11 @@ func (c *AXFRClient) receiveAXFRResponse(conn net.Conn, key *TSIGKey) ([]*protoc
 		msgLen := int(lengthBuf[0])<<8 | int(lengthBuf[1])
 		if msgLen == 0 || msgLen > 65535 {
 			return nil, fmt.Errorf("invalid message length: %d", msgLen)
+		}
+
+		totalBytes += msgLen
+		if totalBytes > maxTransferBytes {
+			return nil, fmt.Errorf("AXFR response exceeds aggregate byte cap (%d bytes received)", totalBytes)
 		}
 
 		// Read message

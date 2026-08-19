@@ -571,6 +571,7 @@ func (c *IXFRClient) sendMessage(conn net.Conn, msg *protocol.Message) error {
 func (c *IXFRClient) receiveIXFRResponse(conn net.Conn, key *TSIGKey) ([]*protocol.ResourceRecord, error) {
 	var records []*protocol.ResourceRecord
 	var soaCount int
+	var totalBytes int
 	previousMAC := []byte{}
 
 	for {
@@ -589,6 +590,11 @@ func (c *IXFRClient) receiveIXFRResponse(conn net.Conn, key *TSIGKey) ([]*protoc
 		msgLen := int(lengthBuf[0])<<8 | int(lengthBuf[1])
 		if msgLen == 0 || msgLen > 65535 {
 			return nil, fmt.Errorf("invalid message length: %d", msgLen)
+		}
+
+		totalBytes += msgLen
+		if totalBytes > maxTransferBytes {
+			return nil, fmt.Errorf("IXFR response exceeds aggregate byte cap (%d bytes received)", totalBytes)
 		}
 
 		msgBuf := make([]byte, msgLen)

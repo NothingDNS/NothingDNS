@@ -140,8 +140,17 @@ spec:
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 30
+          # preStop gives the process time to finish in-flight DNS queries and
+          # close TCP/DoT/DoH sessions before SIGTERM — without it Kubernetes
+          # sends the kill immediately after the endpoint is deregistered and
+          # clients see truncated transfers.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sleep", "5"]
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+      terminationGracePeriodSeconds: 45
       volumes:
         - name: config
           projected:
