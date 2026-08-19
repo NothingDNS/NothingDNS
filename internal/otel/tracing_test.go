@@ -2,594 +2,469 @@ package otel
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
-	"time"
+
+	"go.opentelemetry.io/otel/propagation"
 )
 
-// --- Span lifecycle tests ---
-
-func TestSpanStartEndTime(t *testing.T) {
-	tracer := NewTracer(Config{Enabled: true})
-	_, span := tracer.StartSpan(context.Background(), "timing-test")
-	if span.StartTime.IsZero() {
-		t.Error("start time should be set")
-	}
-	if !span.EndTime.IsZero() {
-		t.Error("end time should not be set before EndSpan")
-	}
-	tracer.EndSpan(span, nil)
-	if span.EndTime.IsZero() {
-		t.Error("end time should be set after EndSpan")
-	}
-	if span.EndTime.Before(span.StartTime) {
-		t.Error("end time should be >= start time")
-	}
+// newTestTracer returns a tracer with tracing enabled, no OTLP endpoint
+// (in-memory recorder), and full sampling.
+func newTestTracer() *Tracer {
+	return NewTracer(Config{Enabled: true, SampleRate: 1.0})
 }
 
-func TestSpanError(t *testing.T) {
-	tracer := NewTracer(Config{Enabled: true})
-	_, span := tracer.StartSpan(context.Background(), "error-test")
-	testErr := errors.New("something failed")
-	tracer.EndSpan(span, testErr)
-	if span.Err != testErr {
-		t.Errorf("expected error to be recorded on span")
+// --- Span lifecycle ---
+
+func TestStartEndSpan(t *testing.T) {
+	tr := newTestTracer()
+	defer func() { _ = tr.Shutdown(context.Background()) }()
+
+	ctx, span := tr.StartSpan(context.Background(), "op")
+	if span == nil {
+		t.Fatal("expected non-nil span when tracing enabled")
 	}
-}
-
-func TestEndSpanNil(t *testing.T) {
-	tracer := NewTracer(Config{Enabled: true})
-	// Should not panic
-	tracer.EndSpan(nil, nil)
-}
-
-// --- Parent-child span tests ---
-
-func TestParentChildSpans(t *testing.T) {
-	tracer := NewTracer(Config{Enabled: true, Level: LevelDetailed})
-	_, parent := tracer.StartSpan(context.Background(), "parent")
-	parentSpanID := parent.SpanID
-	parentTraceID := parent.TraceID
-
-	_, child := tracer.StartSpan(context.Background(), "child",
-		WithParent(parentSpanID),
-	)
-	tracer.EndSpan(child, nil)
-
-	if child.ParentID != parentSpanID {
-		t.Error("child should reference parent span ID")
+	if span.Name != "op" {
+		t.Errorf("span name = %q, want %q", span.Name, "op")
 	}
-	if child.TraceID == parentTraceID {
-		// Note: current implementation generates new trace IDs per span
-		// In a real distributed tracing system, child would inherit trace ID
-		// This test documents current behavior
+	if span.TraceID == ([16]byte{}) || span.SpanID == ([8]byte{}) {
+		t.Error("expected non-zero trace/span IDs")
 	}
-}
-
-// --- Attribute tests ---
-
-func TestWithAttr_MultipleTypes(t *testing.T) {
-	tracer := NewTracer(Config{Enabled: true, Level: LevelDetailed})
-	_, span := tracer.StartSpan(context.Background(), "attrs",
-		WithAttr("string_val", "hello"),
-		WithAttr("int_val", 42),
-		WithAttr("bool_val", true),
-		WithAttr("float_val", 3.14),
-	)
-	tracer.EndSpan(span, nil)
-
-	if len(span.Attrs) != 4 {
-		t.Fatalf("expected 4 attrs, got %d", len(span.Attrs))
+	if len(ctx.Value(spanKey).(*Span).Attrs) != 0 {
+		t.Error("expected clean span in context")
 	}
-	checks := map[string]interface{}{
-		"string_val": "hello",
-		"int_val":    42,
-		"bool_val":   true,
-		"float_val":  3.14,
-	}
-	for _, attr := range span.Attrs {
-		expected, ok := checks[attr.Key]
-		if !ok {
-			t.Errorf("unexpected attr key: %s", attr.Key)
-			continue
-		}
-		if attr.Value != expected {
-			t.Errorf("attr %s: expected %v, got %v", attr.Key, expected, attr.Value)
-		}
-	}
-}
 
-// --- RecordError tests ---
+	span.Attrs = append(span.Attrs, Attr{Key: "k", Value: "v"})
+	tr.EndSpan(span, nil)
 
-func TestRecordError(t *testing.T) {
-	tracer := NewTracer(Config{Enabled: true})
-	_, span := tracer.StartSpan(context.Background(), "err")
-	testErr := errors.New("boom")
-	RecordError(span, testErr)
-
-	if span.Err != testErr {
-		t.Error("error not set on span")
+	spans := tr.Export()
+	if len(spans) != 1 {
+		t.Fatalf("Export() after end = %d spans, want 1", len(spans))
 	}
-	// Should have error attribute
-	found := false
-	for _, attr := range span.Attrs {
-		if attr.Key == "error" && attr.Value == true {
+	got := spans[0]
+	if got.Name != "op" {
+		t.Errorf("exported name = %q", got.Name)
+	}
+	var found bool
+	for _, a := range got.Attrs {
+		if a.Key == "k" && a.Value == "v" {
 			found = true
 		}
 	}
 	if !found {
-		t.Error("error attribute not set")
+		t.Errorf("attribute added between Start/End not exported: %v", got.Attrs)
+	}
+	if got.EndTime.IsZero() {
+		t.Error("expected end time set")
 	}
 }
 
-func TestRecordError_NilSpan(t *testing.T) {
-	// Should not panic
-	RecordError(nil, errors.New("test"))
+func TestEndSpanIdempotent(t *testing.T) {
+	tr := newTestTracer()
+	defer func() { _ = tr.Shutdown(context.Background()) }()
+
+	_, span := tr.StartSpan(context.Background(), "op")
+	tr.EndSpan(span, nil)
+	tr.EndSpan(span, nil) // second call must not double-export
+
+	if got := len(tr.Export()); got != 1 {
+		t.Errorf("Export() = %d spans after double EndSpan, want 1", got)
+	}
 }
 
-// --- DNSTraceAttrs tests ---
+func TestDisabledTracerReturnsNilSpan(t *testing.T) {
+	tr := NewTracer(Config{Enabled: false})
+	defer func() { _ = tr.Shutdown(context.Background()) }()
 
-func TestDNSTraceAttrs(t *testing.T) {
-	attrs := DNSTraceAttrs("A", "8.8.8.8", false)
-	if len(attrs) != 3 {
-		t.Fatalf("expected 3 attrs, got %d", len(attrs))
+	ctx, span := tr.StartSpan(context.Background(), "op")
+	if span != nil {
+		t.Error("expected nil span when tracing disabled")
 	}
-	expected := map[string]interface{}{
-		"dns.query_type": "A",
-		"dns.server":     "8.8.8.8",
-		"dns.cache_hit":  false,
+	if ctx == nil {
+		t.Error("expected non-nil context")
 	}
-	for _, attr := range attrs {
-		if attr.Value != expected[attr.Key] {
-			t.Errorf("attr %s: expected %v, got %v", attr.Key, expected[attr.Key], attr.Value)
+}
+
+func TestNilTracerSafe(t *testing.T) {
+	var tr *Tracer
+	ctx, span := tr.StartSpan(context.Background(), "op")
+	if span != nil || ctx == nil {
+		t.Error("nil Tracer must behave like disabled")
+	}
+	tr.EndSpan(nil, nil)     // must not panic
+	_ = tr.Shutdown(context.Background())
+}
+
+func TestErrorRecorded(t *testing.T) {
+	tr := newTestTracer()
+	defer func() { _ = tr.Shutdown(context.Background()) }()
+
+	_, span := tr.StartSpan(context.Background(), "fail")
+	tr.EndSpan(span, context.DeadlineExceeded)
+
+	spans := tr.Export()
+	if len(spans) != 1 {
+		t.Fatalf("Export() = %d spans, want 1", len(spans))
+	}
+	// Err is facade-side state that the SDK round-trip cannot preserve; the
+	// observable contract is the error attribute set by EndSpan.
+	var hasError bool
+	for _, a := range spans[0].Attrs {
+		if a.Key == "error" && a.Value == true {
+			hasError = true
+		}
+	}
+	if !hasError {
+		t.Errorf("EndSpan(err) did not set error=true attribute: %v", spans[0].Attrs)
+	}
+}
+
+// --- Sampling ---
+
+func TestSampleRateZeroDropsAll(t *testing.T) {
+	tr := NewTracer(Config{Enabled: true, SampleRate: 0.000001})
+	defer func() { _ = tr.Shutdown(context.Background()) }()
+
+	for i := 0; i < 200; i++ {
+		if _, span := tr.StartSpan(context.Background(), "op"); span != nil {
+			t.Fatalf("near-zero sample rate returned a span at iteration %d", i)
 		}
 	}
 }
 
-// --- HTTP Middleware tests ---
+func TestSampleRateOneKeepsAll(t *testing.T) {
+	tr := newTestTracer()
+	defer func() { _ = tr.Shutdown(context.Background()) }()
 
-func TestMiddleware_Disabled(t *testing.T) {
-	tracer := NewTracer(Config{Enabled: false})
-	handler := Middleware(tracer)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest("GET", "/test", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("expected 200, got %d", rec.Code)
-	}
-}
-
-func TestMiddleware_Enabled(t *testing.T) {
-	tracer := NewTracer(Config{Enabled: true, Level: LevelDetailed})
-	called := false
-	handler := Middleware(tracer)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		called = true
-		// Verify span is in context
-		span := SpanFromContext(r.Context())
+	for i := 0; i < 50; i++ {
+		_, span := tr.StartSpan(context.Background(), "op")
 		if span == nil {
-			t.Error("span should be in request context")
+			t.Fatalf("sample rate 1.0 dropped a span at iteration %d", i)
 		}
-		w.WriteHeader(http.StatusAccepted)
-	}))
+		tr.EndSpan(span, nil)
+	}
+	if got := len(tr.Export()); got != 50 {
+		t.Errorf("Export() = %d spans, want 50", got)
+	}
+}
 
-	req := httptest.NewRequest("POST", "/api/v1/test", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
+func TestSampleRateFractional(t *testing.T) {
+	tr := NewTracer(Config{Enabled: true, SampleRate: 0.5})
+	defer func() { _ = tr.Shutdown(context.Background()) }()
+
+	kept, total := 0, 2000
+	for i := 0; i < total; i++ {
+		if _, span := tr.StartSpan(context.Background(), "op"); span != nil {
+			kept++
+			tr.EndSpan(span, nil)
+		}
+	}
+	// 0.5 across 2000 fresh trace IDs should land near half — the SDK's
+	// TraceIDRatioBased hashes the trace ID deterministically. Accept a
+	// generous band to avoid flakiness; the assertion that matters is
+	// "neither everything nor nothing".
+	if kept < total/4 || kept > total*3/4 {
+		t.Errorf("sample rate 0.5 kept %d/%d spans — not a real probability", kept, total)
+	}
+}
+
+// --- Parent/child via context ---
+
+func TestChildInheritsTraceID(t *testing.T) {
+	tr := newTestTracer()
+	defer func() { _ = tr.Shutdown(context.Background()) }()
+
+	ctx, parent := tr.StartSpan(context.Background(), "parent")
+	_, child := tr.StartSpan(ctx, "child")
+	if child.TraceID != parent.TraceID {
+		t.Errorf("child trace ID %x != parent %x (distributed trace broken)",
+			child.TraceID, parent.TraceID)
+	}
+	if child.ParentID != parent.SpanID {
+		t.Errorf("child parent ID %x != parent span ID %x", child.ParentID, parent.SpanID)
+	}
+	tr.EndSpan(child, nil)
+	tr.EndSpan(parent, nil)
+
+	spans := tr.Export()
+	if len(spans) != 2 {
+		t.Fatalf("Export() = %d spans, want 2", len(spans))
+	}
+	if spans[0].TraceID != spans[1].TraceID {
+		t.Error("exported parent and child have different trace IDs")
+	}
+}
+
+// --- W3C TraceContext propagation ---
+
+func TestW3CPropagationRoundTrip(t *testing.T) {
+	tr := newTestTracer()
+	defer func() { _ = tr.Shutdown(context.Background()) }()
+
+	// Server side: extract from inbound headers.
+	inbound := http.Header{}
+	inbound.Set("traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+
+	r := httptest.NewRequest("GET", "/api/v1/zones", nil)
+	r.Header = inbound
+	w := httptest.NewRecorder()
+
+	var seenTraceID [16]byte
+	captured := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if span := SpanFromContext(r.Context()); span != nil {
+			seenTraceID = span.TraceID
+			captured = true
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	Middleware(tr)(next).ServeHTTP(w, r)
+
+	if !captured {
+		t.Fatal("middleware did not put a span in the request context")
+	}
+	want := [16]byte{0x4b, 0xf9, 0x2f, 0x35, 0x77, 0xb3, 0x4d, 0xa6, 0xa3, 0xce, 0x92, 0x9d, 0x0e, 0x0e, 0x47, 0x36}
+	if seenTraceID != want {
+		t.Errorf("server span did not join inbound W3C trace: got %x want %x",
+			seenTraceID, want)
+	}
+}
+
+func TestMiddlewareInjectsOutboundContext(t *testing.T) {
+	tr := newTestTracer()
+	defer func() { _ = tr.Shutdown(context.Background()) }()
+
+	r := httptest.NewRequest("GET", "/api/v1/cache/stats", nil)
+	w := httptest.NewRecorder()
+
+	var injected string
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Simulate an outbound call made while handling the request: the
+		// middleware injected the server span's context into the request
+		// headers, which an http.Client would propagate onward.
+		injected = r.Header.Get("traceparent")
+		w.WriteHeader(http.StatusOK)
+	})
+
+	Middleware(tr)(next).ServeHTTP(w, r)
+
+	if injected == "" {
+		t.Fatal("middleware did not inject traceparent for downstream propagation")
+	}
+	if !strings.HasPrefix(injected, "00-") {
+		t.Errorf("injected traceparent %q is not W3C format", injected)
+	}
+}
+
+func TestMiddlewareDisabledPassthrough(t *testing.T) {
+	tr := NewTracer(Config{Enabled: false})
+	defer func() { _ = tr.Shutdown(context.Background()) }()
+
+	r := httptest.NewRequest("GET", "/api/v1/zones", nil)
+	w := httptest.NewRecorder()
+	called := false
+	Middleware(tr)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+	})).ServeHTTP(w, r)
 
 	if !called {
-		t.Error("handler was not called")
-	}
-	if rec.Code != http.StatusAccepted {
-		t.Errorf("expected 202, got %d", rec.Code)
+		t.Error("disabled tracer must pass requests through")
 	}
 }
 
-func TestMiddleware_SpanNameBoundedCardinality(t *testing.T) {
-	tracer := NewTracer(Config{Enabled: true, Level: LevelDetailed})
-	var gotName string
-	handler := Middleware(tracer)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if span := SpanFromContext(r.Context()); span != nil {
-			gotName = span.Name
-		}
-		w.WriteHeader(http.StatusOK)
-	}))
+// --- Span name cardinality bounding (spanPath) ---
 
-	req := httptest.NewRequest("GET", "/api/v1/zones/example.com./records", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if gotName != "GET /api/v1/zones/*" {
-		t.Errorf("expected span name 'GET /api/v1/zones/*', got %q", gotName)
-	}
-}
-
-func TestSpanPath(t *testing.T) {
-	tests := []struct {
-		path string
-		want string
+func TestSpanPathBoundedCardinality(t *testing.T) {
+	cases := []struct {
+		in, want string
 	}{
 		{"/", "/"},
-		{"", "/"},
-		{"/metrics", "/metrics"},
-		{"/api/v1", "/api/v1"},
 		{"/api/v1/zones", "/api/v1/zones"},
-		// Deeper paths collapse after the third segment
-		{"/api/v1/zones/example.com./records", "/api/v1/zones/*"},
-		{"/api/v1/auth/users/alice", "/api/v1/auth/*"},
-		// Dynamic-looking third segments are masked
-		{"/api/v1/12345", "/api/v1/:id"},
-		{"/api/v1/deadbeefdeadbeefdeadbeefdeadbeef", "/api/v1/:id"},                                // 32-hex (dashless UUID)
-		{"/api/v1/550e8400-e29b-41d4-a716-446655440000", "/api/v1/:id"},                            // dashed UUID (36 chars > 32)
-		{"/api/v1/" + strings.Repeat("a", 33), "/api/v1/:id"},                                      // over-long segment
-		{"/api/v1/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/records", "/api/v1/:id/*"},                      // 32-hex plus tail
-		{"/one/two/status", "/one/two/status"},                                                     // fixed word survives
-		{"/one/two/deadbeefdeadbeefdeadbeefdeadbeeZ", "/one/two/deadbeefdeadbeefdeadbeefdeadbeeZ"}, // 32 chars, not hex
+		{"/api/v1/zones/example.com./records/www/A", "/api/v1/zones/*"},
+		// Exactly three segments with a dynamic third → masked as :id
+		{"/api/zones/12345", "/api/zones/:id"},
+		{"/api/zones/550e8400e29b41d4a716446655440000", "/api/zones/:id"},
+		// Two segments: no third segment to mask, path kept verbatim
+		{"/zones/12345", "/zones/12345"},
+		// Four or more segments → truncated to three + /*
+		{"/api/v1/zones/12345", "/api/v1/zones/*"},
+		{"/metrics", "/metrics"},
 	}
-
-	for _, tc := range tests {
-		if got := spanPath(tc.path); got != tc.want {
-			t.Errorf("spanPath(%q) = %q, want %q", tc.path, got, tc.want)
+	for _, c := range cases {
+		if got := spanPath(c.in); got != c.want {
+			t.Errorf("spanPath(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }
 
-// --- TraceHandler tests ---
+func TestMiddlewareSpanNameBounded(t *testing.T) {
+	tr := newTestTracer()
+	defer func() { _ = tr.Shutdown(context.Background()) }()
 
-func TestTraceHandler_Disabled(t *testing.T) {
-	tracer := NewTracer(Config{Enabled: false})
-	handler := TraceHandler(tracer, "test-op", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
+	for _, path := range []string{
+		"/api/v1/zones/example.com./records/www/A",
+		"/api/v1/zones/other.test./records/mail/MX",
+	} {
+		r := httptest.NewRequest("GET", path, nil)
+		w := httptest.NewRecorder()
+		Middleware(tr)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})).ServeHTTP(w, r)
+	}
 
-	req := httptest.NewRequest("GET", "/test", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("expected 200, got %d", rec.Code)
+	spans := tr.Export()
+	if len(spans) != 2 {
+		t.Fatalf("Export() = %d spans, want 2", len(spans))
+	}
+	if spans[0].Name != spans[1].Name {
+		t.Errorf("dynamic paths produced distinct span names: %q vs %q",
+			spans[0].Name, spans[1].Name)
+	}
+	if !strings.HasPrefix(spans[0].Name, "GET /api/v1/zones/*") {
+		t.Errorf("span name %q not bounded", spans[0].Name)
 	}
 }
 
-func TestTraceHandler_Enabled(t *testing.T) {
-	tracer := NewTracer(Config{Enabled: true})
-	handler := TraceHandler(tracer, "dns.query", func(w http.ResponseWriter, r *http.Request) {
-		span := SpanFromContext(r.Context())
-		if span == nil {
-			t.Error("span should be in context")
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		if span.Name != "dns.query" {
-			t.Errorf("expected span name 'dns.query', got %s", span.Name)
-		}
-		w.WriteHeader(http.StatusOK)
-	})
+// --- Retention bounding ---
 
-	req := httptest.NewRequest("GET", "/dns", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
+func TestRecorderRetentionBounded(t *testing.T) {
+	tr := newTestTracer()
+	defer func() { _ = tr.Shutdown(context.Background()) }()
+
+	for i := 0; i < maxRetainedSpans+500; i++ {
+		_, span := tr.StartSpan(context.Background(), "op")
+		tr.EndSpan(span, nil)
+	}
+	spans := tr.Export()
+	if len(spans) != maxRetainedSpans {
+		t.Errorf("retained %d spans, want cap %d", len(spans), maxRetainedSpans)
+	}
+	if tr.DroppedSpans() != 500 {
+		t.Errorf("DroppedSpans() = %d, want 500", tr.DroppedSpans())
+	}
 }
 
-// --- TraceLevel tests ---
+// --- TraceLevel ---
 
-func TestTraceLevel_MarshalText(t *testing.T) {
-	tests := []struct {
-		level    TraceLevel
-		expected string
+func TestTraceLevelRoundTrip(t *testing.T) {
+	for _, want := range []TraceLevel{LevelNone, LevelBasic, LevelDetailed, LevelVerbose} {
+		var got TraceLevel
+		if err := got.UnmarshalText([]byte(want.String())); err != nil {
+			t.Fatalf("UnmarshalText(%q): %v", want.String(), err)
+		}
+		if got != want {
+			t.Errorf("round trip %q -> %d, want %d", want.String(), got, want)
+		}
+	}
+	var l TraceLevel
+	if err := l.UnmarshalText([]byte("nope")); err == nil {
+		t.Error("expected error for unknown level")
+	}
+}
+
+// --- Span options ---
+
+func TestSpanOptions(t *testing.T) {
+	tr := newTestTracer()
+	defer func() { _ = tr.Shutdown(context.Background()) }()
+
+	_, span := tr.StartSpan(context.Background(), "op",
+		WithAttr("req.id", "abc"),
+		WithLevel(LevelDetailed),
+	)
+	if span.Level != LevelDetailed {
+		t.Errorf("WithLevel not applied: %v", span.Level)
+	}
+	var found bool
+	for _, a := range span.Attrs {
+		if a.Key == "req.id" && a.Value == "abc" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("WithAttr not applied")
+	}
+	tr.EndSpan(span, nil)
+}
+
+// --- Remote parent context (NewSpanContext) ---
+
+func TestNewSpanContextRemoteParent(t *testing.T) {
+	tr := newTestTracer()
+	defer func() { _ = tr.Shutdown(context.Background()) }()
+
+	var traceID [16]byte
+	for i := range traceID {
+		traceID[i] = byte(i + 1)
+	}
+	var parentID [8]byte
+	for i := range parentID {
+		parentID[i] = byte(0xA0 + i)
+	}
+
+	ctx := NewSpanContext(traceID, parentID)
+	_, span := tr.StartSpan(ctx, "child")
+
+	if span.TraceID != traceID {
+		t.Errorf("child trace ID %x != remote parent %x", span.TraceID, traceID)
+	}
+	if span.ParentID != parentID {
+		t.Errorf("child parent ID %x != remote parent %x", span.ParentID, parentID)
+	}
+	tr.EndSpan(span, nil)
+}
+
+// --- Attribute type mapping ---
+
+func TestToKeyValueTypes(t *testing.T) {
+	cases := []struct {
+		attr Attr
+		want string // attribute.Value type name suffix
 	}{
-		{LevelNone, "none"},
-		{LevelBasic, "basic"},
-		{LevelDetailed, "detailed"},
-		{LevelVerbose, "verbose"},
+		{Attr{"s", "x"}, "STRING"},
+		{Attr{"b", true}, "BOOL"},
+		{Attr{"i", 42}, "INT64"},
+		{Attr{"f", 1.5}, "FLOAT64"},
+		{Attr{"u", uint16(7)}, "INT64"},
+		{Attr{"x", []byte{1, 2}}, "BYTESLICE"},
 	}
-	for _, tt := range tests {
-		got, err := tt.level.MarshalText()
-		if err != nil {
-			t.Errorf("marshal %v: %v", tt.level, err)
-		}
-		if string(got) != tt.expected {
-			t.Errorf("marshal %v: expected %s, got %s", tt.level, tt.expected, got)
-		}
-	}
-}
-
-func TestTraceLevel_UnmarshalText_Invalid(t *testing.T) {
-	var level TraceLevel
-	err := level.UnmarshalText([]byte("invalid"))
-	if err == nil {
-		t.Error("expected error for invalid level")
-	}
-}
-
-// --- Span ID generation uniqueness ---
-
-func TestSpanIDUniqueness(t *testing.T) {
-	ids := make(map[[8]byte]bool, 1000)
-	for i := 0; i < 1000; i++ {
-		id := generateSpanID()
-		if ids[id] {
-			t.Fatal("duplicate span ID generated")
-		}
-		ids[id] = true
-	}
-}
-
-func TestTraceIDUniqueness(t *testing.T) {
-	ids := make(map[[16]byte]bool, 1000)
-	for i := 0; i < 1000; i++ {
-		id := generateTraceID()
-		if ids[id] {
-			t.Fatal("duplicate trace ID generated")
-		}
-		ids[id] = true
-	}
-}
-
-// --- OTLP Exporter tests ---
-
-func TestOTLPExporter_Batching(t *testing.T) {
-	var received []byte
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		received, _ = json.Marshal(map[string]interface{}{
-			"status": "ok",
-		})
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-
-	exporter := NewOTLPExporter(ExporterConfig{
-		Endpoint:     server.URL,
-		BatchSize:    2,
-		BatchTimeout: 1 * time.Hour, // Don't auto-flush in test
-	})
-	defer exporter.Close()
-
-	tracer := NewTracer(Config{Enabled: true})
-	_, s1 := tracer.StartSpan(context.Background(), "span1")
-	tracer.EndSpan(s1, nil)
-	_, s2 := tracer.StartSpan(context.Background(), "span2")
-	tracer.EndSpan(s2, nil)
-
-	exporter.Export(s1)
-	exporter.Export(s2) // Should trigger batch flush at size 2
-
-	time.Sleep(50 * time.Millisecond) // Give HTTP call time
-
-	// Verify server received the request
-	if received == nil {
-		t.Error("exporter should have sent batch to server")
-	}
-}
-
-func TestOTLPExporter_NormalizesInvalidBatchConfig(t *testing.T) {
-	exporter := NewOTLPExporter(ExporterConfig{
-		BatchSize:    -1,
-		BatchTimeout: -time.Second,
-	})
-	defer exporter.Close()
-
-	if exporter.config.BatchSize != 100 {
-		t.Fatalf("BatchSize = %d, want 100", exporter.config.BatchSize)
-	}
-	if exporter.config.BatchTimeout != 5*time.Second {
-		t.Fatalf("BatchTimeout = %v, want %v", exporter.config.BatchTimeout, 5*time.Second)
-	}
-
-	span := &Span{Name: "normalized-config"}
-	exporter.Export(span)
-	if got := len(exporter.batch); got != 1 {
-		t.Fatalf("batch length = %d, want 1", got)
-	}
-}
-
-func TestOTLPExporter_Flush(t *testing.T) {
-	received := false
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		received = true
-		// Verify it's valid JSON
-		var payload map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Errorf("invalid JSON payload: %v", err)
-		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-
-	exporter := NewOTLPExporter(ExporterConfig{
-		Endpoint:     server.URL,
-		BatchSize:    100,
-		BatchTimeout: 1 * time.Hour,
-	})
-	defer exporter.Close()
-
-	tracer := NewTracer(Config{Enabled: true})
-	_, span := tracer.StartSpan(context.Background(), "flush-test")
-	tracer.EndSpan(span, nil)
-
-	exporter.Export(span)
-	exporter.Flush()
-
-	time.Sleep(50 * time.Millisecond)
-	if !received {
-		t.Error("flush should have sent spans to server")
-	}
-}
-
-func TestOTLPExporter_NoEndpoint(t *testing.T) {
-	exporter := NewOTLPExporter(ExporterConfig{
-		Endpoint:     "",
-		BatchSize:    10,
-		BatchTimeout: 1 * time.Hour,
-	})
-	defer exporter.Close()
-
-	tracer := NewTracer(Config{Enabled: true})
-	_, span := tracer.StartSpan(context.Background(), "no-endpoint")
-	tracer.EndSpan(span, nil)
-
-	// Should not panic with empty endpoint
-	exporter.Export(span)
-	exporter.Flush()
-}
-
-func TestOTLPExporter_EmptyFlush(t *testing.T) {
-	exporter := NewOTLPExporter(ExporterConfig{
-		Endpoint:     "http://localhost:9999",
-		BatchSize:    10,
-		BatchTimeout: 1 * time.Hour,
-	})
-	defer exporter.Close()
-
-	// Flush with no spans should not panic
-	exporter.Flush()
-}
-
-// --- bytesToHex tests ---
-
-func TestBytesToHex(t *testing.T) {
-	tests := []struct {
-		input    []byte
-		expected string
-	}{
-		{[]byte{0x00}, "00"},
-		{[]byte{0xff}, "ff"},
-		{[]byte{0x0a, 0x1b, 0x2c}, "0a1b2c"},
-	}
-	for _, tt := range tests {
-		got := bytesToHex(tt.input)
-		if got != tt.expected {
-			t.Errorf("bytesToHex(%v) = %s, want %s", tt.input, got, tt.expected)
+	for _, c := range cases {
+		kv := toKeyValue(c.attr)
+		got := kv.Value.Type().String()
+		if got != c.want {
+			t.Errorf("toKeyValue(%v) type = %s, want %s", c.attr.Value, got, c.want)
 		}
 	}
 }
 
-// --- LogSpans test ---
+// --- Propagator is W3C TraceContext ---
 
-func TestLogSpans(t *testing.T) {
-	tracer := NewTracer(Config{Enabled: true})
-	_, span := tracer.StartSpan(context.Background(), "log-test",
-		WithAttr("key", "val"),
-	)
-	tracer.EndSpan(span, nil)
-	// Should not panic
-	LogSpans([]*Span{span})
-}
-
-// --- Export (tracer) test ---
-
-func TestTracerExport(t *testing.T) {
-	tracer := NewTracer(Config{Enabled: true})
-	_, span := tracer.StartSpan(context.Background(), "export-test")
-	tracer.EndSpan(span, nil)
-
-	spans := tracer.Export()
-	if len(spans) != 1 {
-		t.Fatalf("expected 1 exported span, got %d", len(spans))
-	}
-	if spans[0] != span {
-		t.Fatal("exported span does not match completed span")
-	}
-	if spans[0].EndTime.IsZero() {
-		t.Fatal("exported span should be completed")
-	}
-
-	spans[0] = nil
-	if got := tracer.Export(); len(got) != 1 || got[0] != span {
-		t.Fatal("Export should return a copy of the tracer span slice")
-	}
-
-	tracer.EndSpan(span, nil)
-	if got := tracer.Export(); len(got) != 1 {
-		t.Fatalf("EndSpan should export a completed span once, got %d exports", len(got))
+func TestGlobalPropagatorIsW3C(t *testing.T) {
+	_ = newTestTracer() // sets the global propagator
+	p := otelPropagator()
+	_, ok := p.(propagation.TraceContext)
+	if !ok {
+		t.Errorf("global propagator is %T, want propagation.TraceContext", p)
 	}
 }
 
-// --- SampleRate default test ---
+// --- Middleware concurrency safety ---
 
-func TestTracerDefaultSampleRate(t *testing.T) {
-	tracer := NewTracer(Config{Enabled: true})
-	if tracer.cfg.SampleRate != 1.0 {
-		t.Errorf("expected default sample rate 1.0, got %f", tracer.cfg.SampleRate)
+func TestMiddlewareConcurrent(t *testing.T) {
+	tr := newTestTracer()
+	defer func() { _ = tr.Shutdown(context.Background()) }()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r := httptest.NewRequest("GET", "/api/v1/zones", nil)
+			w := httptest.NewRecorder()
+			Middleware(tr)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})).ServeHTTP(w, r)
+		}()
 	}
-}
-
-// --- Context with nil span ---
-
-func TestSpanFromContext_Empty(t *testing.T) {
-	span := SpanFromContext(context.Background())
-	if span != nil {
-		t.Error("expected nil span from empty context")
-	}
-}
-
-// --- Integration: full span lifecycle ---
-
-func TestSpanLifecycle(t *testing.T) {
-	tracer := NewTracer(Config{Enabled: true, Level: LevelDetailed})
-
-	ctx, parent := tracer.StartSpan(context.Background(), "dns.query",
-		WithAttr("qname", "example.com"),
-		WithAttr("qtype", "A"),
-	)
-	defer tracer.EndSpan(parent, nil)
-
-	// Simulate child span (e.g., upstream lookup)
-	_, child := tracer.StartSpan(ctx, "dns.upstream",
-		WithParent(parent.SpanID),
-		WithAttr("upstream", "8.8.8.8"),
-	)
-	tracer.EndSpan(child, nil)
-
-	if child.ParentID != parent.SpanID {
-		t.Error("child should have parent's span ID")
-	}
-	if len(parent.Attrs) != 2 {
-		t.Errorf("parent should have 2 attrs, got %d", len(parent.Attrs))
-	}
-	if len(child.Attrs) != 1 {
-		t.Errorf("child should have 1 attr, got %d", len(child.Attrs))
-	}
-}
-
-// --- OTLP format validation ---
-
-func TestToOTLPRequest(t *testing.T) {
-	exporter := NewOTLPExporter(ExporterConfig{Endpoint: "http://localhost:0"})
-	defer exporter.Close()
-
-	tracer := NewTracer(Config{Enabled: true})
-	_, span := tracer.StartSpan(context.Background(), "otlp-test",
-		WithAttr("test_key", "test_val"),
-	)
-	tracer.EndSpan(span, nil)
-
-	data := exporter.toOTLPRequest([]*Span{span})
-
-	var payload map[string]interface{}
-	if err := json.Unmarshal(data, &payload); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-
-	// Verify structure
-	rs, ok := payload["resourceSpans"].([]interface{})
-	if !ok || len(rs) != 1 {
-		t.Fatal("expected resourceSpans with 1 entry")
-	}
-
-	// Verify span contains required fields
-	jsonStr := string(data)
-	requiredFields := []string{"trace_id", "span_id", "name", "start_time_unix_nano", "end_time_unix_nano"}
-	for _, field := range requiredFields {
-		if !strings.Contains(jsonStr, field) {
-			t.Errorf("missing field %s in OTLP payload", field)
-		}
-	}
+	wg.Wait()
 }

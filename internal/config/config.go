@@ -32,6 +32,9 @@ type Config struct {
 	// Metrics configuration
 	Metrics MetricsConfig `yaml:"metrics"`
 
+	// Tracing (OpenTelemetry) configuration
+	Tracing TracingConfig `yaml:"tracing"`
+
 	// DNSSEC configuration
 	DNSSEC DNSSECConfig `yaml:"dnssec"`
 
@@ -297,6 +300,13 @@ func unmarshalToConfig(node *Node, cfg *Config) error {
 	if metricsNode := node.Get("metrics"); metricsNode != nil {
 		if err := unmarshalMetrics(metricsNode, &cfg.Metrics); err != nil {
 			return fmt.Errorf("metrics: %w", err)
+		}
+	}
+
+	// Tracing config
+	if tracingNode := node.Get("tracing"); tracingNode != nil {
+		if err := unmarshalTracing(tracingNode, &cfg.Tracing); err != nil {
+			return fmt.Errorf("tracing: %w", err)
 		}
 	}
 

@@ -158,7 +158,7 @@ internal/
 
 ## Dependency Policy
 
-**Minimal external dependencies** — the only direct deps are `github.com/quic-go/quic-go` (DoQ transport) and `golang.org/x/sys`; `golang.org/x/{net,crypto}` and `go.uber.org/mock` are indirect (see `go.mod`). Everything else is hand-rolled on stdlib (including the YAML parser — no `gopkg.in/yaml`). Adding any new third-party import requires explicit discussion and justification.
+**Minimal external dependencies** — direct deps are `github.com/quic-go/quic-go` (DoQ transport), `golang.org/x/sys`, and the official OpenTelemetry SDK (`go.opentelemetry.io/otel`, `otel/sdk`, `otel/trace`, and the `otlptracehttp` exporter; added 2026-08-19 when the hand-rolled tracer/OTLP/Jaeger exporters were replaced by the SDK — see `internal/otel/`). `golang.org/x/{net,crypto,text}` and `go.uber.org/mock` are indirect (see `go.mod`). Everything else is hand-rolled on stdlib (including the YAML parser — no `gopkg.in/yaml`). Adding any new third-party import requires explicit discussion and justification.
 
 > Note: there is **no PostgreSQL/`pgx` backend**. Zone/KV storage is the embedded WAL-backed KV store in `internal/storage/`. (Earlier revisions of this file documented a `pgx/v5` `postgres_zonestore.go` backend that was never committed; that text has been removed to match the code.)
 

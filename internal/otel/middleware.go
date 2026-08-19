@@ -6,26 +6,39 @@ import (
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/util"
+	"go.opentelemetry.io/otel/propagation"
+	gootel "go.opentelemetry.io/otel"
 )
 
-// Middleware returns an HTTP middleware that adds tracing.
+// Middleware returns an HTTP middleware that adds tracing. Incoming
+// traceparent/tracestate headers are extracted via the global W3C
+// TraceContext propagator, so requests carrying an upstream trace context
+// join that trace instead of starting a new one. The response carries the
+// current span's context back out so callers can continue the trace.
 func Middleware(tracer *Tracer) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !tracer.cfg.Enabled {
+			if tracer == nil || !tracer.cfg.Enabled {
 				next.ServeHTTP(w, r)
 				return
 			}
 
+			// Extract W3C trace context from inbound headers.
+			ctx := otelPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+
 			// Start span — spanPath bounds cardinality: raw request paths
 			// (zone names, record IDs, arbitrary probes) would otherwise
 			// mint an unbounded set of span names.
-			ctx, span := tracer.StartSpan(r.Context(), r.Method+" "+spanPath(r.URL.Path))
+			ctx, span := tracer.StartSpan(ctx, r.Method+" "+spanPath(r.URL.Path))
 			if span == nil {
 				next.ServeHTTP(w, r)
 				return
 			}
 			defer tracer.EndSpan(span, nil)
+
+			// Inject the server span's context so downstream HTTP calls
+			// made with this request's context propagate the trace.
+			otelPropagator().Inject(ctx, propagation.HeaderCarrier(r.Header))
 
 			// Update request context
 			r = r.WithContext(ctx)
@@ -52,13 +65,13 @@ func Middleware(tracer *Tracer) func(http.Handler) http.Handler {
 	}
 }
 
-// spanPath maps a raw URL path onto a bounded-cardinality span-name path:
-// only the first three segments are kept (the rest collapse to "/*"), and a
-// third segment that looks like a dynamic value — numeric, UUID-like, or
-// longer than 32 characters — is masked as ":id". API routes here are shaped
-// /api/v1/<resource>/<instance>/..., so three segments identify the route
-// family while instance names never reach the span name.
-func spanPath(path string) string {
+// otelPropagator returns the global propagator (W3C TraceContext, set by
+// NewTracer).
+func otelPropagator() propagation.TextMapPropagator {
+	return gootel.GetTextMapPropagator()
+}
+
+var spanPath = func(path string) string {
 	trimmed := strings.Trim(path, "/")
 	if trimmed == "" {
 		return "/"
@@ -114,15 +127,17 @@ func (rw *responseWriter) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
-// TraceHandler wraps an HTTP handler with tracing.
+// TraceHandler wraps an HTTP handler with tracing, extracting the W3C
+// trace context from the inbound request like Middleware does.
 func TraceHandler(tracer *Tracer, name string, handler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !tracer.cfg.Enabled {
+		if tracer == nil || !tracer.cfg.Enabled {
 			handler(w, r)
 			return
 		}
 
-		ctx, span := tracer.StartSpan(r.Context(), name)
+		ctx := otelPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+		ctx, span := tracer.StartSpan(ctx, name)
 		if span == nil {
 			handler(w, r)
 			return

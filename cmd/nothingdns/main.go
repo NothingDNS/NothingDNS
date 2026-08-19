@@ -38,6 +38,7 @@ import (
 	"github.com/nothingdns/nothingdns/internal/mdns"
 	"github.com/nothingdns/nothingdns/internal/metrics"
 	"github.com/nothingdns/nothingdns/internal/odoh"
+	"github.com/nothingdns/nothingdns/internal/otel"
 	"github.com/nothingdns/nothingdns/internal/protocol"
 	"github.com/nothingdns/nothingdns/internal/resolver"
 	"github.com/nothingdns/nothingdns/internal/rpz"
@@ -626,6 +627,25 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 		logger.Info("Query audit logging enabled")
 	}
 
+	// Initialize tracing (OpenTelemetry SDK). Disabled by default; when
+	// enabled, spans are exported over OTLP/HTTP to cfg.Tracing.Endpoint
+	// (or OTEL_EXPORTER_OTLP_* env vars) with W3C TraceContext propagation.
+	var tracer *otel.Tracer
+	if cfg.Tracing.Enabled {
+		level := otel.LevelBasic
+		if err := level.UnmarshalText([]byte(cfg.Tracing.Level)); err != nil {
+			logger.Warnf("Invalid tracing level %q, defaulting to basic", cfg.Tracing.Level)
+		}
+		tracer = otel.NewTracer(otel.Config{
+			Enabled:    true,
+			Level:      level,
+			SampleRate: cfg.Tracing.SampleRate,
+			Endpoint:   cfg.Tracing.Endpoint,
+		})
+		logger.Infof("Tracing enabled (OTel SDK, sample_rate=%.2f, endpoint=%q)",
+			cfg.Tracing.SampleRate, cfg.Tracing.Endpoint)
+	}
+
 	// Initialize DNS cookie jar (RFC 7873)
 	var cookieJar *dnscookie.CookieJar
 	if cfg.Cookie.Enabled {
@@ -698,6 +718,7 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 		splitHorizon:  splitHorizon,
 		viewZones:     viewZones,
 		auditLogger:   auditLogger,
+		tracer:        tracer,
 		nsecCache:     cache.NewNSECCache(10000),
 		cookieJar:     cookieJar,
 		mdnsResponder: mdnsResponder,
@@ -854,6 +875,7 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 		WithDashboard(dashboardServer).
 		WithMetrics(metricsCollector).
 		WithDNSSEC(validator).
+		WithTracer(tracer).
 		WithZoneSigners(zoneSigners).
 		WithRPZ(rpzEngine).
 		WithGeoDNS(geoEngine).
@@ -995,6 +1017,14 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 
 				// Stop transfer manager (slave manager, notify handler, DDNS handler)
 				transferManager.Stop()
+
+				// Flush and shut down the OpenTelemetry tracer provider so
+				// batched spans reach the collector before exit.
+				if tracer != nil {
+					if err := tracer.Shutdown(context.Background()); err != nil {
+						logger.Warnf("Failed to shut down tracer cleanly: %v", err)
+					}
+				}
 
 				// Stop mDNS responder
 				if mdnsResponder != nil {
