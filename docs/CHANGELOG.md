@@ -5,7 +5,7 @@ All notable changes to NothingDNS are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.8] — 2026-08-19
 
 ### Fixed
 - **Path-less OTLP endpoints no longer 404**: `otlptracehttp.WithEndpointURL` exports to the URL exactly as given, so a `tracing.endpoint` like `http://jaeger:4318` (no path) sent every span batch to `/` and the collector answered 404 — spans silently never arrived. `withOTLPPath()` now appends the OTLP/HTTP default `/v1/traces` when the configured URL has no path; explicit paths are preserved verbatim and query strings survive. `CONFIG_REFERENCE.md` and `config.example.yaml` document the normalization. Regression-tested via `TestWithOTLPPath` and `TestTracerEndpointNormalized`.
