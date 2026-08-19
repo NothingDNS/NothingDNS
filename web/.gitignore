@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# tsc -b incremental build-info cache (see web/tsconfig.app.json / tsconfig.node.json)
+/.tsbuild/
