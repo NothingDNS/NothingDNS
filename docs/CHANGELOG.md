@@ -5,6 +5,19 @@ All notable changes to NothingDNS are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.4] — 2026-08-19
+
+### Fixed
+
+- **Official container images now report the released version**: the
+  Dockerfile never passed `-X` to inject `util.Version` at build time —
+  unlike `scripts/build-release.sh`, which stamps release binaries — so
+  every published GHCR image reported the stale compile-time default
+  (`1.1.1`), including the v1.1.3 image. The image build now takes the
+  version from the `VERSION` build-arg (defaulting to the `VERSION` file
+  in the build context) and passes it to both binary builds via
+  `-X github.com/nothingdns/nothingdns/internal/util.Version`.
+
 ## [1.1.3] — 2026-08-19
 
 ### Security
