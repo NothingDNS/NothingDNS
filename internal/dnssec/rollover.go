@@ -235,6 +235,15 @@ func (rs *RolloverScheduler) maybeRolloverZSK(now time.Time) {
 		return
 	}
 
+	// If a replacement ZSK is already pending (published but not yet
+	// active), the rollover is already in flight — minting another key
+	// on every check tick while the current key sits inside the
+	// PublishSafety window would accumulate an unbounded pile of
+	// not-yet-active keys. Wait for the pending key to come active.
+	if rs.hasPendingZSK(now) {
+		return
+	}
+
 	zsks := rs.signer.GetActiveZSKs()
 	needsRollover := len(zsks) == 0
 
@@ -253,9 +262,31 @@ func (rs *RolloverScheduler) maybeRolloverZSK(now time.Time) {
 	}
 }
 
+// hasPendingZSK reports whether a replacement ZSK is already published
+// and waiting to become active (a rollover in flight).
+func (rs *RolloverScheduler) hasPendingZSK(now time.Time) bool {
+	for _, key := range rs.signer.GetKeys() {
+		if !key.IsZSK {
+			continue
+		}
+		if key.State == KeyStatePublished && key.Timing != nil &&
+			!key.Timing.Active.IsZero() && key.Timing.Active.After(now) {
+			return true
+		}
+	}
+	return false
+}
+
 // maybeRolloverKSK checks if a new KSK needs to be generated.
 func (rs *RolloverScheduler) maybeRolloverKSK(now time.Time) {
 	if rs.config.KSKLifetime == 0 {
+		return
+	}
+
+	// Same in-flight guard as maybeRolloverZSK: if a replacement KSK is
+	// already published and waiting to activate, don't mint another on
+	// each check tick.
+	if rs.hasPendingKSK(now) {
 		return
 	}
 
@@ -275,6 +306,21 @@ func (rs *RolloverScheduler) maybeRolloverKSK(now time.Time) {
 	if needsRollover {
 		rs.generateRolloverKSK(now)
 	}
+}
+
+// hasPendingKSK reports whether a replacement KSK is already published
+// and waiting to become active (a rollover in flight).
+func (rs *RolloverScheduler) hasPendingKSK(now time.Time) bool {
+	for _, key := range rs.signer.GetKeys() {
+		if !key.IsKSK {
+			continue
+		}
+		if key.State == KeyStatePublished && key.Timing != nil &&
+			!key.Timing.Active.IsZero() && key.Timing.Active.After(now) {
+			return true
+		}
+	}
+	return false
 }
 
 // generateRolloverZSK creates a new ZSK with proper timing and schedules

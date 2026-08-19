@@ -199,3 +199,77 @@ func TestKeyTimingFields(t *testing.T) {
 		t.Error("Remove should be after Retire")
 	}
 }
+
+// TestRolloverNoDuplicateKeys verifies that while a replacement ZSK/KSK is
+// already published and waiting to activate, the scheduler does NOT mint
+// another key on every check tick.
+//
+// Regression: maybeRolloverZSK/KSK only looked at ACTIVE keys, so once a
+// rollover was triggered (active key within PublishSafety of Retire), every
+// subsequent check() call generated ANOTHER replacement — an unbounded pile
+// of Published-but-inactive keys accumulating over the PublishSafety window.
+func TestRolloverNoDuplicateKeys(t *testing.T) {
+	signer := NewSigner("example.com.", DefaultSignerConfig())
+
+	// Seed an active ZSK and KSK with timing that triggers rollover soon:
+	// Retire is inside PublishSafety from now.
+	now := time.Now()
+	zsk, err := signer.GenerateKeyPair(13, false)
+	if err != nil {
+		t.Fatalf("GenerateKeyPair ZSK: %v", err)
+	}
+	signer.SetKeyTiming(zsk.KeyTag, &KeyTiming{
+		Created: now.Add(-30 * 24 * time.Hour),
+		Publish: now.Add(-29 * 24 * time.Hour),
+		Active:  now.Add(-28 * 24 * time.Hour),
+		Retire:  now.Add(12 * time.Hour), // inside PublishSafety (24h)
+		Remove:  now.Add(30 * 24 * time.Hour),
+	})
+	signer.SetKeyState(zsk.KeyTag, KeyStateActive)
+
+	ksk, err := signer.GenerateKeyPair(13, true)
+	if err != nil {
+		t.Fatalf("GenerateKeyPair KSK: %v", err)
+	}
+	signer.SetKeyTiming(ksk.KeyTag, &KeyTiming{
+		Created: now.Add(-400 * 24 * time.Hour),
+		Publish: now.Add(-399 * 24 * time.Hour),
+		Active:  now.Add(-398 * 24 * time.Hour),
+		Retire:  now.Add(12 * time.Hour), // inside PublishSafety (24h)
+		Remove:  now.Add(30 * 24 * time.Hour),
+	})
+	signer.SetKeyState(ksk.KeyTag, KeyStateActive)
+
+	cfg := RolloverConfig{
+		Enabled:       true,
+		ZSKLifetime:   90 * 24 * time.Hour,
+		KSKLifetime:   365 * 24 * time.Hour,
+		PublishSafety: 24 * time.Hour,
+		RetireSafety:  30 * 24 * time.Hour,
+		Algorithm:     13,
+		CheckInterval: 1 * time.Hour,
+	}
+	scheduler := NewRolloverScheduler(signer, cfg, nil)
+
+	// Run check() several times: each run triggers maybeRolloverZSK/KSK.
+	for i := 0; i < 5; i++ {
+		scheduler.check()
+	}
+
+	// Exactly one replacement per key type should have been generated.
+	zskCount, kskCount := 0, 0
+	for _, k := range signer.GetKeys() {
+		if k.IsZSK {
+			zskCount++
+		}
+		if k.IsKSK {
+			kskCount++
+		}
+	}
+	if zskCount != 2 {
+		t.Errorf("expected 2 ZSKs (original + one replacement), got %d", zskCount)
+	}
+	if kskCount != 2 {
+		t.Errorf("expected 2 KSKs (original + one replacement), got %d", kskCount)
+	}
+}
