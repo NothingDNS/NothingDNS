@@ -161,7 +161,7 @@ Do not commit literal secret values to any config file. The config validator rej
 ### P1 — Near-term hardening
 
 - Replace the custom tracing exporter with the official OpenTelemetry SDK/OTLP pipeline and W3C TraceContext propagation.
-- Ship a versioned Grafana dashboard and validate PrometheusRule queries against real emitted metric names.
+- ~~Ship a versioned Grafana dashboard and validate PrometheusRule queries against real emitted metric names.~~ **Shipped 2026-08-19**: `deploy/grafana/nothingdns-overview.json` (13 panels; every metric name validated against a live production `/metrics` scrape, including the `nothingdns_query_duration_seconds` histogram bucket series). PrometheusRule query validation against the same scrape remains open.
 - Add scheduled recovery drills, container vulnerability scans, and benchmark regression budgets to CI/release automation.
 - Decide whether production environments require progressive delivery (canary/blue-green) and codify rollback criteria in the deployment platform rather than the application chart.
 
