@@ -15,6 +15,7 @@ package otel
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -119,6 +120,7 @@ func NewTracer(cfg Config) *Tracer {
 			// tolerate scheme-less endpoints by defaulting to http
 			endpoint = "http://" + endpoint
 		}
+		endpoint = withOTLPPath(endpoint)
 		exp, err := otlptracehttp.New(context.Background(),
 			otlptracehttp.WithEndpointURL(endpoint),
 		)
@@ -146,6 +148,25 @@ func otlpEndpointFromEnv() string {
 		return v
 	}
 	return os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+}
+
+// withOTLPPath ensures the endpoint URL carries the OTLP/HTTP traces path.
+// otlptracehttp.WithEndpointURL exports to the URL exactly as given, so a
+// path-less endpoint such as "http://collector:4318" sends spans to "/"
+// and the collector answers 404 — every export fails silently from the
+// operator's perspective. Any explicitly configured path is preserved;
+// only a missing or empty path defaults to /v1/traces.
+func withOTLPPath(endpoint string) string {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		// Unparseable: append conservatively rather than dropping the fix.
+		return strings.TrimSuffix(endpoint, "/") + "/v1/traces"
+	}
+	if u.Path == "" || u.Path == "/" {
+		u.Path = "/v1/traces"
+		return u.String()
+	}
+	return endpoint
 }
 
 // StartSpan begins a new span. The returned context carries both the SDK

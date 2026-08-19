@@ -448,9 +448,12 @@ tracing:
   # ParentBased(TraceIDRatioBased) sampler — consistent per trace ID.
   sample_rate: 1.0
 
-  # OTLP collector endpoint (e.g. http://localhost:4318). When empty, falls
-  # back to the OTEL_EXPORTER_OTLP_TRACES_ENDPOINT / OTEL_EXPORTER_OTLP_ENDPOINT
-  # environment variables; if those are unset too, spans are not exported.
+  # OTLP collector endpoint (e.g. http://localhost:4318). A path-less URL is
+  # automatically suffixed with /v1/traces (the OTLP/HTTP default), so both
+  # "http://localhost:4318" and "http://localhost:4318/v1/traces" work. When
+  # empty, falls back to the OTEL_EXPORTER_OTLP_TRACES_ENDPOINT /
+  # OTEL_EXPORTER_OTLP_ENDPOINT environment variables; if those are unset
+  # too, spans are not exported.
   # endpoint: "http://localhost:4318"
 
 # =============================================================================

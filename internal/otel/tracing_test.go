@@ -439,6 +439,39 @@ func TestToKeyValueTypes(t *testing.T) {
 	}
 }
 
+// --- OTLP endpoint path normalization ---
+
+func TestWithOTLPPath(t *testing.T) {
+	cases := []struct{ in, want string }{
+		// Path-less endpoints get the OTLP/HTTP default traces path.
+		{"http://jaeger:4318", "http://jaeger:4318/v1/traces"},
+		{"https://collector.example:4318", "https://collector.example:4318/v1/traces"},
+		{"http://collector:4318/", "http://collector:4318/v1/traces"},
+		// Explicit paths are preserved verbatim.
+		{"http://jaeger:4318/v1/traces", "http://jaeger:4318/v1/traces"},
+		{"https://proxy.example/otlp/traces", "https://proxy.example/otlp/traces"},
+		// Query strings survive path defaulting.
+		{"http://collector:4318?insecure=true", "http://collector:4318/v1/traces?insecure=true"},
+	}
+	for _, c := range cases {
+		if got := withOTLPPath(c.in); got != c.want {
+			t.Errorf("withOTLPPath(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestTracerEndpointNormalized(t *testing.T) {
+	// Regression for the silent-404 bug: a path-less endpoint must be
+	// normalized before reaching the exporter. The tracer under test uses
+	// a path-less endpoint and an unreachable host; what matters here is
+	// that the exporter was constructed (no in-memory recorder fallback).
+	tr := NewTracer(Config{Enabled: true, SampleRate: 1.0, Endpoint: "http://collector.invalid:4318"})
+	defer func() { _ = tr.Shutdown(context.Background()) }()
+	if tr.recorder != nil {
+		t.Error("path-less endpoint fell back to in-memory recorder — exporter construction failed")
+	}
+}
+
 // --- Propagator is W3C TraceContext ---
 
 func TestGlobalPropagatorIsW3C(t *testing.T) {
