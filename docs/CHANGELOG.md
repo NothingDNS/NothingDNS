@@ -5,7 +5,7 @@ All notable changes to NothingDNS are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.7] — 2026-08-19
 
 ### Changed
 - **Tracing migrated to the official OpenTelemetry SDK** (`internal/otel/`): the hand-rolled tracer, OTLP JSON exporter, and Jaeger exporter are replaced by a facade over `go.opentelemetry.io/otel` — `sdktrace.TracerProvider` with `ParentBased(TraceIDRatioBased)` sampling, `BatchSpanProcessor` + `otlptracehttp` exporter (OTLP/HTTP+protobuf) when an endpoint is configured, and a bounded in-memory recorder otherwise. **W3C TraceContext propagation** (`traceparent`/`tracestate`) is now extracted/injected by the HTTP middleware, so inbound requests join upstream traces and downstream calls continue them. New `tracing:` config section (`enabled`, `level`, `sample_rate`, `endpoint`; falls back to `OTEL_EXPORTER_OTLP_*` env vars). The consumer-facing API (`Tracer`/`Span`/`Attr`/`StartSpan`/`EndSpan`/`Middleware`) is unchanged; `Tracer.Shutdown` is wired into graceful server shutdown. Direct deps: `go.opentelemetry.io/otel`, `otel/sdk`, `otel/trace`, `otlptracehttp`.
