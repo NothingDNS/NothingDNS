@@ -5,6 +5,26 @@ All notable changes to NothingDNS are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Grafana dashboard shipped** (`deploy/grafana/nothingdns-overview.json`):
+  13-panel overview covering query rate and per-record-type traffic, cache
+  hit ratio, blocklist and rate-limit counters, upstream queries by server,
+  p50/p95/p99 latency (`histogram_quantile` over
+  `nothingdns_query_duration_seconds`), UDP/TCP transport counters, and
+  cluster health/nodes/gossip. Every metric name was validated against a
+  live production `/metrics` scrape before shipping.
+
+### Fixed
+
+- **dnsctl `dnssec status` and `dnssec keys` now under test**: the last two
+  dnsctl DNSSEC subcommands with zero coverage (`cmdDNSSECStatus`,
+  `cmdDNSSECKeys`) gain success, error, empty-list, and table-rendering
+  tests via the package's HTTP-transport mock. Both functions now at 100%
+  statement coverage; `cmd/dnsctl` package coverage 86.9% → 89.0%.
+
 ## [1.1.5] — 2026-08-19
 
 ### Fixed
