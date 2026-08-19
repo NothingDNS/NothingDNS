@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Cluster gossip now rejects Leader/Heartbeat frames from impostor
+  senders**: `handleLeader` and `handleHeartbeat` accepted any
+  AEAD-authenticated gossip peer's announcement naming an arbitrary
+  `LeaderID`. A compromised keyring peer could forge a higher-term
+  announcement naming a victim node, get adopted by every follower
+  (`adopt=true` on higher term), and then pass the
+  `msg.From == currentLeader` gate on forged ZoneUpdate/ConfigSync
+  frames — full cluster takeover. Only the leader itself may announce
+  its leadership or send heartbeats (`msg.From == payload.LeaderID`),
+  mirroring the impostor checks already present in
+  handlePing/handleAck/handleZoneUpdate.
+
 ### Fixed
 
 - **`transfer.allow_list` now also authorizes RFC 1996 NOTIFY**: the NOTIFY
@@ -16,6 +30,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shared authorization for AXFR/IXFR and NOTIFY — a master permitted for
   transfers may send NOTIFY, and sources not in the list are refused
   (deny-by-default when the list is empty).
+- **NOTIFY responses with mismatched transaction IDs are now rejected**:
+  `SendNOTIFY` never compared the response's transaction ID against the
+  request's, so a spoofed or stale reply carrying the wrong ID was accepted
+  as success. The random TXID (RFC 1996 §3.2.2 / RFC 1035 §4.1.1) exists
+  precisely to bind a reply to its request; the sender now enforces it.
+- **DNSSEC key rollover no longer mints duplicate replacement keys**:
+  `maybeRolloverZSK`/`maybeRolloverKSK` only inspected ACTIVE keys, so once
+  a rollover triggered (active key inside `PublishSafety` of `Retire`),
+  every scheduler tick generated another replacement — an unbounded pile of
+  Published-but-inactive keys accumulating over the safety window. A
+  pending-key guard (`hasPendingZSK`/`hasPendingKSK`) now waits for the
+  in-flight replacement to activate before considering another rollover.
+- **NSEC3 opt-out now engages for unsigned delegations (RFC 5155 §6.1.1)**:
+  `generateNSEC3` treated the presence of any non-NS record — including
+  RRSIG — as making a delegation "secure". A signed parent always carries
+  RRSIGs over the delegation NS RRset, so every delegation was classified
+  secure and the opt-out flag never engaged, bloating the NSEC3 chain.
+  Opt-out now applies only to unsigned delegations (NS, no SOA, no DS, no
+  other records); the zone apex and signed delegations are never opt-out.
+- **TCP responses no longer set TC when only Additional records are dropped
+  (RFC 2181 §9)**: `packFramedDNSPayload` pre-set `TC=1` before calling
+  `Truncate`, so a response needing only its Additional section trimmed
+  (OPT, glue) went out with TC set even though no required data was
+  omitted — inconsistent with the UDP writer. `Truncate`'s own RFC 2181 §9
+  logic (set TC only when Answer/Authority records are dropped or the
+  message still doesn't fit) now decides.
+
+### Changed
+
+- **geodns: removed a dead identical-argument retry in `mmdbLookup`**: the
+  retry re-ran the MMDB decode with the same arguments after a failure — a
+  duplicate of the same error, never a recovery. A single decode at the
+  spec-computed absolute offset (`record_value - node_count +
+  search_tree_size`) is correct; a comment now documents why no retry
+  exists.
 
 ## [1.1.1] — 2026-08-05
 
