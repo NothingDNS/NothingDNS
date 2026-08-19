@@ -5,6 +5,21 @@ All notable changes to NothingDNS are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Version strings now have one canonical format across all build
+  paths**: release binaries built by `scripts/build-release.sh` reported
+  `v1.1.4` (the raw git-describe tag) while container images built by the
+  Dockerfile reported `1.1.4` (the VERSION-file form), and the startup
+  log consequently printed `vv1.1.4`. The canonical form is bare semver
+  without the `v` prefix: the script now strips it (`VERSION="${VERSION#v}"`),
+  and `util.Version` normalizes itself at init so any `-X` injection of a
+  `v`-prefixed tag cannot reintroduce the mismatch. The compile-time
+  fallback in `version.go` is also synced to `1.1.4`. Covered by new
+  unit tests (`TestNormalizeVersion`, `TestVersionIsBareSemver`).
+
 ## [1.1.4] — 2026-08-19
 
 ### Fixed

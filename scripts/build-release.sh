@@ -15,6 +15,13 @@ if [[ -z "${VERSION}" ]]; then
     VERSION="$(tr -d '[:space:]' < "${ROOT_DIR}/VERSION")"
   fi
 fi
+# Canonical version format is bare semver WITHOUT the "v" prefix — the
+# same format as the VERSION file and util.Version's fallback. Release
+# tags are "v"-prefixed ("v1.1.4"), so strip it whether the value came
+# from git describe or an explicitly-set env var (release.yml passes the
+# raw tag name). util.Version init() also strips as a second line of
+# defense; doing it here keeps the printed build banner consistent too.
+VERSION="${VERSION#v}"
 if [[ -z "${COMMIT}" ]]; then
   COMMIT="$(git -C "${ROOT_DIR}" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"
 fi
