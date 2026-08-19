@@ -523,6 +523,142 @@ func TestGossipProtocol_handleGossip_InvalidPayload(t *testing.T) {
 	gp.handleGossip(msg, from)
 }
 
+// TestGossipProtocol_handleLeader_ImpostorRejected verifies the
+// leader-announcement impostor check: a Leader frame whose
+// AEAD-authenticated sender (msg.From) does not match the LeaderID it
+// claims must be rejected even at a higher term. Without this, a
+// compromised gossip-keyring peer could forge a higher-term
+// announcement naming a victim node as leader, get every follower to
+// adopt that identity, and then forge ZoneUpdate/ConfigSync frames
+// under the victim's name (the followers' msg.From == currentLeader
+// gate would pass). The same discipline is applied by every other
+// gossip handler (Ping/Ack/ZoneUpdate/...).
+func TestGossipProtocol_handleLeader_ImpostorRejected(t *testing.T) {
+	self := &Node{ID: "self", State: NodeStateAlive, Addr: "127.0.0.1"}
+	nl := NewNodeList(self)
+	cfg := DefaultGossipConfig()
+
+	gp, _ := NewGossipProtocol(cfg, nl, true)
+
+	from, _ := net.ResolveUDPAddr("udp", "127.0.0.1:12345")
+
+	// Establish a known leader at term 1.
+	gp.leaderMu.Lock()
+	gp.currentLeader = "real-leader"
+	gp.leaderTerm = 1
+	gp.leaderMu.Unlock()
+
+	// Forged announcement: sender "impostor" claims LeaderID
+	// "victim" at a HIGHER term. The claimed leader differs from the
+	// authenticated sender, so it must be dropped.
+	payloadBytes, _ := encodePayload(LeaderPayload{LeaderID: "victim", Term: 2})
+	forged := Message{Type: MessageTypeLeader, From: "impostor", Payload: payloadBytes}
+	gp.handleLeader(forged, from)
+
+	gp.leaderMu.RLock()
+	leader := gp.currentLeader
+	term := gp.leaderTerm
+	gp.leaderMu.RUnlock()
+	if leader != "real-leader" {
+		t.Errorf("forged higher-term Leader announcement adopted %q, want %q", leader, "real-leader")
+	}
+	if term != 1 {
+		t.Errorf("forged Leader announcement advanced term: term = %d, want 1", term)
+	}
+
+	// A frame from a node that is NOT the claimed leader must never be
+	// adopted even when it claims the CURRENT leader's identity.
+	payloadBytes, _ = encodePayload(LeaderPayload{LeaderID: "real-leader", Term: 2})
+	spoof := Message{Type: MessageTypeLeader, From: "impostor", Payload: payloadBytes}
+	gp.handleLeader(spoof, from)
+
+	gp.leaderMu.RLock()
+	leader = gp.currentLeader
+	term = gp.leaderTerm
+	gp.leaderMu.RUnlock()
+	if leader != "real-leader" || term != 1 {
+		t.Errorf("spoofed Leader announcement not rejected: leader = %q term = %d, want real-leader/1", leader, term)
+	}
+
+	// Legitimate announcement from the actual leader itself at a
+	// higher term must still be adopted.
+	payloadBytes, _ = encodePayload(LeaderPayload{LeaderID: "real-leader", Term: 2})
+	legit := Message{Type: MessageTypeLeader, From: "real-leader", Payload: payloadBytes}
+	gp.handleLeader(legit, from)
+
+	gp.leaderMu.RLock()
+	leader = gp.currentLeader
+	term = gp.leaderTerm
+	gp.leaderMu.RUnlock()
+	if leader != "real-leader" || term != 2 {
+		t.Errorf("legitimate Leader announcement not adopted: leader = %q term = %d, want real-leader/2", leader, term)
+	}
+}
+
+// TestGossipProtocol_handleHeartbeat_ImpostorRejected mirrors the
+// Leader check for heartbeats: a heartbeat whose authenticated sender
+// is not the LeaderID it claims must be dropped, even at a higher
+// term.
+func TestGossipProtocol_handleHeartbeat_ImpostorRejected(t *testing.T) {
+	self := &Node{ID: "self", State: NodeStateAlive, Addr: "127.0.0.1"}
+	nl := NewNodeList(self)
+	cfg := DefaultGossipConfig()
+
+	gp, _ := NewGossipProtocol(cfg, nl, true)
+
+	from, _ := net.ResolveUDPAddr("udp", "127.0.0.1:12345")
+
+	gp.leaderMu.Lock()
+	gp.currentLeader = "real-leader"
+	gp.leaderTerm = 1
+	gp.lastHeartbeat = time.Now()
+	gp.leaderMu.Unlock()
+
+	// Forged higher-term heartbeat from an impostor claiming to be
+	// "victim" must be dropped.
+	payloadBytes, _ := encodePayload(LeaderHeartbeatPayload{LeaderID: "victim", Term: 2})
+	forged := Message{Type: MessageTypeHeartbeat, From: "impostor", Payload: payloadBytes}
+	gp.handleHeartbeat(forged, from)
+
+	gp.leaderMu.RLock()
+	leader := gp.currentLeader
+	term := gp.leaderTerm
+	gp.leaderMu.RUnlock()
+	if leader != "real-leader" {
+		t.Errorf("forged heartbeat adopted %q as leader, want %q", leader, "real-leader")
+	}
+	if term != 1 {
+		t.Errorf("forged heartbeat advanced term: term = %d, want 1", term)
+	}
+
+	// A frame from a node that is not the claimed leader must be
+	// dropped even when it claims the current leader's identity.
+	payloadBytes, _ = encodePayload(LeaderHeartbeatPayload{LeaderID: "real-leader", Term: 2})
+	spoof := Message{Type: MessageTypeHeartbeat, From: "impostor", Payload: payloadBytes}
+	gp.handleHeartbeat(spoof, from)
+
+	gp.leaderMu.RLock()
+	leader = gp.currentLeader
+	term = gp.leaderTerm
+	gp.leaderMu.RUnlock()
+	if leader != "real-leader" || term != 1 {
+		t.Errorf("spoofed heartbeat not rejected: leader = %q term = %d, want real-leader/1", leader, term)
+	}
+
+	// Legitimate higher-term heartbeat from the real leader is adopted.
+	payloadBytes, _ = encodePayload(LeaderHeartbeatPayload{LeaderID: "real-leader", Term: 2})
+	legit := Message{Type: MessageTypeHeartbeat, From: "real-leader", Payload: payloadBytes}
+	gp.handleHeartbeat(legit, from)
+
+	gp.leaderMu.RLock()
+	leader = gp.currentLeader
+	term = gp.leaderTerm
+	gp.leaderMu.RUnlock()
+	if leader != "real-leader" || term != 2 {
+		t.Errorf("legitimate heartbeat not adopted: leader = %q term = %d, want real-leader/2", leader, term)
+	}
+}
+
 func TestGossipProtocol_handleCacheInvalidate_InvalidPayload(t *testing.T) {
 	self := &Node{ID: "self", State: NodeStateAlive, Addr: "127.0.0.1"}
 	nl := NewNodeList(self)

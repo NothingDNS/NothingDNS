@@ -58,6 +58,19 @@ func (gp *GossipProtocol) handleLeader(msg Message, from *net.UDPAddr) {
 		return
 	}
 
+	// Impostor protection: payload.LeaderID is the node claiming
+	// leadership; msg.From is the AEAD-authenticated sender. Only the
+	// leader itself may announce its own leadership — without this
+	// check, a compromised gossip-keyring peer could forge a
+	// higher-term Leader announcement naming itself, get adopted by
+	// every follower, and then pass the msg.From == currentLeader gate
+	// on forged ZoneUpdate/ConfigSync frames (full cluster takeover).
+	// Mirrors the same check in handlePing/handleAck/handleZoneUpdate.
+	if msg.From != payload.LeaderID {
+		util.Warnf("gossip: dropped Leader announcement from impostor %s claiming to be %s", msg.From, payload.LeaderID)
+		return
+	}
+
 	gp.leaderMu.Lock()
 	defer gp.leaderMu.Unlock()
 
@@ -90,6 +103,20 @@ func (gp *GossipProtocol) handleLeader(msg Message, from *net.UDPAddr) {
 func (gp *GossipProtocol) handleHeartbeat(msg Message, from *net.UDPAddr) {
 	var payload LeaderHeartbeatPayload
 	if err := decodePayload(msg.Payload, &payload); err != nil {
+		return
+	}
+
+	// Impostor protection: payload.LeaderID is the node claiming to be
+	// the leader; msg.From is the AEAD-authenticated sender. Only the
+	// leader itself may send heartbeats. Without this check, a
+	// compromised gossip-keyring peer could forge a higher-term
+	// heartbeat naming itself, be adopted as leader by every follower
+	// (adopt=true on payload.Term > leaderTerm), and then pass the
+	// msg.From == currentLeader gate on forged ZoneUpdate/ConfigSync
+	// frames — full cluster takeover. Mirrors the same check in
+	// handleLeader/handlePing/handleZoneUpdate.
+	if msg.From != payload.LeaderID {
+		util.Warnf("gossip: dropped Heartbeat from impostor %s claiming to be %s", msg.From, payload.LeaderID)
 		return
 	}
 
