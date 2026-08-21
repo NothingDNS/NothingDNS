@@ -511,6 +511,10 @@ func (h *integratedHandler) handleACLRedirect(w server.ResponseWriter, r *protoc
 }
 
 // buildResponse builds a DNS response from zone records.
+// Every caller serves data owned by a locally hosted zone (exact match,
+// wildcard synthesis, GeoDNS override, or DNSSEC-signed via
+// buildSignedResponse), so the AA bit is set per RFC 1035 §4.1.1.
+// Recursive answers are built by the upstream/resolver stages instead.
 func (h *integratedHandler) buildResponse(query *protocol.Message, records []zone.Record) *protocol.Message {
 	resp := &protocol.Message{
 		Header: protocol.Header{
@@ -519,6 +523,7 @@ func (h *integratedHandler) buildResponse(query *protocol.Message, records []zon
 		},
 		Questions: query.Questions,
 	}
+	resp.Header.Flags.AA = true
 
 	for _, rec := range records {
 		data := parseRData(rec.Type, rec.RData)

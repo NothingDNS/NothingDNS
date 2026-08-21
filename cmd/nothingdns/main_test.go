@@ -4224,6 +4224,169 @@ func TestServeDNS_GeoDNS(t *testing.T) {
 	}
 }
 
+// --- Authoritative AA-bit regression tests ---
+//
+// buildResponse() in handler.go must set the AA bit on every authoritative
+// positive answer per RFC 1035 §4.1.1. This once regressed silently:
+// protocol.NewResponseFlags() deliberately defaults AA to false ("authoritative
+// paths must opt in"), and buildResponse was the one authoritative builder
+// that never opted in — every positive answer from a hosted zone went out
+// with flags "qr ra" instead of "qr aa ra". These tests pin the flag on every
+// path that produces an authoritative answer, and pin it UNSET on referrals,
+// which must never claim authority below a zone cut (RFC 1034 §4.2.1).
+
+func TestServeDNS_AA_ExactMatch(t *testing.T) {
+	h := newTestHandler()
+	addZoneRecords(t, h, "example.com.", []zone.Record{
+		{Name: "www.example.com.", TTL: 300, Class: "IN", Type: "A", RData: "192.168.1.1"},
+	})
+
+	w := newCaptureWriter("10.0.0.1", "udp")
+	h.ServeDNS(w, newTestQuery(t, "www.example.com.", protocol.TypeA))
+
+	if w.msg == nil {
+		t.Fatal("expected a response")
+	}
+	if w.msg.Header.Flags.RCODE != protocol.RcodeSuccess {
+		t.Fatalf("expected NOERROR, got %d", w.msg.Header.Flags.RCODE)
+	}
+	if !w.msg.Header.Flags.AA {
+		t.Error("expected AA bit set on authoritative positive answer (exact match)")
+	}
+}
+
+func TestServeDNS_AA_Wildcard(t *testing.T) {
+	h := newTestHandler()
+	addZoneRecords(t, h, "example.com.", []zone.Record{
+		{Name: "*.example.com.", TTL: 300, Class: "IN", Type: "A", RData: "192.168.1.100"},
+	})
+
+	w := newCaptureWriter("10.0.0.1", "udp")
+	h.ServeDNS(w, newTestQuery(t, "anything.example.com.", protocol.TypeA))
+
+	if w.msg == nil {
+		t.Fatal("expected a response")
+	}
+	if len(w.msg.Answers) != 1 {
+		t.Fatalf("expected 1 synthesized wildcard answer, got %d", len(w.msg.Answers))
+	}
+	if !w.msg.Header.Flags.AA {
+		t.Error("expected AA bit set on authoritative wildcard answer")
+	}
+}
+
+func TestServeDNS_AA_GeoDNS(t *testing.T) {
+	h := newTestHandler()
+	h.security.GeoEngine = geodns.NewEngine(geodns.Config{Enabled: true})
+	h.security.GeoEngine.SetRule("www.example.com.", "A", &geodns.GeoRecord{
+		Default: "192.168.1.1",
+		Type:    "A",
+		TTL:     300,
+	})
+	addZoneRecords(t, h, "example.com.", []zone.Record{
+		{Name: "www.example.com.", TTL: 300, Class: "IN", Type: "A", RData: "10.0.0.1"},
+	})
+
+	w := newCaptureWriter("10.0.0.1", "udp")
+	h.ServeDNS(w, newTestQuery(t, "www.example.com.", protocol.TypeA))
+
+	if w.msg == nil {
+		t.Fatal("expected a response")
+	}
+	if len(w.msg.Answers) != 1 {
+		t.Fatalf("expected 1 GeoDNS answer, got %d", len(w.msg.Answers))
+	}
+	if !w.msg.Header.Flags.AA {
+		t.Error("expected AA bit set on GeoDNS authoritative answer")
+	}
+}
+
+func TestServeDNS_AA_DNSSECSigned(t *testing.T) {
+	h := newTestHandler()
+	addZoneRecords(t, h, "example.com.", []zone.Record{
+		{Name: "www.example.com.", TTL: 300, Class: "IN", Type: "A", RData: "192.168.1.1"},
+	})
+	signer := dnssec.NewSigner("example.com.", dnssec.DefaultSignerConfig())
+	sk, err := signer.GenerateKeyPair(protocol.AlgorithmECDSAP256SHA256, false)
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+	signer.AddKey(sk)
+	h.zoneSigners = map[string]*dnssec.Signer{
+		"example.com.": signer,
+	}
+
+	msg := newTestQuery(t, "www.example.com.", protocol.TypeA)
+	msg.SetEDNS0(4096, true) // DO bit set
+
+	w := newCaptureWriter("10.0.0.1", "udp")
+	h.ServeDNS(w, msg)
+
+	if w.msg == nil {
+		t.Fatal("expected a response")
+	}
+	if !w.msg.Header.Flags.AA {
+		t.Error("expected AA bit set on DNSSEC-signed authoritative answer (buildSignedResponse delegates to buildResponse)")
+	}
+}
+
+func TestServeDNS_AA_CNAMEChase(t *testing.T) {
+	h := newTestHandler()
+	addZoneRecords(t, h, "example.com.", []zone.Record{
+		{Name: "alias.example.com.", TTL: 300, Class: "IN", Type: "CNAME", RData: "target.example.com."},
+		{Name: "target.example.com.", TTL: 300, Class: "IN", Type: "A", RData: "192.168.1.1"},
+	})
+
+	w := newCaptureWriter("10.0.0.1", "udp")
+	h.ServeDNS(w, newTestQuery(t, "alias.example.com.", protocol.TypeA))
+
+	if w.msg == nil {
+		t.Fatal("expected a response")
+	}
+	if !w.msg.Header.Flags.AA {
+		t.Error("expected AA bit set on in-zone CNAME chase answer")
+	}
+}
+
+func TestServeDNS_AA_NODATA(t *testing.T) {
+	h := newTestHandler()
+	addZoneRecords(t, h, "example.com.", []zone.Record{
+		{Name: "www.example.com.", TTL: 300, Class: "IN", Type: "A", RData: "192.168.1.1"},
+	})
+
+	w := newCaptureWriter("10.0.0.1", "udp")
+	h.ServeDNS(w, newTestQuery(t, "www.example.com.", protocol.TypeAAAA))
+
+	if w.msg == nil {
+		t.Fatal("expected a response")
+	}
+	if !w.msg.Header.Flags.AA {
+		t.Error("expected AA bit set on authoritative NODATA answer")
+	}
+}
+
+func TestServeDNS_AA_ReferralUnset(t *testing.T) {
+	h := newTestHandler()
+	addZoneRecords(t, h, "example.com.", []zone.Record{
+		{Name: "sub.example.com.", TTL: 300, Class: "IN", Type: "NS", RData: "ns1.sub.example.com."},
+		{Name: "ns1.sub.example.com.", TTL: 300, Class: "IN", Type: "A", RData: "192.168.1.1"},
+	})
+
+	w := newCaptureWriter("10.0.0.1", "udp")
+	// Query a name deeper than the delegation point so FindDelegation fires.
+	h.ServeDNS(w, newTestQuery(t, "www.sub.example.com.", protocol.TypeA))
+
+	if w.msg == nil {
+		t.Fatal("expected a response")
+	}
+	if len(w.msg.Authorities) == 0 {
+		t.Fatal("expected authority section in referral")
+	}
+	if w.msg.Header.Flags.AA {
+		t.Error("expected AA bit NOT set on referral below a zone cut (RFC 1034 §4.2.1)")
+	}
+}
+
 // --- ServeDNS with zone tree lookup ---
 
 func TestServeDNS_ZoneTreeLookup(t *testing.T) {
