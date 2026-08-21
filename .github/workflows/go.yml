@@ -352,9 +352,20 @@ jobs:
             fuzz-${{ runner.os }}-
 
       - name: Fuzz protocol parsers
+        # Same artifact-conditional retry as the ODoH step below: the
+        # go-fuzz coordinator deadline race fires on any 30s target
+        # (observed here on FuzzUnpackName, run 32516069187) without
+        # writing a crash artifact; a genuine crash always does.
         run: |
           for target in FuzzUnpackMessage FuzzUnpackName FuzzUnpackResourceRecord; do
-            go test ./internal/protocol/ -run='^$' -fuzz="^${target}$" -fuzztime=30s
+            if ! go test ./internal/protocol/ -run='^$' -fuzz="^${target}$" -fuzztime=30s; then
+              if compgen -G "internal/protocol/testdata/fuzz/${target}/*" > /dev/null; then
+                echo "::error::${target}: genuine fuzz crash - failing input in internal/protocol/testdata/fuzz/${target}/"
+                exit 1
+              fi
+              echo "::warning::${target}: go-fuzz deadline race (no crash artifact); retrying once"
+              go test ./internal/protocol/ -run='^$' -fuzz="^${target}$" -fuzztime=30s
+            fi
           done
 
       - name: Fuzz zone parser
