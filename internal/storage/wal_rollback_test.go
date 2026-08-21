@@ -137,6 +137,14 @@ func TestWALAppend_WriteFailureTriggersRollback(t *testing.T) {
 	if _, err := wal.Append(EntryTypePut, []byte("first")); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
+	// Drain the pending background sync while the fd is still open. Every
+	// successful Append signals syncChan, and OpenWAL's syncLoop goroutine
+	// (wal.go:170) would otherwise hit the closed fd after the close below,
+	// set wal.syncErr, and make the next Append short-circuit at
+	// checkSyncErrLocked (wal.go:375) with "previous WAL sync failed"
+	// instead of the write-entry error this test asserts — observed under
+	// -race in CI (run 32526413421).
+	wal.Sync()
 	// Break the fd so the next write fails mid-Append and the rollback
 	// behind it fails too (closed fd).
 	if err := wal.active.file.Close(); err != nil {
