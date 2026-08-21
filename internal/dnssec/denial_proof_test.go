@@ -138,8 +138,8 @@ func TestValidateNegativeResponse_SignedNSEC3ClosestEncloser(t *testing.T) {
 	}
 	mkNSEC3 := func(ownerHash, nextHash []byte) *protocol.ResourceRecord {
 		return &protocol.ResourceRecord{
-			Name:  mustName(t, strings.ToUpper(protocol.Base32Encode(ownerHash))+".example.com."),
-			Type:  protocol.TypeNSEC3, Class: protocol.ClassIN, TTL: 300,
+			Name: mustName(t, strings.ToUpper(protocol.Base32Encode(ownerHash))+".example.com."),
+			Type: protocol.TypeNSEC3, Class: protocol.ClassIN, TTL: 300,
 			Data: &protocol.RDataNSEC3{
 				HashAlgorithm: 1, Iterations: 0, Salt: nil,
 				HashLength: uint8(len(nextHash)), NextHashed: nextHash,
@@ -190,8 +190,8 @@ func TestValidateNegativeResponse_NSEC3ProofFailureNoFallback(t *testing.T) {
 	copy(ceNext, ceRaw)
 	ceNext[len(ceNext)-1]++ // tight: proves CE match, covers nothing else
 	ceRR := &protocol.ResourceRecord{
-		Name:  mustName(t, strings.ToUpper(protocol.Base32Encode(ceRaw))+".example.com."),
-		Type:  protocol.TypeNSEC3, Class: protocol.ClassIN, TTL: 300,
+		Name: mustName(t, strings.ToUpper(protocol.Base32Encode(ceRaw))+".example.com."),
+		Type: protocol.TypeNSEC3, Class: protocol.ClassIN, TTL: 300,
 		Data: &protocol.RDataNSEC3{
 			HashAlgorithm: 1, Iterations: 0, Salt: nil,
 			HashLength: uint8(len(ceNext)), NextHashed: ceNext,
@@ -233,8 +233,8 @@ func TestValidateNSEC3ClosestEncloser_FullProofAndGaps(t *testing.T) {
 	}
 	mkNSEC3 := func(ownerHash, nextHash []byte) *protocol.ResourceRecord {
 		return &protocol.ResourceRecord{
-			Name:  mustName(t, strings.ToUpper(protocol.Base32Encode(ownerHash))+".example.com."),
-			Type:  protocol.TypeNSEC3, Class: protocol.ClassIN,
+			Name: mustName(t, strings.ToUpper(protocol.Base32Encode(ownerHash))+".example.com."),
+			Type: protocol.TypeNSEC3, Class: protocol.ClassIN,
 			Data: &protocol.RDataNSEC3{
 				HashAlgorithm: 1, Iterations: 0, Salt: nil,
 				HashLength: uint8(len(nextHash)), NextHashed: nextHash,
@@ -320,8 +320,8 @@ func TestVerifyDSDenial_SignedNSEC3ProvesInsecureDelegation(t *testing.T) {
 		t.Fatalf("NSEC3Hash: %v", err)
 	}
 	nsec3 := &protocol.ResourceRecord{
-		Name:  mustName(t, strings.ToUpper(protocol.Base32Encode(raw))+".example.com."),
-		Type:  protocol.TypeNSEC3, Class: protocol.ClassIN, TTL: 300,
+		Name: mustName(t, strings.ToUpper(protocol.Base32Encode(raw))+".example.com."),
+		Type: protocol.TypeNSEC3, Class: protocol.ClassIN, TTL: 300,
 		Data: &protocol.RDataNSEC3{
 			HashAlgorithm: 1, Iterations: 0, Salt: nil,
 			HashLength: uint8(len(raw)), NextHashed: raw,
