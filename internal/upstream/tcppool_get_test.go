@@ -38,18 +38,6 @@ func (c *deadlineErrConn) SetReadDeadline(t time.Time) error {
 	return nil
 }
 
-// errCloseConn reports the underlying Close error so closeConnLocked
-// failures can be asserted.
-type errCloseConn struct {
-	net.Conn
-	closeErr error
-}
-
-func (c *errCloseConn) Close() error {
-	_ = c.Conn.Close()
-	return c.closeErr
-}
-
 func TestTCPPoolGet_ClosedPool(t *testing.T) {
 	pool := &tcpConnPool{closed: true}
 	if _, err := pool.get(); !errors.Is(err, net.ErrClosed) {
