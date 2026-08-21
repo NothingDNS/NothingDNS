@@ -369,12 +369,34 @@ jobs:
           done
 
       - name: Fuzz zone parser
-        run: go test ./internal/zone/ -run='^$' -fuzz='^FuzzParseZoneFile$' -fuzztime=30s
+        # Same artifact-conditional retry as the ODoH/protocol steps: the
+        # go-fuzz coordinator deadline race fires on any 30s target
+        # without writing a crash artifact; a genuine crash always does.
+        # Single-target form (no loop).
+        run: |
+          if ! go test ./internal/zone/ -run='^$' -fuzz='^FuzzParseZoneFile$' -fuzztime=30s; then
+            if compgen -G "internal/zone/testdata/fuzz/FuzzParseZoneFile/*" > /dev/null; then
+              echo "::error::FuzzParseZoneFile: genuine fuzz crash - failing input in internal/zone/testdata/fuzz/FuzzParseZoneFile/"
+              exit 1
+            fi
+            echo "::warning::FuzzParseZoneFile: go-fuzz deadline race (no crash artifact); retrying once"
+            go test ./internal/zone/ -run='^$' -fuzz='^FuzzParseZoneFile$' -fuzztime=30s
+          fi
 
       - name: Fuzz DSO TLV pipeline
+        # Same artifact-conditional retry as the ODoH/protocol steps: the
+        # go-fuzz coordinator deadline race fires on any 30s target
+        # without writing a crash artifact; a genuine crash always does.
         run: |
           for target in FuzzUnpackTLV FuzzHandleDSORequest; do
-            go test ./internal/dso/ -run='^$' -fuzz="^${target}$" -fuzztime=30s
+            if ! go test ./internal/dso/ -run='^$' -fuzz="^${target}$" -fuzztime=30s; then
+              if compgen -G "internal/dso/testdata/fuzz/${target}/*" > /dev/null; then
+                echo "::error::${target}: genuine fuzz crash - failing input in internal/dso/testdata/fuzz/${target}/"
+                exit 1
+              fi
+              echo "::warning::${target}: go-fuzz deadline race (no crash artifact); retrying once"
+              go test ./internal/dso/ -run='^$' -fuzz="^${target}$" -fuzztime=30s
+            fi
           done
 
       - name: Fuzz ODoH wire format
