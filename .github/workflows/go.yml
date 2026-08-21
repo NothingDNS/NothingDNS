@@ -367,9 +367,21 @@ jobs:
           done
 
       - name: Fuzz ODoH wire format
+        # The go-fuzz coordinator deadline race intermittently fails these
+        # 30s targets with "context deadline exceeded" at the -fuzztime
+        # boundary WITHOUT writing a crash artifact; a genuine crash always
+        # writes a failing input to testdata/fuzz/<target>/. Retry once only
+        # when no artifact was written, so real crashes still fail fast.
         run: |
           for target in FuzzParseODoHMessage FuzzParseConfigContents FuzzDecryptQuery; do
-            go test ./internal/odoh/ -run='^$' -fuzz="^${target}$" -fuzztime=30s
+            if ! go test ./internal/odoh/ -run='^$' -fuzz="^${target}$" -fuzztime=30s; then
+              if compgen -G "internal/odoh/testdata/fuzz/${target}/*" > /dev/null; then
+                echo "::error::${target}: genuine fuzz crash - failing input in internal/odoh/testdata/fuzz/${target}/"
+                exit 1
+              fi
+              echo "::warning::${target}: go-fuzz deadline race (no crash artifact); retrying once"
+              go test ./internal/odoh/ -run='^$' -fuzz="^${target}$" -fuzztime=30s
+            fi
           done
 
       - name: Upload fuzz failures on failure
