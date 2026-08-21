@@ -230,8 +230,8 @@ update-deps:
 # CI/CD Targets
 # =============================================================================
 
-## Run CI pipeline locally (build, test, vet)
-ci: vet test build
+## Run CI pipeline locally (fmt, vet, test, build)
+ci: fmt-check vet test build
 	@echo "✓ CI checks passed"
 
 ## Prepare for release (clean build with all checks)
