@@ -1,7 +1,7 @@
 # NothingDNS Makefile
 # Provides convenient shortcuts for common development tasks
 
-.PHONY: all build build-server build-cli build-web build-docker build-release test test-short test-verbose test-race test-race-critical test-e2e test-pkg test-run test-coverage vet fmt fmt-check fmt-all lint staticcheck clean clean-all install dev dev-watch validate-config deps tidy update-deps ci release help benchmark security-check docs docker-push helm-install helm-template setup-hooks lint-ci backup backup-restore-test restore health-check
+.PHONY: all build build-server build-cli build-web build-docker build-release test test-short test-verbose test-race test-race-critical test-e2e test-pkg test-run test-coverage vet fmt fmt-check fmt-all lint staticcheck staticcheck-ci clean clean-all install dev dev-watch validate-config deps tidy update-deps ci release help benchmark security-check docs docker-push helm-install helm-template setup-hooks lint-ci backup backup-restore-test restore health-check
 
 # Binary names
 SERVER_BINARY := nothingdns
@@ -166,6 +166,14 @@ staticcheck:
 	@which staticcheck > /dev/null 2>&1 || (echo "staticcheck not installed. Run: go install honnef.co/go/tools/cmd/staticcheck@latest"; exit 1)
 	@staticcheck ./...
 
+## Run staticcheck at the version CI's security job pins, so local
+## findings match remote findings exactly (the go-errorlint tool is not
+## included: it needs a separate install and is disabled for _test.go
+## files by CI, which is where its findings would differ).
+staticcheck-ci:
+	@echo "Running staticcheck (CI-pinned 2025.1.1)..."
+	@go run honnef.co/go/tools/cmd/staticcheck@2025.1.1 ./...
+
 # =============================================================================
 # Development Targets
 # =============================================================================
@@ -231,7 +239,7 @@ update-deps:
 # =============================================================================
 
 ## Run CI pipeline locally (fmt, vet, test, build)
-ci: fmt-check vet test build
+ci: fmt-check vet staticcheck-ci test build
 	@echo "✓ CI checks passed"
 
 ## Prepare for release (clean build with all checks)
