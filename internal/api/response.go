@@ -500,6 +500,14 @@ type PTRLookupResponse struct {
 	Found   bool   `json:"found"`
 }
 
+// cspReportBody is the envelope browsers POST per W3C CSP Level 2/3 §5:
+// {"csp-report": {"document-uri": ...}}. The report fields are nested one
+// level down — decoding the fields at the top level (as a flat struct)
+// silently yields all-empty values for every real report.
+type cspReportBody struct {
+	Report CSPReportRequest `json:"csp-report"`
+}
+
 // CSPReportRequest is the payload POSTed by browsers when Content Security
 // Policy is violated. Only the relevant fields are decoded; the full spec
 // defines ~30 fields (see W3C CSP Level 2 §5).

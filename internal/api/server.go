@@ -879,17 +879,28 @@ func (s *Server) rateLimitCleanupLoop() {
 
 // handleCSPReport receives Content Security Policy violation reports
 // POSTed by browsers. Logs each violation at Info level for monitoring
-// without storing or forwarding. Intentionally lightweight — no auth,
-// no body size enforcement beyond the server-level ReadLimit (10MB).
+// without storing or forwarding. Browsers submit these automatically with
+// no credentials, so the endpoint is unauthenticated by design (matched
+// in authMiddleware's public-path list) — it stays safe because the body
+// is hard-capped at maxBodyBytes and every /api/ path is rate-limited by
+// rateLimitMiddleware before reaching here.
 // Endpoint path: POST /api/v1/csp-report
 func (s *Server) handleCSPReport(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeErrorJSON(w, http.StatusMethodNotAllowed, "use POST")
 		return
 	}
-	var report CSPReportRequest
-	if err := json.NewDecoder(r.Body).Decode(&report); err != nil {
+	var body cspReportBody
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&body); err != nil {
 		// Body too large, malformed JSON, or empty — nothing actionable.
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	report := body.Report
+	if report.ViolatedDirective == "" && report.BlockedURI == "" && report.DocumentURI == "" {
+		// Valid JSON but no recognizable report content (e.g. a flat body
+		// from a non-browser client). Log nothing rather than a stream of
+		// empty "CSP violation" lines.
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -1024,6 +1035,16 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Skip auth for login and public endpoints
 		if r.URL.Path == "/api/v1/auth/login" || r.URL.Path == "/api/v1/auth/bootstrap" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Skip auth for CSP violation reports: browsers submit these
+		// automatically from the dashboard with no credentials (no
+		// Authorization header, and POST means the cookie fallback does
+		// not apply either). Without this skip every real report dies at
+		// the 401 the CSP header's own report-uri advertises.
+		if r.URL.Path == "/api/v1/csp-report" {
 			next.ServeHTTP(w, r)
 			return
 		}
