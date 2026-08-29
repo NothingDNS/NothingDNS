@@ -118,7 +118,7 @@ scripts/production-smoke.sh
 ### Repository Hygiene
 
 - Debug-printing parser tests were converted into assertion-based tests and renamed.
-- `security-report/` is ignored for local scan artifacts while `security-report/SECURITY-REPORT.md` remains trackable as the finding ledger.
+- Security scan artifacts are ignored and retained only in the system that produced them.
 - Stale documentation examples were updated to match the current config schema and CLI/API behavior.
 
 ## Required Operator Inputs

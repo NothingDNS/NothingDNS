@@ -174,8 +174,9 @@ upstream:
     - 8.8.4.4:53        # Google Secondary
     # - 9.9.9.9:53      # Quad9
 
-  # Timeout for upstream queries
-  timeout: 5s
+  # NOTE: the upstream query timeout is `resolution.timeout` (see the
+  # RECURSIVE RESOLVER section) — it applies to forwarded queries too.
+  # There is no `upstream.timeout`; a key of that name is ignored.
 
   # Health check interval
   health_check: 30s
@@ -272,15 +273,21 @@ dnssec:
 # =============================================================================
 # Access Control List
 acl:
-  # Allow only specific IP ranges
+  # Allow only specific IP ranges.
+  #
+  # `types` narrows a rule to specific QTYPEs. OMIT IT to match every query
+  # type — that is what "allow these networks" means. Listing "ANY" does NOT
+  # mean "all types": it is QTYPE 255, so such a rule matches only literal ANY
+  # queries and every ordinary A/AAAA query falls through to the default,
+  # which is deny when recursion is enabled without
+  # acl_allow_unrestricted_recursion. The result is a server that refuses
+  # everyone it was meant to allow.
   - name: allow-private-networks
     action: allow
     networks:
       - 10.0.0.0/8
       - 172.16.0.0/12
       - 192.168.0.0/16
-    types:
-      - ANY
 
   # Deny specific IPs
   # - name: deny-test-net

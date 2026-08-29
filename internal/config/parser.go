@@ -176,8 +176,25 @@ func (p *Parser) parseMapping(indent int) (*Node, error) {
 	}
 	seenKeys := make(map[string]struct{})
 
-	// Remember the indentation level when we entered this mapping
-	entryIndentLevel := p.tokenizer.CurrentIndent()
+	// Column of this mapping's first key. Every later key of the same mapping
+	// sits at that column; anything shallower belongs to an enclosing one.
+	//
+	// This used to be decided from the tokenizer's live indent level instead,
+	// which cannot work: when a deeply indented block closes, the tokenizer
+	// pops its whole indent stack at once and only then emits one DEDENT per
+	// closed level, so CurrentIndent() already reads the final level while the
+	// first of several stacked DEDENTs is still being handled. Each nested
+	// parseMapping consumed exactly one DEDENT and compared against that same
+	// collapsed value, which happened to come out right for one or two levels
+	// of nesting and wrong for three. A key returning to column 0 after a
+	// three-deep block sequence — `logging:` after `dnssec.signing.keys:`,
+	// exactly the shape of the shipped example — was attached to the wrong
+	// parent, and the whole section was silently dropped.
+	//
+	// Columns do not have that problem: they are a property of the source
+	// text, not of tokenizer state, and parseBlockSequence already decides
+	// its own boundaries the same way.
+	keyCol := 0
 
 	for {
 		// Skip newlines at current level
@@ -190,15 +207,13 @@ func (p *Parser) parseMapping(indent int) (*Node, error) {
 			break
 		}
 
-		// On DEDENT, check if we've dropped below our entry level
+		// On DEDENT, absorb the whole run — how many there are says nothing
+		// about which mapping they close — and let the column check below
+		// decide whether the next key is still ours.
 		if p.current.Type == TokenDedent {
-			// Consume the DEDENT and check if we're below entry level
-			p.advance()
-			if p.tokenizer.CurrentIndent() < entryIndentLevel {
-				// We've exited this mapping's level
-				break
+			for p.current.Type == TokenDedent {
+				p.advance()
 			}
-			// We're still at or above entry level, continue parsing
 			continue
 		}
 
@@ -209,6 +224,15 @@ func (p *Parser) parseMapping(indent int) (*Node, error) {
 				break
 			}
 			return nil, fmt.Errorf("expected mapping key but got %s at line %d", p.current.Type, p.current.Line)
+		}
+
+		// A key to the left of ours closes this mapping. Leaving it as the
+		// current token lets the enclosing parser claim it.
+		if keyCol > 0 && p.current.Col < keyCol {
+			break
+		}
+		if keyCol == 0 {
+			keyCol = p.current.Col
 		}
 
 		key := &Node{
@@ -296,13 +320,10 @@ func (p *Parser) parseMapping(indent int) (*Node, error) {
 			p.advance()
 		}
 
-		// Handle DEDENT after a value
-		if p.current.Type == TokenDedent {
-			p.advance()
-			if p.tokenizer.CurrentIndent() < entryIndentLevel {
-				break
-			}
-		}
+		// A DEDENT after a value is handled at the top of the loop, where the
+		// run is absorbed and the next key's column decides whether this
+		// mapping continues. Breaking here on a tokenizer indent comparison
+		// would re-introduce the miscount this mapping's keyCol replaced.
 	}
 
 	return node, nil

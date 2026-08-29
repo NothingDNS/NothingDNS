@@ -57,7 +57,18 @@ type Zone struct {
 	// Computed on zone load if ZONEMD is enabled in config.
 	ZONEMD *ZONEMD
 
-	// mu protects Records, SOA, NS, and ZONEMD from concurrent access.
+	// entNames is the set of empty non-terminals: names that exist in this
+	// zone as DNS nodes because they have descendants, but own no records of
+	// their own (RFC 4592 §2.2.2). Derived from Records; see ensureENTIndex.
+	entNames map[string]struct{}
+
+	// entBuiltFor is len(Records) at the time entNames was built. Records is
+	// an exported field that transfer/DDNS code mutates directly, so the set
+	// is revalidated against the owner count rather than trusted forever.
+	entBuiltFor int
+
+	// mu protects Records, SOA, NS, ZONEMD, and the ENT index from
+	// concurrent access.
 	mu sync.RWMutex
 }
 
@@ -767,6 +778,14 @@ func (p *parser) parseRecordOwned(line string, ownerInherited bool) error {
 	// Make name absolute and lowercase
 	absName := strings.ToLower(makeAbsolute(record.Name, p.zone.Origin))
 
+	// Keep Record.Name in step with the map key. Leaving the file's relative
+	// owner ("ns1.sub") on the record while keying the map by the absolute
+	// name broke every consumer that reads Record.Name instead of the key —
+	// most visibly delegation glue, whose owner name then failed to match the
+	// NS target and was dropped from the referral, leaving the child zone
+	// unreachable.
+	record.Name = absName
+
 	// Store the record
 	p.zone.Records[absName] = append(p.zone.Records[absName], record)
 
@@ -1027,6 +1046,16 @@ func (z *Zone) lookupLocked(name, rrtype string) []Record {
 func recordTypeMatches(recordType, queryType string) bool {
 	recordType = strings.ToUpper(recordType)
 	queryType = strings.ToUpper(queryType)
+	// QTYPE=ANY (RFC 1035 §3.2.3) requests every type at the name, so it
+	// matches any record. Without this, an exact-name ANY query matched
+	// nothing and the handler answered NODATA — telling the client the name
+	// holds no data at all, and inviting it to cache that for the SOA
+	// minimum, even though the name is fully populated. LookupWildcard
+	// already special-cased ANY, so the wildcard and exact-match paths
+	// disagreed on the same query.
+	if queryType == "ANY" {
+		return true
+	}
 	return recordType == queryType || (recordType == "DKIM" && queryType == "TXT")
 }
 
@@ -1079,6 +1108,93 @@ func (z *Zone) NameExists(name string) bool {
 	return len(z.Records[name]) > 0
 }
 
+// NodeExists reports whether name exists in this zone as a DNS node — either
+// because it owns records, or because it is an empty non-terminal: a name
+// with descendants but no records of its own (RFC 4592 §2.2.2).
+//
+// This is the existence test the negative-answer path needs, and NameExists is
+// not it. Answering NXDOMAIN for an empty non-terminal claims that nothing at
+// or below the name exists, which is false — and RFC 8020 resolvers take that
+// claim literally, so a cached NXDOMAIN for "b.example.com" makes them refuse
+// "a.b.example.com" too. A zone could make its own populated names
+// unresolvable that way. The correct answer for an empty non-terminal is
+// NODATA.
+func (z *Zone) NodeExists(name string) bool {
+	z.ensureENTIndex()
+	z.mu.RLock()
+	defer z.mu.RUnlock()
+	return z.nodeExistsLocked(name)
+}
+
+// nodeExistsLocked is NodeExists without locking or index refresh. Callers
+// must hold at least the read lock and must have called ensureENTIndex first.
+func (z *Zone) nodeExistsLocked(name string) bool {
+	name = strings.ToLower(canonicalize(name))
+	if len(z.Records[name]) > 0 {
+		return true
+	}
+	// The apex exists by definition — it is the zone cut this zone is named
+	// for. A well-formed zone always carries an SOA there so the Records
+	// lookup above would find it, but the closest-encloser search must not
+	// depend on that: terminating it at the apex is what bounds the walk.
+	if name == strings.ToLower(canonicalize(z.Origin)) {
+		return true
+	}
+	_, ok := z.entNames[name]
+	return ok
+}
+
+// ensureENTIndex rebuilds the empty-non-terminal set when it is missing or
+// stale. Called before taking the read lock, never while holding it.
+func (z *Zone) ensureENTIndex() {
+	z.mu.RLock()
+	fresh := z.entNames != nil && z.entBuiltFor == len(z.Records)
+	z.mu.RUnlock()
+	if fresh {
+		return
+	}
+
+	z.mu.Lock()
+	defer z.mu.Unlock()
+	if z.entNames == nil || z.entBuiltFor != len(z.Records) {
+		z.rebuildENTIndexLocked()
+	}
+}
+
+// rebuildENTIndexLocked recomputes entNames. Must hold the write lock.
+//
+// Every owner name contributes its ancestors up to (not including) the origin;
+// an ancestor that owns records is not an empty non-terminal and is left out,
+// since nodeExistsLocked finds it in Records directly.
+func (z *Zone) rebuildENTIndexLocked() {
+	origin := strings.ToLower(canonicalize(z.Origin))
+	ents := make(map[string]struct{})
+
+	for owner := range z.Records {
+		name := owner
+		for {
+			dot := strings.IndexByte(name, '.')
+			if dot < 0 || dot+1 >= len(name) {
+				break
+			}
+			name = name[dot+1:]
+			if name == origin || !nameInZone(name, origin) {
+				break
+			}
+			if _, seen := ents[name]; seen {
+				// This ancestor chain was already walked from another owner.
+				break
+			}
+			if len(z.Records[name]) == 0 {
+				ents[name] = struct{}{}
+			}
+		}
+	}
+
+	z.entNames = ents
+	z.entBuiltFor = len(z.Records)
+}
+
 // LookupWildcard performs RFC 4592 wildcard matching for a query name.
 // It is called only after an exact match has failed and the name does not
 // exist in the zone (not a NODATA situation).
@@ -1092,6 +1208,7 @@ func (z *Zone) NameExists(name string) bool {
 // Returns the matching records, the wildcard name used, and whether a match
 // was found. The caller must rewrite the owner name to the original query name.
 func (z *Zone) LookupWildcard(name, rrtype string) (records []Record, wildcardName string, found bool) {
+	z.ensureENTIndex() // needs the read lock; must run before we take it
 	z.mu.RLock()
 	defer z.mu.RUnlock()
 
@@ -1104,43 +1221,60 @@ func (z *Zone) LookupWildcard(name, rrtype string) (records []Record, wildcardNa
 		return nil, "", false
 	}
 
-	// Strip labels from the left to find the closest encloser
+	// Step 1: find the closest encloser — the longest ancestor of the query
+	// name that exists as a node, counting empty non-terminals.
+	//
+	// The loop used to keep climbing past existing ancestors until it found
+	// SOME "*.ancestor", which is not what RFC 4592 §2.2.1 defines. With
+	// "*.wild.example." and "deep.sub.wild.example." both in the zone, a query
+	// for "x.deep.sub.wild.example." was answered from "*.wild.example." even
+	// though its closest encloser is "deep.sub.wild.example." — the zone
+	// manufactured answers for names it does not cover, where the correct
+	// reply is NXDOMAIN.
+	closestEncloser := ""
 	current := name
 	for {
-		// Don't go above the zone origin
 		if current == origin || current == "." {
 			break
 		}
-
-		// Strip the leftmost label
 		dot := strings.IndexByte(current, '.')
 		if dot < 0 || dot+1 >= len(current) {
 			break
 		}
 		parent := current[dot+1:]
-
-		// Check if a wildcard exists at this parent: *.parent
-		wildcard := "*." + parent
-		if recs, ok := z.Records[wildcard]; ok && len(recs) > 0 {
-			// Found a wildcard — filter by requested type
-			if rrtype == "" || rrtype == "ANY" {
-				return cloneRecords(recs), wildcard, true
-			}
-			var matched []Record
-			for _, r := range recs {
-				if recordTypeMatches(r.Type, rrtype) {
-					matched = append(matched, r)
-				}
-			}
-			// Even if no records match the type, the wildcard name exists,
-			// so this is a wildcard NODATA (not NXDOMAIN). Return found=true.
-			return matched, wildcard, true
+		if !nameInZone(parent, origin) {
+			break
 		}
-
+		if z.nodeExistsLocked(parent) {
+			closestEncloser = parent
+			break
+		}
 		current = parent
 	}
+	if closestEncloser == "" {
+		return nil, "", false
+	}
 
-	return nil, "", false
+	// Step 2: the source of synthesis is the wildcard at the closest encloser,
+	// and nowhere else (RFC 4592 §2.2.1).
+	wildcard := "*." + closestEncloser
+	recs, ok := z.Records[wildcard]
+	if !ok || len(recs) == 0 {
+		return nil, "", false
+	}
+
+	if rrtype == "" || rrtype == "ANY" {
+		return cloneRecords(recs), wildcard, true
+	}
+	var matched []Record
+	for _, r := range recs {
+		if recordTypeMatches(r.Type, rrtype) {
+			matched = append(matched, r)
+		}
+	}
+	// Even if no records match the type, the wildcard name exists, so this is
+	// a wildcard NODATA (not NXDOMAIN). Return found=true.
+	return matched, wildcard, true
 }
 
 // FindDelegation checks if the query name crosses a delegation point

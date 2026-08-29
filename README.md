@@ -83,7 +83,7 @@ Start with the [documentation index](docs/README.md). Common entry points:
 | Architecture and request pipeline | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | Implementation notes | [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md) |
 | Testing and fuzzing | [docs/TESTING.md](docs/TESTING.md) |
-| Performance tuning/backlog | [docs/PERFORMANCE.md](docs/PERFORMANCE.md), [docs/PERF_BACKLOG.md](docs/PERF_BACKLOG.md) |
+| Performance tuning | [docs/PERFORMANCE.md](docs/PERFORMANCE.md) |
 | Security policy | [SECURITY.md](SECURITY.md), [docs/SECURITY.md](docs/SECURITY.md) |
 | Dependencies | [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) |
 | Release history | [docs/CHANGELOG.md](docs/CHANGELOG.md) |

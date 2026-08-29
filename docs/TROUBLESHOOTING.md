@@ -524,8 +524,10 @@ acl:
       - "10.0.0.0/8"
       - "172.16.0.0/12"
       - "192.168.0.0/16"
-    types:
-      - ANY
+    # Do NOT add `types: [ANY]` here. `types` narrows the rule to specific
+    # QTYPEs, and "ANY" is QTYPE 255 — not a wildcard. A rule carrying it
+    # matches no ordinary A/AAAA query, so every client stays refused and this
+    # "solution" appears not to work. Omit `types` to match all query types.
 ```
 
 ### Rate Limiting Triggered

@@ -197,7 +197,11 @@ func (p *Pipeline) ServeDNS(h *integratedHandler, w server.ResponseWriter, r *pr
 		}
 	}()
 
-	q.currentWriter = w
+	// Wrap the writer before any stage can respond, so that every response —
+	// including the panic-recovery SERVFAIL and the errors written by the
+	// admission stages below — carries the request's OPCODE/RD/CD back to the
+	// client (RFC 1035 §4.1.1, RFC 4035 §3.1.6) and an accurate RA bit.
+	q.currentWriter = newHeaderPolicyWriter(h, w, r)
 
 	for _, stage := range p.stages {
 		handled, err := stage(q.ctx, q, q.currentWriter)
@@ -217,11 +221,13 @@ func (p *Pipeline) AppendStage(s Stage) {
 func NewPipeline(h *integratedHandler) *Pipeline {
 	p := &Pipeline{}
 	p.AppendStage(setupStage(h))
+	p.AppendStage(queryDirectionStage(h))
 	p.AppendStage(validationStage(h))
 	p.AppendStage(metricsStage(h))
 	p.AppendStage(aclStage(h))
 	p.AppendStage(rpzClientStage(h))
 	p.AppendStage(rateLimitStage(h))
+	p.AppendStage(requestPolicyStage(h))
 	p.AppendStage(cookieStage(h))
 	p.AppendStage(anyStage(h))
 	p.AppendStage(transferStage(h))

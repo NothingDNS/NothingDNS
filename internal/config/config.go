@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -260,6 +261,12 @@ func unmarshalToConfig(node *Node, cfg *Config) error {
 		}
 		util.Warnf("config: unknown top-level key %q — ignored (typo?)", k)
 	}
+
+	// Same reasoning, one level down and deeper: a key the loader has no
+	// field for is dropped silently, and a dropped `server.bind` typo turns a
+	// loopback-only deployment into an open resolver.
+	warnUnknownNestedKeys(node, reflect.TypeOf(Config{}))
+	defer cfg.warnACLAllowOnlyANY() // after the ACL section below is populated
 
 	// Server config
 	if serverNode := node.Get("server"); serverNode != nil {

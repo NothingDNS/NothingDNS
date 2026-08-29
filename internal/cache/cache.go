@@ -119,6 +119,9 @@ func (e *Entry) AgeAdjustedMessage(now time.Time) *protocol.Message {
 // decrementMessageTTLs reduces every RR TTL in msg (Answers/Authority/
 // Additional, skipping the OPT pseudo-record) by ageSeconds, flooring at 1.
 func decrementMessageTTLs(msg *protocol.Message, ageSeconds int64) {
+	if msg == nil {
+		return
+	}
 	adjust := func(rrs []*protocol.ResourceRecord) {
 		for _, rr := range rrs {
 			if rr == nil || rr.Type == protocol.TypeOPT {
@@ -142,6 +145,9 @@ func decrementMessageTTLs(msg *protocol.Message, ageSeconds int64) {
 // downstream caches re-check quickly once the authority recovers — serving
 // the original (possibly hours-long) TTLs would pin stale data downstream.
 func clampMessageTTLs(msg *protocol.Message, maxTTL uint32) {
+	if msg == nil {
+		return
+	}
 	clamp := func(rrs []*protocol.ResourceRecord) {
 		for _, rr := range rrs {
 			if rr == nil || rr.Type == protocol.TypeOPT {
@@ -588,6 +594,42 @@ func (c *Cache) StaleServed() uint64 {
 	return total
 }
 
+// ApplyTTLPolicy bounds the record TTLs in msg by the lifetime this cache
+// would actually grant an entry stored with ttl, and returns that lifetime in
+// seconds.
+//
+// Callers that both cache a response and send it to a client need this: Set
+// deep-copies, so clamping inside the cache reaches the stored copy only. The
+// response on the wire — the cache MISS, which is precisely the one that
+// seeds every downstream cache — kept the raw upstream TTL. Under
+// max_ttl=3600 an upstream TTL of 999999 was still handed to the client as
+// 999999, so downstream held for 11 days what this server refreshes hourly.
+//
+// Only lowers TTLs: a min_ttl that extends the local entry must not inflate
+// what the authority published.
+func (c *Cache) ApplyTTLPolicy(msg *protocol.Message, ttl uint32) uint32 {
+	duration := c.boundedTTL(ttl)
+	secs := remainingSecondsUint32(duration)
+	if msg != nil && secs > 0 {
+		clampMessageTTLs(msg, secs)
+	}
+	return secs
+}
+
+// boundedTTL applies the configured min/max bounds to a raw TTL.
+// maxTTL == 0 means "no upper bound" — only clamp when a positive ceiling has
+// been configured, since a zero ceiling would expire entries immediately.
+func (c *Cache) boundedTTL(ttl uint32) time.Duration {
+	duration := time.Duration(ttl) * time.Second
+	if duration < c.minTTL {
+		duration = c.minTTL
+	}
+	if c.maxTTL > 0 && duration > c.maxTTL {
+		duration = c.maxTTL
+	}
+	return duration
+}
+
 // Set adds or updates an entry in the cache. The message is deep-copied
 // before the shard lock is taken, so callers may keep using (and mutating)
 // their copy after Set returns.
@@ -703,14 +745,21 @@ func (c *Cache) setNegativeEntry(key, name string, rcode uint8, msg *protocol.Me
 // needed); copying here would run the allocation-heavy copy under the lock.
 func (c *Cache) setInternal(s *cacheShard, key string, msg *protocol.Message, ttl uint32, isPrefetch bool) {
 	// Apply min/max TTL constraints.
-	// maxTTL == 0 means "no upper bound" — only clamp when a positive ceiling
-	// has been configured (otherwise zero-clamp expires the entry immediately).
-	duration := time.Duration(ttl) * time.Second
-	if duration < c.minTTL {
-		duration = c.minTTL
-	}
-	if c.maxTTL > 0 && duration > c.maxTTL {
-		duration = c.maxTTL
+	duration := c.boundedTTL(ttl)
+
+	// The entry lives for `duration`, so nothing in it may claim to be fresh
+	// for longer. Without this, a configured max_ttl bounded only how long
+	// THIS server treated the answer as fresh: the record TTLs inside the
+	// cached message went out untouched, so an upstream TTL of 999999 was
+	// still handed to clients as 999999 even under max_ttl=3600 — every
+	// downstream cache then held for 11 days what this server refreshes
+	// hourly. Clamping only lowers TTLs, so a min_ttl that extends the entry
+	// never inflates what the authority actually published.
+	// duration == 0 only when the caller asked for a zero TTL and no min_ttl
+	// floor is configured; there is no ceiling to impose in that case, and
+	// clamping to 0 would rewrite record TTLs the caller never bounded.
+	if secs := remainingSecondsUint32(duration); secs > 0 {
+		clampMessageTTLs(msg, secs)
 	}
 
 	now := c.now()

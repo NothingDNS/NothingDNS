@@ -270,9 +270,14 @@ func (t *Tokenizer) readComment() Token {
 
 // readQuotedString reads a single or double quoted string.
 func (t *Tokenizer) readQuotedString() Token {
-	quote := t.next()
+	// Capture the position of the opening quote, not of the first content
+	// character. A token's column is where it starts in the source, and the
+	// parser uses key columns to decide which mapping a key belongs to — so
+	// reporting `"key"` one column to the right of a plain `key` at the same
+	// indentation made a quoted key look more deeply indented than it is.
 	startLine := t.line
 	startCol := t.col
+	quote := t.next()
 
 	limit := t.maxStringSize
 	if limit == 0 {

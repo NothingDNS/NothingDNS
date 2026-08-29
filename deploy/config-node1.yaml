@@ -13,7 +13,8 @@ upstream:
     - 1.1.1.1:53
     - 8.8.8.8:53
     - 8.8.4.4:53
-  timeout: 5s
+  # The upstream query timeout is `resolution.timeout`; there is no
+  # `upstream.timeout` and a key of that name is ignored.
   health_check: 30s
 
 cache:

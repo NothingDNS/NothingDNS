@@ -433,6 +433,16 @@ func (h *integratedHandler) handleANYTruncated(w server.ResponseWriter, r *proto
 		Questions: r.Questions,
 	}
 	resp.Header.Flags.TC = true // Truncated — retry over TCP
+	// RFC 6891 §7: a truncated response to an EDNS requestor must still carry
+	// an OPT record. Without it the requestor sees a TC=1 answer from what
+	// looks like a non-EDNS server and retries over TCP with EDNS downgraded.
+	if clientOPT := r.GetOPT(); clientOPT != nil {
+		payload := clientOPT.Class
+		if payload == 0 {
+			payload = ednsResponsePayloadSize
+		}
+		resp.SetEDNS0(payload, false)
+	}
 	if _, err := w.Write(resp); err != nil {
 		h.logger.Errorf("failed to write TC response: %v", err)
 	}
@@ -654,11 +664,20 @@ func minimizeResponse(resp *protocol.Message) {
 
 	// Filter authority section.
 	if resp.Header.Flags.AA {
-		// Authoritative: keep only SOA records (for negative caching).
+		// Authoritative: keep the SOA (negative caching) and the DNSSEC
+		// denial records. NSEC/NSEC3 and their RRSIGs are not decoration —
+		// RFC 4035 §3.1.3 makes them the proof that the negative answer is
+		// genuine, and a validator rejects the answer without them. Stripping
+		// them here made every negative answer from a signed zone Bogus.
+		// A client that did not set DO never sees them: scrubForClient
+		// removes them on the way out (RFC 4035 §3.2.2).
 		if hasSOA {
 			filtered := make([]*protocol.ResourceRecord, 0, len(resp.Authorities))
 			for _, rr := range resp.Authorities {
-				if rr != nil && rr.Type == protocol.TypeSOA {
+				if rr == nil {
+					continue
+				}
+				if rr.Type == protocol.TypeSOA || isDNSSECType(rr.Type) {
 					filtered = append(filtered, rr)
 				}
 			}

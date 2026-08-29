@@ -244,6 +244,41 @@ func (s *Signer) generateKeyPairOnce(algorithm uint8, isKSK bool) (*SigningKey, 
 	return signingKey, nil
 }
 
+// DNSKEYRRSet returns the zone's DNSKEY RRset, one record per loaded key.
+//
+// SignZone already synthesised these when signing a whole zone, but nothing
+// published them on the query path: a zone signed from configured keys served
+// RRSIGs whose keys no resolver could fetch, so every validator saw the zone
+// as Bogus. Serving the RRset is what makes a signed zone validatable.
+//
+// Every loaded key is published, including Pre-Published and Retired ones —
+// that is the point of pre-publication during a rollover (RFC 7583); only
+// *signing* is restricted to active keys.
+func (s *Signer) DNSKEYRRSet(ttl uint32) ([]*protocol.ResourceRecord, error) {
+	name, err := protocol.ParseName(s.zone)
+	if err != nil {
+		return nil, fmt.Errorf("parsing zone name %q: %w", s.zone, err)
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rrs := make([]*protocol.ResourceRecord, 0, len(s.keys))
+	for _, key := range s.keys {
+		if key == nil || key.DNSKEY == nil {
+			continue
+		}
+		rrs = append(rrs, &protocol.ResourceRecord{
+			Name:  name,
+			Type:  protocol.TypeDNSKEY,
+			Class: protocol.ClassIN,
+			TTL:   ttl,
+			Data:  key.DNSKEY,
+		})
+	}
+	return rrs, nil
+}
+
 // SignZone signs all records in a zone.
 // Returns the signed zone records including RRSIGs and NSEC/NSEC3 records.
 func (s *Signer) SignZone(records []*protocol.ResourceRecord) ([]*protocol.ResourceRecord, error) {

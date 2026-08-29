@@ -265,22 +265,111 @@ func rpzQnameStage(h *integratedHandler) Stage {
 func splitHorizonStage(h *integratedHandler) Stage {
 	return func(ctx context.Context, q *query, w server.ResponseWriter) (bool, error) {
 		clientIP := w.ClientInfo().IP()
-		if h.splitHorizon != nil && clientIP != nil {
-			if view := h.splitHorizon.SelectView(clientIP); view != nil {
-				if vzMap, ok := h.viewZones[view.Name]; ok {
-					for origin, z := range vzMap {
-						if isSubdomain(q.qname, origin) {
-							h.logger.Debugf("View %s: checking zone %s for %s", view.Name, origin, q.qname)
-							if h.handleAuthoritative(z, w, q.msg, q.q, q.qname) {
-								return true, nil
-							}
-						}
-					}
-				}
+		if h.splitHorizon == nil || clientIP == nil {
+			return false, nil
+		}
+		view := h.splitHorizon.SelectView(clientIP)
+		if view == nil {
+			return false, nil
+		}
+		vzMap, ok := h.viewZones[view.Name]
+		if !ok {
+			return false, nil
+		}
+
+		inView := false
+		for origin, z := range vzMap {
+			if !isSubdomain(q.qname, origin) {
+				continue
+			}
+			inView = true
+			h.logger.Debugf("View %s: checking zone %s for %s", view.Name, origin, q.qname)
+			if h.handleAuthoritative(z, w, q.msg, q.q, q.qname) {
+				return true, nil
 			}
 		}
+		if !inView {
+			return false, nil
+		}
+
+		// handleAuthoritative returns false when the name carries a CNAME, as
+		// a signal to chase it. Falling through with that signal sent the
+		// query on to the global zones, which do not contain view zones — so
+		// the chase never happened, and an authoritative-only server answered
+		// REFUSED ("name is outside all configured zones") for an alias it was
+		// authoritative for. Every CNAME inside a split-horizon view was
+		// unresolvable. The chase stays inside this view: following it across
+		// the whole server would resolve one horizon's aliases against
+		// another's data.
+		return h.answerViewCNAME(q, w, vzMap)
+	}
+}
+
+// answerViewCNAME resolves a CNAME chain within a single view's zones.
+func (h *integratedHandler) answerViewCNAME(q *query, w server.ResponseWriter, vzMap map[string]*zone.Zone) (bool, error) {
+	result := chaseCNAMEInZoneSet(q.qname, vzMap)
+	if result.loopDetected {
+		h.logger.Warnf("CNAME loop detected for %s in view zones", q.qname)
+		if h.metrics != nil {
+			h.metrics.RecordResponse(protocol.RcodeServerFailure)
+		}
+		sendErrorWithEDE(q.currentWriter, q.msg, protocol.RcodeServerFailure,
+			protocol.EDEOtherError, "CNAME loop detected")
+		return true, nil
+	}
+	if len(result.cnameRecords) == 0 {
 		return false, nil
 	}
+
+	// Resolve the chain's endpoint inside the view first. Anything the view
+	// does not hold falls back to the ordinary path (global zones, cache,
+	// upstream) — the same answer any client would get, so nothing private
+	// to this view leaks and nothing public is hidden from it.
+	targetAnswers := lookupInZoneSet(vzMap, result.targetName, q.qtype)
+	if len(targetAnswers) == 0 {
+		targetAnswers = h.resolveCNAMETarget(w, q.msg, q.q, result.targetName, q.qtype)
+	}
+
+	resp := h.buildCNAMEResponse(q.msg, result.cnameRecords, targetAnswers)
+	handled, err := h.applyRPZResponsePolicyWithError(w, q.msg, q.q, resp, result.targetName)
+	if handled || err != nil {
+		return handled, err
+	}
+	if h.metrics != nil {
+		h.metrics.RecordResponse(protocol.RcodeSuccess)
+	}
+	reply(q.currentWriter, q.msg, resp)
+	return true, nil
+}
+
+// lookupInZoneSet returns answer records of qtype for name from one set of
+// zones.
+func lookupInZoneSet(zones map[string]*zone.Zone, name string, qtype uint16) []*protocol.ResourceRecord {
+	qtypeStr := typeToString(qtype)
+	parsed, err := protocol.ParseName(name)
+	if err != nil {
+		return nil
+	}
+	var answers []*protocol.ResourceRecord
+	for _, z := range zones {
+		for _, rec := range z.Lookup(name, qtypeStr) {
+			data := parseRData(rec.Type, rec.RData)
+			if data == nil {
+				continue
+			}
+			answers = append(answers, &protocol.ResourceRecord{
+				Name:  parsed,
+				Type:  qtype,
+				Class: protocol.ClassIN,
+				TTL:   rec.TTL,
+				Data:  data,
+			})
+		}
+		if len(answers) > 0 {
+			return answers
+		}
+	}
+	return nil
 }
 
 // authoritativeStage checks local authoritative zones for a direct answer.
@@ -553,6 +642,11 @@ func upstreamStage(h *integratedHandler) Stage {
 		// Cache the response (Set deep-copies internally)
 		if resp.Header.Flags.RCODE == protocol.RcodeSuccess && len(resp.Answers) > 0 {
 			ttl := extractTTL(resp)
+			// Bound resp's own TTLs by the cache policy BEFORE Set copies it,
+			// so the client and the cached entry agree on how long this answer
+			// is good for. Skipping this left the miss response — the one that
+			// seeds every downstream cache — carrying the raw upstream TTL.
+			h.cache.ApplyTTLPolicy(resp, ttl)
 			h.cache.Set(q.cacheKey, resp, ttl)
 		} else if resp.Header.Flags.RCODE == protocol.RcodeNameError ||
 			(resp.Header.Flags.RCODE == protocol.RcodeSuccess && len(resp.Answers) == 0) {

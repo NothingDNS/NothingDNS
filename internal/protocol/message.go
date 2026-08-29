@@ -641,8 +641,16 @@ func (m *Message) Clear() {
 // Per RFC 2181 §9 the TC bit means that *required* data was omitted, so it
 // is set only when records are removed from the Answer or Authority
 // sections (or the message still does not fit after removing everything).
-// Dropping Additional-section records (OPT, glue, ...) alone does not set
-// TC. Removal is always on whole-record boundaries.
+// Dropping Additional-section records (glue, ...) alone does not set TC.
+// Removal is always on whole-record boundaries.
+//
+// The OPT pseudo-record is exempt from Additional-section trimming: RFC 6891
+// §7 requires it to survive into a truncated response, because it is what
+// tells the requestor that this server speaks EDNS at all (and it carries the
+// DNS Cookie). Dropping it made a TC=1 response look like a non-EDNS server,
+// which pushes conforming resolvers into an EDNS downgrade on the TCP retry.
+// It is released only as the last resort, if the message still does not fit
+// once every other record is gone.
 func (m *Message) Truncate(maxSize int) {
 	if m == nil {
 		return
@@ -660,10 +668,27 @@ func (m *Message) Truncate(maxSize int) {
 		return records[:last]
 	}
 
+	// Set the OPT record aside so the Additional-section trim below cannot
+	// consume it, then put it back at the end of the section (its
+	// conventional position).
+	var opt *ResourceRecord
+	kept := m.Additionals[:0]
+	for _, rr := range m.Additionals {
+		if opt == nil && rr != nil && rr.Type == TypeOPT {
+			opt = rr
+			continue
+		}
+		kept = append(kept, rr)
+	}
+	m.Additionals = kept
+
 	// Try removing additional records first. These are optional data, so
 	// dropping them does not set the TC bit (RFC 2181 §9).
 	for len(m.Additionals) > 0 && currentLength > maxSize {
 		m.Additionals = removeLast(m.Additionals)
+	}
+	if opt != nil {
+		m.Additionals = append(m.Additionals, opt)
 	}
 	m.Header.ARCount = uint16(len(m.Additionals))
 
@@ -697,5 +722,20 @@ func (m *Message) Truncate(maxSize int) {
 	// If required records were removed or we still do not fit, set TC bit.
 	if truncated || currentLength > maxSize {
 		m.Header.SetTruncated(true)
+	}
+
+	// Last resort: every answer and authority record is gone and the message
+	// still overflows, so the OPT record has to go too. Keeping it would
+	// leave a packet that cannot be sent at all, which serves the requestor
+	// worse than an EDNS-less truncated response.
+	if currentLength > maxSize && opt != nil {
+		for i, rr := range m.Additionals {
+			if rr == opt {
+				m.Additionals = append(m.Additionals[:i], m.Additionals[i+1:]...)
+				currentLength -= opt.WireLength()
+				break
+			}
+		}
+		m.Header.ARCount = uint16(len(m.Additionals))
 	}
 }

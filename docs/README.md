@@ -18,7 +18,6 @@ This directory contains NothingDNS design, usage, and operations documentation.
 | [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture, 21-stage request pipeline, component diagrams |
 | [SPECIFICATION.md](SPECIFICATION.md) | Functional specification: protocols, architecture, feature scope |
 | [IMPLEMENTATION.md](IMPLEMENTATION.md) | Implementation details: package structure, init order, algorithms |
-| [RFC_IMPLEMENTATION.md](RFC_IMPLEMENTATION.md) | RFC implementation roadmap (XoT, mDNS, IDNA, etc.) |
 
 ## Operations
 
@@ -43,7 +42,6 @@ This directory contains NothingDNS design, usage, and operations documentation.
 | Document | Contents |
 |---|---|
 | [PERFORMANCE.md](PERFORMANCE.md) | Performance tuning, benchmarks, profiling, caching strategies |
-| [PERF_BACKLOG.md](PERF_BACKLOG.md) | Optimization backlog: pooling, cache key alloc, wire-byte names |
 | [TESTING.md](TESTING.md) | Testing pyramid, patterns for unit/integration/E2E, fuzzing |
 
 ## Reference
@@ -52,16 +50,12 @@ This directory contains NothingDNS design, usage, and operations documentation.
 |---|---|
 | [GLOSSARY.md](GLOSSARY.md) | 400+ DNS terms, RFC index (60+ references), quick reference tables |
 | [DEPENDENCIES.md](DEPENDENCIES.md) | Go module dependencies and minimal-dependency philosophy |
-| [ROADMAP.md](ROADMAP.md) | Version roadmap v0.2.0 through v1.0.0 |
-| [COMPETITOR_MATRIX.md](COMPETITOR_MATRIX.md) | Honest feature/market comparison against major DNS competitors |
-| [MARKET_LEADERSHIP_ROADMAP.md](MARKET_LEADERSHIP_ROADMAP.md) | Execution roadmap for turning product breadth into market leadership |
 
 ## Community & Project
 
 | Document | Contents |
 |---|---|
 | [CHANGELOG.md](CHANGELOG.md) | Semantic version changelog: Added/Fixed/Changed |
-| [BRANDING.md](BRANDING.md) | Brand identity, color palette, messaging framework |
 | [.project/SPEC_DEVIATIONS.md](../.project/SPEC_DEVIATIONS.md) | Intentional deviations from SPEC.md with rationale |
 | [.project/AUTH_KDF.md](../.project/AUTH_KDF.md) | Custom PBKDF2 implementation design document |
 

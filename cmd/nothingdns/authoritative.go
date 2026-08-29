@@ -73,6 +73,18 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 		}
 	}
 
+	// ── Step 1b: DNSKEY RRset from the zone's signing keys ──
+	// A zone signed from configured keys carries no DNSKEY records in its
+	// file, so the lookup below finds nothing and the query fell through to
+	// NODATA. The zone then served RRSIGs referencing keys no resolver could
+	// fetch — signed, but unvalidatable by anyone. Zone-file DNSKEY records,
+	// if present, take precedence and are served by the exact-match path.
+	if qtype == protocol.TypeDNSKEY && canonicalize(qname) == canonicalize(z.Origin) {
+		if len(z.Lookup(qname, "DNSKEY")) == 0 && h.serveZoneDNSKEY(w, r, q, z, wantsDNSSEC) {
+			return true
+		}
+	}
+
 	// ── Step 2: Exact match ──
 	records := z.Lookup(qname, typeToString(qtype))
 	if len(records) > 0 {
@@ -117,7 +129,9 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 	// Only attempt wildcards if the exact name doesn't exist at all.
 	// If the name exists but has no records of the requested type,
 	// that's NODATA (handled below), not a wildcard case.
-	if !z.NameExists(qname) {
+	// NodeExists, not NameExists: an empty non-terminal is an existing node,
+	// so it is NODATA rather than a wildcard candidate or an NXDOMAIN.
+	if !z.NodeExists(qname) {
 		wcRecords, _, wcFound := z.LookupWildcard(qname, typeToString(qtype))
 		if wcFound {
 			if len(wcRecords) > 0 {
@@ -149,7 +163,7 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 				return true
 			}
 			// Wildcard exists but no records of the requested type → NODATA
-			resp := h.buildNODATAResponse(r, z)
+			resp := h.buildNODATAResponse(r, z, qname, wantsDNSSEC)
 			if h.metrics != nil {
 				h.metrics.RecordResponse(protocol.RcodeSuccess)
 			}
@@ -164,7 +178,7 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 		}
 
 		// Name doesn't exist and no wildcard → authoritative NXDOMAIN
-		resp := h.buildNXDOMAINResponse(r, z)
+		resp := h.buildNXDOMAINResponse(r, z, qname, wantsDNSSEC)
 		if h.metrics != nil {
 			h.metrics.RecordResponse(protocol.RcodeNameError)
 		}
@@ -173,7 +187,7 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 	}
 
 	// ── Step 5: Name exists but no records of requested type → NODATA ──
-	resp := h.buildNODATAResponse(r, z)
+	resp := h.buildNODATAResponse(r, z, qname, wantsDNSSEC)
 	if h.metrics != nil {
 		h.metrics.RecordResponse(protocol.RcodeSuccess)
 	}
@@ -245,7 +259,7 @@ func (h *integratedHandler) buildReferralResponse(query *protocol.Message, z *zo
 
 // buildNXDOMAINResponse returns an authoritative NXDOMAIN with the zone's
 // SOA in the authority section (for negative caching per RFC 2308).
-func (h *integratedHandler) buildNXDOMAINResponse(query *protocol.Message, z *zone.Zone) *protocol.Message {
+func (h *integratedHandler) buildNXDOMAINResponse(query *protocol.Message, z *zone.Zone, qname string, wantsDNSSEC bool) *protocol.Message {
 	resp := &protocol.Message{
 		Header: protocol.Header{
 			ID:    query.Header.ID,
@@ -255,12 +269,13 @@ func (h *integratedHandler) buildNXDOMAINResponse(query *protocol.Message, z *zo
 	}
 	resp.Header.Flags.AA = true
 	h.addSOAAuthority(resp, z)
+	h.addDenialProof(resp, z, qname, denialNXDomain, wantsDNSSEC)
 	return resp
 }
 
 // buildNODATAResponse returns an authoritative NODATA response (RCODE=0,
 // no answers) with the zone's SOA in the authority section.
-func (h *integratedHandler) buildNODATAResponse(query *protocol.Message, z *zone.Zone) *protocol.Message {
+func (h *integratedHandler) buildNODATAResponse(query *protocol.Message, z *zone.Zone, qname string, wantsDNSSEC bool) *protocol.Message {
 	resp := &protocol.Message{
 		Header: protocol.Header{
 			ID:    query.Header.ID,
@@ -270,6 +285,7 @@ func (h *integratedHandler) buildNODATAResponse(query *protocol.Message, z *zone
 	}
 	resp.Header.Flags.AA = true
 	h.addSOAAuthority(resp, z)
+	h.addDenialProof(resp, z, qname, denialNoData, wantsDNSSEC)
 	return resp
 }
 
@@ -402,6 +418,25 @@ type cnameChainResult struct {
 // The caller must NOT hold zonesMu; this method acquires the read lock
 // internally as needed.
 func (h *integratedHandler) chaseCNAMEInZones(name string) cnameChainResult {
+	return chaseCNAMEChain(name, func(current string) *zone.Record {
+		h.zonesMu.RLock()
+		defer h.zonesMu.RUnlock()
+		return h.findCNAMEInZonesLocked(current)
+	})
+}
+
+// chaseCNAMEInZoneSet is chaseCNAMEInZones restricted to one set of zones.
+// Split-horizon views need it: a CNAME must be followed inside the view that
+// answered, never across the whole server, or one horizon's aliases would
+// resolve against another horizon's data.
+func chaseCNAMEInZoneSet(name string, zones map[string]*zone.Zone) cnameChainResult {
+	return chaseCNAMEChain(name, func(current string) *zone.Record {
+		return findCNAMEIn(zones, current)
+	})
+}
+
+// chaseCNAMEChain walks a CNAME chain, asking lookup for the next link.
+func chaseCNAMEChain(name string, lookup func(string) *zone.Record) cnameChainResult {
 	const maxCNAMEDepth = 16
 
 	visited := make(map[string]struct{}, maxCNAMEDepth)
@@ -416,11 +451,7 @@ func (h *integratedHandler) chaseCNAMEInZones(name string) cnameChainResult {
 		}
 		visited[current] = struct{}{}
 
-		// Look for a CNAME record in any authoritative zone
-		h.zonesMu.RLock()
-		cnameRec := h.findCNAMEInZonesLocked(current)
-		h.zonesMu.RUnlock()
-
+		cnameRec := lookup(current)
 		if cnameRec == nil {
 			// No CNAME found; the chain terminates at current.
 			result.targetName = current
@@ -428,8 +459,7 @@ func (h *integratedHandler) chaseCNAMEInZones(name string) cnameChainResult {
 		}
 
 		result.cnameRecords = append(result.cnameRecords, *cnameRec)
-		target := canonicalize(cnameRec.RData)
-		current = target
+		current = canonicalize(cnameRec.RData)
 	}
 
 	// Chain exceeded maximum depth — treat as loop.
@@ -449,8 +479,13 @@ func (h *integratedHandler) chaseCNAMEInZones(name string) cnameChainResult {
 // serving the raw relative forms produced answers like "al. CNAME www."
 // (owner and target both wrong, chain resolution broken).
 func (h *integratedHandler) findCNAMEInZonesLocked(name string) *zone.Record {
+	return findCNAMEIn(h.zones, name)
+}
+
+// findCNAMEIn searches one set of zones for a CNAME at name.
+func findCNAMEIn(zones map[string]*zone.Zone, name string) *zone.Record {
 	cname := canonicalize(name)
-	for _, z := range h.zones {
+	for _, z := range zones {
 		recs := z.Lookup(cname, "CNAME")
 		if len(recs) > 0 {
 			rec := recs[0]
@@ -629,4 +664,75 @@ func (h *integratedHandler) buildCNAMEResponse(query *protocol.Message, cnameRec
 	}
 
 	return resp
+}
+
+// serveZoneDNSKEY answers a DNSKEY query at the apex from the zone's signing
+// keys, signing the RRset with an active KSK.
+//
+// RFC 4035 §2.2: the DNSKEY RRset at the apex is signed by the key-signing
+// key, which is what a validator follows down from the parent's DS record.
+// Signing it with a ZSK instead would leave the chain of trust broken.
+//
+// Returns false when there is no signer for the zone or it holds no keys, so
+// the caller continues with normal zone processing.
+func (h *integratedHandler) serveZoneDNSKEY(w server.ResponseWriter, r *protocol.Message, q *protocol.Question, z *zone.Zone, wantsDNSSEC bool) bool {
+	h.zoneSignersMu.RLock()
+	signer, ok := h.zoneSigners[z.Origin]
+	h.zoneSignersMu.RUnlock()
+	if !ok || signer == nil {
+		return false
+	}
+
+	ttl := z.GetDefaultTTL()
+	if ttl == 0 {
+		ttl = 3600
+	}
+	dnskeys, err := signer.DNSKEYRRSet(ttl)
+	if err != nil {
+		h.logger.Warnf("Building DNSKEY RRset for %s: %v", z.Origin, err)
+		return false
+	}
+	if len(dnskeys) == 0 {
+		return false
+	}
+
+	resp := &protocol.Message{
+		Header: protocol.Header{
+			ID:    r.Header.ID,
+			Flags: protocol.NewResponseFlags(protocol.RcodeSuccess),
+		},
+		Questions: r.Questions,
+	}
+	resp.Header.Flags.AA = true
+	for _, rr := range dnskeys {
+		resp.AddAnswer(rr)
+	}
+
+	if wantsDNSSEC {
+		if ksks := signer.GetActiveKSKs(); len(ksks) > 0 {
+			inception := time.Now().UTC()
+			expiration := inception.Add(30 * 24 * time.Hour)
+			rrsig, sigErr := signer.SignRRSet(dnskeys, ksks[0],
+				dnssecSignatureUnixTime(inception), dnssecSignatureUnixTime(expiration))
+			if sigErr == nil && rrsig != nil {
+				resp.AddAnswer(rrsig)
+			} else if sigErr != nil {
+				// The RRset still goes out; an unsigned DNSKEY set is what a
+				// validator will reject, so make the reason visible.
+				h.logger.Warnf("Failed to sign DNSKEY RRset for %s: %v", z.Origin, sigErr)
+			}
+		}
+	}
+
+	if h.metrics != nil {
+		h.metrics.RecordResponse(protocol.RcodeSuccess)
+	}
+	if handled, err := h.checkRPZResponseIPWithError(w, r, q, resp); handled || err != nil {
+		if err != nil {
+			h.logger.Warnf("RPZ response write failed for DNSKEY %s: %v", z.Origin, err)
+		}
+		return true
+	}
+	reply(w, r, resp)
+	return true
 }

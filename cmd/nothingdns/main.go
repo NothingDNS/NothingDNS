@@ -5,13 +5,7 @@ package main
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/ed25519"
-	"crypto/elliptic"
-	"crypto/rsa"
-	"crypto/x509"
 	"encoding/hex"
-	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
@@ -1263,95 +1257,12 @@ func writePIDFile(path string, data []byte) error {
 	return util.AtomicWriteFile(path, data)
 }
 
+// parseDNSSECPrivateKey loads signing key material. The formats it accepts —
+// BIND-style ".private" envelopes, PEM, and bare DER — live in one place so
+// the daemon and dnsctl cannot disagree about them again; they used to, and
+// the keys dnsctl generated were unloadable by the server as a result.
 func parseDNSSECPrivateKey(data []byte, algorithm uint8) (*dnssec.PrivateKey, error) {
-	der := data
-	if block, _ := pem.Decode(data); block != nil {
-		der = block.Bytes
-	}
-
-	switch algorithm {
-	case protocol.AlgorithmRSASHA256, protocol.AlgorithmRSASHA512:
-		key, err := parseRSAPrivateKey(der)
-		if err != nil {
-			return nil, err
-		}
-		return &dnssec.PrivateKey{Algorithm: algorithm, Key: key}, nil
-	case protocol.AlgorithmECDSAP256SHA256, protocol.AlgorithmECDSAP384SHA384:
-		key, err := parseECDSAPrivateKey(der, algorithm)
-		if err != nil {
-			return nil, err
-		}
-		return &dnssec.PrivateKey{Algorithm: algorithm, Key: key}, nil
-	case protocol.AlgorithmED25519:
-		key, err := parseEd25519PrivateKey(der)
-		if err != nil {
-			return nil, err
-		}
-		return &dnssec.PrivateKey{Algorithm: algorithm, Key: key}, nil
-	default:
-		return nil, fmt.Errorf("unsupported algorithm: %d", algorithm)
-	}
-}
-
-func parseRSAPrivateKey(der []byte) (*rsa.PrivateKey, error) {
-	if key, err := x509.ParsePKCS1PrivateKey(der); err == nil {
-		return key, nil
-	}
-	key, err := x509.ParsePKCS8PrivateKey(der)
-	if err != nil {
-		return nil, fmt.Errorf("parsing RSA private key: %w", err)
-	}
-	rsaKey, ok := key.(*rsa.PrivateKey)
-	if !ok {
-		return nil, fmt.Errorf("private key is %T, not RSA", key)
-	}
-	return rsaKey, nil
-}
-
-func parseECDSAPrivateKey(der []byte, algorithm uint8) (*ecdsa.PrivateKey, error) {
-	if key, err := x509.ParseECPrivateKey(der); err == nil {
-		return validateECDSAPrivateKeyCurve(key, algorithm)
-	}
-	key, err := x509.ParsePKCS8PrivateKey(der)
-	if err != nil {
-		return nil, fmt.Errorf("parsing ECDSA private key: %w", err)
-	}
-	ecdsaKey, ok := key.(*ecdsa.PrivateKey)
-	if !ok {
-		return nil, fmt.Errorf("private key is %T, not ECDSA", key)
-	}
-	return validateECDSAPrivateKeyCurve(ecdsaKey, algorithm)
-}
-
-func validateECDSAPrivateKeyCurve(key *ecdsa.PrivateKey, algorithm uint8) (*ecdsa.PrivateKey, error) {
-	switch algorithm {
-	case protocol.AlgorithmECDSAP256SHA256:
-		if key.Curve != elliptic.P256() {
-			return nil, fmt.Errorf("ECDSAP256SHA256 requires P-256 private key")
-		}
-	case protocol.AlgorithmECDSAP384SHA384:
-		if key.Curve != elliptic.P384() {
-			return nil, fmt.Errorf("ECDSAP384SHA384 requires P-384 private key")
-		}
-	default:
-		return nil, fmt.Errorf("unsupported ECDSA algorithm: %d", algorithm)
-	}
-	return key, nil
-}
-
-func parseEd25519PrivateKey(der []byte) (ed25519.PrivateKey, error) {
-	key, err := x509.ParsePKCS8PrivateKey(der)
-	if err == nil {
-		edKey, ok := key.(ed25519.PrivateKey)
-		if !ok {
-			return nil, fmt.Errorf("private key is %T, not Ed25519", key)
-		}
-		return edKey, nil
-	}
-	if len(der) == ed25519.PrivateKeySize {
-		return ed25519.PrivateKey(append([]byte(nil), der...)), nil
-	}
-	return nil, fmt.Errorf("parsing Ed25519 private key: %w", err)
+	return dnssec.ParsePrivateKeyFile(data, algorithm)
 }
 
 // validateConfigOnly loads and validates a configuration file without starting the server.

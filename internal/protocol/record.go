@@ -203,6 +203,19 @@ func UnpackResourceRecord(buf []byte, offset int) (*ResourceRecord, int, error) 
 	ttl := Uint32(buf[offset:])
 	offset += 4
 
+	// RFC 2181 §8: "Implementations should treat TTL values received with the
+	// most significant bit set as if the entire value received was zero."
+	// The TTL is signed on the wire in practice, so 0x80000000 and above are
+	// nonsense — but they are nonsense a remote party chooses. Passed through,
+	// a TTL of 0xFFFFFFFF tells every downstream cache to hold the record for
+	// 136 years, which turns one bad or hostile answer into a permanent one.
+	// The OPT pseudo-record is exempt: its "TTL" field is not a TTL at all
+	// (RFC 6891 §6.1.3 packs the extended RCODE, EDNS version, DO bit and Z
+	// into it), so zeroing it would silently strip the DO bit.
+	if rrtype != TypeOPT && ttl&0x80000000 != 0 {
+		ttl = 0
+	}
+
 	// Unpack RDLENGTH
 	rdlength := Uint16(buf[offset:])
 	offset += 2

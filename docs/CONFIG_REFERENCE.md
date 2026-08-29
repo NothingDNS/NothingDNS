@@ -181,8 +181,11 @@ acl:
     networks:
       - 127.0.0.0/8
       - "::1/128"      # ⚠️ IPv6 CIDR'leri tırnak içine alın!
-    types:
-      - ANY            # spesifik QTYPE'lar veya ANY
+    # types:           # ⚠️ Kuralı belirli QTYPE'lara daraltır.
+    #   - MX           #    HER tip için eşleşsin istiyorsanız BU ALANI YAZMAYIN.
+    #                  #    "ANY" tüm tipler demek DEĞİLDİR — QTYPE 255'tir; öyle
+    #                  #    bir kural yalnızca literal ANY sorgularıyla eşleşir ve
+    #                  #    sıradan A/AAAA sorguları varsayılana düşer.
 ```
 
 Sırayla değerlendirilir; ilk eşleşme kazanır. Hot-reload destekler.

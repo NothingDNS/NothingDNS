@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/auth"
+	"github.com/nothingdns/nothingdns/internal/util"
 )
 
 // placeholderSecretTokens is the list of substrings that must never appear in a
@@ -653,6 +654,41 @@ func (c *Config) validateACL() []string {
 	}
 
 	return errors
+}
+
+// warnACLAllowOnlyANY flags `allow` rules narrowed to QTYPE ANY and nothing
+// else, which allow nothing in practice.
+//
+// `types` filters a rule by query type, and "ANY" is QTYPE 255 — not a
+// wildcard. A rule carrying it matches no A/AAAA query, so every ordinary
+// query falls through to the default, and with recursion enabled that default
+// is deny. The server then refuses exactly the clients the rule was written to
+// admit, with no other signal that anything is wrong.
+//
+// This is easy to write by accident — the shipped example and three of the
+// docs showed the pattern — and it is not an error: a `deny` rule scoped to
+// ANY is a legitimate anti-amplification measure, so only `allow` is flagged.
+//
+// Called from the load path rather than Validate(), which is invoked more than
+// once per run and must stay free of side effects.
+func (c *Config) warnACLAllowOnlyANY() {
+	for i, rule := range c.ACL {
+		if len(rule.Types) == 0 || !strings.EqualFold(rule.Action, "allow") {
+			continue
+		}
+		onlyANY := true
+		for _, qt := range rule.Types {
+			if !strings.EqualFold(qt, "ANY") {
+				onlyANY = false
+				break
+			}
+		}
+		if onlyANY {
+			util.Warnf("config: acl[%d] (%q) allows only QTYPE ANY — \"ANY\" is query type 255, "+
+				"not a wildcard, so this rule matches no ordinary query and its networks stay "+
+				"denied. Omit `types` to allow every query type.", i, rule.Name)
+		}
+	}
 }
 
 func (c *Config) validateBlocklist() []string {

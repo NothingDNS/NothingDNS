@@ -213,10 +213,10 @@ nothingdns/
 ├── Makefile
 ├── Dockerfile
 ├── README.md
-├── SPECIFICATION.md          # This file
-├── IMPLEMENTATION.md         # Implementation guide
-├── TASKS.md                  # Task breakdown
-└── BRANDING.md               # Branding & marketing
+├── docs/
+│   ├── SPECIFICATION.md      # This file
+│   └── IMPLEMENTATION.md     # Implementation guide
+└── README.md
 ```
 
 ---
@@ -963,12 +963,13 @@ rrl:
   burst: 20
 
 acl:
+  # `types` narrows a rule to specific QTYPEs; omit it to match all of them.
+  # "ANY" is QTYPE 255, not a wildcard — a rule listing it matches only
+  # literal ANY queries.
   - name: block-public
     action: deny
     networks:
       - "0.0.0.0/0"
-    types:
-      - ANY
   - name: allow-internal
     action: allow
     networks:

@@ -14,7 +14,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"math/big"
 	"os"
 	"path/filepath"
 	"sort"
@@ -920,61 +919,21 @@ func loadSigningKey(keyPath, zone string) (*dnssec.SigningKey, error) {
 	}, nil
 }
 
-// loadPrivateKey reads a private key from BIND-format private key file.
+// loadPrivateKey reads a private key from a BIND-format ".private" file.
+//
+// The daemon reads the same files, so both go through one parser — this
+// command's own version accepted only PKCS#8 DER in the PrivateKey field and
+// reassembled RSA keys without their primes, producing keys that cannot sign.
 func loadPrivateKey(path string, algorithm uint8) (crypto.PrivateKey, error) {
 	data, err := readDNSCTLFile(path, maxDNSCTLKeyFileSize)
 	if err != nil {
 		return nil, err
 	}
-
-	var privateKeyB64 string
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "PrivateKey: ") {
-			privateKeyB64 = strings.TrimPrefix(line, "PrivateKey: ")
-			break
-		}
+	key, err := dnssec.ParsePrivateKeyFile(data, algorithm)
+	if err != nil {
+		return nil, err
 	}
-
-	if privateKeyB64 != "" {
-		derBytes, err := base64.StdEncoding.DecodeString(privateKeyB64)
-		if err != nil {
-			return nil, fmt.Errorf("decoding private key: %w", err)
-		}
-		return x509.ParsePKCS8PrivateKey(derBytes)
-	}
-
-	// Try RSA component-based format
-	var modulus, privateExp string
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "Modulus: ") {
-			modulus = strings.TrimPrefix(line, "Modulus: ")
-		}
-		if strings.HasPrefix(line, "PrivateExponent: ") {
-			privateExp = strings.TrimPrefix(line, "PrivateExponent: ")
-		}
-	}
-
-	if modulus != "" && privateExp != "" {
-		modBytes, err := base64.StdEncoding.DecodeString(modulus)
-		if err != nil {
-			return nil, fmt.Errorf("decoding modulus: %w", err)
-		}
-		expBytes, err := base64.StdEncoding.DecodeString(privateExp)
-		if err != nil {
-			return nil, fmt.Errorf("decoding exponent: %w", err)
-		}
-		n := new(big.Int).SetBytes(modBytes)
-		d := new(big.Int).SetBytes(expBytes)
-		// Reconstruct RSA key - this is approximate
-		return &rsa.PrivateKey{
-			PublicKey: rsa.PublicKey{N: n, E: 65537},
-			D:         d,
-		}, nil
-	}
-
-	return nil, fmt.Errorf("no private key data found in %s", path)
+	return key.Key, nil
 }
 
 // keyType returns "KSK" or "ZSK" for a signing key.

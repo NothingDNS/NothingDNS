@@ -1,5 +1,8 @@
-// NothingDNS - Coverage: key parsing functions
-package main
+// NothingDNS - Coverage: private key file parsing
+//
+// Moved here from cmd/nothingdns when the daemon and dnsctl were unified onto
+// one reader; the functions under test live in this package now.
+package dnssec
 
 import (
 	"bytes"
@@ -23,7 +26,7 @@ func TestParseRSAPrivateKey(t *testing.T) {
 
 	t.Run("PKCS1", func(t *testing.T) {
 		der := x509.MarshalPKCS1PrivateKey(rsaKey)
-		key, err := parseRSAPrivateKey(der)
+		key, err := parseRSADER(der)
 		if err != nil {
 			t.Fatalf("parseRSAPrivateKey: %v", err)
 		}
@@ -37,7 +40,7 @@ func TestParseRSAPrivateKey(t *testing.T) {
 		if err != nil {
 			t.Fatalf("MarshalPKCS8: %v", err)
 		}
-		key, err := parseRSAPrivateKey(der)
+		key, err := parseRSADER(der)
 		if err != nil {
 			t.Fatalf("parseRSAPrivateKey: %v", err)
 		}
@@ -47,7 +50,7 @@ func TestParseRSAPrivateKey(t *testing.T) {
 	})
 
 	t.Run("invalid DER", func(t *testing.T) {
-		_, err := parseRSAPrivateKey([]byte("bogus"))
+		_, err := parseRSADER([]byte("bogus"))
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -62,7 +65,7 @@ func TestParseRSAPrivateKey(t *testing.T) {
 		if err != nil {
 			t.Fatalf("MarshalPKCS8: %v", err)
 		}
-		_, err = parseRSAPrivateKey(der)
+		_, err = parseRSADER(der)
 		if err == nil {
 			t.Fatal("expected error for non-RSA key")
 		}
@@ -80,7 +83,7 @@ func TestParseEd25519PrivateKey(t *testing.T) {
 		if err != nil {
 			t.Fatalf("MarshalPKCS8: %v", err)
 		}
-		key, err := parseEd25519PrivateKey(der)
+		key, err := parseEd25519DER(der)
 		if err != nil {
 			t.Fatalf("parseEd25519: %v", err)
 		}
@@ -92,7 +95,7 @@ func TestParseEd25519PrivateKey(t *testing.T) {
 	t.Run("raw seed", func(t *testing.T) {
 		seed := make([]byte, ed25519.PrivateKeySize)
 		rand.Read(seed)
-		key, err := parseEd25519PrivateKey(seed)
+		key, err := parseEd25519DER(seed)
 		if err != nil {
 			t.Fatalf("parseEd25519: %v", err)
 		}
@@ -102,7 +105,7 @@ func TestParseEd25519PrivateKey(t *testing.T) {
 	})
 
 	t.Run("invalid DER", func(t *testing.T) {
-		_, err := parseEd25519PrivateKey([]byte("bogus"))
+		_, err := parseEd25519DER([]byte("bogus"))
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -117,14 +120,14 @@ func TestParseEd25519PrivateKey(t *testing.T) {
 		if err != nil {
 			t.Fatalf("MarshalPKCS8: %v", err)
 		}
-		_, err = parseEd25519PrivateKey(der)
+		_, err = parseEd25519DER(der)
 		if err == nil {
 			t.Fatal("expected error for non-Ed25519 key")
 		}
 	})
 
 	t.Run("wrong size raw", func(t *testing.T) {
-		_, err := parseEd25519PrivateKey([]byte("short"))
+		_, err := parseEd25519DER([]byte("short"))
 		if err == nil {
 			t.Fatal("expected error for wrong size")
 		}
@@ -141,7 +144,7 @@ func TestParseECDSAPrivateKey(t *testing.T) {
 		if err != nil {
 			t.Fatalf("MarshalECPrivateKey: %v", err)
 		}
-		key, err := parseECDSAPrivateKey(der, protocol.AlgorithmECDSAP256SHA256)
+		key, err := parseECDSADER(der, protocol.AlgorithmECDSAP256SHA256)
 		if err != nil {
 			t.Fatalf("parseECDSAPrivateKey: %v", err)
 		}
@@ -159,7 +162,7 @@ func TestParseECDSAPrivateKey(t *testing.T) {
 		if err != nil {
 			t.Fatalf("MarshalPKCS8: %v", err)
 		}
-		key, err := parseECDSAPrivateKey(der, protocol.AlgorithmECDSAP384SHA384)
+		key, err := parseECDSADER(der, protocol.AlgorithmECDSAP384SHA384)
 		if err != nil {
 			t.Fatalf("parseECDSAPrivateKey: %v", err)
 		}
@@ -177,14 +180,14 @@ func TestParseECDSAPrivateKey(t *testing.T) {
 		if err != nil {
 			t.Fatalf("MarshalPKCS8: %v", err)
 		}
-		_, err = parseECDSAPrivateKey(der, protocol.AlgorithmECDSAP256SHA256)
+		_, err = parseECDSADER(der, protocol.AlgorithmECDSAP256SHA256)
 		if err == nil {
 			t.Fatal("expected error for non-ECDSA")
 		}
 	})
 
 	t.Run("invalid DER", func(t *testing.T) {
-		_, err := parseECDSAPrivateKey([]byte("bogus"), protocol.AlgorithmECDSAP256SHA256)
+		_, err := parseECDSADER([]byte("bogus"), protocol.AlgorithmECDSAP256SHA256)
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -202,31 +205,31 @@ func TestValidateECDSAPrivateKeyCurve(t *testing.T) {
 	}
 
 	t.Run("P256 ok", func(t *testing.T) {
-		_, err := validateECDSAPrivateKeyCurve(p256Key, protocol.AlgorithmECDSAP256SHA256)
+		_, err := checkECDSACurve(p256Key, protocol.AlgorithmECDSAP256SHA256)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 	t.Run("P384 ok", func(t *testing.T) {
-		_, err := validateECDSAPrivateKeyCurve(p384Key, protocol.AlgorithmECDSAP384SHA384)
+		_, err := checkECDSACurve(p384Key, protocol.AlgorithmECDSAP384SHA384)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 	t.Run("P256 wrong algo", func(t *testing.T) {
-		_, err := validateECDSAPrivateKeyCurve(p256Key, protocol.AlgorithmECDSAP384SHA384)
+		_, err := checkECDSACurve(p256Key, protocol.AlgorithmECDSAP384SHA384)
 		if err == nil {
 			t.Fatal("expected error")
 		}
 	})
 	t.Run("P384 wrong algo", func(t *testing.T) {
-		_, err := validateECDSAPrivateKeyCurve(p384Key, protocol.AlgorithmECDSAP256SHA256)
+		_, err := checkECDSACurve(p384Key, protocol.AlgorithmECDSAP256SHA256)
 		if err == nil {
 			t.Fatal("expected error")
 		}
 	})
 	t.Run("unsupported algo", func(t *testing.T) {
-		_, err := validateECDSAPrivateKeyCurve(p256Key, 255)
+		_, err := checkECDSACurve(p256Key, 255)
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -253,7 +256,7 @@ func TestParseDNSSECPrivateKey(t *testing.T) {
 
 	t.Run("RSA SHA-256 PKCS1", func(t *testing.T) {
 		der := x509.MarshalPKCS1PrivateKey(rsaKey)
-		pk, err := parseDNSSECPrivateKey(der, protocol.AlgorithmRSASHA256)
+		pk, err := ParsePrivateKeyFile(der, protocol.AlgorithmRSASHA256)
 		if err != nil {
 			t.Fatalf("parseDNSSECPrivateKey: %v", err)
 		}
@@ -271,7 +274,7 @@ func TestParseDNSSECPrivateKey(t *testing.T) {
 		if err != nil {
 			t.Fatalf("MarshalPKCS8: %v", err)
 		}
-		pk, err := parseDNSSECPrivateKey(der, protocol.AlgorithmRSASHA512)
+		pk, err := ParsePrivateKeyFile(der, protocol.AlgorithmRSASHA512)
 		if err != nil {
 			t.Fatalf("parseDNSSECPrivateKey: %v", err)
 		}
@@ -285,7 +288,7 @@ func TestParseDNSSECPrivateKey(t *testing.T) {
 		if err != nil {
 			t.Fatalf("MarshalECPrivateKey: %v", err)
 		}
-		pk, err := parseDNSSECPrivateKey(der, protocol.AlgorithmECDSAP256SHA256)
+		pk, err := ParsePrivateKeyFile(der, protocol.AlgorithmECDSAP256SHA256)
 		if err != nil {
 			t.Fatalf("parseDNSSECPrivateKey: %v", err)
 		}
@@ -299,7 +302,7 @@ func TestParseDNSSECPrivateKey(t *testing.T) {
 		if err != nil {
 			t.Fatalf("MarshalPKCS8: %v", err)
 		}
-		pk, err := parseDNSSECPrivateKey(der, protocol.AlgorithmECDSAP384SHA384)
+		pk, err := ParsePrivateKeyFile(der, protocol.AlgorithmECDSAP384SHA384)
 		if err != nil {
 			t.Fatalf("parseDNSSECPrivateKey: %v", err)
 		}
@@ -314,7 +317,7 @@ func TestParseDNSSECPrivateKey(t *testing.T) {
 			t.Fatalf("MarshalPKCS8: %v", err)
 		}
 		pemData := pemBlock("PRIVATE KEY", der)
-		pk, err := parseDNSSECPrivateKey(pemData, protocol.AlgorithmED25519)
+		pk, err := ParsePrivateKeyFile(pemData, protocol.AlgorithmED25519)
 		if err != nil {
 			t.Fatalf("parseDNSSECPrivateKey: %v", err)
 		}
@@ -324,7 +327,7 @@ func TestParseDNSSECPrivateKey(t *testing.T) {
 	})
 
 	t.Run("unsupported algorithm", func(t *testing.T) {
-		_, err := parseDNSSECPrivateKey([]byte("anything"), 255)
+		_, err := ParsePrivateKeyFile([]byte("anything"), 255)
 		if err == nil {
 			t.Fatal("expected error for unsupported algorithm")
 		}
@@ -339,7 +342,7 @@ func TestParseDNSSECPrivateKey_PEM_AllAlgorithms(t *testing.T) {
 	t.Run("RSA PEM", func(t *testing.T) {
 		der := x509.MarshalPKCS1PrivateKey(rsaKey)
 		pemData := pemBlock("RSA PRIVATE KEY", der)
-		pk, err := parseDNSSECPrivateKey(pemData, protocol.AlgorithmRSASHA256)
+		pk, err := ParsePrivateKeyFile(pemData, protocol.AlgorithmRSASHA256)
 		if err != nil {
 			t.Fatalf("parseDNSSECPrivateKey: %v", err)
 		}
@@ -351,7 +354,7 @@ func TestParseDNSSECPrivateKey_PEM_AllAlgorithms(t *testing.T) {
 	t.Run("EC PEM", func(t *testing.T) {
 		der, _ := x509.MarshalECPrivateKey(ecKey)
 		pemData := pemBlock("EC PRIVATE KEY", der)
-		pk, err := parseDNSSECPrivateKey(pemData, protocol.AlgorithmECDSAP256SHA256)
+		pk, err := ParsePrivateKeyFile(pemData, protocol.AlgorithmECDSAP256SHA256)
 		if err != nil {
 			t.Fatalf("parseDNSSECPrivateKey: %v", err)
 		}
@@ -363,7 +366,7 @@ func TestParseDNSSECPrivateKey_PEM_AllAlgorithms(t *testing.T) {
 	t.Run("Ed25519 PEM", func(t *testing.T) {
 		der, _ := x509.MarshalPKCS8PrivateKey(edKey)
 		pemData := pemBlock("PRIVATE KEY", der)
-		pk, err := parseDNSSECPrivateKey(pemData, protocol.AlgorithmED25519)
+		pk, err := ParsePrivateKeyFile(pemData, protocol.AlgorithmED25519)
 		if err != nil {
 			t.Fatalf("parseDNSSECPrivateKey: %v", err)
 		}
@@ -386,7 +389,7 @@ func TestValidateECDSAPrivateKeyCurvePEM(t *testing.T) {
 	}
 	pemData := pemBlock("PRIVATE KEY", der)
 
-	pk, err := parseDNSSECPrivateKey(pemData, protocol.AlgorithmECDSAP256SHA256)
+	pk, err := ParsePrivateKeyFile(pemData, protocol.AlgorithmECDSAP256SHA256)
 	if err != nil {
 		t.Fatalf("parseDNSSECPrivateKey: %v", err)
 	}
@@ -407,7 +410,7 @@ func TestParseRSAPrivateKeyPEM(t *testing.T) {
 		der := x509.MarshalPKCS1PrivateKey(rsaKey)
 		pemData := pemBlock("RSA PRIVATE KEY", der)
 		// parseDNSSECPrivateKey will strip PEM and call parseRSAPrivateKey
-		pk, err := parseDNSSECPrivateKey(pemData, protocol.AlgorithmRSASHA256)
+		pk, err := ParsePrivateKeyFile(pemData, protocol.AlgorithmRSASHA256)
 		if err != nil {
 			t.Fatalf("parseDNSSECPrivateKey: %v", err)
 		}
@@ -423,7 +426,7 @@ func TestParseRSAPrivateKeyPEM(t *testing.T) {
 			t.Fatalf("MarshalPKCS8: %v", err)
 		}
 		pemData := pemBlock("PRIVATE KEY", der)
-		pk, err := parseDNSSECPrivateKey(pemData, protocol.AlgorithmRSASHA256)
+		pk, err := ParsePrivateKeyFile(pemData, protocol.AlgorithmRSASHA256)
 		if err != nil {
 			t.Fatalf("parseDNSSECPrivateKey: %v", err)
 		}
@@ -442,7 +445,7 @@ func TestParseDNSSECPrivateKey_Ed25519RSAMismatch(t *testing.T) {
 	}
 	// Try to parse as Ed25519 - should fail type assertion
 	der := x509.MarshalPKCS1PrivateKey(rsaKey)
-	_, err = parseDNSSECPrivateKey(der, protocol.AlgorithmED25519)
+	_, err = ParsePrivateKeyFile(der, protocol.AlgorithmED25519)
 	if err == nil {
 		t.Fatal("expected error for RSA key parsed as Ed25519")
 	}
@@ -459,7 +462,7 @@ func TestParseDNSSECPrivateKey_ECDSAEd25519Mismatch(t *testing.T) {
 		t.Fatalf("MarshalECPrivateKey: %v", err)
 	}
 	// Try Ed25519 path with ECDSA key - will hit PKCS8 parse failure, then wrong size
-	_, err = parseDNSSECPrivateKey(der, protocol.AlgorithmED25519)
+	_, err = ParsePrivateKeyFile(der, protocol.AlgorithmED25519)
 	if err == nil {
 		t.Fatal("expected error for ECDSA key parsed as Ed25519")
 	}
