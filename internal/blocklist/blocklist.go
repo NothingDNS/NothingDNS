@@ -429,34 +429,37 @@ func (bl *Blocklist) IsBlocked(domain string) bool {
 	bl.mu.RLock()
 	defer bl.mu.RUnlock()
 
-	// Normalize domain once
-	domain = strings.ToLower(strings.TrimSuffix(domain, "."))
+	domain = normalizeDomain(domain)
 
 	// Check each enabled source
 	for source, entries := range bl.sourceEntries {
 		if bl.disabledSources[source] {
 			continue
 		}
-		// Check exact match
-		if _, blocked := entries[domain]; blocked {
+		if isDomainBlockedIn(entries, domain) {
 			return true
-		}
-		// Check parent domains by finding dots and checking substrings
-		// For "sub.ads.example.com", check "ads.example.com", then "example.com"
-		// Use index-based checking to minimize allocations
-		for i := len(domain) - 1; i >= 0; i-- {
-			if domain[i] == '.' && i < len(domain)-1 {
-				parent := domain[i+1:]
-				if _, blocked := entries[parent]; blocked {
-					return true
-				}
-			}
 		}
 	}
 
-	// Check manually added domains (exact match only, parent checking is redundant)
-	if _, blocked := bl.manualEntries[domain]; blocked {
+	// Check manually added domains (including parent-domain matches)
+	return isDomainBlockedIn(bl.manualEntries, domain)
+}
+
+func isDomainBlockedIn(entries map[string]Entry, domain string) bool {
+	if _, blocked := entries[domain]; blocked {
 		return true
+	}
+
+	// Check parent domains by finding dots and checking substrings.
+	// For "sub.ads.example.com", check "ads.example.com", then "example.com".
+	// Use index-based checking to minimize allocations.
+	for i := len(domain) - 1; i >= 0; i-- {
+		if domain[i] == '.' && i < len(domain)-1 {
+			parent := domain[i+1:]
+			if _, blocked := entries[parent]; blocked {
+				return true
+			}
+		}
 	}
 
 	return false
@@ -690,7 +693,7 @@ func (bl *Blocklist) AddDomain(domain string) {
 	bl.mu.Lock()
 	defer bl.mu.Unlock()
 
-	d := strings.ToLower(strings.TrimSuffix(domain, "."))
+	d := normalizeDomain(domain)
 	bl.entries[d] = Entry{Domain: d}
 	bl.manualEntries[d] = Entry{Domain: d}
 }

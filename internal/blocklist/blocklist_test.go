@@ -232,6 +232,12 @@ func TestBlocklistAddDomain(t *testing.T) {
 	if !bl.IsBlocked("case.com") {
 		t.Error("AddDomain should be case insensitive")
 	}
+
+	// Parent-domain matching should apply to manually added entries
+	bl.AddDomain("parent.example.com")
+	if !bl.IsBlocked("sub.parent.example.com") {
+		t.Error("AddDomain should apply suffix matching for subdomains")
+	}
 }
 
 // TestBlocklistAddFile_NormalizesTrailingDot regresses SECURITY-REPORT.md

@@ -1130,16 +1130,31 @@ func isReferral(msg *protocol.Message) bool {
 }
 
 // findCNAME returns the CNAME target if the answer section contains a CNAME
-// for the given name.
+// for the given name. Only CNAME records whose owner matches the queried
+// name qualify (case-insensitive per RFC 4343, trailing-dot-tolerant): an
+// answer section may legitimately carry CNAMEs for other names (multi-name
+// answers, additional data, hostile injection), and following one of those
+// would chase an off-chain target. RFC 1034 §4.3.2 requires following the
+// CNAME RRset owned by the queried name, and nothing else.
 func findCNAME(answers []*protocol.ResourceRecord, name string) string {
+	norm := func(s string) string { return strings.ToLower(strings.TrimSuffix(s, ".")) }
+	want := norm(name)
 	for _, rr := range answers {
 		if rr == nil {
 			continue
 		}
-		if rr.Type == protocol.TypeCNAME {
-			if cname, ok := rr.Data.(*protocol.RDataCNAME); ok && cname != nil && cname.CName != nil {
-				return cname.CName.String()
-			}
+		if rr.Type != protocol.TypeCNAME {
+			continue
+		}
+		owner, ok := rrOwnerName(rr)
+		if !ok {
+			continue
+		}
+		if norm(owner) != want {
+			continue
+		}
+		if cname, ok := rr.Data.(*protocol.RDataCNAME); ok && cname != nil && cname.CName != nil {
+			return cname.CName.String()
 		}
 	}
 	return ""
