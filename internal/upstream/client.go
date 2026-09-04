@@ -538,10 +538,15 @@ func (c *Client) queryUDPBuf(server *Server, msg *protocol.Message, buf []byte) 
 
 	latency := time.Since(start)
 
-	// Parse response
+	// Parse and bind the response to this query. DNS transaction IDs prevent
+	// stale or spoofed replies from being accepted as the current exchange.
 	resp, err = protocol.UnpackMessage(buf[:n])
 	if err != nil {
 		return nil, fmt.Errorf("unpack response: %w", err)
+	}
+	if responseID := resp.Header.ID; responseID != msg.Header.ID {
+		resp.Release()
+		return nil, fmt.Errorf("response ID mismatch: got %d, want %d", responseID, msg.Header.ID)
 	}
 
 	server.markSuccess(latency)
@@ -712,10 +717,15 @@ func (c *Client) queryTCPBuf(server *Server, msg *protocol.Message, buf []byte) 
 		return nil, fmt.Errorf("reset deadline: %w", err)
 	}
 
-	// Parse response
+	// Parse and bind the response to this query. DNS transaction IDs prevent
+	// stale or spoofed replies from being accepted as the current exchange.
 	resp, err = protocol.UnpackMessage(buf[:respLen])
 	if err != nil {
 		return nil, fmt.Errorf("unpack response: %w", err)
+	}
+	if responseID := resp.Header.ID; responseID != msg.Header.ID {
+		resp.Release()
+		return nil, fmt.Errorf("response ID mismatch: got %d, want %d", responseID, msg.Header.ID)
 	}
 
 	server.markSuccess(latency)

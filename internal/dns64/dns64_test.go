@@ -48,6 +48,13 @@ func TestNewSynthesizer(t *testing.T) {
 		t.Fatal("expected error for invalid prefix, got nil")
 	}
 
+	// An IPv4 literal can be converted to a 16-byte value by net.IP.To16,
+	// but it is not a valid NAT64 IPv6 prefix.
+	_, err = NewSynthesizer("192.0.2.0", 96)
+	if err == nil {
+		t.Fatal("expected error for IPv4 NAT64 prefix, got nil")
+	}
+
 	// Invalid prefix length.
 	_, err = NewSynthesizer("64:ff9b::", 72)
 	if err == nil {

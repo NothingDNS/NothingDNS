@@ -2,7 +2,10 @@ package upstream
 
 import (
 	"context"
+	"encoding/binary"
+	"io"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -670,6 +673,124 @@ func TestHealthCheckLoopUsesConfiguredInterval(t *testing.T) {
 	case <-seen:
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("health check loop did not use configured 10ms interval")
+	}
+}
+
+func TestQueryUDPRejectsMismatchedResponseID(t *testing.T) {
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatalf("ListenUDP: %v", err)
+	}
+	defer conn.Close()
+
+	go func() {
+		buf := make([]byte, 512)
+		n, remote, readErr := conn.ReadFromUDP(buf)
+		if readErr != nil {
+			return
+		}
+		query, unpackErr := protocol.UnpackMessage(buf[:n])
+		if unpackErr != nil {
+			return
+		}
+		defer query.Release()
+		response := &protocol.Message{
+			Header: protocol.Header{
+				ID:      query.Header.ID + 1,
+				Flags:   protocol.NewResponseFlags(protocol.RcodeSuccess),
+				QDCount: uint16(len(query.Questions)),
+			},
+			Questions: query.Questions,
+		}
+		packed := make([]byte, 512)
+		responseLen, packErr := response.Pack(packed)
+		if packErr == nil {
+			_, _ = conn.WriteToUDP(packed[:responseLen], remote)
+		}
+	}()
+
+	client, err := NewClient(Config{Servers: []string{conn.LocalAddr().String()}, Timeout: time.Second, Strategy: "random"})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+	msg := testClientQuery(t, 0x4321)
+	defer msg.Questions[0].Name.Release()
+
+	_, err = client.queryUDP(client.servers[0], msg)
+	if err == nil || !strings.Contains(err.Error(), "response ID mismatch") {
+		t.Fatalf("queryUDP error = %v, want response ID mismatch", err)
+	}
+}
+
+func TestQueryTCPRejectsMismatchedResponseID(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	defer listener.Close()
+
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer conn.Close()
+		var length [2]byte
+		if _, readErr := io.ReadFull(conn, length[:]); readErr != nil {
+			return
+		}
+		queryData := make([]byte, binary.BigEndian.Uint16(length[:]))
+		if _, readErr := io.ReadFull(conn, queryData); readErr != nil {
+			return
+		}
+		query, unpackErr := protocol.UnpackMessage(queryData)
+		if unpackErr != nil {
+			return
+		}
+		defer query.Release()
+		response := &protocol.Message{
+			Header: protocol.Header{
+				ID:      query.Header.ID + 1,
+				Flags:   protocol.NewResponseFlags(protocol.RcodeSuccess),
+				QDCount: uint16(len(query.Questions)),
+			},
+			Questions: query.Questions,
+		}
+		packed := make([]byte, 512)
+		responseLen, packErr := response.Pack(packed)
+		if packErr != nil {
+			return
+		}
+		binary.BigEndian.PutUint16(length[:], uint16(responseLen))
+		_, _ = conn.Write(length[:])
+		_, _ = conn.Write(packed[:responseLen])
+	}()
+
+	client, err := NewClient(Config{Servers: []string{listener.Addr().String()}, Timeout: time.Second, Strategy: "random"})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+	client.servers[0].Network = "tcp"
+	msg := testClientQuery(t, 0x4321)
+	defer msg.Questions[0].Name.Release()
+
+	_, err = client.queryTCP(client.servers[0], msg)
+	if err == nil || !strings.Contains(err.Error(), "response ID mismatch") {
+		t.Fatalf("queryTCP error = %v, want response ID mismatch", err)
+	}
+}
+
+func testClientQuery(t *testing.T, id uint16) *protocol.Message {
+	t.Helper()
+	name, err := protocol.ParseName("example.test.")
+	if err != nil {
+		t.Fatalf("ParseName: %v", err)
+	}
+	return &protocol.Message{
+		Header: protocol.Header{ID: id, Flags: protocol.NewQueryFlags(), QDCount: 1},
+		Questions: []*protocol.Question{{Name: name, QType: protocol.TypeA, QClass: protocol.ClassIN}},
 	}
 }
 

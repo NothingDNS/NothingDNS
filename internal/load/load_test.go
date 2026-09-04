@@ -118,6 +118,9 @@ func TestIntegrationLoadWithServer(t *testing.T) {
 	if result.Success != wantTotal {
 		t.Fatalf("successful queries = %d, want %d (errors=%d timeouts=%d)", result.Success, wantTotal, result.Errors, result.Timeouts)
 	}
+	if result.Queries != wantTotal {
+		t.Fatalf("counted queries = %d, want %d", result.Queries, wantTotal)
+	}
 	if result.Errors != 0 || result.Timeouts != 0 {
 		t.Fatalf("unexpected failures: errors=%d timeouts=%d", result.Errors, result.Timeouts)
 	}

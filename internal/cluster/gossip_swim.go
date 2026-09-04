@@ -278,7 +278,11 @@ func (gp *GossipProtocol) gossip() {
 			break
 		}
 
-		addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", target.Addr, gp.config.BindPort))
+		port := target.Port
+		if port == 0 {
+			port = gp.config.BindPort
+		}
+		addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", target.Addr, port))
 		if err != nil {
 			util.Warnf("gossip: failed to resolve address for %s: %v", target.Addr, err)
 			continue
@@ -362,7 +366,11 @@ func (gp *GossipProtocol) sendPing(node *Node) {
 		util.Warnf("gossip: failed to encode ping payload: %v", err)
 		return
 	}
-	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", node.Addr, gp.config.BindPort))
+	port := node.Port
+	if port == 0 {
+		port = gp.config.BindPort
+	}
+	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", node.Addr, port))
 	if err != nil {
 		util.Warnf("gossip: failed to resolve address for %s: %v", node.Addr, err)
 		return

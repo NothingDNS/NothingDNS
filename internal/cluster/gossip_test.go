@@ -1293,3 +1293,125 @@ func TestGossipProtocol_DecodeMessage_AADBindingFailure(t *testing.T) {
 		t.Error("Expected AAD verification to fail with wrong AAD, got nil")
 	}
 }
+
+type recordingGossipUDPConn struct {
+	lastAddr *net.UDPAddr
+}
+
+func (c *recordingGossipUDPConn) ReadFromUDP([]byte) (int, *net.UDPAddr, error) {
+	return 0, nil, io.EOF
+}
+
+func (c *recordingGossipUDPConn) WriteToUDP(p []byte, addr *net.UDPAddr) (int, error) {
+	copy := *addr
+	c.lastAddr = &copy
+	return len(p), nil
+}
+
+func (c *recordingGossipUDPConn) SetReadDeadline(time.Time) error { return nil }
+func (c *recordingGossipUDPConn) Close() error                    { return nil }
+
+func TestGossipProtocol_UsesAdvertisedPeerPort(t *testing.T) {
+	const (
+		localPort = 17990
+		peerPort  = 17991
+	)
+
+	newProtocol := func() (*GossipProtocol, *Node) {
+		self := &Node{ID: "self", Addr: "127.0.0.1", Port: localPort, State: NodeStateAlive}
+		peer := &Node{ID: "peer", Addr: "127.0.0.1", Port: peerPort, State: NodeStateAlive}
+		nodes := NewNodeList(self)
+		nodes.Add(peer)
+		cfg := DefaultGossipConfig()
+		cfg.BindPort = localPort
+		cfg.GossipNodes = 1
+		gp, err := NewGossipProtocol(cfg, nodes, true)
+		if err != nil {
+			t.Fatalf("NewGossipProtocol: %v", err)
+		}
+		return gp, peer
+	}
+
+	for _, test := range []struct {
+		name string
+		send func(*GossipProtocol, *Node)
+	}{
+		{name: "gossip", send: func(gp *GossipProtocol, _ *Node) { gp.gossip() }},
+		{name: "ping", send: func(gp *GossipProtocol, peer *Node) { gp.sendPing(peer) }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			gp, peer := newProtocol()
+			conn := &recordingGossipUDPConn{}
+			gp.conn = conn
+
+			test.send(gp, peer)
+			if conn.lastAddr == nil {
+				t.Fatal("expected a UDP datagram")
+			}
+			if conn.lastAddr.Port != peerPort {
+				t.Fatalf("destination port = %d, want advertised peer port %d", conn.lastAddr.Port, peerPort)
+			}
+		})
+	}
+}
+
+func TestGossipProtocol_BroadcastCacheInvalidationUsesPeerPort(t *testing.T) {
+	reservePort := func() int {
+		conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+		if err != nil {
+			t.Fatalf("reserve UDP port: %v", err)
+		}
+		defer conn.Close()
+		return conn.LocalAddr().(*net.UDPAddr).Port
+	}
+
+	senderPort := reservePort()
+	receiverPort := reservePort()
+	if senderPort == receiverPort {
+		t.Fatal("reserved the same UDP port for both gossip nodes")
+	}
+
+	senderSelf := &Node{ID: "sender", Addr: "127.0.0.1", Port: senderPort, State: NodeStateAlive}
+	receiverSelf := &Node{ID: "receiver", Addr: "127.0.0.1", Port: receiverPort, State: NodeStateAlive}
+
+	newProtocol := func(self, peer *Node, port int) *GossipProtocol {
+		nodes := NewNodeList(self)
+		nodes.Add(peer)
+		cfg := DefaultGossipConfig()
+		cfg.BindAddr = "127.0.0.1"
+		cfg.BindPort = port
+		cfg.GossipInterval = time.Hour
+		cfg.ProbeInterval = time.Hour
+		gp, err := NewGossipProtocol(cfg, nodes, true)
+		if err != nil {
+			t.Fatalf("NewGossipProtocol: %v", err)
+		}
+		return gp
+	}
+
+	sender := newProtocol(senderSelf, receiverSelf, senderPort)
+	receiver := newProtocol(receiverSelf, senderSelf, receiverPort)
+	received := make(chan []string, 1)
+	receiver.SetCallbacks(nil, nil, nil, func(keys []string) { received <- keys }, nil, nil)
+
+	if err := receiver.Start(); err != nil {
+		t.Fatalf("start receiver: %v", err)
+	}
+	defer receiver.Stop()
+	if err := sender.Start(); err != nil {
+		t.Fatalf("start sender: %v", err)
+	}
+	defer sender.Stop()
+
+	if err := sender.BroadcastCacheInvalidation([]string{"cache-key"}); err != nil {
+		t.Fatalf("BroadcastCacheInvalidation: %v", err)
+	}
+	select {
+	case keys := <-received:
+		if len(keys) != 1 || keys[0] != "cache-key" {
+			t.Fatalf("received keys = %v, want [cache-key]", keys)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("cache invalidation did not arrive at peer UDP port %d", receiverPort)
+	}
+}

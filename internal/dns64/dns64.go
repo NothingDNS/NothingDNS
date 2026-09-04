@@ -46,8 +46,8 @@ func NewSynthesizer(prefix string, prefixLen int) (*Synthesizer, error) {
 	}
 
 	ip := net.ParseIP(prefix)
-	if ip == nil {
-		return nil, fmt.Errorf("invalid IPv6 prefix: %q", prefix)
+	if ip == nil || ip.To4() != nil {
+		return nil, fmt.Errorf("prefix is not a valid IPv6 address: %q", prefix)
 	}
 	ip = ip.To16()
 	if ip == nil {

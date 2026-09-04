@@ -257,10 +257,12 @@ func (r *Runner) computeResult(total time.Duration) *Result {
 	success := atomic.LoadInt64(&r.success)
 	errors := atomic.LoadInt64(&r.errors)
 	timeouts := atomic.LoadInt64(&r.timeouts)
+	queries := success + errors + timeouts
 
 	latencies := r.latencies
 	if len(latencies) == 0 {
 		return &Result{
+			Queries:       queries,
 			Success:       success,
 			Errors:        errors,
 			Timeouts:      timeouts,
@@ -284,6 +286,7 @@ func (r *Runner) computeResult(total time.Duration) *Result {
 
 	n := len(latencies)
 	result := &Result{
+		Queries:       queries,
 		Success:       success,
 		Errors:        errors,
 		Timeouts:      timeouts,

@@ -33,7 +33,11 @@ func (gp *GossipProtocol) BroadcastCacheInvalidation(keys []string) error {
 	// protection at every peer that had ever exchanged any other
 	// gossip frame with us.
 	for _, node := range gp.nodeList.GetAlive() {
-		addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", node.Addr, gp.config.BindPort))
+		port := node.Port
+		if port == 0 {
+			port = gp.config.BindPort
+		}
+		addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", node.Addr, port))
 		if err != nil {
 			util.Warnf("gossip: failed to resolve address for %s: %v", node.Addr, err)
 			continue
