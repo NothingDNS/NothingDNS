@@ -160,6 +160,7 @@ func (a *doqHandlerAdapter) ServeDoQ(stream *quic.Stream, queryData []byte) {
 	if err != nil {
 		return
 	}
+	defer msg.Release()
 	if len(msg.Questions) == 0 {
 		return
 	}
