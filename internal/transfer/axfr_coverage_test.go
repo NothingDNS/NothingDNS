@@ -826,7 +826,7 @@ func (m *mockConn) SetWriteDeadline(t time.Time) error { return nil }
 func TestAXFRClient_receiveAXFRResponse_InvalidMsgLen(t *testing.T) {
 	client := NewAXFRClient("ns1.example.com:53")
 	conn := &mockConn{readData: []byte{0x00, 0x00}}
-	_, err := client.receiveAXFRResponse(conn, nil)
+	_, err := client.receiveAXFRResponse(conn, 0x1234, nil)
 	if err == nil {
 		t.Error("Expected error for zero message length")
 	}
@@ -861,7 +861,7 @@ func TestAXFRClient_receiveAXFRResponse_ErrorResponseMock(t *testing.T) {
 	copy(data[2:], buf[:n])
 
 	conn := &mockConn{readData: data}
-	_, err := client.receiveAXFRResponse(conn, nil)
+	_, err := client.receiveAXFRResponse(conn, 0x1234, nil)
 	if err == nil {
 		t.Error("Expected error for non-success RCODE")
 	}
@@ -870,7 +870,7 @@ func TestAXFRClient_receiveAXFRResponse_ErrorResponseMock(t *testing.T) {
 func TestAXFRClient_receiveAXFRResponse_ReadErrorBeforeSOA(t *testing.T) {
 	client := NewAXFRClient("ns1.example.com:53")
 	conn := &mockConn{readErr: fmt.Errorf("connection reset")}
-	_, err := client.receiveAXFRResponse(conn, nil)
+	_, err := client.receiveAXFRResponse(conn, 0x1234, nil)
 	if err == nil {
 		t.Error("Expected error for read failure")
 	}
@@ -904,7 +904,7 @@ func TestAXFRClient_receiveAXFRResponse_SuccessfulTransferMock(t *testing.T) {
 	}
 	msg2 := &protocol.Message{
 		Header: protocol.Header{
-			ID: 0x1235, Flags: protocol.Flags{QR: true, RCODE: protocol.RcodeSuccess},
+			ID: 0x1234, Flags: protocol.Flags{QR: true, RCODE: protocol.RcodeSuccess},
 		},
 		Answers: []*protocol.ResourceRecord{soaRR},
 	}
@@ -918,7 +918,7 @@ func TestAXFRClient_receiveAXFRResponse_SuccessfulTransferMock(t *testing.T) {
 	}
 
 	conn := &mockConn{readData: allData}
-	records, err := client.receiveAXFRResponse(conn, nil)
+	records, err := client.receiveAXFRResponse(conn, 0x1234, nil)
 	if err != nil {
 		t.Fatalf("receiveAXFRResponse() error = %v", err)
 	}
@@ -932,7 +932,7 @@ func TestAXFRClient_receiveAXFRResponse_UnpackErrorMock(t *testing.T) {
 	data := []byte{0x00, 0x10}
 	data = append(data, make([]byte, 16)...)
 	conn := &mockConn{readData: data}
-	_, err := client.receiveAXFRResponse(conn, nil)
+	_, err := client.receiveAXFRResponse(conn, 0x1234, nil)
 	if err == nil {
 		t.Error("Expected error for unpack failure")
 	}
@@ -941,7 +941,7 @@ func TestAXFRClient_receiveAXFRResponse_UnpackErrorMock(t *testing.T) {
 func TestAXFRClient_receiveAXFRResponse_LargeMessageLength(t *testing.T) {
 	client := NewAXFRClient("ns1.example.com:53")
 	conn := &mockConn{readData: []byte{0xFF, 0xFF}}
-	_, err := client.receiveAXFRResponse(conn, nil)
+	_, err := client.receiveAXFRResponse(conn, 0x1234, nil)
 	if err == nil {
 		t.Error("Expected error for very large message length")
 	}
@@ -994,10 +994,12 @@ func TestAXFRClient_Transfer_WithTCPServer(t *testing.T) {
 		reqLen := int(lengthBuf[0])<<8 | int(lengthBuf[1])
 		reqBuf := make([]byte, reqLen)
 		conn.Read(reqBuf)
+		reqMsg, _ := protocol.UnpackMessage(reqBuf)
+		reqTXID := reqMsg.Header.ID
 
 		msg1 := &protocol.Message{
 			Header: protocol.Header{
-				Flags: protocol.Flags{QR: true, RCODE: protocol.RcodeSuccess},
+				ID: reqTXID, Flags: protocol.Flags{QR: true, RCODE: protocol.RcodeSuccess},
 			},
 			Answers: []*protocol.ResourceRecord{soaRR, aRR},
 		}
@@ -1005,7 +1007,7 @@ func TestAXFRClient_Transfer_WithTCPServer(t *testing.T) {
 
 		msg2 := &protocol.Message{
 			Header: protocol.Header{
-				Flags: protocol.Flags{QR: true, RCODE: protocol.RcodeSuccess},
+				ID: reqTXID, Flags: protocol.Flags{QR: true, RCODE: protocol.RcodeSuccess},
 			},
 			Answers: []*protocol.ResourceRecord{soaRR},
 		}

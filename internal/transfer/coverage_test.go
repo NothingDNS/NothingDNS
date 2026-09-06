@@ -1011,7 +1011,7 @@ func TestAXFRClient_receiveAXFRResponse_UnpackError(t *testing.T) {
 	data := []byte{0x00, 0x10}
 	data = append(data, make([]byte, 16)...)
 	conn := &mockConn{readData: data}
-	_, err := client.receiveAXFRResponse(conn, nil)
+	_, err := client.receiveAXFRResponse(conn, 0x1234, nil)
 	if err == nil {
 		t.Error("expected error for unpack failure in receiveAXFRResponse")
 	}
@@ -1309,7 +1309,7 @@ func TestAXFRClient_receiveAXFRResponse_UnpackError_Extra5(t *testing.T) {
 	data := []byte{0x00, 0x10}
 	data = append(data, make([]byte, 16)...)
 	conn := &mockConn{readData: data}
-	_, err := client.receiveAXFRResponse(conn, nil)
+	_, err := client.receiveAXFRResponse(conn, 0x1234, nil)
 	if err == nil {
 		t.Error("expected error for unpack failure")
 	}
@@ -1322,7 +1322,7 @@ func TestAXFRClient_receiveAXFRResponse_UnpackError_Extra5(t *testing.T) {
 func TestAXFRClient_receiveAXFRResponse_InvalidLengthZero_Extra5(t *testing.T) {
 	client := NewAXFRClient("ns1.example.com:53")
 	conn := &mockConn{readData: []byte{0x00, 0x00}}
-	_, err := client.receiveAXFRResponse(conn, nil)
+	_, err := client.receiveAXFRResponse(conn, 0x1234, nil)
 	if err == nil {
 		t.Error("expected error for zero message length")
 	}
@@ -1361,7 +1361,7 @@ func TestAXFRClient_receiveAXFRResponse_SOAGe2ThenBreak_Extra5(t *testing.T) {
 	allData = append(allData, buf[:n]...)
 
 	conn := &mockConn{readData: allData}
-	records, err := client.receiveAXFRResponse(conn, nil)
+	records, err := client.receiveAXFRResponse(conn, 0x1234, nil)
 	if err != nil {
 		t.Fatalf("receiveAXFRResponse: %v", err)
 	}
@@ -2367,7 +2367,7 @@ func TestAXFRClient_receiveAXFRResponse_SOACountBreak_Extra6(t *testing.T) {
 	allData = append(allData, buf[:n]...)
 
 	conn := &mockConn{readData: allData}
-	records, err := client.receiveAXFRResponse(conn, nil)
+	records, err := client.receiveAXFRResponse(conn, 0x1234, nil)
 	if err != nil {
 		t.Fatalf("receiveAXFRResponse: %v", err)
 	}
@@ -2555,7 +2555,7 @@ func TestAXFRClient_receiveAXFRResponse_UnpackFirstMsgError_Extra6(t *testing.T)
 	data = append(data, make([]byte, 16)...)
 
 	conn := &mockConn{readData: data}
-	_, err := client.receiveAXFRResponse(conn, nil)
+	_, err := client.receiveAXFRResponse(conn, 0x1234, nil)
 	if err == nil {
 		t.Error("expected error for unpack failure on first message")
 	}
@@ -2679,7 +2679,7 @@ func TestAXFRClient_receiveAXFRResponse_UnpackMessageError_Extra7(t *testing.T) 
 	wireData = append(wireData, msgData...)
 
 	conn := &mockConn{readData: wireData}
-	_, err := client.receiveAXFRResponse(conn, nil)
+	_, err := client.receiveAXFRResponse(conn, 0x1234, nil)
 	if err == nil {
 		t.Error("expected error for UnpackMessage failure")
 	}

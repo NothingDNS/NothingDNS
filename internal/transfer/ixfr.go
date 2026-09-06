@@ -477,7 +477,7 @@ func (c *IXFRClient) Transfer(zoneName string, currentSerial uint32, key *TSIGKe
 	}
 
 	// Receive response records
-	records, err := c.receiveIXFRResponse(conn, key)
+	records, err := c.receiveIXFRResponse(conn, req.Header.ID, key)
 	if err != nil {
 		return nil, fmt.Errorf("receiving IXFR response: %w", err)
 	}
@@ -568,7 +568,7 @@ func (c *IXFRClient) sendMessage(conn net.Conn, msg *protocol.Message) error {
 }
 
 // receiveIXFRResponse receives IXFR response records over TCP
-func (c *IXFRClient) receiveIXFRResponse(conn net.Conn, key *TSIGKey) ([]*protocol.ResourceRecord, error) {
+func (c *IXFRClient) receiveIXFRResponse(conn net.Conn, expectedTXID uint16, key *TSIGKey) ([]*protocol.ResourceRecord, error) {
 	var records []*protocol.ResourceRecord
 	var soaCount int
 	var totalBytes int
@@ -604,7 +604,15 @@ func (c *IXFRClient) receiveIXFRResponse(conn net.Conn, key *TSIGKey) ([]*protoc
 
 		msg, err := protocol.UnpackMessage(msgBuf)
 		if err != nil {
-			return nil, fmt.Errorf("unpacking message: %w", err)
+			return nil, fmt.Errorf("unpacking IXFR message: %w", err)
+		}
+		defer msg.Release()
+
+		// Verify the response transaction ID matches the request.
+		// This prevents a hostile or misbehaving master from injecting
+		// spoofed DNS messages into the TCP stream (CWE-290 / CWE-347).
+		if msg.Header.ID != expectedTXID {
+			return nil, fmt.Errorf("IXFR response TXID mismatch: got %d, want %d", msg.Header.ID, expectedTXID)
 		}
 
 		if msg.Header.Flags.RCODE != protocol.RcodeSuccess {

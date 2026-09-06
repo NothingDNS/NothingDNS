@@ -397,6 +397,12 @@ type Target struct {
 	Region     string
 	Zone       string
 
+	// Backend reference for anycast health tracking.
+	// Populated by selectAnycastTarget so queryWithFailover can call
+	// b.markSuccess(latency) and b.markFailure() — mirroring the
+	// standalone server pattern (server.markSuccess/markFailure).
+	Backend *AnycastBackend
+
 	// Reference to original server (for standalone)
 	Server *Server
 }
@@ -452,6 +458,7 @@ func (lb *LoadBalancer) selectAnycastTarget() (*Target, error) {
 		PhysicalIP: backend.PhysicalIP,
 		Region:     backend.Region,
 		Zone:       backend.Zone,
+		Backend:    backend, // populate so queryWithFailover can call b.markSuccess/markFailure
 	}, nil
 }
 
@@ -602,6 +609,13 @@ func (lb *LoadBalancer) queryWithFailover(target *Target, msg *protocol.Message)
 	resp, err := lb.queryUDP(target.Address, msg)
 	if err == nil {
 		cb.recordSuccess()
+		// Drive anycast backend health state machine from real traffic,
+		// mirroring the standalone server pattern. Without this, the anycast
+		// health machine is only driven by checkHealth() and real client queries
+		// contribute nothing — a backend can stay unhealthy indefinitely.
+		if target.Type == "anycast" && target.Backend != nil {
+			target.Backend.markSuccess(0) // query path doesn't measure latency
+		}
 		return resp, nil
 	}
 
@@ -610,6 +624,9 @@ func (lb *LoadBalancer) queryWithFailover(target *Target, msg *protocol.Message)
 	resp, err = lb.queryTCP(target.Address, msg)
 	if err == nil {
 		cb.recordSuccess()
+		if target.Type == "anycast" && target.Backend != nil {
+			target.Backend.markSuccess(0) // query path doesn't measure latency
+		}
 		return resp, nil
 	}
 
@@ -619,6 +636,10 @@ func (lb *LoadBalancer) queryWithFailover(target *Target, msg *protocol.Message)
 	// Mark target as failed
 	if target.Type == "standalone" && target.Server != nil {
 		target.Server.markFailure()
+	}
+	// Mark anycast backend as failed, mirroring the standalone server pattern.
+	if target.Type == "anycast" && target.Backend != nil {
+		target.Backend.markFailure()
 	}
 
 	// Try failover to another target
@@ -735,6 +756,15 @@ func (lb *LoadBalancer) queryUDP(address string, msg *protocol.Message) (*protoc
 		return nil, fmt.Errorf("unpack response: %w", err)
 	}
 
+	// Reject responses whose transaction ID doesn't match — stale or spoofed
+	// responses must not be returned as the current answer. This is the same
+	// guard already present in (*Client).queryUDP/queryTCP
+	// (fix for memory 01M1PHJT9DRKY835ZPZEV7R6N0).
+	if resp.Header.ID != msg.Header.ID {
+		resp.Release()
+		return nil, fmt.Errorf("response ID mismatch: got %d, want %d", resp.Header.ID, msg.Header.ID)
+	}
+
 	// Update latency for the target if it's a standalone server
 	for _, s := range lb.servers {
 		if s.Address == address {
@@ -843,6 +873,15 @@ func (lb *LoadBalancer) queryTCP(address string, msg *protocol.Message) (*protoc
 	resp, err := protocol.UnpackMessage(buf[:respLen])
 	if err != nil {
 		return nil, fmt.Errorf("unpack response: %w", err)
+	}
+
+	// Reject responses whose transaction ID doesn't match — stale or spoofed
+	// responses must not be returned as the current answer. This is the same
+	// guard already present in (*Client).queryUDP and (*Client).queryTCP
+	// (fix for memory 01M1PHJT9DRKY835ZPZEV7R6N0).
+	if resp.Header.ID != msg.Header.ID {
+		resp.Release()
+		return nil, fmt.Errorf("response ID mismatch: got %d, want %d", resp.Header.ID, msg.Header.ID)
 	}
 
 	// Update latency for the target

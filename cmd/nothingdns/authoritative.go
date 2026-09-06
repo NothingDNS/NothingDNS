@@ -606,6 +606,11 @@ func (h *integratedHandler) resolveCNAMETarget(w server.ResponseWriter, r *proto
 			h.logger.Warnf("Upstream CNAME target query failed for %s: %v", targetName, err)
 			return nil
 		}
+		// Return the pooled *Message to the sync.Pool after the cache takes a deep
+		// copy. Without this, every CNAME target resolution leaks one message
+		// from the pool, eventually starving upstream queries and forcing extra
+		// allocations under load.
+		defer resp.Release()
 
 		// Cache the upstream response
 		if resp.Header.Flags.RCODE == protocol.RcodeSuccess && len(resp.Answers) > 0 {

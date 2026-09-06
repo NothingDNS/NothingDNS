@@ -1837,6 +1837,160 @@ func TestLoadBalancerQueryTCPWithMockServer(t *testing.T) {
 	t.Logf("queryTCP result: %v", err)
 }
 
+// Regression test: LoadBalancer.queryUDPLoop must reject responses whose
+// transaction ID does not match the query's ID.  This is the mirror of the
+// TCP fix (memory 01M1PHJT9DRKY835ZPZEV7R6N0).
+func TestLoadBalancerQueryUDPRejectsTXIDMismatch(t *testing.T) {
+	pc, err := net.ListenPacket("udp", "[::]:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	localAddr := pc.LocalAddr().String()
+
+	done := make(chan struct{})
+	go func() {
+		defer func() { close(done) }()
+		defer pc.Close()
+
+		buf := make([]byte, 4096)
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			pc.SetDeadline(time.Now().Add(2 * time.Second))
+			n, addr, err := pc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			_ = n // consume query
+
+			hdr := protocol.Header{
+				ID:      0xCAFE, // wrong ID
+				Flags:   protocol.NewResponseFlags(protocol.RcodeSuccess),
+				QDCount: 1,
+				ANCount: 1,
+			}
+			msg := protocol.NewMessage(hdr)
+			qname, _ := protocol.ParseName("spoof.example.")
+			msg.AddQuestion(&protocol.Question{Name: qname, QType: protocol.TypeA, QClass: protocol.ClassIN})
+			msg.AddAnswer(&protocol.ResourceRecord{
+				Name:  qname,
+				Type:  protocol.TypeA,
+				Class: protocol.ClassIN,
+				TTL:   300,
+				Data:  &protocol.RDataA{Address: [4]byte{1, 2, 3, 4}},
+			})
+			packed := make([]byte, msg.WireLength())
+			n2, _ := msg.Pack(packed)
+			pc.WriteTo(packed[:n2], addr)
+		}
+	}()
+
+	lb, err := NewLoadBalancer(LoadBalancerConfig{
+		Servers: []string{localAddr},
+		Timeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewLoadBalancer: %v", err)
+	}
+	defer lb.Close()
+
+	query, err := protocol.NewQuery(0xBEEF, "spoof.example.", protocol.TypeA)
+	if err != nil {
+		t.Fatalf("NewQuery: %v", err)
+	}
+
+	_, err = lb.Query(query)
+	<-done
+	if err == nil {
+		t.Fatal("expected non-nil error for TXID mismatch, got nil")
+	}
+}
+
+// Regression test: LoadBalancer.queryTCPLoop must reject responses whose
+// transaction ID does not match the query's ID.  This is the same class of
+// TXID-bypass fixed in (*Client).queryUDP/queryTCP (memory 01M1PHJT9DRKY835ZPZEV7R6N0).
+func TestLoadBalancerQueryTCPRejectsTXIDMismatch(t *testing.T) {
+	addr, err := net.ListenTCP("tcp", nil)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	localAddr := addr.Addr().String()
+
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			conn, err := addr.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				var lenBuf [2]byte
+				if _, err := c.Read(lenBuf[:]); err != nil {
+					return
+				}
+				bodyLen := uint16(lenBuf[0])<<8 | uint16(lenBuf[1])
+				body := make([]byte, bodyLen)
+				if _, err := c.Read(body); err != nil {
+					return
+				}
+				// Build a syntactically-valid response with a WRONG transaction ID.
+				hdr := protocol.Header{
+					ID:      0xCAFE, // wrong ID
+					Flags:   protocol.NewResponseFlags(protocol.RcodeSuccess),
+					QDCount: 1,
+					ANCount: 1,
+				}
+				msg := protocol.NewMessage(hdr)
+				qname, _ := protocol.ParseName("spoof.example.")
+				msg.AddQuestion(&protocol.Question{Name: qname, QType: protocol.TypeA, QClass: protocol.ClassIN})
+				msg.AddAnswer(&protocol.ResourceRecord{
+					Name:  qname,
+					Type:  protocol.TypeA,
+					Class: protocol.ClassIN,
+					TTL:   300,
+					Data:  &protocol.RDataA{Address: [4]byte{1, 2, 3, 4}},
+				})
+				packed := make([]byte, msg.WireLength())
+				n, _ := msg.Pack(packed)
+				respBuf := make([]byte, 2+n)
+				respBuf[0], respBuf[1] = byte(n>>8), byte(n)
+				copy(respBuf[2:], packed[:n])
+				c.SetWriteDeadline(time.Now().Add(5 * time.Second))
+				c.Write(respBuf)
+			}(conn)
+		}
+	}()
+	defer func() { close(done); addr.Close() }()
+
+	lb, err := NewLoadBalancer(LoadBalancerConfig{
+		Servers: []string{localAddr},
+		Timeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewLoadBalancer: %v", err)
+	}
+	defer lb.Close()
+
+	query, err := protocol.NewQuery(0xBEEF, "spoof.example.", protocol.TypeA)
+	if err != nil {
+		t.Fatalf("NewQuery: %v", err)
+	}
+
+	_, err = lb.Query(query)
+	if err == nil {
+		t.Fatal("expected non-nil error for TXID mismatch, got nil")
+	}
+}
+
 func TestLoadBalancerQueryTCPLargeResponse(t *testing.T) {
 	// Create a TCP mock server that returns a large response
 	addr, err := net.ResolveTCPAddr("tcp", "127.0.0.1:0")

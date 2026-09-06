@@ -145,7 +145,7 @@ func TestAXFRClient_receiveAXFRResponse_SingleMessageComplete(t *testing.T) {
 	allData = append(allData, buf[:n]...)
 
 	conn := &mockConn{readData: allData}
-	records, err := client.receiveAXFRResponse(conn, nil)
+	records, err := client.receiveAXFRResponse(conn, 0x1234, nil)
 	if err != nil {
 		t.Fatalf("receiveAXFRResponse() error = %v", err)
 	}
@@ -188,7 +188,7 @@ func TestAXFRClient_receiveAXFRResponse_SOA2ThenClose(t *testing.T) {
 	allData = append(allData, buf[:n]...)
 
 	conn := &mockConn{readData: allData}
-	records, err := client.receiveAXFRResponse(conn, nil)
+	records, err := client.receiveAXFRResponse(conn, 0x1234, nil)
 	if err != nil {
 		t.Fatalf("receiveAXFRResponse() error = %v", err)
 	}
@@ -237,7 +237,7 @@ func TestAXFRClient_receiveAXFRResponse_ReadErrorOnSecond(t *testing.T) {
 
 	conn := &mockConn{readData: allData}
 	// After first message, second read returns error (soaCount=1 < 2)
-	_, err := client.receiveAXFRResponse(conn, nil)
+	_, err := client.receiveAXFRResponse(conn, 0x1234, nil)
 	if err == nil {
 		t.Error("Expected error when transfer is incomplete")
 	}
@@ -269,7 +269,7 @@ func TestAXFRClient_receiveAXFRResponse_ErrorResponse(t *testing.T) {
 	copy(data[2:], buf[:n])
 
 	conn := &mockConn{readData: data}
-	_, err := client.receiveAXFRResponse(conn, nil)
+	_, err := client.receiveAXFRResponse(conn, 0x1234, nil)
 	if err == nil {
 		t.Error("Expected error for non-success RCODE")
 	}
@@ -323,11 +323,13 @@ func TestAXFRClient_Transfer_FullWithTCPServer(t *testing.T) {
 		reqLen := int(lengthBuf[0])<<8 | int(lengthBuf[1])
 		reqBuf := make([]byte, reqLen)
 		conn.Read(reqBuf)
+		reqMsg, _ := protocol.UnpackMessage(reqBuf)
+		reqTXID := reqMsg.Header.ID
 
 		// Send response with SOA + A + SOA in single message
 		msg := &protocol.Message{
 			Header: protocol.Header{
-				Flags: protocol.Flags{QR: true, RCODE: protocol.RcodeSuccess},
+				ID: reqTXID, Flags: protocol.Flags{QR: true, RCODE: protocol.RcodeSuccess},
 			},
 			Answers: []*protocol.ResourceRecord{soaRR, aRR, soaRR},
 		}
@@ -502,7 +504,7 @@ func TestIXFRClient_buildIXFRRequest_InvalidName(t *testing.T) {
 func TestIXFRClient_receiveIXFRResponse_InvalidLength_Coverage(t *testing.T) {
 	client := NewIXFRClient("ns1.example.com:53")
 	conn := &mockConn{readData: []byte{0x00, 0x00}}
-	_, err := client.receiveIXFRResponse(conn, nil)
+	_, err := client.receiveIXFRResponse(conn, 0x1234, nil)
 	if err == nil {
 		t.Error("Expected error for zero message length")
 	}
@@ -511,7 +513,7 @@ func TestIXFRClient_receiveIXFRResponse_InvalidLength_Coverage(t *testing.T) {
 func TestIXFRClient_receiveIXFRResponse_ReadError_Coverage(t *testing.T) {
 	client := NewIXFRClient("ns1.example.com:53")
 	conn := &mockConn{readErr: fmt.Errorf("connection reset")}
-	_, err := client.receiveIXFRResponse(conn, nil)
+	_, err := client.receiveIXFRResponse(conn, 0x1234, nil)
 	if err == nil {
 		t.Error("Expected error for read failure")
 	}
@@ -522,7 +524,7 @@ func TestIXFRClient_receiveIXFRResponse_UnpackError_Coverage(t *testing.T) {
 	data := []byte{0x00, 0x10}
 	data = append(data, make([]byte, 16)...)
 	conn := &mockConn{readData: data}
-	_, err := client.receiveIXFRResponse(conn, nil)
+	_, err := client.receiveIXFRResponse(conn, 0x1234, nil)
 	if err == nil {
 		t.Error("Expected error for unpack failure")
 	}
@@ -550,7 +552,7 @@ func TestIXFRClient_receiveIXFRResponse_ErrorResponse(t *testing.T) {
 	copy(data[2:], buf[:n])
 
 	conn := &mockConn{readData: data}
-	_, err := client.receiveIXFRResponse(conn, nil)
+	_, err := client.receiveIXFRResponse(conn, 0x1234, nil)
 	if err == nil {
 		t.Error("Expected error for error response")
 	}
@@ -590,7 +592,7 @@ func TestIXFRClient_receiveIXFRResponse_Success_Coverage(t *testing.T) {
 	allData = append(allData, buf[:n]...)
 
 	conn := &mockConn{readData: allData}
-	records, err := client.receiveIXFRResponse(conn, nil)
+	records, err := client.receiveIXFRResponse(conn, 0x1234, nil)
 	if err != nil {
 		t.Fatalf("receiveIXFRResponse() error = %v", err)
 	}
@@ -638,7 +640,7 @@ func TestIXFRClient_receiveIXFRResponse_WithMiddleRecords(t *testing.T) {
 	allData = append(allData, buf[:n]...)
 
 	conn := &mockConn{readData: allData}
-	records, err := client.receiveIXFRResponse(conn, nil)
+	records, err := client.receiveIXFRResponse(conn, 0x1234, nil)
 	if err != nil {
 		t.Fatalf("receiveIXFRResponse() error = %v", err)
 	}
@@ -1430,7 +1432,7 @@ func TestAXFRClient_receiveAXFRResponse_ReadBodyError(t *testing.T) {
 	client := NewAXFRClient("ns1.example.com:53")
 	// Provide 2 bytes of valid length but then fail on the body read
 	conn := &mockConn{readData: []byte{0x00, 0x20}}
-	_, err := client.receiveAXFRResponse(conn, nil)
+	_, err := client.receiveAXFRResponse(conn, 0x1234, nil)
 	if err == nil {
 		t.Error("Expected error for body read failure")
 	}
@@ -1462,7 +1464,7 @@ func TestIXFRClient_sendMessage_WriteBodyError(t *testing.T) {
 func TestIXFRClient_receiveIXFRResponse_ReadBodyError(t *testing.T) {
 	client := NewIXFRClient("ns1.example.com:53")
 	conn := &mockConn{readData: []byte{0x00, 0x20}}
-	_, err := client.receiveIXFRResponse(conn, nil)
+	_, err := client.receiveIXFRResponse(conn, 0x1234, nil)
 	if err == nil {
 		t.Error("Expected error for body read failure")
 	}
@@ -1512,7 +1514,7 @@ func TestAXFRClient_receiveAXFRResponse_TooLarge(t *testing.T) {
 		}
 	}()
 
-	_, err := client.receiveAXFRResponse(clientConn, nil)
+	_, err := client.receiveAXFRResponse(clientConn, 0, nil)
 	if err == nil {
 		t.Error("Expected error for too large response")
 	}
@@ -2082,7 +2084,7 @@ func TestAXFRClient_receiveAXFRResponse_TSIGBadVerification(t *testing.T) {
 	allData = append(allData, buf[:n]...)
 
 	conn := &mockConn{readData: allData}
-	_, err = client.receiveAXFRResponse(conn, key)
+	_, err = client.receiveAXFRResponse(conn, 0, key)
 	if err == nil {
 		t.Error("Expected error for TSIG verification failure")
 	}
@@ -2139,7 +2141,7 @@ func TestIXFRClient_receiveIXFRResponse_TSIGBadVerification(t *testing.T) {
 	allData = append(allData, buf[:n]...)
 
 	conn := &mockConn{readData: allData}
-	_, err = client.receiveIXFRResponse(conn, key)
+	_, err = client.receiveIXFRResponse(conn, 0, key)
 	if err == nil {
 		t.Error("Expected error for TSIG verification failure in IXFR")
 	}
@@ -2185,7 +2187,7 @@ func TestAXFRClient_receiveAXFRResponse_ReadBodyErrAfterPartial(t *testing.T) {
 
 	conn := &mockConn{readData: allData}
 	// After first message data consumed, second read returns error (soaCount=1 < 2)
-	_, err := client.receiveAXFRResponse(conn, nil)
+	_, err := client.receiveAXFRResponse(conn, 0x1234, nil)
 	if err == nil {
 		t.Error("Expected error when transfer incomplete after first message")
 	}

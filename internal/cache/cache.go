@@ -1278,6 +1278,7 @@ func (c *Cache) Load(entries []CacheEntryJSON) (restored int) {
 		// Calculate remaining TTL
 		remainingTTL := remainingSecondsUint32(e.ExpireTime.Sub(now))
 		if remainingTTL == 0 {
+			msg.Release()
 			continue
 		}
 
