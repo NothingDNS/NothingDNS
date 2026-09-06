@@ -1384,6 +1384,7 @@ func (t *StdioTransport) queryUDP(ctx context.Context, msg *protocol.Message, ad
 
 	// Match response ID
 	if resp.Header.ID != msg.Header.ID {
+		resp.Release()
 		return nil, fmt.Errorf("resolver: UDP ID mismatch")
 	}
 	// The response must answer the question we asked. Matching only the
@@ -1445,9 +1446,11 @@ func (t *StdioTransport) queryTCP(ctx context.Context, msg *protocol.Message, ad
 	}
 
 	if resp.Header.ID != msg.Header.ID {
+		resp.Release()
 		return nil, fmt.Errorf("resolver: TCP ID mismatch")
 	}
 	if !questionMatches(msg, resp) {
+		resp.Release()
 		return nil, fmt.Errorf("resolver: TCP response question mismatch")
 	}
 
