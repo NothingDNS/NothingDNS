@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -556,6 +557,15 @@ func parseGenerateRange(s string) (start, stop, step int, err error) {
 
 	if start > stop {
 		return 0, 0, 0, fmt.Errorf("start (%d) must not exceed stop (%d)", start, stop)
+	}
+
+	// Guard: stop must not be close enough to math.MaxInt that the loop
+	// counter overflows before the condition is checked. When i = math.MaxInt
+	// and step > 0, i += step wraps to a negative number. Since any negative
+	// int is ≤ stop, the condition i <= stop stays true forever → infinite loop.
+	// Reject ranges where the last iteration would overflow: stop > MaxInt - step.
+	if step > 0 && stop > math.MaxInt-step {
+		return 0, 0, 0, fmt.Errorf("stop value (%d) is too large: last iteration would overflow int", stop)
 	}
 
 	return start, stop, step, nil
