@@ -273,10 +273,14 @@ func (rrl *RRL) pruneStale() {
 	defer rrl.mu.Unlock()
 
 	threshold := time.Now().Add(-5 * time.Minute)
+	var stale []string
 	for key, b := range rrl.buckets {
 		if b.lastTime.Before(threshold) {
-			delete(rrl.buckets, key)
+			stale = append(stale, key)
 		}
+	}
+	for _, key := range stale {
+		delete(rrl.buckets, key)
 	}
 }
 
