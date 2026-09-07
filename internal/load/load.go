@@ -188,11 +188,12 @@ func (r *Runner) sendQuery(conn net.Conn) {
 	}
 
 	// Unpack to validate
-	_, err = protocol.UnpackMessage(resp)
+	msg, err = protocol.UnpackMessage(resp)
 	if err != nil {
 		atomic.AddInt64(&r.errors, 1)
 		return
 	}
+	msg.Release()
 
 	atomic.AddInt64(&r.success, 1)
 
