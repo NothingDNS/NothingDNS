@@ -191,6 +191,7 @@ func (r *Runner) sendQuery(conn net.Conn) {
 	msg, err = protocol.UnpackMessage(resp)
 	if err != nil {
 		atomic.AddInt64(&r.errors, 1)
+		msg.Release()
 		return
 	}
 	msg.Release()
