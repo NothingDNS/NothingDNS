@@ -872,6 +872,7 @@ func (lb *LoadBalancer) queryTCP(address string, msg *protocol.Message) (*protoc
 
 	resp, err := protocol.UnpackMessage(buf[:respLen])
 	if err != nil {
+		resp.Release()
 		return nil, fmt.Errorf("unpack response: %w", err)
 	}
 
@@ -884,7 +885,7 @@ func (lb *LoadBalancer) queryTCP(address string, msg *protocol.Message) (*protoc
 		return nil, fmt.Errorf("response ID mismatch: got %d, want %d", resp.Header.ID, msg.Header.ID)
 	}
 
-	// Update latency for the target
+// Update latency for the target
 	for _, s := range lb.servers {
 		if s.Address == address {
 			s.markSuccess(latency)
