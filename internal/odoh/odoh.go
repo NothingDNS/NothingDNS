@@ -553,6 +553,7 @@ func (t *ObliviousTarget) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	rw := &odohResponseWriter{}
 	(&server.ServeDNSWithRecovery{Handler: t.handler}).ServeDNS(rw, query)
+	defer func() { rw.response.Release() }()
 	if rw.response == nil {
 		http.Error(w, "Failed to process query", http.StatusInternalServerError)
 		return
