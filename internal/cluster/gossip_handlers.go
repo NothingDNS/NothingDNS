@@ -117,7 +117,11 @@ func (gp *GossipProtocol) BroadcastZoneUpdate(payload ZoneUpdatePayload) error {
 		if node.ID == self.ID || node.State != NodeStateAlive {
 			continue
 		}
-		addr := &net.UDPAddr{IP: net.ParseIP(node.Addr), Port: node.Port}
+		port := node.Port
+		if port == 0 {
+			port = gp.config.BindPort
+		}
+		addr := &net.UDPAddr{IP: net.ParseIP(node.Addr), Port: port}
 		if err := gp.sendMessage(MessageTypeZoneUpdate, payloadBytes, addr); err != nil {
 			util.Warnf("gossip: failed to send zone update to %s: %v", addr, err)
 		}
@@ -195,7 +199,11 @@ func (gp *GossipProtocol) BroadcastConfigUpdate(payload ConfigSyncPayload) error
 		if node.ID == self.ID || node.State != NodeStateAlive {
 			continue
 		}
-		addr := &net.UDPAddr{IP: net.ParseIP(node.Addr), Port: node.Port}
+		port := node.Port
+		if port == 0 {
+			port = gp.config.BindPort
+		}
+		addr := &net.UDPAddr{IP: net.ParseIP(node.Addr), Port: port}
 		if err := gp.sendMessage(MessageTypeConfigSync, payloadBytes, addr); err != nil {
 			util.Warnf("gossip: failed to send config sync to %s: %v", addr, err)
 		}
@@ -307,7 +315,11 @@ func (gp *GossipProtocol) BroadcastDraining(draining bool, inFlightReq int) erro
 		if node.ID == self.ID {
 			continue
 		}
-		addr := &net.UDPAddr{IP: net.ParseIP(node.Addr), Port: node.Port}
+		port := node.Port
+		if port == 0 {
+			port = gp.config.BindPort
+		}
+		addr := &net.UDPAddr{IP: net.ParseIP(node.Addr), Port: port}
 		if err := gp.sendMessage(MessageTypeDraining, payloadBytes, addr); err != nil {
 			util.Warnf("gossip: failed to send draining message to %s: %v", addr, err)
 		}
@@ -379,7 +391,11 @@ func (gp *GossipProtocol) BroadcastNodeStats(stats NodeHealthStats) error {
 		if node.ID == self.ID {
 			continue
 		}
-		addr := &net.UDPAddr{IP: net.ParseIP(node.Addr), Port: node.Port}
+		port := node.Port
+		if port == 0 {
+			port = gp.config.BindPort
+		}
+		addr := &net.UDPAddr{IP: net.ParseIP(node.Addr), Port: port}
 		if err := gp.sendMessage(MessageTypeNodeStats, payloadBytes, addr); err != nil {
 			util.Warnf("gossip: failed to send node stats to %s: %v", addr, err)
 		}
@@ -435,7 +451,11 @@ func (gp *GossipProtocol) BroadcastClusterMetrics(metrics ClusterMetricsPayload)
 		if node.ID == self.ID {
 			continue
 		}
-		addr := &net.UDPAddr{IP: net.ParseIP(node.Addr), Port: node.Port}
+		port := node.Port
+		if port == 0 {
+			port = gp.config.BindPort
+		}
+		addr := &net.UDPAddr{IP: net.ParseIP(node.Addr), Port: port}
 		if err := gp.sendMessage(MessageTypeClusterMetrics, payloadBytes, addr); err != nil {
 			util.Warnf("gossip: failed to send cluster metrics to %s: %v", addr, err)
 		}
