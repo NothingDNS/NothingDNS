@@ -1392,6 +1392,8 @@ func (t *StdioTransport) queryUDP(ctx context.Context, msg *protocol.Message, ad
 	// return data for a DIFFERENT name/type that would be cached under the
 	// queried key (cache-poisoning defense-in-depth).
 	if !questionMatches(msg, resp) {
+		// UnpackMessage returns a pooled *Message; must release to avoid leak.
+		resp.Release()
 		return nil, fmt.Errorf("resolver: UDP response question mismatch")
 	}
 
