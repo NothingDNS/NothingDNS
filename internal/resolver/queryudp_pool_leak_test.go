@@ -19,7 +19,7 @@ import (
 func TestQueryUDP_QuestionMismatch_ReleasesResponse(t *testing.T) {
 	// git show HEAD: reads the committed file from internal/resolver/resolver.go.
 	// We pass "resolver.go" because the test runs from internal/resolver/.
-	showOut, _ := exec.Command("git", "show", "HEAD:resolver.go").CombinedOutput()
+	showOut, _ := exec.Command("git", "show", "HEAD:internal/resolver/resolver.go").CombinedOutput()
 	content := string(showOut)
 
 	// The fix: resp.Release() must appear in the question-mismatch block.
