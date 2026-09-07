@@ -102,6 +102,8 @@ func rcodeToString(rcode uint8) string {
 		return "NOTIMP"
 	case 5:
 		return "REFUSED"
+	case 6:
+		return "YXDOMAIN"
 	default:
 		return fmt.Sprintf("RCODE%d", rcode)
 	}
