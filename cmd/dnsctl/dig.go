@@ -190,6 +190,7 @@ func cmdDig(args []string) error {
 		}
 	}
 
+	defer resp.Release()
 	printDigResponse(qname, qtypeStr, server, addr, wantDNSSEC, resp)
 	return nil
 }
