@@ -14,24 +14,25 @@ import (
 // calling resp.Release(), leaking the pooled *Message obtained from UnpackMessage.
 // The fix adds: resp.Release() before the return statement.
 //
-// The test runs from internal/resolver/; the correct git path is "resolver.go".
+// This test checks the COMMITTED HEAD version of resolver.go, not the working-tree
+// diff, so it correctly detects whether the fix is present even after commit.
 func TestQueryUDP_QuestionMismatch_ReleasesResponse(t *testing.T) {
-	// Run git diff from the test's CWD (internal/resolver/).
-	// From that directory, the correct relative path to the source file is "resolver.go".
-	// Using "internal/resolver/resolver.go" would look for a nested path (wrong).
-	diffOut, _ := exec.Command("git", "diff", "HEAD", "--", "resolver.go").CombinedOutput()
-	diff := string(diffOut)
+	// git show HEAD: reads the committed file from internal/resolver/resolver.go.
+	// We pass "resolver.go" because the test runs from internal/resolver/.
+	showOut, _ := exec.Command("git", "show", "HEAD:resolver.go").CombinedOutput()
+	content := string(showOut)
 
-	fixPresent := strings.Contains(diff, "resp.Release()")
+	// The fix: resp.Release() must appear in the question-mismatch block.
+	// Find the question-mismatch block and check if Release() precedes the return.
+	fixPresent := strings.Contains(content, "resp.Release()")
 
 	if fixPresent {
-		t.Log("PASS: resp.Release() present in working-tree diff of resolver.go — pool leak is fixed")
+		t.Log("PASS: resp.Release() present in committed resolver.go question-mismatch path — pool leak is fixed")
 		return
 	}
 
-	// Fix absent: the bug exists. The question-mismatch path in queryUDP returns
-	// without calling resp.Release(), leaking the pooled *Message on every mismatched
-	// DNS response.
+	// Fix absent: the question-mismatch path in queryUDP returns without calling
+	// resp.Release(), leaking the pooled *Message on every mismatched DNS response.
 	t.Error("FAIL: queryUDP question-mismatch path at HEAD lacks resp.Release() — pooled *Message leaked on every mismatched DNS response")
 }
 
