@@ -183,7 +183,13 @@ func (r *Runner) sendQuery(conn net.Conn) {
 	latency := time.Since(queryStart)
 
 	if err != nil {
-		atomic.AddInt64(&r.timeouts, 1)
+		// Only count actual deadline-exceeded as timeouts; protocol and transport
+		// errors (broken pipe, TCP RST, io.ErrShortWrite, DNS FORMERR) count as errors.
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			atomic.AddInt64(&r.timeouts, 1)
+		} else {
+			atomic.AddInt64(&r.errors, 1)
+		}
 		return
 	}
 

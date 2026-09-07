@@ -16,10 +16,12 @@ func serialIsNewer(s1, s2 uint32) bool {
 	if s1 == s2 {
 		return false
 	}
-	// RFC 1982: s1 is newer if (s1 > s2 AND s1-s2 < 2^31) OR (s1 < s2 AND s2-s1 > 2^31)
+	// RFC 1982 §3.2: s1 > s2 if s1 > s2 AND s1-s2 < 2^31,
+	// s2 > s1 if s2 > s1 AND s2-s1 >= 2^31.
+	// The branch condition must be s1 > s2 AND diff < half, not s1 > s2 AND diff >= half.
 	const half uint32 = 1 << 31
 	if s1 > s2 {
 		return s1-s2 < half
 	}
-	return s2-s1 > half
+	return s2-s1 >= half
 }

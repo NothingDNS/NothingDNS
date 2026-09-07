@@ -188,7 +188,8 @@ func NewUDPServerWithWorkers(addr string, handler Handler, workers int) *UDPServ
 		},
 		responsePool: sync.Pool{
 			New: func() interface{} {
-				return make([]byte, MaxUDPPayloadSize)
+				buf := make([]byte, MaxUDPPayloadSize)
+				return &buf
 			},
 		},
 	}

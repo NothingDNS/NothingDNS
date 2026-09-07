@@ -111,8 +111,11 @@ func NewTCPServerWithWorkers(addr string, handler Handler, workers int) *TCPServ
 		ipConnCount: make(map[string]int),
 		responsePool: sync.Pool{
 			New: func() interface{} {
-				// Pre-allocate a commonly-used size; larger responses allocate fresh
-				return make([]byte, defaultFrameBufSize)
+				// Pre-allocate a commonly-used size; larger responses allocate fresh.
+				// Return *[]byte so the Put/Get cycle is type-consistent (the
+				// Write path passes *[]byte to Put).
+				buf := make([]byte, defaultFrameBufSize)
+				return &buf
 			},
 		},
 	}

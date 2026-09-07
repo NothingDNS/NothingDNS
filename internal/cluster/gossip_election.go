@@ -331,7 +331,11 @@ func (gp *GossipProtocol) startElection() {
 		if node.ID == selfID || node.State != NodeStateAlive {
 			continue
 		}
-		addr := &net.UDPAddr{IP: net.ParseIP(node.Addr), Port: node.Port}
+		port := node.Port
+		if port == 0 {
+			port = gp.config.BindPort
+		}
+		addr := &net.UDPAddr{IP: net.ParseIP(node.Addr), Port: port}
 		if err := gp.sendMessage(MessageTypeElection, payloadBytes, addr); err != nil {
 			util.Warnf("gossip: failed to send election message to %s: %v", addr, err)
 		}
@@ -371,7 +375,11 @@ func (gp *GossipProtocol) AnnounceLeader() error {
 		if node.ID == self.ID || node.State != NodeStateAlive {
 			continue
 		}
-		addr := &net.UDPAddr{IP: net.ParseIP(node.Addr), Port: node.Port}
+		port := node.Port
+		if port == 0 {
+			port = gp.config.BindPort
+		}
+		addr := &net.UDPAddr{IP: net.ParseIP(node.Addr), Port: port}
 		if err := gp.sendMessage(MessageTypeLeader, payloadBytes, addr); err != nil {
 			util.Warnf("gossip: failed to send leader announcement to %s: %v", addr, err)
 		}
