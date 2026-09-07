@@ -187,6 +187,7 @@ func (h *Handler) serveJSON(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no DNS response generated", http.StatusInternalServerError)
 		return
 	}
+	defer jrw.response.Release()
 
 	// Encode the captured response as JSON
 	jsonData, err := EncodeJSON(jrw.response)
