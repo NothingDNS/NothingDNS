@@ -89,10 +89,14 @@ func (c *ValidationCache) Set(name string, qtype uint16, result ValidationResult
 	// Lazy eviction: purge expired entries when cache exceeds threshold
 	if len(c.items) > 10000 {
 		now := time.Now()
+		var stale []string
 		for key, entry := range c.items {
 			if cacheExpiredAt(now, entry.expiresAt) {
-				delete(c.items, key)
+				stale = append(stale, key)
 			}
+		}
+		for _, key := range stale {
+			delete(c.items, key)
 		}
 	}
 
@@ -131,14 +135,16 @@ func (c *ValidationCache) Purge() int {
 	defer c.mu.Unlock()
 
 	now := time.Now()
-	var purged int
+	var stale []string
 	for key, entry := range c.items {
 		if cacheExpiredAt(now, entry.expiresAt) {
-			delete(c.items, key)
-			purged++
+			stale = append(stale, key)
 		}
 	}
-	return purged
+	for _, key := range stale {
+		delete(c.items, key)
+	}
+	return len(stale)
 }
 
 // rrsigCacheKey builds a cache key for RRSIG cache.
@@ -181,10 +187,14 @@ func (c *RRSIGCache) SetRRSIG(zone string, qtype uint16, data []byte, rrsig *pro
 	// Lazy eviction: purge expired entries when cache exceeds threshold
 	if len(c.items) > 5000 {
 		now := time.Now()
+		var stale []string
 		for key, entry := range c.items {
 			if cacheExpiredAt(now, entry.expiresAt) {
-				delete(c.items, key)
+				stale = append(stale, key)
 			}
+		}
+		for _, key := range stale {
+			delete(c.items, key)
 		}
 	}
 
