@@ -860,7 +860,8 @@ func (s *cacheShard) moveToFront(entry *Entry) {
 	s.pushFront(entry)
 }
 
-// intrusiveRemove removes an entry from the intrusive LRU list.
+// intrusiveRemove removes an entry from the intrusive LRU list and releases
+// the pooled *Message it holds, if any.
 func (s *cacheShard) intrusiveRemove(entry *Entry) {
 	if entry.prev != nil {
 		entry.prev.next = entry.next
@@ -874,6 +875,9 @@ func (s *cacheShard) intrusiveRemove(entry *Entry) {
 	}
 	entry.prev = nil
 	entry.next = nil
+	if entry.Message != nil {
+		entry.Message.Release()
+	}
 }
 
 // EvictPercent removes approximately percent of entries from each shard,
@@ -932,9 +936,12 @@ func (c *Cache) Clear() {
 	for i := range c.shards {
 		s := &c.shards[i]
 		s.mu.Lock()
-		// Unlink all entries for GC
+		// Release pooled messages and unlink all entries
 		for e := s.lruFront; e != nil; {
 			next := e.next
+			if e.Message != nil {
+				e.Message.Release()
+			}
 			e.prev = nil
 			e.next = nil
 			e = next
