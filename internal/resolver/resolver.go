@@ -428,6 +428,15 @@ func (r *Resolver) resolve(ctx context.Context, name string, qtype uint16, cname
 			// DNAME takes precedence over CNAME per RFC 6672 §2.1
 			if qtype != protocol.TypeCNAME && qtype != protocol.TypeDNAME && len(resp.Answers) > 0 {
 				if dname := findDNAME(resp.Answers, name); dname.found {
+					// Copy the DNAME record and capture Questions from the pooled response
+					// before releasing it. The pool zeroes backing arrays on Release;
+					// findDNAME returns a pointer into that array, so dname.dnameRR
+					// would be zeroed if captured after Release.
+					dnameRR := *dname.dnameRR // deep copy: struct lives in pooled backing array
+					respQuestions := resp.Questions
+					resp.Release()
+
+
 					// Synthesize a CNAME from the DNAME and chase it
 					cnameName, _ := protocol.ParseName(dname.synthTarget)
 					qnameParsed, _ := protocol.ParseName(name)
@@ -435,15 +444,14 @@ func (r *Resolver) resolve(ctx context.Context, name string, qtype uint16, cname
 						Name:  qnameParsed,
 						Type:  protocol.TypeCNAME,
 						Class: protocol.ClassIN,
-						TTL:   dname.dnameRR.TTL,
+						TTL:   dnameRR.TTL,
 						Data:  &protocol.RDataCNAME{CName: cnameName},
 					}
 
 					// Resolve the synthesized CNAME target
 					target, err := r.resolve(ctx, dname.synthTarget, qtype, cnameDepth+1)
 					if err != nil {
-						resp.Header.Flags.RA = true
-						return resp, nil
+						return nil, err
 					}
 
 					// Build a new response: DNAME + synthesized CNAME + target answers
@@ -452,10 +460,10 @@ func (r *Resolver) resolve(ctx context.Context, name string, qtype uint16, cname
 							ID:    resp.Header.ID,
 							Flags: protocol.NewResponseFlags(protocol.RcodeSuccess),
 						},
-						Questions: resp.Questions,
+						Questions: respQuestions,
 					}
 					result.Header.Flags.RA = true
-					result.AddAnswer(dname.dnameRR)
+					result.AddAnswer(&dnameRR)
 					result.AddAnswer(synthCNAME)
 					for _, rr := range target.Answers {
 						if rr == nil {
