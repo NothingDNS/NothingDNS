@@ -59,15 +59,15 @@ func acquireWireNameBuffer() []byte {
 	return (*wireNamePool.Get().(*[]byte))[:0]
 }
 
-func releaseWireNameBuffer(wire []byte) {
+func releaseWireNameBuffer(wire *[]byte) {
 	if wire == nil {
 		return
 	}
-	for i := range wire {
-		wire[i] = 0
+	for i := range *wire {
+		(*wire)[i] = 0
 	}
-	wire = wire[:0]
-	wireNamePool.Put(&wire)
+	*wire = (*wire)[:0]
+	wireNamePool.Put(wire)
 }
 
 func acquireName() *Name {

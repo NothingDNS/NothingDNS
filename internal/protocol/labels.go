@@ -114,7 +114,7 @@ func (n *Name) Release() {
 		return
 	}
 	if n.wire != nil {
-		releaseWireNameBuffer(n.wire)
+		releaseWireNameBuffer(&n.wire)
 		n.wire = nil
 	}
 	n.stringCache.Store(nil)
@@ -496,23 +496,23 @@ func UnpackName(buf []byte, offset int) (*Name, int, error) {
 
 	for {
 		if offset >= len(buf) {
-			releaseWireNameBuffer(wire)
+			releaseWireNameBuffer(&wire)
 			return nil, 0, ErrBufferTooSmall
 		}
 
 		if buf[offset]&PointerMask == PointerMask {
 			if offset+2 > len(buf) {
-				releaseWireNameBuffer(wire)
+				releaseWireNameBuffer(&wire)
 				return nil, 0, ErrBufferTooSmall
 			}
 
 			pointer := int(Uint16(buf[offset:]) & PointerOffsetMask)
 			if pointer >= len(buf) || pointer >= offset {
-				releaseWireNameBuffer(wire)
+				releaseWireNameBuffer(&wire)
 				return nil, 0, ErrInvalidPointer
 			}
 			if ptrDepth >= MaxPointerDepth {
-				releaseWireNameBuffer(wire)
+				releaseWireNameBuffer(&wire)
 				return nil, 0, ErrPointerTooDeep
 			}
 			if ptrOffset == -1 {
@@ -537,17 +537,17 @@ func UnpackName(buf []byte, offset int) (*Name, int, error) {
 		}
 
 		if labelLen > MaxLabelLength {
-			releaseWireNameBuffer(wire)
+			releaseWireNameBuffer(&wire)
 			return nil, 0, ErrLabelTooLong
 		}
 		if offset+1+labelLen > len(buf) {
-			releaseWireNameBuffer(wire)
+			releaseWireNameBuffer(&wire)
 			return nil, 0, ErrBufferTooSmall
 		}
 
 		nameLen += 1 + labelLen
 		if nameLen > MaxNameLength || len(wire)+1+labelLen+1 > MaxNameLength {
-			releaseWireNameBuffer(wire)
+			releaseWireNameBuffer(&wire)
 			return nil, 0, ErrNameTooLong
 		}
 
