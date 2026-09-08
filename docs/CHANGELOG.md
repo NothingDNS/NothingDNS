@@ -5,6 +5,17 @@ All notable changes to NothingDNS are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.9] — 2026-09-08
+
+### Fixed
+
+- **Protocol: pooled Name buffers now released on all short-buffer Unpack paths**: in every `Unpack` method that allocates a temporary `Name` via `UnpackName` before validating the offset or rdlength, the pooled `Name` was leaked if the subsequent bounds check failed. Patches added `name.Release()` before early returns on `ErrBufferTooSmall` and rdlength-overflow in: `RDataCNAME`, `RDataDNAME`, `RDataNS`, `RDataPTR`, `RDataSOA` (MName/RName), `RDataSRV`, `RDataRP`, `RDataAFSDB`, `RDataKX`, `RDataNAPTR`, `RDataIPSECKEY`, `RDataHIP`, `RDataNSEC`, `RDataRRSIG`, and `RDataSVCB`. The `releaseWireNameBuffer` function also fixed to pass `*[]byte` so `pool.Put` reclaims the actual element.
+- **`sync.Pool` buffer leaks fixed across the codebase**: pooled `*[]byte` write buffers were not returned in `server/handler.go` and `upstream/loadbalancer.go` when `writeMsgUDP` or `WriteMsgUDP` received an undersized buffer; pooled `*Message` was leaked in `doh.Handler.serveJSON` after JSON encoding, `odoh.ServeTarget` after response encoding, `cache.evict/replace/clear`, `resolver.DNAME` synthesis, `upstream.queryTCP`, `load.sendQuery` (TCP and UDP), and `dnsctl cmdDig` after response printing. All paths now call `Release()` on the pooled object on every exit path.
+- **Seven independent bug fixes**: `serialIsNewer` (likely incorrect timestamp comparison), `BindPort` fallback added to five cluster gossip broadcast functions that only called `BindPort` without acting on its return value, `sync.Pool` map-range safety corrected in dnssec cache eviction (`f13b5ff`) and filter `pruneStale` (`9e693ca`), IXFR journal EOF safety, env var expansion for empty keys, and upstream load balancing rounding.
+- **`internal/zone`: `parseGenerateRange` integer overflow guard**: `maxEnd - start + 1` computed with `int` could overflow for large `$GENERATE` ranges on 32-bit platforms. Now checked before use.
+- **RCODE 6 (YXDOMAIN, RFC 2136) added to `rcodeToString`**: `cmd/nothingdns` now correctly maps RCODE 6 to its string name in responses and logs.
+- **Cluster gossip: `BindPort` fallback added to broadcast functions**: five gossip broadcast functions only called `BindPort` but ignored its return value; fallback port selection now works correctly when the primary port is unavailable.
+
 ## [1.1.8] — 2026-08-19
 
 ### Fixed
