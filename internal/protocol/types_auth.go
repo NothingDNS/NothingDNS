@@ -90,6 +90,7 @@ func (r *RDataSOA) Unpack(buf []byte, offset int, rdlength uint16) (int, error) 
 	r.MName = mname
 	offset += n
 	if offset > endOffset {
+		mname.Release()
 		return 0, fmt.Errorf("SOA MName overflows rdlength")
 	}
 
@@ -101,6 +102,7 @@ func (r *RDataSOA) Unpack(buf []byte, offset int, rdlength uint16) (int, error) 
 	r.RName = rname
 	offset += n
 	if offset > endOffset {
+		rname.Release()
 		return 0, fmt.Errorf("SOA RName overflows rdlength")
 	}
 
@@ -260,6 +262,7 @@ func (r *RDataSRV) Unpack(buf []byte, offset int, rdlength uint16) (int, error) 
 	r.Target = target
 	offset += n
 	if offset > endOffset {
+		target.Release()
 		return 0, fmt.Errorf("SRV Target overflows rdlength")
 	}
 

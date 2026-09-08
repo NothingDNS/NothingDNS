@@ -242,6 +242,10 @@ func (r *RDataIPSECKEY) Unpack(buf []byte, offset int, rdlength uint16) (int, er
 		if err != nil {
 			return 0, err
 		}
+		if offset+n > endOffset {
+			name.Release()
+			return 0, ErrBufferTooSmall
+		}
 		r.GatewayName = name
 		offset += n
 	default:
@@ -413,6 +417,7 @@ func (r *RDataHIP) Unpack(buf []byte, offset int, rdlength uint16) (int, error) 
 		}
 		offset += n
 		if offset > endOffset {
+			name.Release()
 			return 0, ErrBufferTooSmall
 		}
 		r.RendezvousServers = append(r.RendezvousServers, name)
