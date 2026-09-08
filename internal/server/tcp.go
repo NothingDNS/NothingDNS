@@ -415,24 +415,37 @@ func (w *tcpResponseWriter) Write(msg *protocol.Message) (int, error) {
 	// that don't fit take the exact-size fallback inside
 	// packFramedDNSPayload — no per-response WireLength traversal here.
 	var buf []byte
+	var bufPtr *[]byte // captures the pooled reference before buf is reassigned
 	if w.server != nil {
-		if pooled := w.server.responsePool.Get(); pooled != nil {
+		respPool := &w.server.responsePool
+		if pooled := respPool.Get(); pooled != nil {
 			switch p := pooled.(type) {
-			case []byte:
-				buf = p
 			case *[]byte:
 				if p != nil {
+					bufPtr = p
 					buf = *p
 				}
+			default:
+				// Pool returned an unexpected type; fall through to allocation.
 			}
 		}
-		if cap(buf) < defaultFrameBufSize {
+		if bufPtr == nil {
 			buf = make([]byte, defaultFrameBufSize)
-		} else {
-			buf = buf[:cap(buf)]
 		}
-		defer w.server.responsePool.Put(&buf)
+	}
+	// Return the pooled buffer on exit. Put tolerates nil safely.
+	defer func() {
+		if w.server != nil && bufPtr != nil {
+			w.server.responsePool.Put(bufPtr)
+		}
+	}()
+	// Slice to usable capacity so packFramedDNSPayload writes within the backing array.
+	if cap(buf) < defaultFrameBufSize {
+		buf = make([]byte, defaultFrameBufSize)
 	} else {
+		buf = buf[:cap(buf)]
+	}
+	if buf == nil {
 		buf = make([]byte, defaultFrameBufSize)
 	}
 

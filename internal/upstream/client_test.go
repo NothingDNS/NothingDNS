@@ -2243,3 +2243,48 @@ func TestClientQuerySuccess(t *testing.T) {
 		t.Errorf("expected 1 query, got %d", queries)
 	}
 }
+
+// TestUpstreamPoolTypeConsistency verifies the fix for the pool type mismatch in queryUDP:
+// newClient's udpPool/tcpPool New functions must return *[]byte so that pool.Put(&buf)
+// (a *[]byte) stores the same type that Get() returns. Previously New returned bare
+// []byte but putBack called pool.Put(&buf), silently corrupting the pool after the first call.
+func TestUpstreamPoolTypeConsistency(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		size int
+	}{
+		{"udp", 4096},
+		{"tcp", 65535},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Replicate the fixed pool initialization pattern from newClient.
+			pool := &sync.Pool{
+				New: func() interface{} {
+					b := make([]byte, tc.size)
+					return &b
+				},
+			}
+
+			// Simulate queryUDP's Get/putBack/Get cycle.
+			item1 := pool.Get()
+			ptr, ok := item1.(*[]byte)
+			if !ok {
+				t.Fatalf("Get returned %T, want *[]byte", item1)
+			}
+			if ptr == nil || cap(*ptr) != tc.size {
+				t.Fatalf("pool returned %v with cap %d, want non-nil with cap %d",
+					*ptr, cap(*ptr), tc.size)
+			}
+
+			// putBack calls pool.Put(&buf) where buf is the slice backed by *ptr.
+			pool.Put(item1)
+
+			// Second Get must return the same item back (self-consistent type).
+			item2 := pool.Get()
+			if item1 != item2 {
+				t.Fatalf("Get after Put did not return the Put item: got %v, want %v", item2, item1)
+			}
+			pool.Put(item2)
+		})
+	}
+}

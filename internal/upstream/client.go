@@ -192,12 +192,14 @@ func NewClient(config Config) (*Client, error) {
 		// Initialize buffer pools
 		client.udpPool[addr] = &sync.Pool{
 			New: func() interface{} {
-				return make([]byte, 4096)
+				b := make([]byte, 4096)
+				return &b
 			},
 		}
 		client.tcpPool[addr] = &sync.Pool{
 			New: func() interface{} {
-				return make([]byte, 65535)
+				b := make([]byte, 65535)
+				return &b
 			},
 		}
 

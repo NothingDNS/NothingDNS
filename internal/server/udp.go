@@ -406,28 +406,40 @@ func (w *udpResponseWriter) Write(msg *protocol.Message) (int, error) {
 	}
 	w.written = true
 
-	// Get a buffer from the pool (zero-alloc hot path)
+	// Get a buffer from the pool (zero-alloc hot path).
+	// responsePool stores *[]byte; we dereference it and capture the pool
+	// reference so the defer remains valid after buf is reassigned.
 	var buf []byte
+	var respPool *sync.Pool
+	var bufPtr *[]byte
 	if w.server != nil {
-		if pooled := w.server.responsePool.Get(); pooled != nil {
+		respPool = &w.server.responsePool
+		if pooled := respPool.Get(); pooled != nil {
 			switch p := pooled.(type) {
-			case []byte:
-				buf = p
 			case *[]byte:
 				if p != nil {
+					bufPtr = p
 					buf = *p
 				}
+			default:
+				// Pool returned an unexpected type; fall through to allocation.
 			}
 		}
-		if buf == nil {
+		if bufPtr == nil {
 			buf = make([]byte, MaxUDPPayloadSize)
 		}
-		if cap(buf) < MaxUDPPayloadSize {
-			buf = make([]byte, MaxUDPPayloadSize)
-		} else {
-			buf = buf[:MaxUDPPayloadSize]
-			defer w.server.responsePool.Put(&buf)
+	}
+	// Return the pooled buffer on exit. Put tolerates nil safely.
+	defer func() {
+		if respPool != nil && bufPtr != nil {
+			respPool.Put(bufPtr)
 		}
+	}()
+	// Slice to usable capacity so Pack writes within the backing array.
+	if cap(buf) < MaxUDPPayloadSize {
+		buf = make([]byte, MaxUDPPayloadSize)
+	} else {
+		buf = buf[:MaxUDPPayloadSize]
 	}
 	if buf == nil {
 		buf = make([]byte, MaxUDPPayloadSize)
