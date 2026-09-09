@@ -132,8 +132,8 @@ func (p *PooledBuffer) Grow(n int) error {
 	if cap(*p.buf)-len(*p.buf) < n {
 		// Need more capacity - allocate new underlying array
 		newCap := len(*p.buf) + n
-		newBuf := make([]byte, len(*p.buf), newCap)
-		copy(newBuf, *p.buf)
+		newBuf := make([]byte, 0, newCap)
+		newBuf = append(newBuf, *p.buf...)
 		*p.buf = newBuf
 	}
 	return nil
