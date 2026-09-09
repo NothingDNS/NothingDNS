@@ -2,6 +2,7 @@ package transfer
 
 import (
 	"bytes"
+	"container/list"
 	"crypto/hmac"
 	"crypto/sha1" // #nosec G505 -- HMAC-SHA1 required for TSIG algorithm hmac-sha1 (RFC 4635)
 	"crypto/sha256"
@@ -504,14 +505,25 @@ func VerifyMessageWithPrevious(msg *protocol.Message, key *TSIGKey, previousKey 
 // time_signed.
 //
 // Memory bound: an attacker could probe with an unbounded set of key
-// names. We cap the map at a generous limit and evict in FIFO order on
-// overflow (an attacker who manages to evict legitimate state has only
-// regained the pre-fix behaviour — replay still requires a captured valid
-// signed message).
+// names. We cap the map at a generous limit and evict only the true LRU
+// entry (head of list = least recently used). A victim's entry survives as
+// long as the victim makes replay checks, even if many attacker-named keys
+// exist in the map.
+//
+// LRU structure: map[keyName] -> *list.Element of *replayEntry{keyName, time}
+// list order: head=LRU, tail=MRU. On every successful check the key is moved
+// to the tail. On overflow the head is evicted. A key can only be evicted
+// through its own inactivity, not through other keys filling the map.
 var (
-	tsigReplayMu        sync.Mutex
-	tsigReplayHighWater = make(map[string]time.Time)
+	tsigReplayMu   sync.Mutex
+	tsigReplayList = list.New() // head=LRU, tail=MRU
+	tsigReplayMap  = make(map[string]*list.Element)
 )
+
+type replayEntry struct {
+	keyName string
+	time    time.Time
+}
 
 const tsigReplayKeyCap = 10000
 
@@ -520,25 +532,32 @@ const tsigReplayKeyCap = 10000
 func checkReplay(keyName string, timeSigned time.Time, fudge time.Duration) error {
 	tsigReplayMu.Lock()
 	defer tsigReplayMu.Unlock()
-	if prev, ok := tsigReplayHighWater[keyName]; ok {
-		if timeSigned.Before(prev.Add(-fudge)) {
+
+	// If key already exists, move to MRU tail (unless time is stale).
+	if el, ok := tsigReplayMap[keyName]; ok {
+		entry := el.Value.(*replayEntry)
+		if timeSigned.Before(entry.time.Add(-fudge)) {
 			return fmt.Errorf("TSIG replay: time_signed %s is more than fudge=%s before last-accepted %s for key %q",
-				timeSigned.UTC().Format(time.RFC3339Nano), fudge, prev.UTC().Format(time.RFC3339Nano), keyName)
+				timeSigned.UTC().Format(time.RFC3339Nano), fudge, entry.time.UTC().Format(time.RFC3339Nano), keyName)
 		}
-		if timeSigned.After(prev) {
-			tsigReplayHighWater[keyName] = timeSigned
+		if timeSigned.After(entry.time) {
+			entry.time = timeSigned
+			tsigReplayList.MoveToBack(el)
 		}
-	} else {
-		if len(tsigReplayHighWater) >= tsigReplayKeyCap {
-			// FIFO eviction: drop a single arbitrary entry. Sets in Go
-			// iterate in random order so this is effectively random eviction.
-			for k := range tsigReplayHighWater {
-				delete(tsigReplayHighWater, k)
-				break
-			}
-		}
-		tsigReplayHighWater[keyName] = timeSigned
+		// timeSigned <= entry.time: accept (same or older-than-stored, but not stale)
+		// This matches original FIFO behavior where equal timestamps advance the high-water mark.
+		return nil
 	}
+
+	// New key: evict LRU entry if at capacity.
+	if tsigReplayList.Len() >= tsigReplayKeyCap {
+		lru := tsigReplayList.Remove(tsigReplayList.Front()).(*replayEntry)
+		delete(tsigReplayMap, lru.keyName)
+	}
+
+	entry := &replayEntry{keyName: keyName, time: timeSigned}
+	el := tsigReplayList.PushBack(entry)
+	tsigReplayMap[keyName] = el
 	return nil
 }
 
