@@ -856,6 +856,11 @@ func cookieStage(h *integratedHandler) Stage {
 			}
 			resp.SetEDNS0(4096, false)
 			if opt := resp.GetOPT(); opt != nil {
+				// RFC 6891 §6.1.3: RcodeBadCookie (23) cannot ride in the
+				// 4-bit header RCODE alone — the OPT TTL must carry the
+				// extended byte (23>>4 = 1) or external clients decode the
+				// response as YXRRSET (7). Same pattern as the BADVERS site.
+				opt.TTL = protocol.BuildEDNSTTL(protocol.RcodeBadCookie>>4, 0, false, 0)
 				if optData, ok := opt.Data.(*protocol.RDataOPT); ok {
 					optData.AddOption(protocol.OptionCodeCookie, cookieData)
 				}
