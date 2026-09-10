@@ -32,7 +32,14 @@ async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
 	const token = getToken();
 	if (token) headers.Authorization = `Bearer ${token}`;
 
-	const resp = await fetch(path, { ...options, headers });
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), 10_000);
+	let resp: Response;
+	try {
+		resp = await fetch(path, { ...options, headers, signal: controller.signal });
+	} finally {
+		clearTimeout(timeout);
+	}
 
 	// Global 401 handling — see api.ts. Expired token bounces to login.
 	if (resp.status === 401) {
