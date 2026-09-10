@@ -5,6 +5,20 @@ All notable changes to NothingDNS are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.10] — 2026-09-10
+
+### Fixed
+
+- **Protocol: pooled `Name` structs are no longer recycled**: records sharing one `*Name` each called `Name.Release()`, putting the same struct into `namePool` once per record; later `ParseName` calls received that struct again and the last writer clobbered every other name's content. `Name.Release()` now returns only the wire buffer (already decoupled via a local header Put) and leaves the struct to the GC. Root cause of the order-dependent `TestGenerateNSEC3_OptOutClassification`, `TestBuildChainWithDelegation`, and resolver DNAME synthesis failures.
+- **Protocol: `UnpackMessage` enforces the zero-length section invariant at pool Get**: a pooled `*Message` mutated by a user after `Release()` carried leftover Questions across pool cycles, so a single-question wire message unpacked with duplicate questions (order-dependent `TestServeDNS_DNS64Synthesis` SERVFAIL, "got 2" question mismatch). All four section slices are truncated right after `messagePool.Get()`; dropped leftovers are simply GC-reclaimed.
+- **Protocol: RFC 6891 extended RCODEs reconstructed at unpack**: `UnpackMessage` read only the 4-bit header RCODE, so upstream EDNS extended codes were misread — BADVERS (16) unpacked as NOERROR (0) and BADCOOKIE (23) as YXRRSET (7). The OPT record's TTL now contributes `EXTENDED-RCODE << 4` via the existing `ParseEDNS0Header` helper (extended byte 0 responses are unchanged). Covered by `TestUnpackMessage_ReconstructsExtendedRCODE`.
+- **cmd: BADCOOKIE responses now carry the extended RCODE on the wire**: the cookie stage set RCODE 23 in memory, but `SetEDNS0` builds the OPT TTL with extended byte 0, so external clients decoded the response as YXRRSET (7). The stage now writes `BuildEDNSTTL(RcodeBadCookie>>4, …)`, mirroring the BADVERS site in the request-policy stage. Asserted by `TestServeDNS_DNSCookie_Invalid`.
+- **dnssec: three pooled-message leaks fixed in the chain-build fetchers**: `fetchDNSKEY`, `fetchDNSKEYAndSigs`, and `fetchNSEC3PARAM` leaked one pooled `*Message` per call and returned records that `Release()` would zero; every path now Releases the message and returned records are detached via a `detachRecord` helper. Regression-tested by the four `fetch*_pool_leak_test.go` suites.
+- **odoh: the target snapshots the response wire at Write and no longer double-Releases**: the ODoH target packed the inner handler's response *after* the pipeline had Released it at stage exit (empty/corrupted ODoH answers under concurrency) and Released it a second time (double-Put into `messagePool`). `odohResponseWriter` now captures the wire inside `Write` and the target never reads or Releases the handler's message. Guarded by `TestODoHTarget_PipelineReleasedResponseEncrypted`.
+- **doh: JSON responses snapshotted via `Message.Copy`**: `jsonResponseWriter` held the handler's response pointer while the JSON handler encoded *and* Released it after the pipeline's stage-exit Release — upstream-path `application/dns-json` answers were Status-0/empty and the pooled message was double-Put. The writer now stores a detached `Message.Copy()`.
+- **resolver: DNAME synthesis deep-copies owner and rdata**: the synthesized DNAME record shared its `*Name` and `*RDataDNAME` with the pooled upstream response, which `Release()` then recycled; the copy is now fully detached.
+- **cmd: test fixtures under single ownership**: `mockUpstream`, `mockResolverTransport`, and the dnssec/ODoH stubs return detached per-call copies (shared templates were put into `messagePool` while still in use — the dirt source behind several order-dependent failures), `mockResolverTransport` echoes the query TXID per the resolver's RFC 5452 binding, and `captureWriter` snapshots with `Message.Copy()` (wire round-trips normalize extended RCODEs).
+
 ## [1.1.9] — 2026-09-08
 
 ### Fixed
