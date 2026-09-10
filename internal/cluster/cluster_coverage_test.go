@@ -80,80 +80,6 @@ func TestCluster_Start_WithSuccessfulSeedJoin(t *testing.T) {
 		t.Error("Expected cluster to be started")
 	}
 }
-
-func TestCluster_cacheSyncLoop(t *testing.T) {
-	logger := util.NewLogger(util.INFO, util.TextFormat, nil)
-	cacheCfg := cache.Config{Capacity: 1000}
-	dnsCache := cache.New(cacheCfg)
-
-	cfg := Config{
-		Enabled:              true,
-		NodeID:               "test-node",
-		BindAddr:             "127.0.0.1",
-		GossipPort:           27949,
-		CacheSync:            true,
-		AllowInsecureCluster: true, // test: no encryption key required
-	}
-
-	c, err := New(cfg, logger, dnsCache)
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-
-	if err := c.Start(); err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-
-	// Send a cache sync event to exercise the cacheSyncLoop
-	c.cacheSyncChan <- CacheSyncEvent{
-		Type: "invalidate",
-		Keys: []string{"key1", "key2"},
-	}
-
-	// Allow some time for processing
-	time.Sleep(200 * time.Millisecond)
-
-	c.Stop()
-}
-
-func TestCluster_cacheSyncLoop_WithBroadcastError(t *testing.T) {
-	logger := util.NewLogger(util.INFO, util.TextFormat, nil)
-	cacheCfg := cache.Config{Capacity: 1000}
-	dnsCache := cache.New(cacheCfg)
-
-	cfg := Config{
-		Enabled:              true,
-		NodeID:               "test-node",
-		BindAddr:             "127.0.0.1",
-		GossipPort:           27970,
-		CacheSync:            true,
-		AllowInsecureCluster: true, // test: no encryption key required
-	}
-
-	c, err := New(cfg, logger, dnsCache)
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-
-	if err := c.Start(); err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-
-	// Stop the gossip protocol so broadcast fails, triggering the Warnf path
-	c.gossip.Stop()
-
-	// Send a cache sync event - broadcast will fail since gossip is stopped
-	c.cacheSyncChan <- CacheSyncEvent{
-		Type: "invalidate",
-		Keys: []string{"key3", "key4"},
-	}
-
-	// Allow some time for processing
-	time.Sleep(200 * time.Millisecond)
-
-	c.Stop()
-}
-
 func TestCluster_InvalidateCache_Enabled(t *testing.T) {
 	logger := util.NewLogger(util.INFO, util.TextFormat, nil)
 	cacheCfg := cache.Config{Capacity: 1000}
@@ -827,8 +753,8 @@ func TestCluster_Stop_Twice(t *testing.T) {
 
 	c.Stop()
 
-	// Stopping again should not panic (though cacheSyncChan is already closed)
-	// The second Stop call checks !c.started and returns nil
+	// Stopping again should not panic — the second Stop call checks
+	// !c.started and returns nil.
 	err := c.Stop()
 	if err != nil {
 		t.Errorf("Second Stop() should return nil, got %v", err)

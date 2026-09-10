@@ -45,18 +45,15 @@ type Cluster struct {
 	consensus ConsensusMode
 
 	// Cache integration
-	cache         *cache.Cache
-	cacheSyncChan chan CacheSyncEvent
+	cache *cache.Cache
 
 	// Event handlers
 	handlersMu sync.RWMutex
 	handlers   []EventHandler
 
 	// Status
-	started     bool
-	cacheClosed bool
-	mu          sync.RWMutex
-	wg          sync.WaitGroup
+	started bool
+	mu      sync.RWMutex
 
 	// Local health stats for health-based routing
 	localHealth NodeHealthStats
@@ -100,14 +97,6 @@ type Config struct {
 type PeerConfig struct {
 	NodeID string
 	Addr   string
-}
-
-// CacheSyncEvent represents a cache synchronization event.
-type CacheSyncEvent struct {
-	Type      string // "invalidate", "update"
-	Keys      []string
-	Source    string
-	Timestamp time.Time
 }
 
 // EventHandler handles cluster events.
@@ -175,7 +164,6 @@ func New(config Config, logger *util.Logger, dnsCache *cache.Cache) (*Cluster, e
 		config:               config,
 		logger:               logger,
 		cache:                dnsCache,
-		cacheSyncChan:        make(chan CacheSyncEvent, 100),
 		consensus:            config.ConsensusMode,
 		zoneManager:          config.ZoneManager,
 		configReloadCallback: config.ConfigReloadCallback,
@@ -395,12 +383,6 @@ func (c *Cluster) Start() error {
 		c.logger.Infof("Cluster listening on %s:%d (SWIM)", c.config.BindAddr, c.config.GossipPort)
 	}
 
-	// Start cache sync processor (works with both modes)
-	if c.config.CacheSync {
-		c.wg.Add(1)
-		go c.cacheSyncLoop()
-	}
-
 	c.started = true
 	c.logger.Infof("Cluster started with node ID %s", c.config.NodeID)
 
@@ -415,12 +397,6 @@ func (c *Cluster) Stop() error {
 		return nil
 	}
 
-	// Atomically close cache sync channel if not already closed.
-	// Must set cacheClosed BEFORE close() to prevent double-close race.
-	if !c.cacheClosed {
-		c.cacheClosed = true
-		close(c.cacheSyncChan)
-	}
 	c.started = false
 
 	if c.consensus == ConsensusRaft {
@@ -434,9 +410,6 @@ func (c *Cluster) Stop() error {
 	}
 	c.logger.Info("Cluster stopped")
 	c.mu.Unlock()
-
-	// Wait for cacheSyncLoop to finish
-	c.wg.Wait()
 
 	return nil
 }
@@ -1130,21 +1103,6 @@ func isLoopbackHost(seed string) bool {
 	}
 	// Also treat by-name localhost variants as loopback
 	return host == "localhost" || host == "::1" || host == "127.0.0.1"
-}
-
-// cacheSyncLoop processes cache synchronization events.
-func (c *Cluster) cacheSyncLoop() {
-	defer c.wg.Done()
-	for event := range c.cacheSyncChan {
-		switch event.Type {
-		case "invalidate":
-			if c.gossip != nil {
-				if err := c.gossip.BroadcastCacheInvalidation(event.Keys); err != nil {
-					c.logger.Warnf("Failed to broadcast cache invalidation: %v", err)
-				}
-			}
-		}
-	}
 }
 
 // Stats contains cluster statistics.

@@ -61,6 +61,16 @@ func TestNewGossipProtocol(t *testing.T) {
 	}
 }
 
+// pickFreePort returns a random available UDP port.
+func pickFreePort() int {
+	l, err := net.ListenPacket("udp", "0.0.0.0:0")
+	if err != nil {
+		return 0
+	}
+	defer l.Close()
+	return l.LocalAddr().(*net.UDPAddr).Port
+}
+
 func TestNewGossipProtocolNormalizesInvalidConfig(t *testing.T) {
 	self := &Node{ID: "self", State: NodeStateAlive}
 	nl := NewNodeList(self)
