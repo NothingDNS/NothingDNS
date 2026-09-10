@@ -502,17 +502,43 @@ func (v *Validator) fetchDNSKEYAndSigs(ctx context.Context, zone string) (keys, 
 	if err != nil {
 		return nil, nil, err
 	}
+	// Query hands back a pooled *protocol.Message. The extracted records
+	// outlive this call (buildChain verifies signatures with them), but
+	// msg.Release() zeroes and pools every record it holds — so return
+	// detached copies. Sharing the RData pointers is safe: DNSSEC rdata
+	// types have no case in releaseRData, so Release never pools or
+	// mutates them. The Name is namePool-managed, hence the Copy.
+	defer msg.Release()
+
 	for _, rr := range msg.Answers {
 		switch rr.Type {
 		case protocol.TypeDNSKEY:
-			keys = append(keys, rr)
+			keys = append(keys, detachRecord(rr))
 		case protocol.TypeRRSIG:
 			if sig, ok := rr.Data.(*protocol.RDataRRSIG); ok && sig.TypeCovered == protocol.TypeDNSKEY {
-				sigs = append(sigs, rr)
+				sigs = append(sigs, detachRecord(rr))
 			}
 		}
 	}
 	return keys, sigs, nil
+}
+
+// detachRecord returns a copy of rr that stays valid after the pooled
+// message it came from is released. The record shell and Name are freshly
+// allocated (Name is recycled by namePool on Release); the RData pointer
+// is shared because protocol.releaseRData never pools or mutates the
+// DNSSEC rdata types (DNSKEY, RRSIG, DS, NSEC, NSEC3, NSEC3PARAM).
+func detachRecord(rr *protocol.ResourceRecord) *protocol.ResourceRecord {
+	if rr == nil {
+		return nil
+	}
+	return &protocol.ResourceRecord{
+		Name:  rr.Name.Copy(),
+		Type:  rr.Type,
+		Class: rr.Class,
+		TTL:   rr.TTL,
+		Data:  rr.Data,
+	}
 }
 
 // KeyTrap mitigation caps (VULN-040 / CVE-2023-50387).
@@ -1536,6 +1562,12 @@ func (v *Validator) fetchDNSKEY(ctx context.Context, zone string) ([]*protocol.R
 	if err != nil {
 		return nil, err
 	}
+	// Query hands back a pooled *protocol.Message; release it once the
+	// keys are extracted. Release also zeroes and pools the extracted
+	// records themselves — fetchDNSKEY currently has no callers, and any
+	// future caller must copy the result before reuse (see
+	// fetchdnskey_pool_leak_test.go, which mandates this fix shape).
+	defer msg.Release()
 
 	var keys []*protocol.ResourceRecord
 	for _, rr := range msg.Answers {
@@ -1747,6 +1779,11 @@ func (v *Validator) fetchNSEC3PARAM(ctx context.Context, zone string) (*protocol
 	if err != nil {
 		return nil, err
 	}
+	// Query hands back a pooled *protocol.Message; release it once the
+	// parameter is extracted. Returning the bare RData pointer is safe:
+	// RDataNSEC3PARAM has no case in protocol.releaseRData, so Release
+	// never pools or mutates it.
+	defer msg.Release()
 
 	for _, rr := range msg.Answers {
 		if rr.Type == protocol.TypeNSEC3PARAM {
