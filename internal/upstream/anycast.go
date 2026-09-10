@@ -223,16 +223,13 @@ func (g *AnycastGroup) SelectBackend(preferredRegion, preferredZone string) *Any
 				}
 			}
 		}
-
-		// Try any healthy backend in the preferred region
-		for _, b := range g.Backends {
-			if b == nil {
-				continue
-			}
-			if b.IsHealthy() && b.Region == preferredRegion {
-				return b
-			}
-		}
+		// If preferredZone was set but no backend matched, fall through
+		// to weighted selection over ALL healthy backends below. Do NOT
+		// short-circuit to the first region-match here — that would
+		// bypass load balancing when the preferred zone has a temporary
+		// outage. (Previously this had a second loop that returned the
+		// first region-match by slice order; that loop was dead code
+		// since the first loop already covers the zone-empty case.)
 	}
 
 	// Get all healthy backends
