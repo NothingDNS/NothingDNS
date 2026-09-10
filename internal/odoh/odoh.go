@@ -122,15 +122,24 @@ type ObliviousTarget struct {
 	keyPair *odohKeyPair
 }
 
-// odohResponseWriter captures a DNS response message from the handler.
+// odohResponseWriter captures the DNS response wire from the handler.
 // It implements server.ResponseWriter.
 type odohResponseWriter struct {
-	response *protocol.Message
+	// packed holds the response wire, snapshotted at Write time. The inner
+	// handler owns its response message's lifecycle — the pipeline Releases
+	// pooled responses at stage exit — so the target must not read or
+	// Release the message after ServeDNS returns.
+	packed []byte
 }
 
 func (rw *odohResponseWriter) Write(msg *protocol.Message) (int, error) {
-	rw.response = msg
-	return 0, nil
+	buf := make([]byte, msg.WireLength())
+	n, err := msg.Pack(buf)
+	if err != nil {
+		return 0, err
+	}
+	rw.packed = append([]byte(nil), buf[:n]...)
+	return n, nil
 }
 
 func (rw *odohResponseWriter) ClientInfo() *server.ClientInfo {
@@ -553,20 +562,16 @@ func (t *ObliviousTarget) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	rw := &odohResponseWriter{}
 	(&server.ServeDNSWithRecovery{Handler: t.handler}).ServeDNS(rw, query)
-	defer func() { rw.response.Release() }()
-	if rw.response == nil {
+	// The writer snapshotted the response wire at Write time; the inner
+	// handler/pipeline owns the response message's lifecycle (the pipeline
+	// Releases pooled responses at stage exit — releasing it here would be
+	// a double-Release of a pooled message).
+	if len(rw.packed) == 0 {
 		http.Error(w, "Failed to process query", http.StatusInternalServerError)
 		return
 	}
 
-	respLen := rw.response.WireLength()
-	buf := make([]byte, respLen)
-	if _, err := rw.response.Pack(buf); err != nil {
-		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
-		return
-	}
-
-	encryptedResponse, err := respCtx.encryptResponse(buf)
+	encryptedResponse, err := respCtx.encryptResponse(rw.packed)
 	if err != nil {
 		http.Error(w, "Encryption error", http.StatusInternalServerError)
 		return

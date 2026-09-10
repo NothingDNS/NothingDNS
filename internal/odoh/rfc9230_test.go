@@ -24,9 +24,27 @@ type rfc9230MockHandler struct {
 }
 
 func (h *rfc9230MockHandler) ServeDNS(w server.ResponseWriter, _ *protocol.Message) {
-	if h.response != nil {
-		_, _ = w.Write(h.response)
+	if h.response == nil {
+		return
 	}
+	// Single ownership: the ODoH target Releases the response message it is
+	// given after encrypting it (odoh.go defer rw.response.Release()), so
+	// hand it a detached Pack/Unpack copy — never the shared template
+	// fixture, whose reuse across requests would be corrupted by that
+	// release.
+	packed := make([]byte, h.response.WireLength())
+	n, err := h.response.Pack(packed)
+	if err != nil {
+		return
+	}
+	detached, err := protocol.UnpackMessage(packed[:n])
+	if err != nil {
+		return
+	}
+	_, _ = w.Write(detached)
+	// The ODoH writer snapshots the wire inside Write; release the detached
+	// copy afterwards for pooling hygiene.
+	detached.Release()
 }
 
 // TestRFC9230RoundTrip exercises the full ODoH flow with the conformant

@@ -49,11 +49,11 @@ func TestODoHResponseWriterWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Write() returned error: %v", err)
 	}
-	if n != 0 {
-		t.Errorf("Write() = %d, want 0", n)
+	if n <= 0 {
+		t.Errorf("Write() = %d, want > 0", n)
 	}
-	if rw.response == nil || rw.response.Header.ID != 42 {
-		t.Error("Write() did not store the response")
+	if len(rw.packed) == 0 {
+		t.Error("Write() did not snapshot the response wire")
 	}
 }
 
