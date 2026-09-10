@@ -441,6 +441,17 @@ func UnpackMessage(buf []byte) (*Message, error) {
 
 	msg := messagePool.Get().(*Message)
 	msg.RawBody = nil
+	// Enforce the zero-length section invariant at Get. Release() truncates
+	// before Put, but pooled messages have been observed carrying leftover
+	// Questions across pool cycles (a user mutating a message after
+	// Release), which made UnpackMessage return duplicate questions for
+	// single-question wire messages. Truncating here makes unpacking
+	// correct regardless of prior-user discipline; dropped leftover
+	// entries are simply unreferenced and GC-reclaimed.
+	msg.Questions = msg.Questions[:0]
+	msg.Answers = msg.Answers[:0]
+	msg.Authorities = msg.Authorities[:0]
+	msg.Additionals = msg.Additionals[:0]
 
 	// Unpack header
 	if err := msg.Header.Unpack(buf[:HeaderLen]); err != nil {
@@ -541,6 +552,25 @@ func UnpackMessage(buf []byte) (*Message, error) {
 		}
 		msg.Additionals = append(msg.Additionals, rr)
 		offset += n
+	}
+
+	// RFC 6891 §6.1.3: the OPT record's TTL carries the EDNS EXTENDED-RCODE
+	// in its upper 8 bits. The header only holds the low nibble, so the full
+	// response code is (EXTENDED-RCODE << 4) | nibble. Combine here so
+	// consumers (resolvers, stubs, validators) see BADVERS/BADCOOKIE/etc. as
+	// their real codes instead of the truncated nibble.
+	for _, rr := range msg.Additionals {
+		h := ParseEDNS0Header(rr)
+		if h == nil {
+			continue
+		}
+		// Header.Flags.RCODE is a uint8: extended codes whose upper byte
+		// exceeds 0x0F cannot be represented, so only combine when the full
+		// code fits.
+		if h.ExtendedRCODE != 0 && h.ExtendedRCODE <= 0x0F {
+			msg.Header.Flags.RCODE |= h.ExtendedRCODE << 4
+		}
+		break
 	}
 
 	return msg, nil
