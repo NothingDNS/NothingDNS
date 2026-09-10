@@ -52,7 +52,15 @@ type captureWriter struct {
 }
 
 func (w *captureWriter) Write(msg *protocol.Message) (int, error) {
-	w.msg = msg
+	if msg == nil {
+		w.msg = nil
+		return 0, nil
+	}
+	// Field-faithful deep copy: tests read w.msg after ServeDNS returns,
+	// while the pipeline Releases pooled responses at stage exit. Copy()
+	// preserves in-memory-only state (e.g. extended RCODEs in Header.Flags
+	// that a wire round-trip would mask to the low nibble).
+	w.msg = msg.Copy()
 	return 0, nil
 }
 func (w *captureWriter) ClientInfo() *server.ClientInfo { return w.client }
@@ -3968,6 +3976,18 @@ func TestServeDNS_DNSCookie_Invalid(t *testing.T) {
 	if w.msg.Header.Flags.RCODE != protocol.RcodeBadCookie {
 		t.Errorf("expected BADCOOKIE for invalid cookie, got %d", w.msg.Header.Flags.RCODE)
 	}
+	// Wire fidelity: BADCOOKIE is extended RCODE 23 — the OPT TTL must carry
+	// the extended byte (23>>4) or external clients decode the response as
+	// YXRRSET (7). CaptureWriter hands back a Message.Copy(), so this reads
+	// the response exactly as it was written.
+	respOpt := w.msg.GetOPT()
+	if respOpt == nil {
+		t.Fatal("expected OPT record on BADCOOKIE response")
+	}
+	eh := protocol.ParseEDNS0Header(respOpt)
+	if eh == nil || eh.ExtendedRCODE != protocol.RcodeBadCookie>>4 {
+		t.Errorf("OPT TTL extended RCODE mismatch: got %+v, want %d", eh, protocol.RcodeBadCookie>>4)
+	}
 }
 
 func TestCookieStage_ReturnsBadCookieWriteError(t *testing.T) {
@@ -4743,7 +4763,23 @@ type mockUpstream struct {
 }
 
 func (m *mockUpstream) Query(msg *protocol.Message) (*protocol.Message, error) {
-	return m.resp, m.err
+	if m.resp == nil {
+		return nil, m.err
+	}
+	// Single ownership: the pipeline Releases the response message it
+	// receives (upstreamStage defer resp.Release()), so return a detached
+	// Pack/Unpack copy — never the stored template, whose reuse across
+	// calls would put the same pointer into messagePool repeatedly.
+	packed := make([]byte, m.resp.WireLength())
+	n, err := m.resp.Pack(packed)
+	if err != nil {
+		return nil, err
+	}
+	detached, err := protocol.UnpackMessage(packed[:n])
+	if err != nil {
+		return nil, err
+	}
+	return detached, m.err
 }
 
 func TestDNSSECResolverAdapter(t *testing.T) {
@@ -6738,7 +6774,26 @@ type mockResolverTransport struct {
 }
 
 func (m *mockResolverTransport) QueryContext(ctx context.Context, msg *protocol.Message, addr string) (*protocol.Message, error) {
-	return m.resp, m.err
+	if m.resp == nil {
+		return nil, m.err
+	}
+	// Single ownership: the resolver Releases the response message it
+	// receives, so return a detached Pack/Unpack copy — never the shared
+	// stored template, whose reuse across queries would leave the same
+	// pointer simultaneously in messagePool and in use by the resolver.
+	packed := make([]byte, m.resp.WireLength())
+	n, err := m.resp.Pack(packed)
+	if err != nil {
+		return nil, err
+	}
+	detached, err := protocol.UnpackMessage(packed[:n])
+	if err != nil {
+		return nil, err
+	}
+	// Real upstreams echo the query's transaction ID (RFC 1035 §4.1.1);
+	// the resolver's TXID binding (RFC 5452) rejects responses that do not.
+	detached.Header.ID = msg.Header.ID
+	return detached, m.err
 }
 
 // failingResolverTransport always returns an error.
