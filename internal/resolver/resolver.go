@@ -633,6 +633,22 @@ func (r *Resolver) sendQuery(ctx context.Context, name string, qtype uint16, add
 		return nil, fmt.Errorf("resolver: nil response from %s", addr)
 	}
 
+	// TXID binding: we generated a random transaction ID via nextSecureID()
+	// precisely so a response can be bound to this query (RFC 5452 / RFC 1035
+	// §4.1.1). Without this check, a spoofed, stale, or replayed response
+	// with a different ID would be accepted as the answer to THIS query —
+	// and because sendQuery is the path the DNSSEC validator's chain-build
+	// fetches (fetchDS / fetchDNSKEYAndSigs / fetchNSEC3PARAM) take via
+	// Resolve(), a forged DNSKEY/DS/NSEC3PARAM could authenticate the chain
+	// and compromise DNSSEC validation for the entire subtree. The same
+	// guard already exists in upstream.Client and LoadBalancer (commit
+	// dac7975). UnpackMessage returns a pooled *Message; release it before
+	// returning so the pool isn't drained on mismatch.
+	if resp.Header.ID != id {
+		resp.Release()
+		return nil, fmt.Errorf("resolver: TXID mismatch (got %d, want %d)", resp.Header.ID, id)
+	}
+
 	// Handle referral with TC bit — re-query over TCP (handled by transport)
 	if resp.Header.Flags.TC {
 		return resp, nil

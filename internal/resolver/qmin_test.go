@@ -78,7 +78,14 @@ func (t *mockQminTransport) QueryContext(_ context.Context, msg *protocol.Messag
 	q := msg.Questions[0]
 	t.queries = append(t.queries, qminQuery{name: q.Name.String(), qtype: q.QType})
 	if t.handler != nil {
-		return t.handler(q.Name.String(), q.QType), nil
+		resp := t.handler(q.Name.String(), q.QType)
+		// Echo the query's transaction ID. sendQuery() now rejects
+		// mismatched TXIDs (security: prevents spoofed/replayed responses
+		// from being accepted as the answer to a chain-of-trust fetch).
+		if resp != nil {
+			resp.Header.ID = msg.Header.ID
+		}
+		return resp, nil
 	}
 	return nil, nil
 }
