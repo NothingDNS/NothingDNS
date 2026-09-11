@@ -627,12 +627,16 @@ func (c *AXFRClient) receiveAXFRResponse(conn net.Conn, expectedTXID uint16, key
 			return nil, fmt.Errorf("reading message: %w", err)
 		}
 
-		// Parse message
+		// Parse message. The message is intentionally NOT released: its
+		// records are appended to the returned slice below, and Release()
+		// would zero them (Type/TTL reset, Name/RData nil'd) before the
+		// caller reads them. Unreleased pooled messages are reclaimed by
+		// the garbage collector — the documented safe fallback in the
+		// protocol pool contract.
 		msg, err := protocol.UnpackMessage(msgBuf)
 		if err != nil {
 			return nil, fmt.Errorf("unpacking message: %w", err)
 		}
-		defer msg.Release()
 
 		// Verify the response transaction ID matches the request.
 		// This prevents a hostile or misbehaving master from injecting
