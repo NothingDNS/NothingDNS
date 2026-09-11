@@ -111,10 +111,13 @@ function AppContent() {
   useEffect(() => { setStreamConnected(connected); }, [connected, setStreamConnected]);
 
   useEffect(() => {
-    // Validate token on mount if authenticated
+    // Validate token on mount if authenticated. Clear the session ONLY on an
+    // explicit 401 (invalid/expired token): a 500/502/503 from a restart or
+    // maintenance proxy is a server problem and must not log a valid
+    // operator out — same 401-only convention as api.ts and useApi.ts.
     if (isAuthenticated && token) {
       fetch('/api/v1/status', { headers: { Authorization: `Bearer ${token}` } })
-        .then((r) => { if (!r.ok) useAuthStore.getState().clearAuth(); })
+        .then((r) => { if (r.status === 401) useAuthStore.getState().clearAuth(); })
         .catch(() => {});
     }
   }, [isAuthenticated, token]);
