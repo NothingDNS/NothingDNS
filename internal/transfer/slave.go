@@ -474,6 +474,17 @@ func (sm *SlaveManager) applyTransferredZone(slaveZone *SlaveZone, records []*pr
 		return fmt.Errorf("zone transfer does not begin with an SOA record")
 	}
 
+	// RFC 1982: never commit a transfer whose serial is older than the one
+	// we already hold — a stale or replayed response must not roll the zone
+	// back. A fresh slave (LastSerial == 0, never transferred) accepts any
+	// serial; an equal serial is still honored (lone-SOA refresh,
+	// idempotent re-transfer).
+	if leadingSOA, ok := records[0].Data.(*protocol.RDataSOA); ok {
+		if cur := slaveZone.GetLastSerial(); cur != 0 && serialIsNewer(cur, leadingSOA.Serial) {
+			return fmt.Errorf("ignoring stale zone transfer: received serial %d is older than current %d", leadingSOA.Serial, cur)
+		}
+	}
+
 	// A lone SOA means the slave is already current (no changes). Refresh the
 	// timers/serial but keep the existing zone data.
 	if len(records) == 1 {
@@ -533,6 +544,19 @@ func (sm *SlaveManager) applyIncrementalIXFR(slaveZone *SlaveZone, base *zone.Zo
 	targetSOA, ok := records[0].Data.(*protocol.RDataSOA)
 	if !ok {
 		return fmt.Errorf("incremental IXFR does not begin with an SOA")
+	}
+
+	// RFC 1995 §4: the first interior SOA carries the diff's base serial; it
+	// must match the serial this slave already holds, or the deletions and
+	// additions were computed for a different generation of the zone. The
+	// server side enforces the same continuity (buildIncrementalIXFR).
+	if cur := slaveZone.GetLastSerial(); cur != 0 {
+		if len(records) < 3 {
+			return fmt.Errorf("incremental IXFR too short to contain a diff")
+		}
+		if baseSOA, ok := records[1].Data.(*protocol.RDataSOA); ok && baseSOA.Serial != cur {
+			return fmt.Errorf("IXFR base serial %d does not match slave serial %d", baseSOA.Serial, cur)
+		}
 	}
 
 	// Clone the base zone so a mid-apply error cannot corrupt the live zone.
