@@ -60,22 +60,30 @@ func SPAHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 
-		// Serve static assets directly
+		// Serve static assets directly. Vite content-hashes these
+		// filenames, so their content is immutable.
 		if strings.HasPrefix(path, "/assets/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 			fileServer.ServeHTTP(w, r)
 			return
 		}
 
-		// Serve known static files
+		// Serve known static files. These sit unhashed at the dist root
+		// (theme-init.js, icons.svg) and are referenced by index.html
+		// directly — they must revalidate on every load.
 		if strings.HasSuffix(path, ".svg") || strings.HasSuffix(path, ".png") ||
 			strings.HasSuffix(path, ".ico") || strings.HasSuffix(path, ".js") ||
 			strings.HasSuffix(path, ".css") || strings.HasSuffix(path, ".woff2") {
+			w.Header().Set("Cache-Control", "no-cache")
 			fileServer.ServeHTTP(w, r)
 			return
 		}
 
-		// All other routes: serve index.html for SPA client-side routing
+		// All other routes: serve index.html for SPA client-side routing.
+		// no-cache: a stale cached index would reference rotated hashed
+		// assets that no longer exist after a redeploy.
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
 		if _, err := w.Write(indexHTML); err != nil {
 			return
 		}
