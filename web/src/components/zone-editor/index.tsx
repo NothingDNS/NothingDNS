@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -172,15 +172,35 @@ export function ZoneEditor({ zoneName, initialRecords, onRefresh }: ZoneEditorPr
   // Pair each record with its REAL index before filtering, so selection /
   // edit / delete always target the correct row even when two rows are
   // structurally identical (indexOf would return the first match).
-  const visibleRows = records
-    .map((record, index) => ({ record, index }))
-    .filter(({ record: r }) => {
-      const matchesSearch = !search ||
-        r.name.toLowerCase().includes(search.toLowerCase()) ||
-        r.data.toLowerCase().includes(search.toLowerCase());
-      const matchesType = !typeFilter || r.type === typeFilter;
-      return matchesSearch && matchesType;
+  const visibleRows = useMemo(
+    () =>
+      records
+        .map((record, index) => ({ record, index }))
+        .filter(({ record: r }) => {
+          const matchesSearch = !search ||
+            r.name.toLowerCase().includes(search.toLowerCase()) ||
+            r.data.toLowerCase().includes(search.toLowerCase());
+          const matchesType = !typeFilter || r.type === typeFilter;
+          return matchesSearch && matchesType;
+        }),
+    [records, search, typeFilter],
+  );
+
+  // Selection follows the visible window: filtering can hide rows, and a
+  // hidden row must never be deleted by the bulk action the operator sees.
+  // Drop selected rows the current filter hides.
+  useEffect(() => {
+    setSelectedRecords(prev => {
+      const visible = new Set(visibleRows.map(({ index }) => index));
+      let changed = false;
+      const next = new Set<number>();
+      for (const i of prev) {
+        if (visible.has(i)) next.add(i);
+        else changed = true;
+      }
+      return changed ? next : prev;
     });
+  }, [visibleRows]);
 
   const selectAll = useCallback(() => {
     const visibleIndices = records
@@ -404,7 +424,12 @@ export function ZoneEditor({ zoneName, initialRecords, onRefresh }: ZoneEditorPr
                       <InlineEdit
                         value={String(r.ttl)}
                         label={`TTL for ${r.type} record ${r.name}`}
-                        onSave={v => updateRecord(i, 'ttl', parseInt(v, 10) || r.ttl)}
+                        onSave={v => {
+                          // parseInt('0') is 0 — falsy — so `|| r.ttl` silently reverted an
+                          // explicit TTL 0 (no caching) to the record's previous value.
+                          const parsed = parseInt(v, 10);
+                          updateRecord(i, 'ttl', Number.isNaN(parsed) ? r.ttl : parsed);
+                        }}
                         onFinish={() => saveEdit(i)}
                         edited={r.edited}
                         type="number"

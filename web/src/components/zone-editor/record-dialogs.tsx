@@ -64,12 +64,16 @@ export function AddRecordDialog({ open, onClose, zoneName, initialType, onSaved 
       setError(nextData.error);
       return;
     }
+    // parseInt('0') is 0 — falsy — so `|| 3600` silently rewrote an
+    // explicit TTL 0 (no caching) to an hour. Only NaN falls back to the
+    // default.
+    const parsedTtl = Number.parseInt(ttl, 10);
     setSaving(true);
     try {
       await api('POST', `/api/v1/zones/${encodeURIComponent(zoneName)}/records`, {
         name: name.trim(),
         type,
-        ttl: parseInt(ttl) || 3600,
+        ttl: Number.isNaN(parsedTtl) ? 3600 : parsedTtl,
         data: nextData.data
       });
       setName(''); setType('A'); setTtl('3600'); setFields({ ...defaultRecordFields });
@@ -198,11 +202,15 @@ export function EditRecordDialog({ open, record, onClose, onSave }: {
       setError(nextData.error);
       return;
     }
+    // parseInt('0') is 0 — falsy — so `|| 3600` silently rewrote an
+    // explicit TTL 0 (no caching) to an hour. Only NaN falls back to the
+    // default.
+    const parsedTtl = Number.parseInt(ttl, 10);
     setSaving(true);
     try {
       await onSave({
         name: name.trim(),
-        ttl: parseInt(ttl) || 3600,
+        ttl: Number.isNaN(parsedTtl) ? 3600 : parsedTtl,
         data: nextData.data,
       });
     } catch (e) {
