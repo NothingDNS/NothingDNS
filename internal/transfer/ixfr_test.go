@@ -1216,6 +1216,9 @@ func TestIXFRClient_receiveIXFRResponse_SingleSOA(t *testing.T) {
 	}
 
 	go func() {
+		// RFC 1995 §2: an up-to-date IXFR response is a single message
+		// carrying one SOA record. The first single-SOA message is
+		// terminal — a real server never sends a second one.
 		msg1 := &protocol.Message{
 			Header: protocol.Header{
 				ID: 0x1234, Flags: protocol.Flags{QR: true, RCODE: protocol.RcodeSuccess},
@@ -1223,22 +1226,17 @@ func TestIXFRClient_receiveIXFRResponse_SingleSOA(t *testing.T) {
 			Answers: []*protocol.ResourceRecord{soaRR},
 		}
 		ixfrSendTCPMessage(serverConn, msg1, t)
-
-		msg2 := &protocol.Message{
-			Header: protocol.Header{
-				ID: 0x1234, Flags: protocol.Flags{QR: true, RCODE: protocol.RcodeSuccess},
-			},
-			Answers: []*protocol.ResourceRecord{soaRR},
-		}
-		ixfrSendTCPMessage(serverConn, msg2, t)
 	}()
 
 	records, err := client.receiveIXFRResponse(clientConn, 0x1234, nil)
 	if err != nil {
 		t.Fatalf("receiveIXFRResponse returned error: %v", err)
 	}
-	if len(records) != 2 {
-		t.Errorf("Expected 2 SOA records, got %d", len(records))
+	if len(records) != 1 {
+		t.Errorf("Expected 1 SOA record (RFC 1995 §2 up-to-date response), got %d", len(records))
+	}
+	if len(records) > 0 && records[0].Type != protocol.TypeSOA {
+		t.Errorf("Expected an SOA record, got type %d", records[0].Type)
 	}
 }
 
