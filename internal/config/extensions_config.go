@@ -32,13 +32,15 @@ type ODoHConfig struct {
 	// Proxy URL (public URL where ODoH is hosted)
 	ProxyURL string `yaml:"proxy_url"`
 
-	// HPKE key encapsulation method (4=X25519)
+	// HPKE key encapsulation method (32 = X25519 / 0x0020 — the only KEM
+	// the odoh runtime implements; must be 32, see isValidODoHKEM)
 	KEM int `yaml:"kem"`
 
 	// HPKE key derivation function (1=HKDF-SHA256)
 	KDF int `yaml:"kdf"`
 
-	// HPKE authenticated encryption (1=AES-256-GCM, 3=AES-128-GCM)
+	// HPKE authenticated encryption (1=AES-128-GCM; per RFC 9180 §7.3:
+	// 2=AES-256-GCM, 3=ChaCha20-Poly1305 — the runtime implements 1)
 	AEAD int `yaml:"aead"`
 }
 

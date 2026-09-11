@@ -363,10 +363,11 @@ func (c *Config) validateExtensions() []string {
 	}
 
 	if c.ODoH.Enabled {
-		if c.ODoH.TargetURL == "" {
-			errors = appendODoHSuiteValidation(errors, "odoh", "kem", "kdf", "aead",
-				c.ODoH.KEM, c.ODoH.KDF, c.ODoH.AEAD)
-		}
+		// The suite validation runs whenever ODoH is enabled: a KEM/KDF/AEAD
+		// the odoh runtime rejects produces an unusable ObliviousDoHConfigs
+		// regardless of whether a target URL is configured.
+		errors = appendODoHSuiteValidation(errors, "odoh", "kem", "kdf", "aead",
+			c.ODoH.KEM, c.ODoH.KDF, c.ODoH.AEAD)
 		errors = appendURLValidation(errors, "odoh", "target_url", c.ODoH.TargetURL)
 		errors = appendURLValidation(errors, "odoh", "proxy_url", c.ODoH.ProxyURL)
 	}
@@ -409,7 +410,11 @@ func appendODoHSuiteValidation(errors []string, prefix, kemField, kdfField, aead
 }
 
 func isValidODoHKEM(kem int) bool {
-	return kem == 4
+	// 0x0020 (32) = DHKEM(X25519, HKDF-SHA256) — the only KEM the odoh
+	// runtime implements (internal/odoh parseConfigContents rejects the
+	// rest with "odoh: unsupported suite"). The former value 4 matched no
+	// HPKE KEM and made the runtime-implemented suite unconfigurable.
+	return kem == 32
 }
 
 func isValidODoHKDF(kdf int) bool {
