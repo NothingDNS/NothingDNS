@@ -200,6 +200,11 @@ func (l *Logger) formatText(fields Fields) string {
 	timestamp := fields["time"].(string)
 	level := fields["level"].(string)
 	msg := fields["msg"].(string)
+	// Sanitize the message with the same CR/LF replacement as field values:
+	// upstream error strings can carry attacker-controlled newlines that
+	// forge fake log entries in the text format.
+	msg = strings.ReplaceAll(msg, "\r", " ")
+	msg = strings.ReplaceAll(msg, "\n", " ")
 
 	result := fmt.Sprintf("[%s] %s: %s", timestamp, level, msg)
 
