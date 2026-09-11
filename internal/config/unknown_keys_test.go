@@ -146,3 +146,30 @@ func TestYamlFields_SkipsUntaggedAndIgnored(t *testing.T) {
 		t.Errorf("yamlFields returned %d entries, want 2: %v", len(got), got)
 	}
 }
+
+// TestWarnUnknownNestedKeys_SequenceItems covers list-of-structs sections:
+// keys inside sequence items (dnssec.keys, slave zones, upstreams) go just as
+// silent when typo'd as mapping keys — and derefType already dereferences
+// slices, showing the walk was meant to reach them.
+func TestWarnUnknownNestedKeys_SequenceItems(t *testing.T) {
+	node := parseConfigNode(t, strings.Join([]string{
+		"dnssec:",
+		"  signing:",
+		"    keys:",
+		"      - private_key: /keys/a.pem",
+		"        algorythm: ECDSAP256SHA256", // real key is algorithm
+		"      - private_key: /keys/b.pem",
+		"",
+	}, "\n"))
+
+	out := captureWarnings(t, func() {
+		warnUnknownNestedKeys(node, reflect.TypeOf(Config{}))
+	})
+
+	if !strings.Contains(out, `unknown key "algorythm" in section "dnssec.signing.keys"`) {
+		t.Errorf("the typo inside a sequence item was not reported; warnings were:\n%s", out)
+	}
+	if strings.Contains(out, `"private_key"`) || strings.Contains(out, `"keys" in section "dnssec"`) {
+		t.Errorf("the valid keys were reported:\n%s", out)
+	}
+}
