@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -41,20 +41,29 @@ export function ClusterPage() {
   const [error, setError] = useState('');
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
 
+  // Generation guard for load(): the 10s polling interval and the Refresh
+  // button can overlap an in-flight load, and an older response landing
+  // after a newer one must not overwrite fresher state (api() has no
+  // timeout, so a stalled request can stay in flight indefinitely).
+  const loadGeneration = useRef(0);
+
   const load = async () => {
+    const gen = ++loadGeneration.current;
     setLoading(true);
     try {
       const [data, st] = await Promise.all([
         api<{ nodes: ClusterNode[] }>('GET', '/api/v1/cluster/nodes'),
         api<ClusterStatus>('GET', '/api/v1/cluster/status').catch(() => null),
       ]);
+      if (gen !== loadGeneration.current) return; // superseded by a newer load
       setNodes(data.nodes || []);
       setStatus(st);
       setError('');
     } catch (e: unknown) {
+      if (gen !== loadGeneration.current) return; // superseded
       setError(e instanceof Error ? e.message : 'Failed to load cluster status');
     } finally {
-      setLoading(false);
+      if (gen === loadGeneration.current) setLoading(false);
     }
   };
 

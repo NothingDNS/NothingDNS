@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { RPZPage } from './rpz';
 
@@ -143,5 +143,113 @@ describe('RPZPage', () => {
     expect(await screen.findByText('bad.example.com')).toBeInTheDocument();
     await user.click(screen.getByLabelText('Delete rule bad.example.com'));
     expect(screen.getByText(/Delete rule "bad.example.com"/)).toBeInTheDocument();
+  });
+
+  it('ignores stale responses that resolve after a newer load', async () => {
+    // fetchData has overlapping triggers: the 10s polling interval plus the
+    // toggle/add/delete handlers, which each call fetchData() right after
+    // their mutation. A response from a superseded load landing after a
+    // newer one's must NOT overwrite fresher state.
+    vi.useFakeTimers();
+    try {
+      // Mount: both requests resolve, the page renders.
+      mockFetch
+        .mockImplementationOnce(() => mockJsonResponse(sampleStats))
+        .mockImplementationOnce(() => mockJsonResponse(sampleRules));
+      render(<RPZPage />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(screen.getByText('bad.example.com')).toBeInTheDocument();
+
+      // Tick 1 (t=10s): the interval's fetchData starts; its stats hang.
+      let resolveTickStats!: (value: unknown) => void;
+      mockFetch
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              resolveTickStats = resolve;
+            }),
+        )
+        .mockImplementationOnce(() => mockJsonResponse(sampleRules));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10000);
+      });
+
+      // Tick 2 (t=20s): the next fetchData resolves FRESH (total_rules=999).
+      mockFetch
+        .mockImplementationOnce(() => mockJsonResponse({ ...sampleStats, total_rules: 999 }))
+        .mockImplementationOnce(() => mockJsonResponse(sampleRules));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10000);
+      });
+      expect(screen.getByText('999')).toBeInTheDocument();
+
+      // Tick 1's stale stats finally land. They must be ignored.
+      resolveTickStats(mockJsonResponse({ ...sampleStats, total_rules: 1 }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.queryByText('1')).not.toBeInTheDocument();
+      expect(screen.getByText('999')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ignores late rejections from superseded loads', async () => {
+    // The secondary branch: a superseded load's rejection landing after the
+    // next load's success must not flip a good render into the error page.
+    vi.useFakeTimers();
+    try {
+      // Mount: both requests resolve, the page renders.
+      mockFetch
+        .mockImplementationOnce(() => mockJsonResponse(sampleStats))
+        .mockImplementationOnce(() => mockJsonResponse(sampleRules));
+      render(<RPZPage />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(screen.getByText('bad.example.com')).toBeInTheDocument();
+
+      // Tick 1 (t=10s): the interval's fetchData starts; its stats hang and
+      // will be REJECTED late (the api() 10s timeout's abort).
+      let rejectTickStats!: (reason?: unknown) => void;
+      mockFetch
+        .mockImplementationOnce(
+          (_path: string, init?: RequestInit) =>
+            new Promise((_resolve, reject) => {
+              rejectTickStats = reject;
+              init?.signal?.addEventListener('abort', () => {
+                reject(new DOMException('The operation was aborted.', 'AbortError'));
+              });
+            }),
+        )
+        .mockImplementationOnce(() => mockJsonResponse(sampleRules));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10000);
+      });
+
+      // Tick 2 (t=20s): the next fetchData resolves FRESH.
+      mockFetch
+        .mockImplementationOnce(() => mockJsonResponse({ ...sampleStats, total_rules: 999 }))
+        .mockImplementationOnce(() => mockJsonResponse(sampleRules));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10000);
+      });
+      expect(screen.getByText('999')).toBeInTheDocument();
+
+      // Tick 1's late rejection lands. It must be ignored: DOMException is
+      // not an Error subclass here, so fetchData renders the fallback
+      // message via ErrorState — its appearance is the bug.
+      rejectTickStats(new DOMException('The operation was aborted.', 'AbortError'));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.queryByText('Failed to load RPZ data')).not.toBeInTheDocument();
+      expect(screen.getByText('999')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

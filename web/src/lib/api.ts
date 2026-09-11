@@ -67,7 +67,20 @@ export async function api<T = unknown>(
 	if (token) headers.Authorization = `Bearer ${token}`;
 	const opts: RequestInit = { method, headers };
 	if (body) opts.body = JSON.stringify(body);
-	const resp = await fetch(`${API_BASE}${path}`, opts);
+	// Mirror fetchApi's 10s timeout: a stalled upstream must not leave the
+	// request pending forever (with the dashboard's 10s polling pattern, each
+	// tick would otherwise pile up another permanently in-flight connection).
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), 10_000);
+	let resp: Response;
+	try {
+		resp = await fetch(`${API_BASE}${path}`, {
+			...opts,
+			signal: controller.signal,
+		});
+	} finally {
+		clearTimeout(timeout);
+	}
 
 	// Global 401 handling: a token that expired mid-session must bounce the
 	// user back to login, not surface "HTTP 401" on every page. Clearing auth

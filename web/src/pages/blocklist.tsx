@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -17,11 +17,27 @@ export function BlocklistPage() {
   const [newFile, setNewFile] = useState('');
   const [toggling, setToggling] = useState(false);
 
+  // Generation guard for fetchStatus(): the 10s polling interval and the
+  // toggle/add handlers can overlap an in-flight load, and an older
+  // snapshot — or its late rejection — must not overwrite fresher state
+  // (e.g. the badge flipping back after a successful toggle).
+  const fetchStatusGeneration = useRef(0);
+
   const fetchStatus = () => {
+    const gen = ++fetchStatusGeneration.current;
     api<BlocklistStatus>('GET', '/api/v1/blocklists')
-      .then((d) => { setStatus(d); setError(null); })
-      .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load blocklist status'))
-      .finally(() => setLoading(false));
+      .then((d) => {
+        if (gen !== fetchStatusGeneration.current) return; // superseded by a newer load
+        setStatus(d);
+        setError(null);
+      })
+      .catch((e) => {
+        if (gen !== fetchStatusGeneration.current) return; // superseded
+        setError(e instanceof Error ? e.message : 'Failed to load blocklist status');
+      })
+      .finally(() => {
+        if (gen === fetchStatusGeneration.current) setLoading(false);
+      });
   };
 
   useEffect(() => {
