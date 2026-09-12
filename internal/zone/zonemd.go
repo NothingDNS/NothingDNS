@@ -146,6 +146,9 @@ func collectZoneRRsets(z *Zone) ([][]byte, error) {
 			// that to decide whether to skip.
 			if rtype == typeRRSIG {
 				rdata := serializeRecordData(rec)
+				if rdata == nil {
+					return nil, fmt.Errorf("RRSIG record %s has malformed RDATA and cannot be serialized", rec.Name)
+				}
 				if len(rdata) >= 2 {
 					covered := uint16(rdata[0])<<8 | uint16(rdata[1])
 					if covered == typeZONEMD {
@@ -155,6 +158,9 @@ func collectZoneRRsets(z *Zone) ([][]byte, error) {
 			}
 
 			rdata := serializeRecordData(rec)
+			if rdata == nil {
+				return nil, fmt.Errorf("record %s type %s has malformed RDATA and cannot be serialized", rec.Name, rec.Type)
+			}
 			rrsetMap[rtype] = append(rrsetMap[rtype], rdata)
 			if _, ok := rrsetTTL[rtype]; !ok {
 				rrsetTTL[rtype] = rec.TTL
