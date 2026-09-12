@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -430,7 +431,7 @@ func (s *XoTServer) handleAXFRRequest(conn net.Conn, req *protocol.Message, clie
 
 	// Send AXFR response: SOA + all records + SOA (multiple messages allowed)
 	// RFC 5936: AXFR response is a sequence of messages, each with SOA at start/end of whole transfer
-	if err := s.sendAXFRResponse(conn, records); err != nil {
+	if err := s.sendAXFRResponse(conn, records, req.Header.ID); err != nil {
 		return
 	}
 }
@@ -479,7 +480,7 @@ func (s *XoTServer) handleIXFRRequest(conn net.Conn, req *protocol.Message, clie
 		return
 	}
 
-	if err := s.sendAXFRResponse(conn, records); err != nil {
+	if err := s.sendAXFRResponse(conn, records, req.Header.ID); err != nil {
 		return
 	}
 }
@@ -832,13 +833,11 @@ func (s *XoTServer) changeToRR(change zone.RecordChange) (*protocol.ResourceReco
 
 // sortRecordsCanonically sorts records in canonical order per RFC 4034.
 func (s *XoTServer) sortRecordsCanonically(records []*protocol.ResourceRecord) {
-	for i := 0; i < len(records)-1; i++ {
-		for j := i + 1; j < len(records); j++ {
-			if canonicalLess(records[j], records[i]) {
-				records[i], records[j] = records[j], records[i]
-			}
-		}
-	}
+	// O(n log n) stdlib sort — the previous O(n²) selection sort spent multiple
+	// seconds sorting a 20,000-record zone on the AXFR/IXFR transfer path.
+	sort.Slice(records, func(i, j int) bool {
+		return canonicalLess(records[i], records[j])
+	})
 }
 
 // canonicalLess returns true if a should come before b in canonical order.
@@ -883,7 +882,7 @@ func (s *XoTServer) sendErrorResponse(conn net.Conn, reqMsg *protocol.Message, r
 
 // sendAXFRResponse sends AXFR/IXFR records over the TLS connection.
 // Multiple messages may be sent, each length-prefixed.
-func (s *XoTServer) sendAXFRResponse(conn net.Conn, records []*protocol.ResourceRecord) error {
+func (s *XoTServer) sendAXFRResponse(conn net.Conn, records []*protocol.ResourceRecord, requestID uint16) error {
 	if len(records) == 0 {
 		return nil
 	}
@@ -904,7 +903,7 @@ func (s *XoTServer) sendAXFRResponse(conn net.Conn, records []*protocol.Resource
 
 		msg := &protocol.Message{
 			Header: protocol.Header{
-				ID:      0, // Use 0 for AXFR responses
+				ID:      requestID, // RFC 5936 §2.2: every message in the chain carries the query's ID — compliant secondaries reject the stream otherwise
 				Flags:   protocol.Flags{},
 				ANCount: uint16(end - i),
 			},
