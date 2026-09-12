@@ -258,19 +258,36 @@ func (p *parser) parse() (*Zone, error) {
 
 		// If we're inside a parenthesized multi-line record, accumulate lines
 		if p.parenDepth > 0 {
-			// Strip comments from continuation line
-			if idx := strings.Index(line, ";"); idx >= 0 {
-				line = strings.TrimSpace(line[:idx])
-			}
+			// Strip comments from continuation line — quote-aware: a ';' inside
+			// a quoted string (e.g. a DKIM TXT record) must not truncate it.
+			line = strings.TrimSpace(stripZoneComment(line))
 			if line == "" {
 				continue
 			}
 			p.lineBuf += " " + line
+			// Count parens quote-aware: parens inside quoted strings are
+			// content, not continuation markers.
+			inQuote := false
+			escape := false
 			for _, ch := range line {
-				if ch == '(' {
-					p.parenDepth++
-				} else if ch == ')' {
-					p.parenDepth--
+				if escape {
+					escape = false
+					continue
+				}
+				if ch == '\\' {
+					escape = true
+					continue
+				}
+				if ch == '"' {
+					inQuote = !inQuote
+					continue
+				}
+				if !inQuote {
+					if ch == '(' {
+						p.parenDepth++
+					} else if ch == ')' {
+						p.parenDepth--
+					}
 				}
 			}
 			if p.parenDepth <= 0 {
@@ -281,9 +298,35 @@ func (p *parser) parse() (*Zone, error) {
 				p.parenDepth = 0
 				combined := p.lineBuf
 				p.lineBuf = ""
-				combined = strings.ReplaceAll(combined, "(", " ")
-				combined = strings.ReplaceAll(combined, ")", " ")
-				combined = strings.Join(strings.Fields(combined), " ")
+				// Strip the continuation parens quote-aware: only unquoted
+				// parens are line-continuation markers; quoted parens are
+				// record content.
+				stripped := make([]rune, 0, len(combined))
+				inQuote = false
+				escape = false
+				for _, ch := range []rune(combined) {
+					if escape {
+						stripped = append(stripped, ch)
+						escape = false
+						continue
+					}
+					if ch == '\\' {
+						stripped = append(stripped, ch)
+						escape = true
+						continue
+					}
+					if ch == '"' {
+						inQuote = !inQuote
+						stripped = append(stripped, ch)
+						continue
+					}
+					if !inQuote && (ch == '(' || ch == ')') {
+						stripped = append(stripped, ' ')
+						continue
+					}
+					stripped = append(stripped, ch)
+				}
+				combined = strings.Join(strings.Fields(string(stripped)), " ")
 				if err := p.parseRecordOwned(combined, p.recordIndented); err != nil {
 					return nil, fmt.Errorf("%s:%d: %w", p.filename, p.lineStart, err)
 				}
@@ -314,10 +357,9 @@ func (p *parser) parse() (*Zone, error) {
 			p.parenDepth = 1
 			p.lineStart = p.lineNum
 			p.recordIndented = len(rawLine) > 0 && (rawLine[0] == ' ' || rawLine[0] == '\t')
-			// Strip comments from first line
-			if idx := strings.Index(line, ";"); idx >= 0 {
-				line = strings.TrimSpace(line[:idx])
-			}
+			// Strip comments from first line — quote-aware, same as the
+			// continuation lines and parseRecordOwned.
+			line = strings.TrimSpace(stripZoneComment(line))
 			p.lineBuf = line
 			continue
 		}
