@@ -178,6 +178,87 @@ const OpenAPISpec = `{
     { "basicAuth": [] }
   ],
   "paths": {
+    "/api/v1/acl": {
+      "get": { "tags": ["ACL"], "summary": "Get ACL rules", "security": [] },
+      "put": { "tags": ["ACL"], "summary": "Replace ACL rules" }
+    },
+    "/api/v1/auth/bootstrap": {
+      "post": { "tags": ["Auth"], "summary": "Initial admin setup", "description": "Creates the first admin account. Localhost-only and refused once users exist.", "security": [] }
+    },
+    "/api/v1/auth/login": {
+      "post": { "tags": ["Auth"], "summary": "Log in", "description": "Returns a bearer token and sets the session cookie.", "security": [] }
+    },
+    "/api/v1/auth/logout": {
+      "post": { "tags": ["Auth"], "summary": "Log out" }
+    },
+    "/api/v1/auth/roles": {
+      "get": { "tags": ["Auth"], "summary": "List available roles" }
+    },
+    "/api/v1/auth/users": {
+      "get": { "tags": ["Auth"], "summary": "List users" },
+      "post": { "tags": ["Auth"], "summary": "Create a user" },
+      "put": { "tags": ["Auth"], "summary": "Update a user" },
+      "delete": { "tags": ["Auth"], "summary": "Delete a user" }
+    },
+    "/api/v1/blocklists": {
+      "get": { "tags": ["Blocklists"], "summary": "List blocklist sources and stats" },
+      "post": { "tags": ["Blocklists"], "summary": "Add a blocklist source" },
+      "delete": { "tags": ["Blocklists"], "summary": "Remove a blocklist source" }
+    },
+    "/api/v1/config": {
+      "get": { "tags": ["Config"], "summary": "Get the effective configuration (secrets redacted)" }
+    },
+    "/api/v1/config/cache": {
+      "get": { "tags": ["Config"], "summary": "Get cache settings" },
+      "put": { "tags": ["Config"], "summary": "Update cache settings" }
+    },
+    "/api/v1/config/logging": {
+      "put": { "tags": ["Config"], "summary": "Update logging settings" }
+    },
+    "/api/v1/config/rrl": {
+      "put": { "tags": ["Config"], "summary": "Update response-rate-limiting settings" }
+    },
+    "/api/v1/csp-report": {
+      "post": { "tags": ["Security"], "summary": "Content-Security-Policy violation reports", "security": [] }
+    },
+    "/api/v1/dnssec/keys": {
+      "get": { "tags": ["DNSSEC"], "summary": "List DNSSEC signing keys (public metadata)" }
+    },
+    "/api/v1/dnssec/status": {
+      "get": { "tags": ["DNSSEC"], "summary": "Get DNSSEC signing status" }
+    },
+    "/api/v1/geoip/stats": {
+      "get": { "tags": ["GeoIP"], "summary": "Get GeoIP lookup statistics" }
+    },
+    "/api/v1/metrics/history": {
+      "get": { "tags": ["Metrics"], "summary": "Get historical metrics samples" }
+    },
+    "/api/v1/queries": {
+      "get": { "tags": ["Metrics"], "summary": "Query the query log" }
+    },
+    "/api/v1/rpz": {
+      "get": { "tags": ["RPZ"], "summary": "Get RPZ status and source list" },
+      "post": { "tags": ["RPZ"], "summary": "Add an RPZ source" },
+      "delete": { "tags": ["RPZ"], "summary": "Remove an RPZ source" }
+    },
+    "/api/v1/rpz/rules": {
+      "get": { "tags": ["RPZ"], "summary": "List RPZ rules" },
+      "post": { "tags": ["RPZ"], "summary": "Add an RPZ rule" },
+      "delete": { "tags": ["RPZ"], "summary": "Delete an RPZ rule" }
+    },
+    "/api/v1/server/config": {
+      "get": { "tags": ["Server"], "summary": "Get server configuration summary" }
+    },
+    "/api/v1/topdomains": {
+      "get": { "tags": ["Metrics"], "summary": "Get the most-queried domains" }
+    },
+    "/api/v1/upstreams": {
+      "get": { "tags": ["Upstreams"], "summary": "Get upstream servers and health" },
+      "put": { "tags": ["Upstreams"], "summary": "Replace upstream configuration" }
+    },
+    "/api/v1/zones/transfers": {
+      "get": { "tags": ["Zones"], "summary": "List recent zone transfers" }
+    },
     "/health": {
       "get": {
         "tags": ["Health"],
