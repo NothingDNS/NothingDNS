@@ -512,6 +512,12 @@ func (m *Manager) DeleteRecord(zoneName, name, rtype string) error {
 func (m *Manager) UpdateRecord(zoneName string, name, rtype, oldData string, newRecord Record) error {
 	zoneName = normalizeZoneName(zoneName)
 	rtype = strings.ToUpper(rtype)
+	// Parity with AddRecord: reject injection-shaped RDATA (embedded newlines,
+	// NULs) before it reaches the zone file writer — otherwise an update could
+	// inject a live record into the authoritative zone on the next persist.
+	if err := ValidateRecordData(newRecord.Name, newRecord.RData); err != nil {
+		return err
+	}
 	if newRecord.Class == "" {
 		newRecord.Class = "IN"
 	}
