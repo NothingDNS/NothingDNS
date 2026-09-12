@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -442,5 +443,117 @@ func TestNSECCacheEvictsLiveEntriesAtMaxSize(t *testing.T) {
 
 	if nc.Size() != 2 {
 		t.Fatalf("expected live NSEC cache to stay at max size 2, got %d", nc.Size())
+	}
+}
+
+// TestNSECCacheEntriesSurviveSourceMessageRelease pins the detached-copy
+// contract: AddFromResponse stores the NSEC Owner/NextDomain/TypeBitMap for
+// as long as the cache holds the entry, even though the production caller
+// (pipeline_stages.go:661) releases the pooled response message after the
+// stage. The entry must own copies, not shared references.
+func TestNSECCacheEntriesSurviveSourceMessageRelease(t *testing.T) {
+	nc := NewNSECCache(100)
+
+	// Build the response production-style: pack it, then unpack it so the
+	// records live in a POOLED message exactly like the pipeline's upstream
+	// responses (the released wire buffer is what shared references end up
+	// pointing into).
+	fresh := &protocol.Message{
+		Header: protocol.Header{
+			Flags: protocol.NewResponseFlags(protocol.RcodeNameError),
+		},
+		Questions: []*protocol.Question{
+			{Name: mustName("_covered.example.com."), QType: protocol.TypeA, QClass: protocol.ClassIN},
+		},
+		Authorities: []*protocol.ResourceRecord{
+			{
+				Name:  mustName("_covered.example.com."),
+				Type:  protocol.TypeSOA,
+				Class: protocol.ClassIN,
+				TTL:   300,
+				Data: &protocol.RDataSOA{
+					MName:   mustName("ns1.example.com."),
+					RName:   mustName("admin.example.com."),
+					Serial:  1,
+					Refresh: 7200,
+					Retry:   3600,
+					Expire:  1209600,
+					Minimum: 300,
+				},
+			},
+			{
+				Name:  mustName("_covered.example.com."),
+				Type:  protocol.TypeNSEC,
+				Class: protocol.ClassIN,
+				TTL:   300,
+				Data: &protocol.RDataNSEC{
+					NextDomain: mustName("_end.example.com."),
+					TypeBitMap: []uint16{protocol.TypeA, protocol.TypeNSEC},
+				},
+			},
+		},
+	}
+	wireBuf := make([]byte, fresh.WireLength())
+	n, err := fresh.Pack(wireBuf)
+	if err != nil {
+		t.Fatalf("pack: %v", err)
+	}
+	wire := wireBuf[:n]
+	pooled, err := protocol.UnpackMessage(wire)
+	if err != nil {
+		t.Fatalf("unpack: %v", err)
+	}
+
+	nc.AddFromResponse(pooled, true)
+
+	// The production caller releases the pooled response after the stage.
+	pooled.Release()
+
+	// Churn the protocol pool so the released wire buffer is reused and
+	// overwritten with different bytes — making the use-after-release
+	// exposure deterministic instead of latent until the next reuse.
+	for i := 0; i < 4; i++ {
+		churn := &protocol.Message{
+			Header: protocol.Header{
+				Flags: protocol.NewResponseFlags(protocol.RcodeSuccess),
+			},
+			Questions: []*protocol.Question{
+				{Name: mustName("churned-name-to-overwrite-the-buffer.example.com."), QType: protocol.TypeA, QClass: protocol.ClassIN},
+			},
+		}
+		cwBuf := make([]byte, churn.WireLength())
+		cn, err := churn.Pack(cwBuf)
+		if err != nil {
+			t.Fatalf("churn pack: %v", err)
+		}
+		cm, err := protocol.UnpackMessage(cwBuf[:cn])
+		if err != nil {
+			t.Fatalf("churn unpack: %v", err)
+		}
+		cm.Release()
+	}
+
+	// The cached entry must still synthesize a correct NXDOMAIN: the NSEC
+	// data was shared with the released message, so a gutted entry either
+	// misses the range check or synthesizes with garbage.
+	resp := nc.Lookup("_d.example.com.", protocol.TypeA)
+	if resp == nil {
+		t.Fatalf("FAIL: the covering NSEC no longer synthesizes a response after the source message was released")
+	}
+	if len(resp.Authorities) < 2 {
+		t.Fatalf("FAIL: synthesized response missing authority records: %d", len(resp.Authorities))
+	}
+	nsecRR := resp.Authorities[len(resp.Authorities)-1]
+	if nsecRR.Name == nil || !strings.EqualFold(nsecRR.Name.String(), "_covered.example.com.") {
+		t.Fatalf("FAIL: synthesized NSEC owner reads freed wire bytes: got %q, want %q",
+			nsecRR.Name.String(), "_covered.example.com.")
+	}
+	nd, ok := nsecRR.Data.(*protocol.RDataNSEC)
+	if !ok || nd.NextDomain == nil {
+		t.Fatalf("FAIL: synthesized NSEC record missing NextDomain")
+	}
+	if !strings.EqualFold(nd.NextDomain.String(), "_end.example.com.") {
+		t.Fatalf("FAIL: synthesized NSEC NextDomain reads freed wire bytes: got %q, want %q",
+			nd.NextDomain.String(), "_end.example.com.")
 	}
 }

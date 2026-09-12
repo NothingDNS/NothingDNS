@@ -101,9 +101,12 @@ func (nc *NSECCache) AddFromResponse(resp *protocol.Message, validated bool) {
 		}
 
 		entry := &nsecEntry{
-			Owner:      rr.Name,
-			NextDomain: nsec.NextDomain,
-			TypeBitMap: nsec.TypeBitMap,
+			// Own copies: the caller releases the pooled response after this
+			// stage (pipeline_stages.go:661), so shared Name/TypeBitMap
+			// references would read freed wire bytes.
+			Owner:      rr.Name.Copy(),
+			NextDomain: nsec.NextDomain.Copy(),
+			TypeBitMap: append([]uint16(nil), nsec.TypeBitMap...),
 			ExpireTime: time.Now().Add(time.Duration(ttl) * time.Second),
 			SOA:        soa,
 		}
