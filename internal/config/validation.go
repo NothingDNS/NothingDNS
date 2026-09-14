@@ -620,6 +620,13 @@ func (c *Config) validateDNSSEC() []string {
 				}
 			}
 		}
+
+		// signature_validity is parsed with time.ParseDuration at signing
+		// time (main.go loadZoneSigner), which silently keeps the default
+		// validity on error — Go durations reject the natural "30d" idiom,
+		// so the typo would change DNSSEC signature lifetimes without any
+		// warning. Gate it here, at load.
+		errors = appendDurationValidation(errors, "dnssec.signing", "signature_validity", c.DNSSEC.Signing.SignatureValidity)
 	}
 
 	return errors

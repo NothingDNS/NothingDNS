@@ -744,6 +744,21 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 	}
 	handlerLogger = logger
 
+	// Wire zone mutations to query routing: after every zone mutation
+	// (REST API, Raft apply, gossip), rebuild the radix tree and zone
+	// provider so created/deleted zones are visible to DNS queries.
+	// Compose with the existing mutation hook (KV persistence, installed
+	// by NewZoneManager) instead of overwriting it.
+	{
+		prevHook := zoneManagerInstance.MutationHook()
+		zoneManagerInstance.SetMutationHook(func(zoneName string, deleted bool) {
+			if prevHook != nil {
+				prevHook(zoneName, deleted)
+			}
+			handler.RebuildZoneTree()
+		})
+	}
+
 	// Initialize iterative recursive resolver if enabled
 	if cfg.Resolution.Recursive {
 		resolverTransport := newResolverTransport(client, loadBalancer)

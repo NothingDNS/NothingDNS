@@ -5018,9 +5018,17 @@ func TestXoTServer_zoneRecordToRR_InvalidName_CovExtra(t *testing.T) {
 		RData: "1.2.3.4",
 	}
 	// Empty name may still parse or fail depending on ParseName
-	_, err := srv.zoneRecordToRR("", rec)
-	// We just want to cover the code path
-	_ = err
+	rr, err := srv.zoneRecordToRR("", rec)
+	// An empty name may parse or fail depending on ParseName; either outcome
+	// is valid here, but a successful parse must produce a correct A record.
+	if err == nil {
+		if rr.Type != protocol.TypeA {
+			t.Errorf("zoneRecordToRR type = %d, want %d", rr.Type, protocol.TypeA)
+		}
+		if rr.Data == nil {
+			t.Error("zoneRecordToRR returned nil RData for an A record")
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------

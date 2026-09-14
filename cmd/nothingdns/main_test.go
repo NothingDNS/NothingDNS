@@ -11506,3 +11506,66 @@ func TestMainDispatch_RunWithFakeSignal_TriggersRun(t *testing.T) {
 		t.Fatal("MainDispatch did not return within 20s")
 	}
 }
+
+// --- Zone mutation hook rebuild wiring tests ---
+
+// TestZoneMutationWithoutRebuildLeavesRoutingStale documents the mechanism
+// requirement: a zone created through the manager alone (the exact shape of
+// the REST create handler and the Raft create_zone apply — both call
+// zoneManager.CreateZone without rebuilding the query-routing structures)
+// is invisible to zone routing until RebuildZoneTree runs.
+func TestZoneMutationWithoutRebuildLeavesRoutingStale(t *testing.T) {
+	h := newTestHandler()
+	h.zoneManager = zone.NewManager()
+
+	soa := &zone.SOARecord{TTL: 3600, MName: "ns1.stale.example.", RName: "admin.stale.example.",
+		Serial: 1, Refresh: 3600, Retry: 600, Expire: 604800, Minimum: 86400}
+	ns := []zone.NSRecord{{TTL: 3600, NSDName: "ns1.stale.example."}}
+	if err := h.zoneManager.CreateZone("stale.example.", 3600, soa, ns); err != nil {
+		t.Fatalf("CreateZone: %v", err)
+	}
+
+	if h.zoneProvider != nil {
+		matches := h.zoneProvider.FindZones("x.stale.example.")
+		if len(matches) != 0 {
+			t.Fatalf("expected no matches without RebuildZoneTree, got %d", len(matches))
+		}
+	}
+}
+
+// TestZoneMutationHookRebuildTriggersRoutingRefresh locks the production
+// composition: the mutation hook installed by runWithContext (chaining the
+// previously registered hook — KV persistence — and RebuildZoneTree) must
+// make manager-created zones visible to zone routing.
+func TestZoneMutationHookRebuildTriggersRoutingRefresh(t *testing.T) {
+	h := newTestHandler()
+	h.zoneManager = zone.NewManager()
+
+	prevHookCalls := 0
+	prevHook := func(zoneName string, deleted bool) { prevHookCalls++ }
+	h.zoneManager.SetMutationHook(prevHook)
+
+	// The same composition runWithContext installs (chained hooks, rebuild).
+	h.zoneManager.SetMutationHook(func(zoneName string, deleted bool) {
+		prevHook(zoneName, deleted)
+		h.RebuildZoneTree()
+	})
+
+	soa := &zone.SOARecord{TTL: 3600, MName: "ns1.wired.example.", RName: "admin.wired.example.",
+		Serial: 1, Refresh: 3600, Retry: 600, Expire: 604800, Minimum: 86400}
+	ns := []zone.NSRecord{{TTL: 3600, NSDName: "ns1.wired.example."}}
+	if err := h.zoneManager.CreateZone("wired.example.", 3600, soa, ns); err != nil {
+		t.Fatalf("CreateZone: %v", err)
+	}
+
+	if prevHookCalls != 1 {
+		t.Fatalf("composed hook did not chain to the earlier hook: prevHookCalls = %d", prevHookCalls)
+	}
+	if h.zoneProvider == nil {
+		t.Fatal("expected zone provider to be rebuilt by the hook")
+	}
+	matches := h.zoneProvider.FindZones("x.wired.example.")
+	if len(matches) == 0 {
+		t.Fatal("zone created via manager mutation is invisible to query routing after the wired hook ran — RebuildZoneTree composition missing")
+	}
+}

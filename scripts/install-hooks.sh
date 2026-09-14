@@ -1,7 +1,7 @@
+#!/bin/bash
 # scripts/install-hooks.sh
 # Installs git hooks for NothingDNS development
 
-#!/bin/bash
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

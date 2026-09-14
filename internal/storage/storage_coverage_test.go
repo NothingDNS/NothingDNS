@@ -1551,9 +1551,11 @@ func TestWALTruncateSegmentRemoveError(t *testing.T) {
 		}
 		// Truncate all segments
 		err = wal2.Truncate(0)
-		// The result depends on whether the segment file was already missing
-		// os.IsNotExist should be handled gracefully
-		_ = err
+		// The result depends on whether the segment file was already missing:
+		// success or os.IsNotExist are both acceptable; anything else is not.
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("Truncate(0) failed with an unexpected error: %v", err)
+		}
 		wal2.Close()
 	})
 }
@@ -1939,9 +1941,11 @@ func TestWALReaderNextAllPaths(t *testing.T) {
 		defer reader.Close()
 
 		_, err = reader.Next()
-		// Will either error on partial header or return EOF
-		// Either way it exercises the error handling paths
-		_ = err
+		// A partial header must surface as an error (or EOF) — never as a
+		// silent success with an entry.
+		if err == nil {
+			t.Fatal("Next() succeeded on a segment with a truncated header")
+		}
 
 		wal2.Close()
 	})
@@ -2239,10 +2243,12 @@ func TestWALReadSegmentHeaderError(t *testing.T) {
 
 		// ReadAll will try to read the segment with partial data
 		// This exercises io.ReadFull returning io.EOF or an error on line 439-444
-		_, err = wal2.ReadAll()
-		// The partial data should be handled gracefully
-		// readSegment returns whatever entries it has (none in this case)
-		_ = err
+		walEntries, err := wal2.ReadAll()
+		// Partial data must be handled gracefully: whatever entries exist are
+		// returned — for this fixture, none — without a panic.
+		if err == nil && len(walEntries) != 0 {
+			t.Fatalf("ReadAll returned %d entries from a partial-data segment, want 0", len(walEntries))
+		}
 
 		wal2.Close()
 	})
@@ -2496,8 +2502,11 @@ func TestWALReaderFileReadError(t *testing.T) {
 
 		reader := wal.NewReader()
 		_, err = reader.Next()
-		// Could be permission error or EOF depending on OS
-		_ = err
+		// A permission-restricted file must surface as an error (or EOF) —
+		// never as a silent success with an entry.
+		if err == nil {
+			t.Fatal("Next() succeeded on a permission-restricted WAL file")
+		}
 		reader.Close()
 
 		// Restore permissions for cleanup

@@ -127,6 +127,16 @@ func (m *Manager) SetMutationHook(hook func(zoneName string, deleted bool)) {
 	m.mutationHook = hook
 }
 
+// MutationHook returns the currently registered mutation hook, or nil if
+// none is set. Used to compose hooks (e.g. layering the query-routing
+// rebuild on top of the KV-persistence hook) without losing the earlier
+// registration.
+func (m *Manager) MutationHook() func(zoneName string, deleted bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.mutationHook
+}
+
 // NotifyMutated fires the mutation hook for a zone that was mutated OUTSIDE
 // the manager's mutation methods — e.g. DDNS (transfer.ApplyUpdate) mutates
 // the *Zone object directly. Such paths must call this once after applying
