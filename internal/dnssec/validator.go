@@ -316,6 +316,11 @@ func (v *Validator) buildChain(ctx context.Context, anchor *TrustAnchor, remaini
 		if err != nil {
 			return nil, false, &chainFetchError{err: fmt.Errorf("fetching DS for %s: %w", childZone, err)}
 		}
+		// fetchDS returns a pooled *protocol.Message; release it once the
+		// denial proof (or RRSIG verification) has been read from it.
+		// Matches the defer msg.Release() pattern in fetchDNSKEYAndSigs,
+		// fetchNSEC3PARAM, and fetchDNSKEY.
+		defer dsMsg.Release()
 
 		if len(dsRecords) == 0 {
 			// An empty DS answer might mean (a) the parent zone
