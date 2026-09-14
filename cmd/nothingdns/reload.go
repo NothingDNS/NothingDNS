@@ -32,6 +32,9 @@ type reloadableState struct {
 	cfg   **config.Config
 	cfgMu *sync.RWMutex
 
+	// Serializes concurrent reloads (SIGHUP + API reload can fire simultaneously)
+	reloadMu sync.Mutex
+
 	// Security components (replaced on reload)
 	securityManager **SecurityManager
 	bl              **blocklist.Blocklist
@@ -115,8 +118,10 @@ func reloadConfig(configPath string, s *reloadableState) (reloadedZones int, err
 	// 7. Commit the new config.
 	commitLoadedConfig(newCfg, s.cfgMu, s.cfg, s.handler)
 
-	// 8. Update mutable state pointers.
+	// 8. Update mutable state pointers — serialized against concurrent reloads.
+	s.reloadMu.Lock()
 	*s.securityManager = nextSecMgr
+	currentSec.Stop() // stop the old manager (blocklist watchers, RPZ, GeoDNS, DNS64, ACL/RRL goroutines)
 	*s.bl = secResult.Blocklist
 	*s.rpzEngine = secResult.RPZEngine
 	*s.geoEngine = secResult.GeoEngine
@@ -128,6 +133,7 @@ func reloadConfig(configPath string, s *reloadableState) (reloadedZones int, err
 	*s.loadBalancer = upstreamPlan.upstreamManager.LoadBalancer
 	*s.validator = upstreamPlan.dnssecManager.Validator
 	*s.dnssecManager = upstreamPlan.dnssecManager
+	s.reloadMu.Unlock()
 
 	return len(zonePlan), nil
 }
