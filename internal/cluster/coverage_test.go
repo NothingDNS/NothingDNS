@@ -1252,28 +1252,6 @@ func TestNodeList_ConcurrentAccess(t *testing.T) {
 // 24. CacheSyncEvent fields
 // ---------------------------------------------------------------------------
 
-func TestCacheSyncEvent_Fields(t *testing.T) {
-	now := time.Now()
-	event := CacheSyncEvent{
-		Type:      "update",
-		Keys:      []string{"a", "b"},
-		Source:    "remote",
-		Timestamp: now,
-	}
-
-	if event.Type != "update" {
-		t.Errorf("Type = %q, want %q", event.Type, "update")
-	}
-	if len(event.Keys) != 2 {
-		t.Errorf("len(Keys) = %d, want 2", len(event.Keys))
-	}
-	if event.Source != "remote" {
-		t.Errorf("Source = %q, want %q", event.Source, "remote")
-	}
-	if !event.Timestamp.Equal(now) {
-		t.Errorf("Timestamp mismatch")
-	}
-}
 
 // ---------------------------------------------------------------------------
 // 25. New with encryption key in cluster config (hex decode path)
@@ -1821,45 +1799,6 @@ func TestGetLocalIP_FallbackUnreachable(t *testing.T) {
 // case with a working gossip connection and alive remote nodes
 // ---------------------------------------------------------------------------
 
-func TestCluster_CacheSyncLoop_InvalidateWithAliveRemoteNode(t *testing.T) {
-	logger := util.NewLogger(util.INFO, util.TextFormat, nil)
-	dnsCache := cache.New(cache.Config{Capacity: 1000})
-
-	cfg := Config{
-		Enabled:              true,
-		AllowInsecureCluster: true, // test: no encryption key
-		NodeID:               "sync-remote-test",
-		BindAddr:             "127.0.0.1",
-		GossipPort:           47004,
-		CacheSync:            true,
-	}
-
-	c, err := New(cfg, logger, dnsCache)
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-
-	if err := c.Start(); err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-
-	// Add a remote alive node so BroadcastCacheInvalidation has a target
-	c.nodeList.Add(&Node{
-		ID:       "remote-sync-node",
-		Addr:     "127.0.0.1",
-		State:    NodeStateAlive,
-		LastSeen: time.Now(),
-	})
-
-	// Send an invalidate event through the cacheSyncChan
-	c.cacheSyncChan <- CacheSyncEvent{
-		Type: "invalidate",
-		Keys: []string{"sync-key1", "sync-key2"},
-	}
-
-	time.Sleep(200 * time.Millisecond)
-	c.Stop()
-}
 
 // ---------------------------------------------------------------------------
 // Additional coverage: cluster.go - Stop with CacheSync and gossip having
@@ -2268,39 +2207,6 @@ func TestGetLocalIP_FallbackPath_EnvironmentDependent(t *testing.T) {
 // to ensure the loop processes events correctly under load
 // ---------------------------------------------------------------------------
 
-func TestCluster_CacheSyncLoop_RapidEvents(t *testing.T) {
-	logger := util.NewLogger(util.INFO, util.TextFormat, nil)
-	dnsCache := cache.New(cache.Config{Capacity: 1000})
-
-	cfg := Config{
-		Enabled:              true,
-		AllowInsecureCluster: true, // test: no encryption key
-		NodeID:               "rapid-sync-node",
-		BindAddr:             "127.0.0.1",
-		GossipPort:           48001,
-		CacheSync:            true,
-	}
-
-	c, err := New(cfg, logger, dnsCache)
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-
-	if err := c.Start(); err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-
-	// Send multiple events rapidly
-	for i := 0; i < 10; i++ {
-		c.cacheSyncChan <- CacheSyncEvent{
-			Type: "invalidate",
-			Keys: []string{"key-rapid"},
-		}
-	}
-
-	time.Sleep(300 * time.Millisecond)
-	c.Stop()
-}
 
 // ---------------------------------------------------------------------------
 // Integration: two clusters with CacheSync exchanging invalidations
@@ -2382,38 +2288,6 @@ func TestCluster_TwoClusterCacheInvalidation(t *testing.T) {
 // Integration: cluster with cacheSync disabled - no cacheSyncLoop started
 // ---------------------------------------------------------------------------
 
-func TestCluster_CacheSyncDisabled_NoLoopStarted(t *testing.T) {
-	logger := util.NewLogger(util.INFO, util.TextFormat, nil)
-	dnsCache := cache.New(cache.Config{Capacity: 1000})
-
-	cfg := Config{
-		Enabled:              true,
-		AllowInsecureCluster: true, // test: no encryption key
-		NodeID:               "no-sync-node",
-		BindAddr:             "127.0.0.1",
-		GossipPort:           48004,
-		CacheSync:            false,
-	}
-
-	c, err := New(cfg, logger, dnsCache)
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-
-	if err := c.Start(); err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-
-	// Verify cacheSyncChan exists but no loop reads from it
-	// (writing to it would block if no consumer, but the buffer is 100)
-	c.cacheSyncChan <- CacheSyncEvent{
-		Type: "invalidate",
-		Keys: []string{"key-no-sync"},
-	}
-
-	time.Sleep(100 * time.Millisecond)
-	c.Stop()
-}
 
 // ---------------------------------------------------------------------------
 // GossipProtocol: Join with valid address and gossip not started
@@ -6120,46 +5994,6 @@ func TestCluster_Stop_GossipAlreadyStopped(t *testing.T) {
 // cluster.go: cacheSyncLoop - unknown event type (falls through switch)
 // ---------------------------------------------------------------------------
 
-func TestCluster_cacheSyncLoop_UnknownEventType(t *testing.T) {
-	logger := util.NewLogger(util.INFO, util.TextFormat, nil)
-	cacheCfg := cache.Config{Capacity: 1000}
-	dnsCache := cache.New(cacheCfg)
-
-	cfg := Config{
-		Enabled:              true,
-		AllowInsecureCluster: true, // test: no encryption key required
-		NodeID:               "test-node",
-		BindAddr:             "127.0.0.1",
-		GossipPort:           37904,
-		CacheSync:            true,
-	}
-
-	c, err := New(cfg, logger, dnsCache)
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-
-	if err := c.Start(); err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-
-	// Send a cache sync event with an unknown type - should be ignored
-	c.cacheSyncChan <- CacheSyncEvent{
-		Type: "unknown_type",
-		Keys: []string{"key1"},
-	}
-
-	// Also send a valid invalidate event to ensure loop continues working
-	c.cacheSyncChan <- CacheSyncEvent{
-		Type: "invalidate",
-		Keys: []string{"key2"},
-	}
-
-	// Allow processing
-	time.Sleep(200 * time.Millisecond)
-
-	c.Stop()
-}
 
 // ---------------------------------------------------------------------------
 // gossip.go: Start() - ResolveUDPAddr error (lines 163-165)

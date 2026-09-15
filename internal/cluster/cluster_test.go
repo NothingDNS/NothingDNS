@@ -352,27 +352,6 @@ func TestCluster_InvalidateCache_Disabled(t *testing.T) {
 	}
 }
 
-func TestCacheSyncEvent_Struct(t *testing.T) {
-	event := CacheSyncEvent{
-		Type:      "invalidate",
-		Keys:      []string{"key1", "key2"},
-		Source:    "node1",
-		Timestamp: time.Now(),
-	}
-
-	if event.Type != "invalidate" {
-		t.Errorf("Expected type invalidate, got %s", event.Type)
-	}
-
-	if len(event.Keys) != 2 {
-		t.Errorf("Expected 2 keys, got %d", len(event.Keys))
-	}
-
-	if event.Source != "node1" {
-		t.Errorf("Expected source node1, got %s", event.Source)
-	}
-}
-
 func TestConfig_Values(t *testing.T) {
 	cfg := Config{
 		Enabled:              true,
