@@ -373,13 +373,15 @@ func (lb *LoadBalancer) QueryContext(ctx context.Context, msg *protocol.Message)
 
 	select {
 	case <-ctx.Done():
-		// Check if query completed anyway before returning cancellation error
-		select {
-		case r := <-done:
-			return r.resp, r.err
-		default:
-			return nil, ctx.Err()
+		// Block until the goroutine has sent its result, then clean it up.
+		// Without this drain the goroutine would be left blocked forever on its
+		// unbuffered done send, and the pooled response would be neither released
+		// nor returned to the caller.
+		r := <-done
+		if r.resp != nil {
+			r.resp.Release()
 		}
+		return nil, ctx.Err()
 	case r := <-done:
 		return r.resp, r.err
 	}
