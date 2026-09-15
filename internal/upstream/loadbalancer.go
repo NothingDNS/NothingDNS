@@ -300,12 +300,14 @@ func NewLoadBalancer(config LoadBalancerConfig) (*LoadBalancer, error) {
 		// Initialize connection pools
 		lb.udpPool[addr] = &sync.Pool{
 			New: func() interface{} {
-				return make([]byte, 4096)
+				b := make([]byte, 4096)
+				return &b
 			},
 		}
 		lb.tcpPool[addr] = &sync.Pool{
 			New: func() interface{} {
-				return make([]byte, 65535)
+				b := make([]byte, 65535)
+				return &b
 			},
 		}
 	}
