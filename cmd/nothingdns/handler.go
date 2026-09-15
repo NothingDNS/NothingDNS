@@ -159,6 +159,8 @@ func (h *integratedHandler) tryDNS64Synthesis(ctx context.Context, w server.Resp
 		h.logger.Warnf("DNS64: upstream A query failed for %s: %v", qname, err)
 		return false
 	}
+	defer aQuery.Release()
+	defer aResp.Release()
 	if aResp == nil {
 		h.logger.Warnf("DNS64: upstream returned nil A response for %s", qname)
 		return false
