@@ -54,7 +54,6 @@ func TestDoHResponseWriter_QuestionsCopiedFromQuery(t *testing.T) {
 	queryData, query := createTestQuery()
 	encoded := base64.RawURLEncoding.EncodeToString(queryData)
 
-	var capturedResponse *protocol.Message
 	handler := NewHandler(server.HandlerFunc(func(w server.ResponseWriter, r *protocol.Message) {
 		// Create response with no questions
 		resp := &protocol.Message{
@@ -63,7 +62,6 @@ func TestDoHResponseWriter_QuestionsCopiedFromQuery(t *testing.T) {
 			},
 			Questions: nil, // No questions
 		}
-		capturedResponse = resp
 		w.Write(resp)
 	}))
 
@@ -76,9 +74,22 @@ func TestDoHResponseWriter_QuestionsCopiedFromQuery(t *testing.T) {
 		t.Fatalf("Expected status %d, got %d", http.StatusOK, rr.Code)
 	}
 
-	// Verify the response questions were populated from the query
-	if len(capturedResponse.Questions) != len(query.Questions) {
-		t.Errorf("Expected questions to be copied from query, got %d questions", len(capturedResponse.Questions))
+	// Verify the response body is a valid wire-format DNS message with the same
+	// questions as the query. We unpack the HTTP body rather than relying on a
+	// captured pooled object (which is released by defer msg.Release() inside
+	// dohResponseWriter.Write).
+	body := rr.Body.Bytes()
+	respMsg, err := protocol.UnpackMessage(body)
+	if err != nil {
+		t.Fatalf("Failed to unpack response: %v", err)
+	}
+	defer respMsg.Release()
+
+	// Copy the query questions since UnpackMessage zeroes section backing arrays
+	// on release (the pooled response from Write is also released).
+	wantQCount := len(query.Questions)
+	if len(respMsg.Questions) != wantQCount {
+		t.Errorf("Expected response to have %d questions (copied from query), got %d", wantQCount, len(respMsg.Questions))
 	}
 }
 

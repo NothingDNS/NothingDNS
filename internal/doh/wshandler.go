@@ -140,6 +140,11 @@ func (rw *wsResponseWriter) Write(msg *protocol.Message) (int, error) {
 		msg.Questions = rw.query.Questions
 	}
 
+	// msg is from the server.Handler's upstream/resolver pool. Release it after
+	// wire-packing completes so ServeDNS can still mutate it and we keep the
+	// wire bytes.
+	defer msg.Release()
+
 	buf := make([]byte, msg.WireLength())
 	n, err := msg.Pack(buf)
 	if err != nil {

@@ -220,6 +220,26 @@ var messagePool = sync.Pool{
 	},
 }
 
+// AcquireMessage returns a pooled *Message with all sections reset to zero
+// length. Call Release() when done to return it to the pool.
+func AcquireMessage() *Message {
+	m := messagePool.Get().(*Message)
+	m.reset()
+	return m
+}
+
+// reset clears all fields to their zero values without deallocating backing
+// slices or the struct itself. Used by AcquireMessage to prepare a pooled
+// instance for fresh use; callers must call Release() when done.
+func (m *Message) reset() {
+	m.Header = Header{}
+	m.Questions = m.Questions[:0]
+	m.Answers = m.Answers[:0]
+	m.Authorities = m.Authorities[:0]
+	m.Additionals = m.Additionals[:0]
+	m.RawBody = nil
+}
+
 // Release returns the Message to the internal pool so its struct and
 // section-slice backing arrays can be reused by a future UnpackMessage.
 // After calling Release the Message and any sub-objects (Questions,
