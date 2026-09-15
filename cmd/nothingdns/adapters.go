@@ -183,6 +183,9 @@ func (w *doqResponseWriter) Write(msg *protocol.Message) (int, error) {
 	// The 2-octet length prefix (RFC 9250) caps a DoQ message at 65535 bytes.
 	// Truncate record-boundary-aware (sets TC) rather than letting uint16(n)
 	// silently wrap and emit a garbled frame — matching the TCP/DoT writers.
+	// msg is from the upstream or resolver pool; release it after packing.
+	defer msg.Release()
+
 	wireLen := msg.WireLength()
 	if wireLen > 65535 {
 		msg.Truncate(65535)
