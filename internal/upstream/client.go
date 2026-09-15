@@ -294,10 +294,14 @@ func (c *Client) QueryContext(ctx context.Context, msg *protocol.Message) (*prot
 
 	select {
 	case <-ctx.Done():
-		// Check if query completed anyway before returning cancellation error
+		// Drain the goroutine result to avoid leaking the pooled response.
+		// The buffered channel ensures the goroutine always exits cleanly.
 		select {
 		case r := <-done:
-			return r.resp, r.err
+			if r.resp != nil {
+				r.resp.Release()
+			}
+			return nil, ctx.Err()
 		default:
 			return nil, ctx.Err()
 		}
