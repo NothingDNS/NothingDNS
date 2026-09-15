@@ -355,6 +355,7 @@ func (s *XoTServer) handleMessage(conn net.Conn, msg []byte) {
 	// RFC 9103: Messages are length-prefixed over TLS (same as TCP)
 	// Parse the DNS message
 	protocolMsg, err := protocol.UnpackMessage(msg)
+	defer protocolMsg.Release()
 	if err != nil {
 		// Send FORMERR response
 		if err := s.sendErrorResponse(conn, nil, protocol.RcodeFormatError); err != nil {
@@ -362,7 +363,6 @@ func (s *XoTServer) handleMessage(conn net.Conn, msg []byte) {
 		}
 		return
 	}
-	defer protocolMsg.Release()
 
 	// Get client IP for access control. Tests and wrapped connections may not
 	// expose a *net.TCPAddr even though production XoT uses TCP/TLS.
