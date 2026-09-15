@@ -312,11 +312,11 @@ func (s *TCPServer) handleMessage(conn net.Conn, data []byte, writeMu *sync.Mute
 
 	// Unpack the message
 	msg, err := protocol.UnpackMessage(data)
-	defer msg.Release()
 	if err != nil {
 		atomic.AddUint64(&s.errors, 1)
 		return
 	}
+	defer msg.Release()
 
 	// Any message on this connection resets a co-hosted DSO session's
 	// inactivity timer (RFC 8490 §7.1.1).
