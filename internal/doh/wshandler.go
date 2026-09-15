@@ -102,13 +102,13 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		defer query.Release() // runs even if ServeDNS panics
 		rw := &wsResponseWriter{
 			conn:    conn,
 			httpReq: r,
 			query:   query,
 		}
-		h.dnsHandler.ServeDNS(rw, query)
-		query.Release()
+		h.dnsHandler.ServeDNS(rw, query) // guarded by ServeDNSWithRecovery; Release is nil-safe
 	}
 }
 
