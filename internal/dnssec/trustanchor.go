@@ -171,7 +171,12 @@ func (s *TrustAnchorStore) FindClosestAnchor(name string) (*TrustAnchor, []strin
 	for i := 0; i < len(labels); i++ {
 		zone := joinLabels(labels[i:])
 		if anchors, ok := s.anchors[zone]; ok && len(anchors) > 0 {
-			// Return the first valid anchor
+			// Return the first valid anchor. remaining is only the
+			// labels BELOW the matched zone: buildChain starts at
+			// anchor.Zone and walks remaining[i:] suffixes downward,
+			// so returning the full label list would make it re-walk
+			// zones at or above the anchor (e.g. com. for an
+			// example.com. anchor) and fail chain building.
 			for _, anchor := range anchors {
 				if anchor.IsValid() {
 					return cloneTrustAnchor(anchor), labels[:i]
