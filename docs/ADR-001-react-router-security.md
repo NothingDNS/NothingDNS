@@ -1,7 +1,7 @@
 # ADR-001: React Router Security Posture (SPA, No Downgrade)
 
 **Date:** 2026-07-29  
-**Status:** Accepted  
+**Status:** Superseded (2026-09-16) — react-router 8.3.0 fixes GHSA-qwww-vcr4-c8h2; the `web/.nsprc` allowlist was removed and CI's npm audit is strict again.  
 **Scope:** `web/` (React SPA dashboard)
 
 ---
