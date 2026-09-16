@@ -1,8 +1,13 @@
 package main
 
 import (
+	"bufio"
+	"encoding/json"
+	"flag"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"strings"
 )
 
@@ -152,7 +157,7 @@ func lookupConfigPath(root interface{}, dotted string) (interface{}, bool) {
 
 func cmdServer(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("server subcommand required (status, health)")
+		return fmt.Errorf("server subcommand required (status, health, bootstrap)")
 	}
 
 	switch args[0] {
@@ -217,8 +222,62 @@ func cmdServer(args []string) error {
 			return fmt.Errorf("server unhealthy (HTTP %d): %s", resp.StatusCode, string(body))
 		}
 
+	case "bootstrap":
+		return cmdServerBootstrap(args[1:], os.Stdin)
+
 	default:
-		return fmt.Errorf("unknown server subcommand: %s (supported: status, health)", args[0])
+		return fmt.Errorf("unknown server subcommand: %s (supported: status, health, bootstrap)", args[0])
 	}
+	return nil
+}
+
+// cmdServerBootstrap creates the first dashboard admin (or resets an admin
+// password) through the localhost-only bootstrap endpoint. It is meant to run
+// on the server host — for the container image: docker exec -i nothingdns
+// dnsctl server bootstrap. The password comes from NOTHINGDNS_ADMIN_PASSWORD
+// or the first line of stdin, never from argv (process listings, shell
+// history).
+func cmdServerBootstrap(args []string, stdin io.Reader) error {
+	fs := flag.NewFlagSet("server bootstrap", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	username := fs.String("username", "admin", "admin username")
+	oldPassword := fs.Bool("old-password", false, "read the current password (second stdin line or NOTHINGDNS_ADMIN_OLD_PASSWORD) to reset an existing admin")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	reader := bufio.NewReader(stdin)
+	readSecret := func(env, prompt string) (string, error) {
+		if v := os.Getenv(env); v != "" {
+			return v, nil
+		}
+		fmt.Fprint(os.Stderr, prompt)
+		line, err := reader.ReadString('\n')
+		if err != nil && line == "" {
+			return "", fmt.Errorf("reading password: %w (set %s or pipe it on stdin)", err, env)
+		}
+		return strings.TrimRight(line, "\r\n"), nil
+	}
+
+	password, err := readSecret("NOTHINGDNS_ADMIN_PASSWORD", "New password: ")
+	if err != nil {
+		return err
+	}
+	req := map[string]string{"username": *username, "password": password}
+	if *oldPassword {
+		old, err := readSecret("NOTHINGDNS_ADMIN_OLD_PASSWORD", "Current password: ")
+		if err != nil {
+			return err
+		}
+		req["old_password"] = old
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+	if _, err := apiRequest("POST", "/api/v1/auth/bootstrap", string(body)); err != nil {
+		return fmt.Errorf("bootstrap failed: %w", err)
+	}
+	fmt.Printf("Admin account %q is ready. Sign in to the dashboard with it.\n", *username)
 	return nil
 }
