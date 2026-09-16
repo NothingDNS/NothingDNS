@@ -9,6 +9,7 @@ package main
 import (
 	"crypto/tls"
 	"fmt"
+	"net"
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/config"
@@ -23,9 +24,13 @@ import (
 type servers struct {
 	udp *server.UDPServer
 	tcp *server.TCPServer
-	tls *server.TLSServer
-	doq *quic.DoQServer
-	xot *transfer.XoTServer
+	// Listeners for additional server.bind / udp_bind / tcp_bind addresses
+	// beyond the first (udp/tcp above).
+	extraUDP []*server.UDPServer
+	extraTCP []*server.TCPServer
+	tls      *server.TLSServer
+	doq      *quic.DoQServer
+	xot      *transfer.XoTServer
 }
 
 // startServers creates and starts the UDP, TCP, TLS (DoT), DoQ, and XoT
@@ -34,33 +39,27 @@ type servers struct {
 func startServers(cfg *config.Config, handler *integratedHandler, transferMgr *TransferManager, logger *util.Logger) (*servers, error) {
 	s := &servers{}
 
-	defaultAddr := fmt.Sprintf(":%d", cfg.Server.Port)
-
-	udpAddr := defaultAddr
-	if len(cfg.Server.UDPBind) > 0 {
-		udpAddr = cfg.Server.UDPBind[0]
-	} else if len(cfg.Server.Bind) > 0 {
-		udpAddr = bindEntryToAddr(cfg.Server.Bind[0], cfg.Server.Port)
-	}
-
-	tcpAddr := defaultAddr
-	if len(cfg.Server.TCPBind) > 0 {
-		tcpAddr = cfg.Server.TCPBind[0]
-	} else if len(cfg.Server.Bind) > 0 {
-		tcpAddr = bindEntryToAddr(cfg.Server.Bind[0], cfg.Server.Port)
-	}
+	udpAddrs := dnsListenAddrs(cfg.Server.UDPBind, cfg.Server.Bind, cfg.Server.Port)
+	tcpAddrs := dnsListenAddrs(cfg.Server.TCPBind, cfg.Server.Bind, cfg.Server.Port)
 
 	// UDP
-	s.udp = server.NewUDPServerWithWorkers(udpAddr, handler, cfg.Server.UDPWorkers)
-	if err := s.udp.Listen(); err != nil {
-		return s, fmt.Errorf("starting UDP server: %w", err)
-	}
-	go func() {
-		if err := s.udp.Serve(); err != nil {
-			logger.Errorf("UDP server error: %v", err)
+	for i, addr := range udpAddrs {
+		udp := server.NewUDPServerWithWorkers(addr, handler, cfg.Server.UDPWorkers)
+		if err := udp.Listen(); err != nil {
+			return s, fmt.Errorf("starting UDP server on %s: %w", addr, err)
 		}
-	}()
-	logger.Infof("UDP server listening on %s", udpAddr)
+		if i == 0 {
+			s.udp = udp
+		} else {
+			s.extraUDP = append(s.extraUDP, udp)
+		}
+		go func() {
+			if err := udp.Serve(); err != nil {
+				logger.Errorf("UDP server error on %s: %v", addr, err)
+			}
+		}()
+		logger.Infof("UDP server listening on %s", addr)
+	}
 
 	// DSO (RFC 8490): one shared adapter serves both TCP and DoT — conn
 	// keys are unique across listeners. Installed before Serve starts.
@@ -70,21 +69,28 @@ func startServers(cfg *config.Config, handler *integratedHandler, transferMgr *T
 	}
 
 	// TCP
-	s.tcp = server.NewTCPServerWithWorkers(tcpAddr, handler, cfg.Server.TCPWorkers)
-	if dsoAdapter != nil {
-		// Session creation still refuses plain TCP unless the DSO manager
-		// was configured with AllowPlainTCP (RFC 8490 §5.1).
-		s.tcp.SetDSOHandler(dsoAdapter)
-	}
-	if err := s.tcp.Listen(); err != nil {
-		return s, fmt.Errorf("starting TCP server: %w", err)
-	}
-	go func() {
-		if err := s.tcp.Serve(); err != nil {
-			logger.Errorf("TCP server error: %v", err)
+	for i, addr := range tcpAddrs {
+		tcp := server.NewTCPServerWithWorkers(addr, handler, cfg.Server.TCPWorkers)
+		if dsoAdapter != nil {
+			// Session creation still refuses plain TCP unless the DSO manager
+			// was configured with AllowPlainTCP (RFC 8490 §5.1).
+			tcp.SetDSOHandler(dsoAdapter)
 		}
-	}()
-	logger.Infof("TCP server listening on %s", tcpAddr)
+		if err := tcp.Listen(); err != nil {
+			return s, fmt.Errorf("starting TCP server on %s: %w", addr, err)
+		}
+		if i == 0 {
+			s.tcp = tcp
+		} else {
+			s.extraTCP = append(s.extraTCP, tcp)
+		}
+		go func() {
+			if err := tcp.Serve(); err != nil {
+				logger.Errorf("TCP server error on %s: %v", addr, err)
+			}
+		}()
+		logger.Infof("TCP server listening on %s", addr)
+	}
 
 	// TLS (DoT)
 	if cfg.Server.TLS.Enabled {
@@ -229,13 +235,13 @@ func (s *servers) startXoT(cfg *config.Config, zones map[string]*zone.Zone, tran
 // failures are logged but do not prevent the remaining servers from
 // shutting down.
 func (s *servers) stopAll(logger *util.Logger) {
-	if s.udp != nil {
-		if err := s.udp.Stop(); err != nil {
+	for _, udp := range s.udpServers() {
+		if err := udp.Stop(); err != nil {
 			logger.Warnf("Failed to stop UDP server cleanly: %v", err)
 		}
 	}
-	if s.tcp != nil {
-		if err := s.tcp.Stop(); err != nil {
+	for _, tcp := range s.tcpServers() {
+		if err := tcp.Stop(); err != nil {
 			logger.Warnf("Failed to stop TCP server cleanly: %v", err)
 		}
 	}
@@ -254,6 +260,82 @@ func (s *servers) stopAll(logger *util.Logger) {
 			logger.Warnf("Failed to close XoT server cleanly: %v", err)
 		}
 	}
+}
+
+// udpServers returns every running UDP listener.
+func (s *servers) udpServers() []*server.UDPServer {
+	if s.udp == nil {
+		return nil
+	}
+	return append([]*server.UDPServer{s.udp}, s.extraUDP...)
+}
+
+// tcpServers returns every running TCP listener.
+func (s *servers) tcpServers() []*server.TCPServer {
+	if s.tcp == nil {
+		return nil
+	}
+	return append([]*server.TCPServer{s.tcp}, s.extraTCP...)
+}
+
+// dnsListenAddrs resolves the listen addresses for one DNS transport:
+// the transport-specific list (udp_bind / tcp_bind) wins, then server.bind,
+// then ":port". Every entry is used — previously only the first was, so
+// additional bind addresses were silently ignored.
+//
+// A wildcard entry (0.0.0.0, ::, or an empty host) already accepts traffic
+// on every local address — Go opens it dual-stack — so any other entry on
+// the same port would fail with "address already in use". Such entries are
+// folded into the first wildcard for that port.
+func dnsListenAddrs(explicit, bind []string, port int) []string {
+	entries := explicit
+	if len(entries) == 0 {
+		entries = bind
+	}
+	if len(entries) == 0 {
+		return []string{fmt.Sprintf(":%d", port)}
+	}
+
+	addrs := make([]string, 0, len(entries))
+	for _, e := range entries {
+		addrs = append(addrs, bindEntryToAddr(e, port))
+	}
+
+	wildcardPorts := make(map[string]bool)
+	for _, a := range addrs {
+		if host, p, err := net.SplitHostPort(a); err == nil && isWildcardHost(host) {
+			wildcardPorts[p] = true
+		}
+	}
+
+	out := make([]string, 0, len(addrs))
+	seen := make(map[string]bool)
+	wildcardUsed := make(map[string]bool)
+	for _, a := range addrs {
+		host, p, err := net.SplitHostPort(a)
+		key := a
+		if err == nil && wildcardPorts[p] {
+			if !isWildcardHost(host) || wildcardUsed[p] {
+				continue
+			}
+			wildcardUsed[p] = true
+			key = "*:" + p
+		}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, a)
+	}
+	return out
+}
+
+func isWildcardHost(host string) bool {
+	if host == "" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsUnspecified()
 }
 
 // buildTLSConfig creates a tls.Config for DoT with dynamic certificate
@@ -294,8 +376,21 @@ func startStatsCollector(srvs *servers, metricsCollector metricsTransport, stopC
 				return
 			case <-ticker.C:
 				if metricsCollector != nil && srvs.udp != nil && srvs.tcp != nil {
-					us := srvs.udp.Stats()
-					ts := srvs.tcp.Stats()
+					var us server.UDPServerStats
+					for _, udp := range srvs.udpServers() {
+						st := udp.Stats()
+						us.PacketsReceived += st.PacketsReceived
+						us.PacketsSent += st.PacketsSent
+						us.Errors += st.Errors
+					}
+					var ts server.TCPServerStats
+					for _, tcp := range srvs.tcpServers() {
+						st := tcp.Stats()
+						ts.ConnectionsAccepted += st.ConnectionsAccepted
+						ts.ConnectionsClosed += st.ConnectionsClosed
+						ts.MessagesReceived += st.MessagesReceived
+						ts.Errors += st.Errors
+					}
 					metricsCollector.SetTransportStats(
 						us.PacketsReceived, us.PacketsSent, us.Errors,
 						ts.ConnectionsAccepted, ts.ConnectionsClosed, ts.MessagesReceived, ts.Errors,

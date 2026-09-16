@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -848,5 +849,60 @@ func TestStartServers_PartialFailure_TLSErrorHasUDPServer(t *testing.T) {
 		t.Error("UDP server should survive as part of the partial-start set")
 	} else {
 		srvs.stopAll(logger)
+	}
+}
+
+func TestDNSListenAddrs(t *testing.T) {
+	tests := []struct {
+		name     string
+		explicit []string
+		bind     []string
+		want     []string
+	}{
+		{name: "default", want: []string{":5354"}},
+		{name: "every bind address is used", bind: []string{"127.0.0.1", "::1"}, want: []string{"127.0.0.1:5354", "[::1]:5354"}},
+		{name: "wildcard pair folds to one dual-stack listener", bind: []string{"0.0.0.0", "::"}, want: []string{"0.0.0.0:5354"}},
+		{name: "specific address behind a wildcard is folded", bind: []string{"127.0.0.1", "::"}, want: []string{"[::]:5354"}},
+		{name: "duplicates removed", bind: []string{"127.0.0.1", "127.0.0.1:5354"}, want: []string{"127.0.0.1:5354"}},
+		{name: "explicit list wins", explicit: []string{"127.0.0.2:53"}, bind: []string{"127.0.0.1"}, want: []string{"127.0.0.2:53"}},
+		{name: "wildcard only folds its own port", bind: []string{"0.0.0.0:5354", "127.0.0.1:5355"}, want: []string{"0.0.0.0:5354", "127.0.0.1:5355"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := dnsListenAddrs(tt.explicit, tt.bind, 5354)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("dnsListenAddrs(%v, %v) = %v, want %v", tt.explicit, tt.bind, got, tt.want)
+			}
+		})
+	}
+}
+
+// Every server.bind address must get its own listener, not just the first.
+func TestStartServersListensOnEveryBindAddress(t *testing.T) {
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := pc.LocalAddr().(*net.UDPAddr).Port
+	pc.Close()
+
+	cfg := &config.Config{}
+	cfg.Server.Port = port
+	cfg.Server.Bind = []string{"127.0.0.1", "::1"}
+	handler := &integratedHandler{}
+	logger := newDiscardLogger()
+
+	srvs, err := startServers(cfg, handler, nil, logger)
+	if srvs != nil {
+		defer srvs.stopAll(logger)
+	}
+	if err != nil {
+		t.Skipf("startServers: %v (IPv6 loopback may be unavailable)", err)
+	}
+	if got := len(srvs.udpServers()); got != 2 {
+		t.Fatalf("UDP listeners = %d, want 2", got)
+	}
+	if got := len(srvs.tcpServers()); got != 2 {
+		t.Fatalf("TCP listeners = %d, want 2", got)
 	}
 }
