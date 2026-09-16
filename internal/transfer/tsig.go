@@ -505,25 +505,16 @@ func VerifyMessageWithPrevious(msg *protocol.Message, key *TSIGKey, previousKey 
 // time_signed.
 //
 // Memory bound: an attacker could probe with an unbounded set of key
-// names. We cap the map at a generous limit and evict only the true LRU
-// entry (head of list = least recently used). A victim's entry survives as
-// long as the victim makes replay checks, even if many attacker-named keys
-// exist in the map.
-//
-// LRU structure: map[keyName] -> *list.Element of *replayEntry{keyName, time}
-// list order: head=LRU, tail=MRU. On every successful check the key is moved
-// to the tail. On overflow the head is evicted. A key can only be evicted
-// through its own inactivity, not through other keys filling the map.
+// names. We cap the map at a generous limit and evict the least-recently-
+// used entry on overflow via a container/list LRU (tail=MRU, head=LRU).
+// A key can only be evicted through its own inactivity, not by other keys
+// filling the map — preventing an attacker from displacing a victim's key.
 var (
-	tsigReplayMu   sync.Mutex
-	tsigReplayList = list.New() // head=LRU, tail=MRU
-	tsigReplayMap  = make(map[string]*list.Element)
+	tsigReplayMu        sync.Mutex
+	tsigReplayHighWater = make(map[string]time.Time)
+	tsigReplayLRUOrder  = list.New() // tail=MRU, head=LRU
+	tsigReplayKeyNodes  = make(map[string]*list.Element)
 )
-
-type replayEntry struct {
-	keyName string
-	time    time.Time
-}
 
 const tsigReplayKeyCap = 10000
 
@@ -532,32 +523,31 @@ const tsigReplayKeyCap = 10000
 func checkReplay(keyName string, timeSigned time.Time, fudge time.Duration) error {
 	tsigReplayMu.Lock()
 	defer tsigReplayMu.Unlock()
-
-	// If key already exists, move to MRU tail (unless time is stale).
-	if el, ok := tsigReplayMap[keyName]; ok {
-		entry := el.Value.(*replayEntry)
-		if timeSigned.Before(entry.time.Add(-fudge)) {
+	if prev, ok := tsigReplayHighWater[keyName]; ok {
+		if timeSigned.Before(prev.Add(-fudge)) {
 			return fmt.Errorf("TSIG replay: time_signed %s is more than fudge=%s before last-accepted %s for key %q",
-				timeSigned.UTC().Format(time.RFC3339Nano), fudge, entry.time.UTC().Format(time.RFC3339Nano), keyName)
+				timeSigned.UTC().Format(time.RFC3339Nano), fudge, prev.UTC().Format(time.RFC3339Nano), keyName)
 		}
-		if timeSigned.After(entry.time) {
-			entry.time = timeSigned
-			tsigReplayList.MoveToBack(el)
+		if timeSigned.After(prev) {
+			tsigReplayHighWater[keyName] = timeSigned
 		}
-		// timeSigned <= entry.time: accept (same or older-than-stored, but not stale)
-		// This matches original FIFO behavior where equal timestamps advance the high-water mark.
-		return nil
+		tsigReplayLRUOrder.MoveToBack(tsigReplayKeyNodes[keyName])
+	} else {
+		if len(tsigReplayHighWater) >= tsigReplayKeyCap {
+			// LRU eviction: drop the least-recently-used entry (head of list).
+			// A key can only be evicted through its own inactivity,
+			// not by other keys filling the map.
+			front := tsigReplayLRUOrder.Front()
+			if front != nil {
+				evictedKey := front.Value.(string)
+				delete(tsigReplayHighWater, evictedKey)
+				delete(tsigReplayKeyNodes, evictedKey)
+				tsigReplayLRUOrder.Remove(front)
+			}
+		}
+		tsigReplayHighWater[keyName] = timeSigned
+		tsigReplayKeyNodes[keyName] = tsigReplayLRUOrder.PushBack(keyName)
 	}
-
-	// New key: evict LRU entry if at capacity.
-	if tsigReplayList.Len() >= tsigReplayKeyCap {
-		lru := tsigReplayList.Remove(tsigReplayList.Front()).(*replayEntry)
-		delete(tsigReplayMap, lru.keyName)
-	}
-
-	entry := &replayEntry{keyName: keyName, time: timeSigned}
-	el := tsigReplayList.PushBack(entry)
-	tsigReplayMap[keyName] = el
 	return nil
 }
 
