@@ -588,6 +588,11 @@ func (c *Config) validateMetrics() []string {
 	if !strings.HasPrefix(c.Metrics.Path, "/") {
 		errors = append(errors, fmt.Sprintf("metrics: path '%s' must start with /", c.Metrics.Path))
 	}
+	// Mirrors the runtime check in metrics.Start, so -validate-config catches
+	// a config the server would refuse to start with.
+	if isPublicListenAddress(c.Metrics.Bind) && strings.TrimSpace(c.Metrics.AuthToken) == "" {
+		errors = append(errors, fmt.Sprintf("metrics: auth_token is required when bind %q is not loopback (use e.g. 127.0.0.1:9153 or set auth_token)", c.Metrics.Bind))
+	}
 	return errors
 }
 

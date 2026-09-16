@@ -117,6 +117,22 @@ type Config struct {
 	AuthToken string
 }
 
+// IsLoopbackBind reports whether a listen address only accepts loopback
+// connections (127.0.0.0/8, ::1 or "localhost"). Wildcard and empty hosts
+// are not loopback.
+func IsLoopbackBind(addr string) bool {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(addr))
+	if err != nil {
+		host = strings.TrimSpace(addr)
+	}
+	host = strings.Trim(host, "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 // New creates a new metrics collector.
 func New(cfg Config) *MetricsCollector {
 	if cfg.Path == "" {
@@ -145,12 +161,13 @@ func (m *MetricsCollector) Start() error {
 		return nil
 	}
 
-	// SECURITY: Refuse to serve metrics without auth. Operators must set
-	// auth_token whenever the metrics endpoint is enabled.
-	if m.config.AuthToken == "" {
-		return fmt.Errorf("metrics enabled but auth_token not configured: " +
-			"refusing to serve sensitive operational metrics without authentication; " +
-			"set metrics.auth_token in config or bind metrics to localhost only")
+	// SECURITY: Refuse to serve metrics unauthenticated on a reachable
+	// address. Without auth_token the endpoint may only bind to loopback,
+	// where a local scraper (or an SSH tunnel) is the only client.
+	if m.config.AuthToken == "" && !IsLoopbackBind(m.config.Bind) {
+		return fmt.Errorf("metrics enabled on %q but auth_token not configured: "+
+			"refusing to serve sensitive operational metrics without authentication; "+
+			"set metrics.auth_token in config or bind metrics to localhost only (e.g. 127.0.0.1:9153)", m.config.Bind)
 	}
 
 	m.lifecycleMu.Lock()
@@ -453,6 +470,16 @@ func (m *MetricsCollector) RecordUpstreamQuery(server string) {
 // The token is accepted via the Authorization header (Bearer token).
 func (m *MetricsCollector) requireMetricsAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Without a token, Start only allows a loopback bind; serve local
+		// scrapers, and still refuse any non-loopback peer as a backstop.
+		if m.config.AuthToken == "" {
+			if !isLoopbackPeer(r.RemoteAddr) {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			next(w, r)
+			return
+		}
 		token := r.Header.Get("Authorization")
 		token = strings.TrimPrefix(token, "Bearer ")
 		if !constantTimeTokenEqual(token, m.config.AuthToken) {
@@ -461,6 +488,15 @@ func (m *MetricsCollector) requireMetricsAuth(next http.HandlerFunc) http.Handle
 		}
 		next(w, r)
 	}
+}
+
+func isLoopbackPeer(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func constantTimeTokenEqual(got, want string) bool {

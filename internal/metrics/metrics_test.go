@@ -739,3 +739,47 @@ func TestUptimeClampsFutureStartTime(t *testing.T) {
 		t.Fatalf("future start time health uptime should be zero, got %s", body)
 	}
 }
+
+func TestStartWithoutTokenAllowedOnlyOnLoopback(t *testing.T) {
+	public := New(Config{Enabled: true, Bind: "0.0.0.0:0", Path: "/metrics"})
+	if err := public.Start(); err == nil {
+		_ = public.Stop()
+		t.Fatal("Start on a public bind without auth_token succeeded; want refusal")
+	}
+
+	local := New(Config{Enabled: true, Bind: "127.0.0.1:0", Path: "/metrics"})
+	if err := local.Start(); err != nil {
+		t.Fatalf("Start on loopback without auth_token: %v", err)
+	}
+	_ = local.Stop()
+}
+
+func TestIsLoopbackBind(t *testing.T) {
+	for addr, want := range map[string]bool{
+		"127.0.0.1:9153": true, "[::1]:9153": true, "localhost:9153": true,
+		":9153": false, "0.0.0.0:9153": false, "[::]:9153": false, "192.168.1.5:9153": false, "": false,
+	} {
+		if got := IsLoopbackBind(addr); got != want {
+			t.Errorf("IsLoopbackBind(%q) = %v, want %v", addr, got, want)
+		}
+	}
+}
+
+func TestMetricsWithoutTokenServesOnlyLoopbackPeers(t *testing.T) {
+	m := New(Config{Enabled: true, Bind: "127.0.0.1:0", Path: "/metrics"})
+	h := m.requireMetricsAuth(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+
+	for remote, want := range map[string]int{
+		"127.0.0.1:5555":  http.StatusOK,
+		"[::1]:5555":      http.StatusOK,
+		"192.168.1.9:555": http.StatusUnauthorized,
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+		req.RemoteAddr = remote
+		rec := httptest.NewRecorder()
+		h(rec, req)
+		if rec.Code != want {
+			t.Errorf("peer %s: status %d, want %d", remote, rec.Code, want)
+		}
+	}
+}
