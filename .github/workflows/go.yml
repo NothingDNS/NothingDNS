@@ -266,7 +266,7 @@ jobs:
         # scope, so a compromised upstream tag of any tool would inherit those
         # permissions. Bump these tags via Renovate / Dependabot.
         run: |
-          go install honnef.co/go/tools/cmd/staticcheck@2025.1.1
+          go install honnef.co/go/tools/cmd/staticcheck@2026.2.1
           go install github.com/kisielk/errcheck@v1.20.0
           go install github.com/polyfloyd/go-errorlint@v1.8.0
           staticcheck ./...
