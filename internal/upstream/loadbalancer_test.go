@@ -3085,3 +3085,50 @@ func TestLoadBalancerCheckHealthFullWithServers(t *testing.T) {
 		t.Log("Server marked unhealthy after health check (may be timing related)")
 	}
 }
+
+// TestLoadBalancerPoolTypeConsistency verifies that LoadBalancer's udpPool and
+// tcpPool New() functions return *[]byte (pointer to slice) to match the
+// pool.Put(&buf) call in putBack(). Without this, sync.Pool's internal type
+// becomes *[]byte after the first Put, but New() keeps returning bare []byte,
+// causing type mismatches and silent memory leaks on every Get() call.
+// This is the same bug fixed in upstream/client.go by commit daaae3e.
+func TestLoadBalancerPoolTypeConsistency(t *testing.T) {
+	config := LoadBalancerConfig{
+		Servers:      []string{"1.1.1.1:53", "9.9.9.9:53"},
+		Strategy:     "random",
+		FailoverTimeout: 2 * time.Second,
+	}
+
+	lb, err := NewLoadBalancer(config)
+	if err != nil {
+		t.Fatalf("NewLoadBalancer failed: %v", err)
+	}
+	defer lb.Close()
+
+	for _, addr := range []string{"1.1.1.1:53", "9.9.9.9:53"} {
+		for _, poolName := range []string{"udpPool", "tcpPool"} {
+			var pool *sync.Pool
+			if poolName == "udpPool" {
+				pool = lb.udpPool[addr]
+			} else {
+				pool = lb.tcpPool[addr]
+			}
+
+			// First Get returns what New() produced.
+			got := pool.Get()
+
+			// After the first Put, the pool's internal type is *[]byte.
+			// If New() correctly returns *[]byte, the next Get also returns *[]byte.
+			// If New() returns bare []byte, the pool returns []byte and Put(&buf)
+			// stores *[]byte — causing type chaos and memory leaks.
+			pool.Put(got) // trigger type alignment
+
+			got2 := pool.Get()
+			if _, ok := got2.(*[]byte); !ok {
+				t.Errorf("%s for %s: after Put, Get() returned %T, want *[]byte — pool New() returns bare []byte",
+					poolName, addr, got2)
+			}
+			pool.Put(got2)
+		}
+	}
+}

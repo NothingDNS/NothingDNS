@@ -524,6 +524,7 @@ func (c *AXFRClient) Transfer(zoneName string, key *TSIGKey) ([]*protocol.Resour
 	if err := c.sendMessage(conn, req); err != nil {
 		return nil, fmt.Errorf("sending AXFR request: %w", err)
 	}
+	defer req.Release()
 
 	// Receive response records
 	records, err := c.receiveAXFRResponse(conn, req.Header.ID, key)

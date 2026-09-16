@@ -2,6 +2,7 @@ package transfer
 
 import (
 	"bytes"
+	"container/list"
 	"crypto/hmac"
 	"crypto/sha1" // #nosec G505 -- HMAC-SHA1 required for TSIG algorithm hmac-sha1 (RFC 4635)
 	"crypto/sha256"
@@ -504,13 +505,15 @@ func VerifyMessageWithPrevious(msg *protocol.Message, key *TSIGKey, previousKey 
 // time_signed.
 //
 // Memory bound: an attacker could probe with an unbounded set of key
-// names. We cap the map at a generous limit and evict in FIFO order on
-// overflow (an attacker who manages to evict legitimate state has only
-// regained the pre-fix behaviour — replay still requires a captured valid
-// signed message).
+// names. We cap the map at a generous limit and evict the least-recently-
+// used entry on overflow via a container/list LRU (tail=MRU, head=LRU).
+// A key can only be evicted through its own inactivity, not by other keys
+// filling the map — preventing an attacker from displacing a victim's key.
 var (
 	tsigReplayMu        sync.Mutex
 	tsigReplayHighWater = make(map[string]time.Time)
+	tsigReplayLRUOrder  = list.New() // tail=MRU, head=LRU
+	tsigReplayKeyNodes  = make(map[string]*list.Element)
 )
 
 const tsigReplayKeyCap = 10000
@@ -528,16 +531,22 @@ func checkReplay(keyName string, timeSigned time.Time, fudge time.Duration) erro
 		if timeSigned.After(prev) {
 			tsigReplayHighWater[keyName] = timeSigned
 		}
+		tsigReplayLRUOrder.MoveToBack(tsigReplayKeyNodes[keyName])
 	} else {
 		if len(tsigReplayHighWater) >= tsigReplayKeyCap {
-			// FIFO eviction: drop a single arbitrary entry. Sets in Go
-			// iterate in random order so this is effectively random eviction.
-			for k := range tsigReplayHighWater {
-				delete(tsigReplayHighWater, k)
-				break
+			// LRU eviction: drop the least-recently-used entry (head of list).
+			// A key can only be evicted through its own inactivity,
+			// not by other keys filling the map.
+			front := tsigReplayLRUOrder.Front()
+			if front != nil {
+				evictedKey := front.Value.(string)
+				delete(tsigReplayHighWater, evictedKey)
+				delete(tsigReplayKeyNodes, evictedKey)
+				tsigReplayLRUOrder.Remove(front)
 			}
 		}
 		tsigReplayHighWater[keyName] = timeSigned
+		tsigReplayKeyNodes[keyName] = tsigReplayLRUOrder.PushBack(keyName)
 	}
 	return nil
 }

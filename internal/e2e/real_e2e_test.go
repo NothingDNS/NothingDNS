@@ -665,6 +665,7 @@ func (h *testDoHHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid dns message", http.StatusBadRequest)
 		return
 	}
+	defer query.Release()
 
 	if len(query.Questions) == 0 {
 		http.Error(w, "no questions", http.StatusBadRequest)

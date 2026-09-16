@@ -102,13 +102,13 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		defer query.Release() // runs even if ServeDNS panics
 		rw := &wsResponseWriter{
 			conn:    conn,
 			httpReq: r,
 			query:   query,
 		}
-		h.dnsHandler.ServeDNS(rw, query)
-		query.Release()
+		h.dnsHandler.ServeDNS(rw, query) // guarded by ServeDNSWithRecovery; Release is nil-safe
 	}
 }
 
@@ -139,6 +139,11 @@ func (rw *wsResponseWriter) Write(msg *protocol.Message) (int, error) {
 	if len(msg.Questions) == 0 && len(rw.query.Questions) > 0 {
 		msg.Questions = rw.query.Questions
 	}
+
+	// msg is from the server.Handler's upstream/resolver pool. Release it after
+	// wire-packing completes so ServeDNS can still mutate it and we keep the
+	// wire bytes.
+	defer msg.Release()
 
 	buf := make([]byte, msg.WireLength())
 	n, err := msg.Pack(buf)

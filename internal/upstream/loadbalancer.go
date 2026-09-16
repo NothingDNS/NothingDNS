@@ -300,12 +300,14 @@ func NewLoadBalancer(config LoadBalancerConfig) (*LoadBalancer, error) {
 		// Initialize connection pools
 		lb.udpPool[addr] = &sync.Pool{
 			New: func() interface{} {
-				return make([]byte, 4096)
+				b := make([]byte, 4096)
+				return &b
 			},
 		}
 		lb.tcpPool[addr] = &sync.Pool{
 			New: func() interface{} {
-				return make([]byte, 65535)
+				b := make([]byte, 65535)
+				return &b
 			},
 		}
 	}
@@ -371,13 +373,15 @@ func (lb *LoadBalancer) QueryContext(ctx context.Context, msg *protocol.Message)
 
 	select {
 	case <-ctx.Done():
-		// Check if query completed anyway before returning cancellation error
-		select {
-		case r := <-done:
-			return r.resp, r.err
-		default:
-			return nil, ctx.Err()
+		// Block until the goroutine has sent its result, then clean it up.
+		// Without this drain the goroutine would be left blocked forever on its
+		// unbuffered done send, and the pooled response would be neither released
+		// nor returned to the caller.
+		r := <-done
+		if r.resp != nil {
+			r.resp.Release()
 		}
+		return nil, ctx.Err()
 	case r := <-done:
 		return r.resp, r.err
 	}

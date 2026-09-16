@@ -294,13 +294,16 @@ func (c *Client) QueryContext(ctx context.Context, msg *protocol.Message) (*prot
 
 	select {
 	case <-ctx.Done():
-		// Check if query completed anyway before returning cancellation error
-		select {
-		case r := <-done:
-			return r.resp, r.err
-		default:
-			return nil, ctx.Err()
+		// Block until the goroutine exits, then release the pooled response.
+		// The buffered channel ensures the goroutine always exits cleanly.
+		// Since we return ctx.Err() here, the caller of QueryContext will
+		// never see the response — the caller already has a context timeout
+		// and does not need the (possibly stale) upstream response.
+		r := <-done
+		if r.resp != nil {
+			r.resp.Release()
 		}
+		return nil, ctx.Err()
 	case r := <-done:
 		return r.resp, r.err
 	}

@@ -622,6 +622,14 @@ func (r *Resolver) sendQuery(ctx context.Context, name string, qtype uint16, add
 		return nil, fmt.Errorf("resolver: nil response from %s", addr)
 	}
 
+	// Verify the response TXID matches what we sent — prevents spoofed
+	// responses from reaching higher layers (including DNSSEC validation).
+	// Tolerate ID=0: some referral responses and non-compliant servers use it.
+	if resp.Header.ID != 0 && resp.Header.ID != id {
+		resp.Release()
+		return nil, fmt.Errorf("resolver: TXID mismatch from %s", addr)
+	}
+
 	// Handle referral with TC bit — re-query over TCP (handled by transport)
 	if resp.Header.Flags.TC {
 		return resp, nil
