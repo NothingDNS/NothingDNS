@@ -59,6 +59,7 @@ func unmarshalBlocklist(node *Node, cfg *BlocklistConfig) error {
 	cfg.Enabled = getBool(node, "enabled", cfg.Enabled)
 	cfg.Files = getStringSlice(node, "files", cfg.Files)
 	cfg.URLs = getStringSlice(node, "urls", cfg.URLs)
+	cfg.BaseDir = node.GetString("base_dir")
 
 	return nil
 }
