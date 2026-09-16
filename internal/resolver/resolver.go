@@ -447,7 +447,6 @@ func (r *Resolver) resolve(ctx context.Context, name string, qtype uint16, cname
 					respQuestions := resp.Questions
 					resp.Release()
 
-
 					// Synthesize a CNAME from the DNAME and chase it
 					cnameName, _ := protocol.ParseName(dname.synthTarget)
 					qnameParsed, _ := protocol.ParseName(name)
@@ -635,8 +634,8 @@ func (r *Resolver) sendQuery(ctx context.Context, name string, qtype uint16, add
 
 	// Verify the response TXID matches what we sent — prevents spoofed
 	// responses from reaching higher layers (including DNSSEC validation).
-	// Tolerate ID=0: some referral responses and non-compliant servers use it.
-	if resp.Header.ID != 0 && resp.Header.ID != id {
+	// No ID=0 exemption: a blind spoofer could simply always answer with 0.
+	if resp.Header.ID != id {
 		resp.Release()
 		return nil, fmt.Errorf("resolver: TXID mismatch from %s", addr)
 	}

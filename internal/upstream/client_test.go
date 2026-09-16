@@ -3,6 +3,7 @@ package upstream
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"io"
 	"net"
 	"strings"
@@ -789,7 +790,7 @@ func testClientQuery(t *testing.T, id uint16) *protocol.Message {
 		t.Fatalf("ParseName: %v", err)
 	}
 	return &protocol.Message{
-		Header: protocol.Header{ID: id, Flags: protocol.NewQueryFlags(), QDCount: 1},
+		Header:    protocol.Header{ID: id, Flags: protocol.NewQueryFlags(), QDCount: 1},
 		Questions: []*protocol.Question{{Name: name, QType: protocol.TypeA, QClass: protocol.ClassIN}},
 	}
 }
@@ -2279,12 +2280,61 @@ func TestUpstreamPoolTypeConsistency(t *testing.T) {
 			// putBack calls pool.Put(&buf) where buf is the slice backed by *ptr.
 			pool.Put(item1)
 
-			// Second Get must return the same item back (self-consistent type).
+			// Second Get must yield the same type whether it is the recycled
+			// item or a fresh New() — sync.Pool never guarantees Put items
+			// come back (the race detector deliberately drops some Puts).
 			item2 := pool.Get()
-			if item1 != item2 {
-				t.Fatalf("Get after Put did not return the Put item: got %v, want %v", item2, item1)
+			ptr2, ok := item2.(*[]byte)
+			if !ok {
+				t.Fatalf("Get after Put returned %T, want *[]byte", item2)
+			}
+			if cap(*ptr2) != tc.size {
+				t.Fatalf("Get after Put returned cap %d, want %d", cap(*ptr2), tc.size)
 			}
 			pool.Put(item2)
 		})
 	}
+}
+
+// TestQueryContextReturnsPromptlyOnCancel guards against QueryContext
+// blocking until the upstream timeout after ctx is cancelled: the caller must
+// get ctx.Err() right away while the abandoned query finishes in the
+// background on its own copy of the message.
+func TestQueryContextReturnsPromptlyOnCancel(t *testing.T) {
+	// A UDP socket that never answers.
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer pc.Close()
+
+	client, err := NewClient(Config{
+		Servers:  []string{pc.LocalAddr().String()},
+		Strategy: "random",
+		Timeout:  3 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+	defer client.Close()
+
+	msg, err := protocol.NewQuery(1234, "example.com.", protocol.TypeA)
+	if err != nil {
+		t.Fatalf("NewQuery: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err = client.QueryContext(ctx, msg)
+	elapsed := time.Since(start)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("QueryContext err = %v, want context.DeadlineExceeded", err)
+	}
+	if elapsed > time.Second {
+		t.Fatalf("QueryContext returned after %v; want prompt return on cancel", elapsed)
+	}
+	// The caller owns msg again as soon as QueryContext returns.
+	msg.Release()
 }

@@ -375,7 +375,7 @@ func (v *Validator) buildChain(ctx context.Context, anchor *TrustAnchor, remaini
 		chain = append(chain, &chainLink{
 			zone:       childZone,
 			dnsKeys:    childKeys,
-			dsRecords:  dsRecords,
+			dsRecords:  detachRecords(dsRecords), // dsMsg is released on return
 			validated:  true,
 			nsec3Param: childNSEC3Param,
 		})
@@ -526,6 +526,15 @@ func (v *Validator) fetchDNSKEYAndSigs(ctx context.Context, zone string) (keys, 
 		}
 	}
 	return keys, sigs, nil
+}
+
+// detachRecords applies detachRecord to every record in rrs.
+func detachRecords(rrs []*protocol.ResourceRecord) []*protocol.ResourceRecord {
+	out := make([]*protocol.ResourceRecord, len(rrs))
+	for i, rr := range rrs {
+		out[i] = detachRecord(rr)
+	}
+	return out
 }
 
 // detachRecord returns a copy of rr that stays valid after the pooled
