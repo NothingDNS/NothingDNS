@@ -2430,3 +2430,79 @@ func TestSetTokenFilePath(t *testing.T) {
 		t.Errorf("tokenFilePath not set correctly: %s", store.tokenFilePath)
 	}
 }
+
+// Users created at runtime must survive a restart through the users file,
+// while config-defined users and the auto-created admin are never written.
+func TestUsersFilePersistsRuntimeUsers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.json")
+
+	s1, err := NewStore(&Config{Secret: "test-secret-test-secret-test-secret-12"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s1.EnableUsersFile(path); err != nil || n != 0 {
+		t.Fatalf("EnableUsersFile on missing file = (%d, %v), want (0, nil)", n, err)
+	}
+	// Bootstrap flow: drop the synthetic admin, create the real one.
+	if err := s1.DeleteUser("admin"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s1.CreateUser("admin", "Str0ng-Passw0rd!", RoleAdmin); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s1.CreateUser("ops", "Str0ng-Passw0rd!", RoleOperator); err != nil {
+		t.Fatal(err)
+	}
+
+	// Restart.
+	s2, err := NewStore(&Config{Secret: "test-secret-test-secret-test-secret-12"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s2.EnableUsersFile(path); err != nil || n != 2 {
+		t.Fatalf("EnableUsersFile after restart = (%d, %v), want (2, nil)", n, err)
+	}
+	if !s2.VerifyUserPassword("admin", "Str0ng-Passw0rd!") {
+		t.Fatal("admin password not preserved across restart")
+	}
+	if u, err := s2.GetUser("admin"); err != nil || u.IsAutoCreated {
+		t.Fatalf("admin after restart = %+v, %v; want the persisted, non-auto-created user", u, err)
+	}
+
+	// Deleting persists too.
+	if err := s2.DeleteUser("ops"); err != nil {
+		t.Fatal(err)
+	}
+	s3, _ := NewStore(&Config{Secret: "test-secret-test-secret-test-secret-12"})
+	if n, err := s3.EnableUsersFile(path); err != nil || n != 1 {
+		t.Fatalf("after delete: EnableUsersFile = (%d, %v), want (1, nil)", n, err)
+	}
+}
+
+func TestUsersFileConfigUsersWinAndAreNotWritten(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.json")
+	cfg := &Config{
+		Secret: "test-secret-test-secret-test-secret-12",
+		Users:  []User{{Username: "root", Password: "Config-Passw0rd!", Role: RoleAdmin}},
+	}
+	s1, err := NewStore(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s1.EnableUsersFile(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s1.CreateUser("viewer1", "Str0ng-Passw0rd!", RoleViewer); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), `"root"`) {
+		t.Fatalf("config-defined user written to users file: %s", data)
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("users file mode = %v, %v; want 0600", info.Mode().Perm(), err)
+	}
+}

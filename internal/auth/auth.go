@@ -60,6 +60,10 @@ type User struct {
 	// the (unknowable, randomly-generated) old password — otherwise the
 	// daemon ships in a permanently unbootstrappable state.
 	IsAutoCreated bool `json:"is_auto_created,omitempty"`
+
+	// configured marks users defined in the server config. The config stays
+	// their source of truth, so they are never written to the users file.
+	configured bool
 }
 
 // Token represents an active authentication token.
@@ -90,6 +94,7 @@ type Store struct {
 	// manually by revoking all tokens and restarting with a new secret.
 	secret        []byte        // HMAC signing key
 	tokenFilePath string        // Path to persist tokens (optional)
+	usersFilePath string        // Path to persist runtime-managed users (optional)
 	tokenExpiry   time.Duration // TTL for newly-issued tokens (VULN-032)
 }
 
@@ -188,6 +193,7 @@ func NewStore(cfg *Config) (*Store, error) {
 			u.Hash = hash
 			u.Password = strings.Repeat("\x00", len(u.Password))
 		}
+		u.configured = true
 		s.users[u.Username] = &u
 	}
 
@@ -577,6 +583,7 @@ func (s *Store) CreateUser(username, password string, role Role) (*User, error) 
 		UpdatedAt: now,
 	}
 	s.users[username] = user
+	s.persistUsersLocked()
 	return clonePublicUser(user), nil
 }
 
@@ -629,6 +636,7 @@ func (s *Store) UpdateUser(username, password string, role Role) (*User, error) 
 		delete(s.activeSessions, username)
 	}
 
+	s.persistUsersLocked()
 	return clonePublicUser(user), nil
 }
 
@@ -668,6 +676,7 @@ func (s *Store) deleteUserLocked(username string) error {
 		}
 	}
 	delete(s.activeSessions, username)
+	s.persistUsersLocked()
 	return nil
 }
 
@@ -746,6 +755,78 @@ func (s *Store) VerifyUserPassword(username, password string) bool {
 		return false
 	}
 	return VerifyPassword(password, user.Hash)
+}
+
+// EnableUsersFile loads users created at runtime (bootstrap, dashboard, API)
+// from path and persists every later user change there, so they survive
+// restarts. A missing file is not an error. Users defined in the server config
+// take precedence over same-named users in the file, and a successfully loaded
+// user replaces the synthetic auto-created admin. Returns the number of users
+// loaded.
+func (s *Store) EnableUsersFile(path string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.usersFilePath = path
+
+	data, err := readAuthPersistFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	var users map[string]*User
+	if err := json.Unmarshal(data, &users); err != nil {
+		return 0, fmt.Errorf("parsing users file %s: %w", path, err)
+	}
+	if len(users) > 0 {
+		if err := validateLoadedUsers(users); err != nil {
+			return 0, fmt.Errorf("users file %s: %w", path, err)
+		}
+	}
+
+	loaded := 0
+	for name, u := range users {
+		if u.IsAutoCreated {
+			continue
+		}
+		if existing, ok := s.users[name]; ok && existing.configured {
+			continue
+		}
+		u.configured = false
+		s.users[name] = u
+		loaded++
+	}
+	if loaded > 0 {
+		if admin, ok := s.users["admin"]; ok && admin.IsAutoCreated {
+			delete(s.users, "admin")
+		}
+	}
+	return loaded, nil
+}
+
+// persistUsersLocked writes the runtime-managed users to the users file, if
+// one is enabled. Config-defined users and the auto-created admin are left
+// out. Must be called with s.mu held. A write failure is logged rather than
+// returned: the in-memory change has already been applied.
+func (s *Store) persistUsersLocked() {
+	if s.usersFilePath == "" {
+		return
+	}
+	users := make(map[string]*User)
+	for name, u := range s.users {
+		if u.configured || u.IsAutoCreated {
+			continue
+		}
+		users[name] = u
+	}
+	data, err := json.MarshalIndent(users, "", "  ")
+	if err == nil {
+		err = atomicWriteFile(s.usersFilePath, data, 0600)
+	}
+	if err != nil {
+		util.Warnf("auth: failed to persist users to %s: %v", s.usersFilePath, err)
+	}
 }
 
 // Save persists users to a file.

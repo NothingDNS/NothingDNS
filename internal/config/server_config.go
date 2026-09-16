@@ -149,6 +149,12 @@ type HTTPConfig struct {
 	// in-memory only and all sessions are invalidated on restart.
 	TokenPersistencePath string `yaml:"token_persistence_path"`
 
+	// UsersFile stores users created at runtime (bootstrap endpoint,
+	// dashboard, API) so they survive restarts. Defaults to
+	// <storage.data_dir>/users.json when storage.data_dir is set; with
+	// neither set, runtime-created users live in memory only.
+	UsersFile string `yaml:"users_file"`
+
 	// MaxSessionsPerUser caps the number of simultaneous tokens any
 	// single user may hold. 0 means unlimited. The auth.Store
 	// already implements the cap (with eviction-by-oldest semantics);
@@ -241,6 +247,7 @@ func unmarshalServer(node *Node, cfg *ServerConfig) error {
 		cfg.HTTP.AuthTokenRole = httpNode.GetString("auth_token_role")
 		cfg.HTTP.AuthSecret = httpNode.GetString("auth_secret")
 		cfg.HTTP.TokenPersistencePath = httpNode.GetString("token_persistence_path")
+		cfg.HTTP.UsersFile = httpNode.GetString("users_file")
 		if cfg.HTTP.MaxSessionsPerUser, err = getRequiredInt(httpNode, "max_sessions_per_user", cfg.HTTP.MaxSessionsPerUser); err != nil {
 			return fmt.Errorf("http: %w", err)
 		}

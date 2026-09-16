@@ -579,6 +579,16 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 	}
 	logger.Infof("Auth store initialized with %d users", len(cfg.Server.HTTP.Users))
 
+	if usersFile := authUsersFile(cfg); usersFile != "" {
+		loaded, err := authStore.EnableUsersFile(usersFile)
+		if err != nil {
+			logger.Fatalf("Failed to load users from %s: %v", usersFile, err)
+		}
+		logger.Infof("Runtime-managed users persisted in %s (%d loaded)", usersFile, loaded)
+	} else {
+		logger.Warnf("No server.http.users_file or storage.data_dir configured: users created from the dashboard or bootstrap endpoint are lost on restart")
+	}
+
 	// Restore persistent tokens from file if configured. Validation
 	// lives in cmd/nothingdns/helpers.validateAuthPersistenceConfig
 	// so it's unit-testable (L-4).
