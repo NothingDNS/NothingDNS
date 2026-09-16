@@ -2,6 +2,7 @@ package transfer
 
 import (
 	"bytes"
+	"container/list"
 	"net"
 	"strings"
 	"testing"
@@ -700,10 +701,11 @@ func TestRDataTSIG_String_Invalid(t *testing.T) {
 // The tsigReplayMu must be held while calling this.
 func resetReplayState() {
 	tsigReplayMu.Lock()
-	tsigReplayList.Init()
-	for k := range tsigReplayMap {
-		delete(tsigReplayMap, k)
+	tsigReplayLRUOrder.Init()
+	for k := range tsigReplayHighWater {
+		delete(tsigReplayHighWater, k)
 	}
+	tsigReplayKeyNodes = make(map[string]*list.Element)
 	tsigReplayMu.Unlock()
 }
 
