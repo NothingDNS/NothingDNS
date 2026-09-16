@@ -129,7 +129,7 @@ Thumbs.db
 /.wrongstack/*
 !/.wrongstack/project.json
 
-# Local temp files (per CLAUDE.md / repo convention)
+# Local temp files (per AGENTS.md / repo convention)
 .temp_files/
 
 # Frontend coverage output directory

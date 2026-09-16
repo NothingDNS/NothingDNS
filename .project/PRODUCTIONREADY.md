@@ -219,7 +219,7 @@ NothingDNS is a **production-grade DNS server** with a mature core, comprehensiv
 - **Excellent specification documents**: `docs/SPECIFICATION.md`, `docs/IMPLEMENTATION.md`, etc.
 - **Security policy**: `docs/SECURITY.md` outlines reporting procedures.
 - **OpenAPI spec**: Served live at `/api/openapi.json`.
-- **CLAUDE.md**: Excellent project guidance.
+- **AGENTS.md**: Excellent project guidance.
 - **✅ FIXED: Dependency claims corrected**: "Zero external dependencies" updated to "minimal external dependencies" in SECURITY.md and README.md.
 - **✅ FIXED: `dnsctl` documentation**: `cmd/dnsctl/README.md` created with full command reference.
 - **✅ FIXED: SPEC_DEVIATIONS.md updated**: Documents login flow, mock data (now fixed), settings, logout.

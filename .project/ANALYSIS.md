@@ -87,7 +87,7 @@ This pipeline is **well-structured and defensively coded**. Panic recovery wraps
 
 ### 2.3 Dependency Philosophy vs Reality
 
-The project claims **"zero external dependencies"** in `docs/SECURITY.md` and `CLAUDE.md`. This is **mostly true but technically false**:
+The project claims **"zero external dependencies"** in `docs/SECURITY.md` and `AGENTS.md`. This is **mostly true but technically false**:
 
 ```go
 // go.mod
