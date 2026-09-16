@@ -14,7 +14,7 @@ NothingDNS is a self-contained DNS server written in Go. It includes authoritati
 ## What is included
 
 - **DNS serving**: UDP/TCP DNS, authoritative zones, forwarding, iterative resolution, DNS64, SVCB/HTTPS, IDNA, and QNAME minimization.
-- **Security and policy**: DNSSEC validation/signing, DNS Cookies, DoH, DoT, DoQ, ODoH, DSO, ACLs, RRL, RPZ, and blocklists from hosts-style, URL, or plain domain-per-line sources.
+- **Security and policy**: DNSSEC validation/signing, DNS Cookies, DoH, DoT, DoQ, ODoH, DSO, ACLs, a recursion allow list (authoritative answers for everyone, recursion only for trusted networks), RRL, RPZ, and blocklists from hosts-style, URL, or plain domain-per-line sources.
 - **Operations**: hot reload, Prometheus metrics, structured audit logs, memory protection, systemd/Docker/Kubernetes deployment assets, and backup/health-check scripts.
 - **Management**: REST API with OpenAPI/Swagger, `dnsctl`, and an embedded React 19 dashboard with WebSocket query streaming and zone management.
 - **Persistence and HA**: built-in KV/WAL storage, AXFR/IXFR support, slave zones, split-horizon views, GeoIP responses, and gossip/Raft clustering.
@@ -106,7 +106,7 @@ The web package uses npm scripts:
 cd web
 npm install
 npm run build
-npm test          # 51 unit tests with Vitest + RTL
+npm test          # unit tests with Vitest + React Testing Library
 npm run lint
 ```
 

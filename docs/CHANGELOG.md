@@ -5,6 +5,37 @@ All notable changes to NothingDNS are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Recursion allow list (`allow_recursion`)**: recursion — upstream forwarding, iterative resolution and cached answers — is now controlled separately from the general ACL. Clients outside the list still receive answers from the server's own zones; other names are refused (REFUSED, EDE 18 "Prohibited", RA=0), and the shared cache is not served to them. The general `acl` keeps applying to every query.
+- **Dashboard: "Allow Recursion" on the ACL page**: administrators can add and remove networks (CIDRs or single IPs), with confirmation before opening recursion to `0.0.0.0/0`/`::/0` or removing the last network. Backed by the new `GET/PUT /api/v1/acl/recursion` endpoint; `GET /api/v1/acl` also returns the recursion list and whether changes persist.
+- **Persistent access policy**: ACL and recursion changes made through the API or dashboard are saved to `<storage.data_dir>/access_policy.json` (mode 0600) and survive restarts and SIGHUP reloads; the file overrides `acl`/`allow_recursion` from the config file. A failed save rolls the change back.
+
+### Changed
+
+- **Default: authoritative answers for everyone, recursion for local networks**: with no `acl` and no `allow_recursion`, every client can query the server's own zones and only loopback/private networks may recurse. Previously a forwarding server with no ACL was an open resolver, and a recursive server with no ACL refused every client including its own zones. Installer, Docker and example configs now express the local-network restriction as `allow_recursion` instead of a general ACL.
+- Configs that already have `acl` rules but no `allow_recursion` keep their behaviour: every client the ACL admits may recurse.
+
+### Fixed
+
+- **ACL rules could not be added from the API when none were configured**: the server installed no ACL checker, so `PUT /api/v1/acl` answered 503. A checker now always exists; rules added at runtime refuse unmatched clients exactly like configured rules.
+- **ACL changes made through the API were lost on restart or reload**; they are now persisted (see above).
+- The ACL page listed DROP and REFUSE actions the server does not support; it now shows ALLOW, DENY and REDIRECT.
+- **`blocklist.base_dir` was never read from the config file** (regression from 1.1.11): the field existed but the loader did not parse it, so adding blocklist files through the API always failed. It is now parsed.
+- **ODoH target mode could not start**: the config only accepts the RFC 9180 KEM id 32 (0x0020) while the runtime compared against a private ordinal (4), so every ODoH-enabled server exited with "unsupported HPKE suite". `internal/odoh` now uses RFC 9180 ids for KEMs and AEADs. **AEAD ids changed accordingly**: `1` = AES-128-GCM (default), `2` = AES-256-GCM; `3` (ChaCha20-Poly1305) is rejected. Previously `1` selected AES-256-GCM and `3` AES-128-GCM.
+- **CI npm audit never failed**: with `web/.nsprc` present the audit output was piped into `head`, discarding its exit status. The obsolete allowlist (react-router 8.3.0 fixes GHSA-qwww-vcr4-c8h2) is removed and the audit is strict.
+
+### Documentation
+
+- `docs/API_REFERENCE.md` rewritten and verified against the handlers: every route with method, required role, request and response bodies, status codes, authentication (bearer, session cookie, legacy token, bootstrap), ACL and recursion, DNS privacy transports and known issues. `docs/API_ZONES.md` corrected (zone endpoints require the operator role; `POST /zones/reload` requires admin), and the OpenAPI spec documents every route with its required role.
+- `docs/CLI_REFERENCE.md` documents `dnsctl server bootstrap`; `docs/CONFIG_REFERENCE.md` documents `allow_recursion` and the access policy file; supported versions updated in `SECURITY.md`.
+
+### Removed
+
+- Personal editor/agent tooling and internal planning notes from version control (`.cursorrules`, `.windsurfrules`, `.wrongstack/`, `.project/`), the unused `.githooks/` copy, and the outdated `.github/CONTRIBUTING.md` (it claimed a zero-dependency policy and shadowed the root `CONTRIBUTING.md` on GitHub). `.gitignore` now covers common editor, AI-assistant and agent state directories.
+
 ## [1.1.12] — 2026-09-16
 
 Installation release. install.sh, setup.sh, update.sh, config.sh and
