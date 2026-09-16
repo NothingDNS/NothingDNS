@@ -106,6 +106,40 @@ func aclStage(h *integratedHandler) Stage {
 	}
 }
 
+// recursionPolicyStage decides whether this client may use recursion
+// (allow_recursion). A client that may not still gets answers from the
+// server's own zones; cache, NSEC-cache, resolver and upstream stages are
+// skipped for it and names outside the zones are refused.
+func recursionPolicyStage(h *integratedHandler) Stage {
+	return func(ctx context.Context, q *query, w server.ResponseWriter) (bool, error) {
+		policy := h.security.RecursionPolicy
+		if policy == nil {
+			return false, nil
+		}
+		clientIP := w.ClientInfo().IP()
+		if clientIP == nil || !policy.Allowed(clientIP) {
+			denyRecursion(q.currentWriter)
+		}
+		return false, nil
+	}
+}
+
+// recursionRefusedStage answers names outside the local zones with REFUSED
+// for clients that may not use recursion (RFC 8914 EDE 18, Prohibited).
+func recursionRefusedStage(h *integratedHandler) Stage {
+	return func(ctx context.Context, q *query, w server.ResponseWriter) (bool, error) {
+		if recursionAllowedFor(q.currentWriter) {
+			return false, nil
+		}
+		h.logger.Debugf("Recursion refused: %s %s from %s", q.qname, typeToString(q.qtype), w.ClientInfo().IP())
+		if h.metrics != nil {
+			h.metrics.RecordResponse(protocol.RcodeRefused)
+		}
+		sendErrorWithEDE(q.currentWriter, q.msg, protocol.RcodeRefused, protocol.EDEProhibited, "recursion not allowed for this client")
+		return true, nil
+	}
+}
+
 // rpzClientStage checks RPZ client IP policy.
 func rpzClientStage(h *integratedHandler) Stage {
 	return func(ctx context.Context, q *query, w server.ResponseWriter) (bool, error) {
@@ -162,6 +196,12 @@ func doBitStage(h *integratedHandler) Stage {
 // Returns (handled=true) if a cached response was found and sent.
 func cacheStage(h *integratedHandler) Stage {
 	return func(ctx context.Context, q *query, w server.ResponseWriter) (bool, error) {
+		// The shared cache holds recursively resolved data; serving it to a
+		// client without recursion rights would leak other clients' lookups
+		// (cache snooping) and act as partial recursion.
+		if !recursionAllowedFor(q.currentWriter) {
+			return false, nil
+		}
 		if entry := h.cache.Get(q.cacheKey); entry != nil {
 			q.cacheHit = true
 			if entry.IsNegative {
@@ -213,7 +253,7 @@ func cacheStage(h *integratedHandler) Stage {
 // nsecCacheStage checks RFC 8198 aggressive NSEC cache before upstream.
 func nsecCacheStage(h *integratedHandler) Stage {
 	return func(ctx context.Context, q *query, w server.ResponseWriter) (bool, error) {
-		if h.nsecCache != nil {
+		if h.nsecCache != nil && recursionAllowedFor(q.currentWriter) {
 			if synthResp := h.nsecCache.Lookup(q.qname, q.qtype); synthResp != nil {
 				h.logger.Debugf("NSEC cache hit for %s (aggressive negative)", q.qname)
 				if h.metrics != nil {

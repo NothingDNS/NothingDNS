@@ -5,6 +5,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/nothingdns/nothingdns/internal/blocklist"
 	"github.com/nothingdns/nothingdns/internal/config"
@@ -24,6 +25,12 @@ type SecurityManagerResult struct {
 	ACLChecker  *filter.ACLChecker
 	RateLimiter *filter.RateLimiter
 	RRL         *filter.RRL
+	// RecursionPolicy limits recursion (forwarding, iterative resolution,
+	// cached answers) to allowed clients.
+	RecursionPolicy *filter.RecursionPolicy
+	// AccessPolicyFile stores dashboard changes to the ACL and recursion
+	// allow list ("" when storage.data_dir is unset).
+	AccessPolicyFile string
 }
 
 // SecurityManager manages DNS security features: blocklist, RPZ, GeoDNS, ACL, and rate limiting.
@@ -112,23 +119,9 @@ func NewSecurityManager(cfg *config.Config, logger *util.Logger) (*SecurityManag
 		}
 	}
 
-	// Initialize ACL checker
-	if len(cfg.ACL) > 0 {
-		var err error
-		mgr.result.ACLChecker, err = filter.NewACLChecker(cfg.ACL, true)
-		if err != nil {
-			return nil, err
-		}
-		logger.Infof("ACL loaded with %d rules", len(cfg.ACL))
-	} else if cfg.Resolution.Recursive && !cfg.Server.ACLAllowUnrestrictedRecursion {
-		// VULN-041: Recursion enabled but no ACL rules and not explicitly allowed to be unrestricted.
-		// Create a deny-by-default ACL checker to prevent open resolver.
-		aclChecker, err := filter.NewACLChecker(nil, true)
-		if err != nil {
-			return nil, err
-		}
-		mgr.result.ACLChecker = aclChecker
-		logger.Warnf("Recursive resolver enabled with no ACL rules and acl_allow_unrestricted_recursion=false; defaulting to deny-by-default (all clients blocked). Set explicit ACL rules or set acl_allow_unrestricted_recursion=true to allow unrestricted access.")
+	// Initialize the ACL and the recursion allow list.
+	if err := mgr.initAccessPolicy(cfg); err != nil {
+		return nil, err
 	}
 
 	// Initialize rate limiter (client-side token bucket).
@@ -158,6 +151,64 @@ func (m *SecurityManager) Stop() {
 	if m.result.RRL != nil {
 		m.result.RRL.Stop()
 	}
+}
+
+// initAccessPolicy builds the general ACL and the recursion policy.
+//
+// The general ACL applies to every query; an empty ACL admits everyone, so
+// the server's own zones are answered for all clients by default.
+// Recursion is decided separately (VULN-041: never an open resolver by
+// accident):
+//   - allow_recursion present in the config: exactly those networks;
+//   - acl_allow_unrestricted_recursion: true: every client;
+//   - general ACL rules configured but no allow_recursion: every client
+//     the ACL admits (the pre-allow_recursion behaviour);
+//   - otherwise: loopback and private networks only.
+//
+// A stored access policy (dashboard changes) replaces both lists.
+func (m *SecurityManager) initAccessPolicy(cfg *config.Config) error {
+	aclRules := cfg.ACL
+	recursion := filter.DefaultRecursionNetworks
+	recursionAll := false
+	switch {
+	case cfg.AllowRecursionSet:
+		recursion = cfg.AllowRecursion
+	case cfg.Server.ACLAllowUnrestrictedRecursion:
+		recursionAll = true
+	case len(cfg.ACL) > 0:
+		recursionAll = true
+	}
+
+	m.result.AccessPolicyFile = filter.AccessPolicyFile(cfg.Storage.DataDir)
+	stored, err := filter.LoadAccessPolicy(m.result.AccessPolicyFile)
+	if err != nil {
+		return fmt.Errorf("loading access policy: %w", err)
+	}
+	if stored != nil {
+		aclRules = stored.ConfigRules()
+		recursion = stored.AllowRecursion
+		recursionAll = false
+		m.logger.Infof("Access policy loaded from %s (overrides acl and allow_recursion in the config file)", m.result.AccessPolicyFile)
+	}
+
+	m.result.ACLChecker = filter.NewEmptyACLChecker()
+	if err := m.result.ACLChecker.UpdateRules(aclRules); err != nil {
+		return err
+	}
+	if len(aclRules) > 0 {
+		m.logger.Infof("ACL loaded with %d rules", len(aclRules))
+	}
+
+	m.result.RecursionPolicy, err = filter.NewRecursionPolicy(recursion, recursionAll)
+	if err != nil {
+		return err
+	}
+	if recursionAll {
+		m.logger.Infof("Recursion allowed for every client admitted by the ACL")
+	} else {
+		m.logger.Infof("Recursion allowed for: %s", strings.Join(m.result.RecursionPolicy.Networks(), ", "))
+	}
+	return nil
 }
 
 // Result returns the security manager results.

@@ -266,6 +266,7 @@ func reloadSecurityComponents(cfg *config.Config, current *SecurityManager, hand
 		handler.security.GeoEngine = result.GeoEngine
 		handler.security.DNS64Synth = result.DNS64Synth
 		handler.security.ACLChecker = result.ACLChecker
+		handler.security.RecursionPolicy = result.RecursionPolicy
 		handler.security.RateLimiter = result.RateLimiter
 		handler.security.RRL = result.RRL
 		handler.runtimeMu.Unlock()
@@ -276,6 +277,7 @@ func reloadSecurityComponents(cfg *config.Config, current *SecurityManager, hand
 			WithRPZ(result.RPZEngine).
 			WithGeoDNS(result.GeoEngine).
 			WithACL(result.ACLChecker).
+			WithAccessPolicy(result.RecursionPolicy, result.AccessPolicyFile).
 			WithRateLimiter(result.RateLimiter)
 	}
 	if current != nil {
@@ -728,13 +730,14 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 		mdnsResponder: mdnsResponder,
 		dsoManager:    dsoManager,
 		security: SecurityComponents{
-			Blocklist:   bl,
-			RPZEngine:   rpzEngine,
-			GeoEngine:   geoEngine,
-			DNS64Synth:  dns64Synth,
-			ACLChecker:  aclChecker,
-			RateLimiter: rateLimiter,
-			RRL:         securityManager.Result().RRL,
+			Blocklist:       bl,
+			RPZEngine:       rpzEngine,
+			GeoEngine:       geoEngine,
+			DNS64Synth:      dns64Synth,
+			ACLChecker:      aclChecker,
+			RateLimiter:     rateLimiter,
+			RRL:             securityManager.Result().RRL,
+			RecursionPolicy: securityManager.Result().RecursionPolicy,
 		},
 		transfer: TransferComponents{
 			AXFRServer:    transferManager.Result().AXFRServer,
@@ -816,7 +819,7 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 	}
 
 	// VULN-041: Warn if recursion is enabled without ACL rules but with explicit allow-unrestricted
-	if cfg.Resolution.Recursive && aclChecker == nil && cfg.Server.ACLAllowUnrestrictedRecursion {
+	if cfg.Server.ACLAllowUnrestrictedRecursion && len(aclChecker.GetRules()) == 0 && securityManager.Result().RecursionPolicy.AllowAll() {
 		logger.Warnf("SECURITY WARNING: Recursive resolver is enabled with no ACL rules but acl_allow_unrestricted_recursion=true. This configuration makes the server an OPEN RECURSIVE RESOLVER accessible from any IP. Only set acl_allow_unrestricted_recursion=true if you intentionally want to run an open resolver.")
 	}
 
@@ -890,6 +893,7 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 		WithBlocklist(bl).
 		WithUpstream(client, loadBalancer).
 		WithACL(aclChecker).
+		WithAccessPolicy(securityManager.Result().RecursionPolicy, securityManager.Result().AccessPolicyFile).
 		WithAuth(authStore).
 		WithDashboard(dashboardServer).
 		WithMetrics(metricsCollector).

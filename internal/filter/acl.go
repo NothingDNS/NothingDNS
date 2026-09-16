@@ -3,6 +3,7 @@ package filter
 import (
 	"fmt"
 	"net"
+	"sort"
 	"strings"
 	"sync"
 
@@ -47,6 +48,18 @@ type ACLChecker struct {
 	mu            sync.RWMutex
 	rules         []compiledRule
 	denyByDefault bool
+	// denyUnmatched refuses clients that match no rule once at least one
+	// rule exists, while an empty rule set still allows everyone. Used by
+	// the checker the server always installs, so rules added later from the
+	// dashboard behave like rules loaded from the config file.
+	denyUnmatched bool
+}
+
+// NewEmptyACLChecker returns a checker with no rules that allows every
+// client. Rules added later through UpdateRules take effect with the usual
+// semantics: first match wins, and a client matching no rule is refused.
+func NewEmptyACLChecker() *ACLChecker {
+	return &ACLChecker{denyUnmatched: true}
 }
 
 // NewACLChecker creates an ACL checker from configuration rules.
@@ -138,7 +151,7 @@ func (a *ACLChecker) IsAllowed(clientIP net.IP, queryType uint16) (bool, string)
 	}
 
 	// Default: allow if no rule matched, unless denyByDefault is set
-	if a.denyByDefault {
+	if a.denyByDefault || a.denyUnmatched {
 		return false, ""
 	}
 	return true, ""
@@ -223,6 +236,7 @@ func (a *ACLChecker) GetRules() []config.ACLRule {
 			for t := range r.Types {
 				rule.Types = append(rule.Types, protocol.TypeString(t))
 			}
+			sort.Strings(rule.Types)
 		}
 		rules = append(rules, rule)
 	}

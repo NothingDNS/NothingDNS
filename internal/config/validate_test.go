@@ -1120,7 +1120,7 @@ func TestValidateDurationFields(t *testing.T) {
 			name: "invalid ODoH AEAD",
 			mutate: func(c *Config) {
 				c.ODoH.Enabled = true
-				c.ODoH.AEAD = 2
+				c.ODoH.AEAD = 3 // ChaCha20-Poly1305: valid RFC 9180 id, not implemented
 			},
 			errSubstr: "odoh: unsupported aead",
 		},

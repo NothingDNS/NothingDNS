@@ -231,6 +231,26 @@ export interface DNSSECStatus {
 	require_dnssec: boolean;
 }
 
+export interface ACLRule {
+	name: string;
+	networks: string[];
+	action: string;
+	types?: string[];
+	redirect?: string;
+}
+
+export interface RecursionPolicy {
+	allow_all: boolean;
+	networks: string[];
+}
+
+export interface ACLResponse {
+	rules: ACLRule[];
+	allow_recursion: RecursionPolicy;
+	persistent: boolean;
+	policy_file?: string;
+}
+
 export interface BlocklistStatus {
 	enabled: boolean;
 	total_rules: number;

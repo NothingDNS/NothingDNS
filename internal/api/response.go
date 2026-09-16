@@ -254,11 +254,33 @@ type ACLRuleResponse struct {
 	Networks []string `json:"networks"`
 	Action   string   `json:"action"`
 	Types    []string `json:"types,omitempty"`
+	Redirect string   `json:"redirect,omitempty"`
 }
 
 // ACLResponse is returned by GET /api/v1/acl.
 type ACLResponse struct {
 	Rules []ACLRuleResponse `json:"rules"`
+	// AllowRecursion is the recursion allow list.
+	AllowRecursion RecursionPolicyResponse `json:"allow_recursion"`
+	// Persistent reports whether changes are saved (to PolicyFile) and
+	// survive restarts; false means storage.data_dir is not configured.
+	Persistent bool   `json:"persistent"`
+	PolicyFile string `json:"policy_file,omitempty"`
+}
+
+// RecursionPolicyResponse is returned by GET /api/v1/acl/recursion and
+// embedded in ACLResponse.
+type RecursionPolicyResponse struct {
+	// AllowAll is true when every client admitted by the ACL may recurse
+	// (acl_allow_unrestricted_recursion, or ACL rules without an
+	// allow_recursion list). Networks is empty in that case.
+	AllowAll bool     `json:"allow_all"`
+	Networks []string `json:"networks"`
+}
+
+// RecursionPolicyRequest is the body of PUT /api/v1/acl/recursion.
+type RecursionPolicyRequest struct {
+	Networks []string `json:"networks"`
 }
 
 // LoginRequest is the request body for POST /api/v1/auth/login.

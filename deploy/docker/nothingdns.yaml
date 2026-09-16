@@ -61,15 +61,14 @@ metrics:
 storage:
   data_dir: /data
 
-# Private networks cover Docker bridge clients; add public client ranges if
-# the server should answer them.
-acl:
-  - name: allow-local-networks
-    action: allow
-    networks:
-      - 127.0.0.0/8
-      - ::1/128
-      - 10.0.0.0/8
-      - 172.16.0.0/12
-      - 192.168.0.0/16
-      - fc00::/7
+# Recursion only for loopback and private networks (Docker bridge clients
+# included), so the container is not an open resolver. Every client still gets
+# answers from the server's own zones. Change it here or on the dashboard's
+# ACL page (saved to /data/access_policy.json).
+allow_recursion:
+  - 127.0.0.0/8
+  - ::1/128
+  - 10.0.0.0/8
+  - 172.16.0.0/12
+  - 192.168.0.0/16
+  - fc00::/7

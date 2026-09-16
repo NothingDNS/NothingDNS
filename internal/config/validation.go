@@ -421,8 +421,10 @@ func isValidODoHKDF(kdf int) bool {
 	return kdf == 1
 }
 
+// isValidODoHAEAD accepts the RFC 9180 AEAD ids the odoh runtime
+// implements: 1 = AES-128-GCM, 2 = AES-256-GCM.
 func isValidODoHAEAD(aead int) bool {
-	return aead == 1 || aead == 3
+	return aead == 1 || aead == 2
 }
 
 func (c *Config) validateResolution() []string {
@@ -639,6 +641,13 @@ func (c *Config) validateDNSSEC() []string {
 
 func (c *Config) validateACL() []string {
 	var errors []string
+
+	for _, entry := range c.AllowRecursion {
+		e := strings.TrimSpace(entry)
+		if net.ParseIP(e) == nil && !isValidCIDR(e) {
+			errors = append(errors, fmt.Sprintf("allow_recursion: invalid IP or CIDR '%s'", entry))
+		}
+	}
 
 	validActions := map[string]bool{"allow": true, "deny": true, "redirect": true}
 

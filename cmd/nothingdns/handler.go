@@ -807,6 +807,11 @@ func (cw *cookieResponseWriter) Write(msg *protocol.Message) (int, error) {
 	return cw.inner.Write(msg)
 }
 
+// Unwrap returns the wrapped writer.
+func (cw *cookieResponseWriter) Unwrap() server.ResponseWriter {
+	return cw.inner
+}
+
 // ClientInfo delegates to the inner writer.
 func (cw *cookieResponseWriter) ClientInfo() *server.ClientInfo {
 	return cw.inner.ClientInfo()

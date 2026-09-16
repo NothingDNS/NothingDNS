@@ -57,6 +57,9 @@ type Server struct {
 	upstreamClient   *upstream.Client
 	upstreamLB       *upstream.LoadBalancer
 	aclChecker       *filter.ACLChecker
+	recursionPolicy  *filter.RecursionPolicy
+	accessPolicyFile string
+	accessPolicyMu   sync.Mutex // serializes ACL/recursion updates and their file write
 	authStore        *auth.Store
 	metrics          *metrics.MetricsCollector
 	validator        *dnssec.Validator
@@ -501,6 +504,17 @@ func (s *Server) WithUpstream(client *upstream.Client, lb *upstream.LoadBalancer
 	return s
 }
 
+// WithAccessPolicy sets the recursion allow list and the file where
+// dashboard changes to the ACL and recursion allow list are persisted
+// ("" keeps them in memory only).
+func (s *Server) WithAccessPolicy(policy *filter.RecursionPolicy, file string) *Server {
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
+	s.recursionPolicy = policy
+	s.accessPolicyFile = file
+	return s
+}
+
 // WithACL sets the ACL checker for the API server.
 func (s *Server) WithACL(acl *filter.ACLChecker) *Server {
 	s.runtimeMu.Lock()
@@ -702,6 +716,7 @@ func (s *Server) Start() error {
 
 	// ACL management (always registered)
 	mux.HandleFunc("/api/v1/acl", s.handleACL)
+	mux.HandleFunc("/api/v1/acl/recursion", s.handleACLRecursion)
 
 	// RPZ management (always registered)
 	mux.HandleFunc("/api/v1/rpz", s.handleRPZ)

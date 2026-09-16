@@ -1415,3 +1415,37 @@ func TestValidateMetrics_RequiresTokenOffLoopback(t *testing.T) {
 		}
 	}
 }
+
+func TestUnmarshalAllowRecursion(t *testing.T) {
+	cfg, err := UnmarshalYAML("server:\n  port: 53\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AllowRecursionSet {
+		t.Error("allow_recursion absent: AllowRecursionSet must be false")
+	}
+
+	cfg, err = UnmarshalYAML("allow_recursion:\n  - 192.168.1.0/24\n  - 203.0.113.5\n  - \"2001:db8::/32\"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.AllowRecursionSet || len(cfg.AllowRecursion) != 3 || cfg.AllowRecursion[2] != "2001:db8::/32" {
+		t.Fatalf("allow_recursion = %v (set=%v)", cfg.AllowRecursion, cfg.AllowRecursionSet)
+	}
+	if errs := cfg.validateACL(); len(errs) != 0 {
+		t.Errorf("valid allow_recursion reported errors: %v", errs)
+	}
+
+	cfg, err = UnmarshalYAML("allow_recursion: []\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.AllowRecursionSet || len(cfg.AllowRecursion) != 0 {
+		t.Fatalf("empty allow_recursion = %v (set=%v), want [] and set", cfg.AllowRecursion, cfg.AllowRecursionSet)
+	}
+
+	cfg, _ = UnmarshalYAML("allow_recursion:\n  - not-a-network\n")
+	if errs := cfg.validateACL(); len(errs) == 0 {
+		t.Error("invalid allow_recursion entry must be reported")
+	}
+}

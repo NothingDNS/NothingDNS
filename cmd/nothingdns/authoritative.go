@@ -549,6 +549,12 @@ func (h *integratedHandler) resolveCNAMETarget(w server.ResponseWriter, r *proto
 	}
 	h.zonesMu.RUnlock()
 
+	// Out-of-zone targets need the cache or upstream, i.e. recursion; a
+	// client without recursion rights gets only the in-zone part.
+	if !recursionAllowedFor(w) {
+		return nil
+	}
+
 	// 2. Check cache for the target (no DO bit needed — authoritative zone lookup)
 	cacheKey := cache.MakeKey(targetName, qtype, false)
 	if entry := h.cache.Get(cacheKey); entry != nil && !entry.IsNegative && entry.Message != nil {

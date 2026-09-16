@@ -175,7 +175,7 @@ type HTTPConfig struct {
 	ODoHPath    string `yaml:"odoh_path"`    // ODoH endpoint path (default: /odoh)
 	ODoHKEM     int    `yaml:"odoh_kem"`     // HPKE KEM for target (default: 32 = X25519 / 0x0020)
 	ODoHKDF     int    `yaml:"odoh_kdf"`     // HPKE KDF for target (default: 1 = HKDF-SHA256)
-	ODoHAEAD    int    `yaml:"odoh_aead"`    // HPKE AEAD for target (default: 1 = AES-256-GCM)
+	ODoHAEAD    int    `yaml:"odoh_aead"`    // HPKE AEAD for target (1 = AES-128-GCM default, 2 = AES-256-GCM)
 
 	// Allowed origins for CORS (empty means only same-origin requests allowed)
 	// Use "*" to allow all origins (not recommended for production)
@@ -283,7 +283,7 @@ func unmarshalServer(node *Node, cfg *ServerConfig) error {
 			return fmt.Errorf("http: %w", err)
 		}
 		if cfg.HTTP.ODoHAEAD == 0 {
-			cfg.HTTP.ODoHAEAD = 1 // AES-256-GCM
+			cfg.HTTP.ODoHAEAD = 1 // AES-128-GCM
 		}
 		if usersNode := httpNode.Get("users"); usersNode != nil && usersNode.Type == NodeSequence {
 			for _, userNode := range usersNode.Children {

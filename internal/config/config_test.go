@@ -218,9 +218,9 @@ odoh:
   bind: ":9443"
   target_url: https://target.example/dns-query
   proxy_url: https://proxy.example/odoh
-  kem: 4
+  kem: 32
   kdf: 1
-  aead: 3
+  aead: 2
 catalog:
   enabled: true
   catalog_zone: catalog.example.
@@ -252,7 +252,7 @@ yang:
 	if !cfg.ODoH.Enabled || cfg.ODoH.Bind != ":9443" ||
 		cfg.ODoH.TargetURL != "https://target.example/dns-query" ||
 		cfg.ODoH.ProxyURL != "https://proxy.example/odoh" ||
-		cfg.ODoH.KEM != 4 || cfg.ODoH.KDF != 1 || cfg.ODoH.AEAD != 3 {
+		cfg.ODoH.KEM != 32 || cfg.ODoH.KDF != 1 || cfg.ODoH.AEAD != 2 {
 		t.Fatalf("unexpected ODoH config: %+v", cfg.ODoH)
 	}
 	if !cfg.Catalog.Enabled || cfg.Catalog.CatalogZone != "catalog.example." ||

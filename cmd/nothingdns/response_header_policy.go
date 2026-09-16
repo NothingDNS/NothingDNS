@@ -37,6 +37,54 @@ type headerPolicyResponseWriter struct {
 	// advertises RA=1 tells clients to keep bringing it recursive work it
 	// refuses by design.
 	recursionAvailable bool
+
+	// recursionDenied is set when this client may not use recursion
+	// (allow_recursion). Its responses must not advertise RA either.
+	recursionDenied bool
+}
+
+// RecursionAllowed reports whether the query this writer answers may use
+// recursion: the server recurses at all, and this client is permitted to.
+func (hw *headerPolicyResponseWriter) RecursionAllowed() bool {
+	return hw.recursionAvailable && !hw.recursionDenied
+}
+
+// Unwrap returns the wrapped writer.
+func (hw *headerPolicyResponseWriter) Unwrap() server.ResponseWriter {
+	return hw.inner
+}
+
+// recursionAllowedFor reports whether a response written through w may use
+// recursion. It walks writer wrappers to the header policy writer; writers
+// outside the pipeline (tests, internal callers) are allowed.
+func recursionAllowedFor(w server.ResponseWriter) bool {
+	for w != nil {
+		if hw, ok := w.(*headerPolicyResponseWriter); ok {
+			return hw.RecursionAllowed()
+		}
+		u, ok := w.(interface{ Unwrap() server.ResponseWriter })
+		if !ok {
+			return true
+		}
+		w = u.Unwrap()
+	}
+	return true
+}
+
+// denyRecursion marks the header policy writer behind w so that the rest of
+// the pipeline skips recursion and responses carry RA=0.
+func denyRecursion(w server.ResponseWriter) {
+	for w != nil {
+		if hw, ok := w.(*headerPolicyResponseWriter); ok {
+			hw.recursionDenied = true
+			return
+		}
+		u, ok := w.(interface{ Unwrap() server.ResponseWriter })
+		if !ok {
+			return
+		}
+		w = u.Unwrap()
+	}
 }
 
 // Write applies the header policy and forwards the message.
@@ -45,7 +93,7 @@ func (hw *headerPolicyResponseWriter) Write(msg *protocol.Message) (int, error) 
 		msg.Header.Flags.Opcode = hw.opcode
 		msg.Header.Flags.RD = hw.rd
 		msg.Header.Flags.CD = hw.cd
-		if !hw.recursionAvailable {
+		if !hw.RecursionAllowed() {
 			msg.Header.Flags.RA = false
 		}
 	}

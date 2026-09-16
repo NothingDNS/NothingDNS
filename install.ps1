@@ -231,18 +231,25 @@ metrics:
 storage:
   data_dir: "${DATA_DIR_YAML}"
 
-# Answer only loopback and private networks, so the server is not an open
-# resolver. Add your public client ranges here if needed.
-acl:
-  - name: allow-local-networks
-    action: allow
-    networks:
-      - 127.0.0.0/8
-      - ::1/128
-      - 10.0.0.0/8
-      - 172.16.0.0/12
-      - 192.168.0.0/16
-      - fc00::/7
+# Recursion (forwarding to upstreams, cached answers) only for loopback and
+# private networks, so the server is not an open resolver. Every client still
+# gets answers from this server's own zones. Add your client ranges here or
+# on the dashboard's ACL page.
+allow_recursion:
+  - 127.0.0.0/8
+  - ::1/128
+  - 10.0.0.0/8
+  - 172.16.0.0/12
+  - 192.168.0.0/16
+  - fc00::/7
+
+# General access control for every query (empty: everyone may query the
+# server's own zones). Example:
+# acl:
+#   - name: block-abuser
+#     action: deny
+#     networks:
+#       - 198.51.100.0/24
 
 rrl:
   enabled: true
