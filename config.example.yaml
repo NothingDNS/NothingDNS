@@ -429,11 +429,9 @@ transfer:
 # METRICS & OBSERVABILITY
 # =============================================================================
 metrics:
-  # Disabled by default so the quickstart / docker-compose works out of the box.
-  # The metrics endpoint FAILS CLOSED: enabling it WITHOUT an auth_token makes
-  # the server refuse to start (it will not serve operational metrics
-  # unauthenticated). To enable, set enabled: true AND provide auth_token
-  # (and ideally bind to localhost).
+  # The metrics endpoint FAILS CLOSED: without auth_token it may only bind to
+  # loopback (e.g. 127.0.0.1:9153); on any other address the server refuses to
+  # start and -validate-config reports the error.
   enabled: false
 
   # Prometheus metrics endpoint

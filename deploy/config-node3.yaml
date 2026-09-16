@@ -56,6 +56,8 @@ metrics:
   enabled: true
   bind: ":9153"
   path: /metrics
+  # Required on a non-loopback bind; the server refuses to start without it.
+  auth_token: "${NOTHINGDNS_METRICS_AUTH_TOKEN}"
 
 zones:
   - /etc/nothingdns/zones/example.com.zone

@@ -73,6 +73,12 @@ jobs:
       - name: Verify backup and restore round trip
         run: ./scripts/backup-restore-smoke.sh
 
+      - name: Validate shipped and installer-generated configs
+        run: ./scripts/validate-shipped-configs.sh
+
+      - name: Lint install scripts
+        run: shellcheck -S warning install.sh setup.sh update.sh config.sh uninstall.sh scripts/validate-shipped-configs.sh
+
   binaries:
     runs-on: ubuntu-latest
     needs: go
