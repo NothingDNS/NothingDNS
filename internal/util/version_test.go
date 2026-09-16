@@ -63,3 +63,20 @@ func TestVersionFallbackMatchesVersionFile(t *testing.T) {
 		t.Errorf("util.Version = %q, VERSION file = %q; bump the fallback in version.go", Version, want)
 	}
 }
+
+// The Helm chart's appVersion is the default image tag; it must name the
+// release being cut, or `helm install` deploys an old image.
+func TestHelmChartAppVersionMatchesVersionFile(t *testing.T) {
+	version, err := os.ReadFile("../../VERSION")
+	if err != nil {
+		t.Skipf("VERSION file not readable: %v", err)
+	}
+	chart, err := os.ReadFile("../../deploy/helm/nothingdns/Chart.yaml")
+	if err != nil {
+		t.Skipf("Chart.yaml not readable: %v", err)
+	}
+	want := `appVersion: "` + strings.TrimSpace(string(version)) + `"`
+	if !strings.Contains(string(chart), want) {
+		t.Errorf("deploy/helm/nothingdns/Chart.yaml lacks %s; bump appVersion with VERSION", want)
+	}
+}

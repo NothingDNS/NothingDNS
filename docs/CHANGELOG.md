@@ -5,18 +5,49 @@ All notable changes to NothingDNS are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.12] — 2026-09-16
 
-### Fixed
+Installation release. install.sh, setup.sh, update.sh, config.sh and
+uninstall.sh were exercised on Ubuntu 24.04 under systemd, Docker Compose was
+run from a bare compose file, the Helm chart was rendered and its config
+validated, and install.ps1's config generation was run under PowerShell 7.
+A fresh install with the previous scripts produced a server that did not
+start.
+
+### Fixed — installation
+
+- **Installer configs made the server exit at startup**: `install.sh`, `setup.sh`, `install.ps1` and `deploy/config-node{1,2,3}.yaml` enabled metrics on `:9153` without `auth_token`, which the server refuses — while `-validate-config` reported the file as valid. Generated configs now bind metrics to `127.0.0.1:9153`, the node configs take `auth_token` from `NOTHINGDNS_METRICS_AUTH_TOKEN`, and `-validate-config` rejects a non-loopback metrics bind without a token.
+- **Metrics without a token work on loopback**: the error message already said "bind metrics to localhost only", but the server refused that too, and the handler answered 401 to local scrapers. A tokenless endpoint is now allowed on loopback and serves only loopback peers.
+- **systemd service could not start**: it ran as `nobody:nogroup` (no `nogroup` on RHEL) while the config was root-owned `0600`, the binary was installed `0700` via `mktemp` + `mv`, and there was no `WorkingDirectory`, so the IXFR journal store failed on the read-only `/`. The scripts now create a `nothingdns` system user, install binaries with `install -m 0755`, own `/var/lib/nothingdns` and `/var/log/nothingdns` by that user, keep the config `root:nothingdns 0640`, set `storage.data_dir: /var/lib/nothingdns`, and the units (including `deploy/nothingdns.service`) use `WorkingDirectory=/var/lib/nothingdns`.
+- **Dashboard users were lost on restart**: users created through the bootstrap endpoint, the dashboard or the API lived only in memory, so the installer's admin password stopped working after the first restart. They are now persisted to `server.http.users_file` (default `<storage.data_dir>/users.json`, mode 0600); config-defined users keep precedence and are never written there.
+- **`setup.sh` aborted immediately**: `${#missing[@}` is a bash "bad substitution" error in the prerequisite check.
+- **`install.sh` could delete the installed binary**: re-running it on an up-to-date system removed `/usr/local/bin/nothingdns` and then skipped the download. It also compared `1.1.11` with `v1.1.11` and always reported an available upgrade, matched `:5353` as port 53, turned `port: 5353` into `port: 535353` on re-runs, wrote the config without `sudo`, printed the admin password to stdout, and required an unused `gzip`.
+- **`update.sh` installed unverified binaries**: it now checks `SHA256SUMS` like the installers, validates the current config with the new binary before stopping the service, and uses bare-semver version comparison.
+- **`config.sh` validation never worked**: it called a non-existent `--validate` flag and relied on PyYAML. It now uses `nothingdns -validate-config`, refuses to reload an invalid config, and handles the root-owned config with `sudo`.
+- **Generated configs were open resolvers** and used an unknown `upstream.timeout` key: installer configs now carry an ACL for loopback and private networks.
+- **Windows install could not succeed**: releases had no Windows binaries (now built for `windows/amd64` and `windows/arm64`), `RandomNumberGenerator.GetBytes(int)` does not exist on Windows PowerShell 5.1, and `Out-File -Encoding UTF8` wrote a byte order mark.
+- **A UTF-8 BOM hid the first config section**: `\ufeffserver` was treated as an unknown key, so `server:` was silently ignored. The loader strips the BOM.
+- **Docker quick start failed**: `docker-compose.yml` mounted `./config.example.yaml` (a directory once Docker creates the missing path) whose relative zone path does not exist in the container, and `/data` was root-owned while the container runs as UID 1000. The image now ships `deploy/docker/nothingdns.yaml` as its default config and a `/data` owned by UID 1000.
+- **No way to create the first admin in Docker**: bootstrap only accepts localhost, and the scratch image has no shell or curl. New `dnsctl server bootstrap` (password from stdin or `NOTHINGDNS_ADMIN_PASSWORD`) works via `docker exec -i nothingdns dnsctl server bootstrap`.
+- **Helm installed an old image**: `appVersion` was `1.0.0`, the default image tag. It now tracks the release, enforced by `TestHelmChartAppVersionMatchesVersionFile`.
+- **`deploy/staging.yaml` refused every query**: its allow rule was limited to QTYPE `ANY`.
+
+### Fixed — server
 
 - **DNS listens on every `server.bind` address**: only the first entry was used and the rest were silently ignored, so `bind: [127.0.0.1, 192.168.0.18]` never answered on the second address. Each address (and each `udp_bind` / `tcp_bind` entry) now gets its own listener. A wildcard (`0.0.0.0` / `::`) already covers every local address through a dual-stack socket, so other entries on the same port are folded into it instead of failing with "address already in use".
 - **Example config answers local queries**: the sample ACL allowed only RFC 1918 ranges, so `dig @127.0.0.1` against the shipped `config.example.yaml` returned REFUSED. Loopback (`127.0.0.0/8`, `::1/128`) is now allowed.
 - **config: plain scalars may start with a colon**: the YAML tokenizer treated the leading `:` of an unquoted `- ::1/128` as a mapping indicator and failed to parse. A colon is now an indicator only when followed by whitespace, end of line or a flow indicator.
 - **Version fallback matches the release**: binaries built without `-ldflags` reported `v1.1.4`. The fallback now tracks `VERSION`, enforced by `TestVersionFallbackMatchesVersionFile`.
 
-### Documentation
+### Added
 
-- `QUICK_START.md` explains how to create the first dashboard admin with the localhost-only `/api/v1/auth/bootstrap` endpoint, and that signing in ends the user's other sessions.
+- `scripts/validate-shipped-configs.sh`, run in CI: validates `config.example.yaml`, `deploy/*.yaml`, the Docker and Kubernetes configs, and the configs generated by `install.sh`, `setup.sh` and `install.ps1` with the real binary. CI also runs shellcheck on the install scripts.
+
+### Upgrade notes
+
+- Existing systemd installs keep running as before. To move to the new layout, re-run `install.sh` (config and credentials are kept) or create the `nothingdns` user, `chown` `/var/lib/nothingdns`, and add `storage.data_dir: /var/lib/nothingdns` to the config.
+- A config with metrics enabled on a non-loopback address and no `auth_token` now fails `-validate-config` (it already failed at startup).
+- Users previously created at runtime were never saved; create them once more after upgrading and they will persist.
 
 ## [1.1.11] — 2026-09-16
 
