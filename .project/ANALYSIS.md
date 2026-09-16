@@ -3,7 +3,7 @@
 > Comprehensive architectural, quality, and gap analysis  
 > Assessment Date: 2026-04-14 (initial) / 2026-04-16 (updated)  
 > Audited Commit: `78acc7a` (current — all findings updated through 2026-04-16 audit)  
-> Auditor: Claude Code — Full Codebase Audit
+> Scope: Full Codebase Audit
 
 ---
 

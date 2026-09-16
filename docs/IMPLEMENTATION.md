@@ -1,6 +1,6 @@
 # NothingDNS — Implementation Guide
 
-> Technical implementation details for every module. This document serves as the engineering blueprint for Claude Code single-shot prompt generation.
+> Technical implementation details for every module. This document serves as the engineering blueprint for the implementation.
 
 ---
 

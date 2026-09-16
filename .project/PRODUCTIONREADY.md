@@ -3,7 +3,7 @@
 > Honest, evidence-based assessment of production readiness  
 > Assessment Date: 2026-04-16
 > Audited Commit: `78acc7a` (current — GeoDNS IPv6 fix applied)
-> Auditor: Claude Code — Full Codebase Audit
+> Scope: Full Codebase Audit
 
 ---
 

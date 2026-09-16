@@ -556,7 +556,7 @@ export function DashboardPage() {
 
 ---
 
-## 💬 NOTE TO CLAUDE CODE
+## 💬 NOTE TO THE IMPLEMENTER
 
 The rules in this prompt are **ABSOLUTE**. They cannot be skipped with justifications like "we'll fix it later", "keep it simple for now", or "for the sake of brevity." Every component, every page, every pixel must comply. Production quality from the first commit.
 
