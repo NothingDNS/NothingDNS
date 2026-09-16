@@ -1,6 +1,8 @@
 package api
 
 import (
+	"errors"
+
 	"github.com/nothingdns/nothingdns/internal/blocklist"
 )
 
@@ -81,6 +83,12 @@ func (s *BlocklistService) RemoveSource(source string) error {
 func (s *BlocklistService) AddFile(path string) error {
 	if s.bl == nil {
 		return nil
+	}
+	// Runtime file sources let an API caller make the server read any
+	// process-visible path. Only allow them when blocklist.base_dir confines
+	// reads to an operator-chosen directory (VULN-067).
+	if s.bl.BaseDir() == "" {
+		return errors.New("adding blocklist files at runtime requires blocklist.base_dir to be configured")
 	}
 	return s.bl.AddFile(path)
 }

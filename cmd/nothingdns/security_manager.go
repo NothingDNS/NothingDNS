@@ -41,6 +41,7 @@ func NewSecurityManager(cfg *config.Config, logger *util.Logger) (*SecurityManag
 		Enabled: cfg.Blocklist.Enabled,
 		Files:   cfg.Blocklist.Files,
 		URLs:    cfg.Blocklist.URLs,
+		BaseDir: cfg.Blocklist.BaseDir,
 	})
 	if err := mgr.result.Blocklist.Load(); err != nil {
 		return nil, fmt.Errorf("loading blocklist: %w", err)

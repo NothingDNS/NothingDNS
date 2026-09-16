@@ -9,6 +9,9 @@ type BlocklistConfig struct {
 	Enabled bool     `yaml:"enabled"`
 	Files   []string `yaml:"files"`
 	URLs    []string `yaml:"urls"` // URLs to download blocklists from (e.g., adguard, malware domains)
+	// BaseDir confines blocklist file sources to this directory. It is also
+	// required for adding file sources at runtime through the API.
+	BaseDir string `yaml:"base_dir"`
 }
 
 // RPZConfig holds Response Policy Zone configuration.

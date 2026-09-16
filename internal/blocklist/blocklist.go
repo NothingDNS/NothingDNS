@@ -344,9 +344,13 @@ func (bl *Blocklist) loadFile(path string) error {
 		return fmt.Errorf("blocklist path must be absolute: %s", path)
 	}
 	if bl.baseDir != "" {
-		if err := ensureBlocklistPathInBaseDir(cleanPath, bl.baseDir); err != nil {
+		realPath, err := ensureBlocklistPathInBaseDir(cleanPath, bl.baseDir)
+		if err != nil {
 			return err
 		}
+		// Open the resolved path so a symlink swapped after validation
+		// cannot redirect the read outside BaseDir.
+		cleanPath = realPath
 	}
 	f, err := os.Open(cleanPath)
 	if err != nil {
@@ -403,20 +407,25 @@ func (bl *Blocklist) loadFile(path string) error {
 	return scanner.Err()
 }
 
-func ensureBlocklistPathInBaseDir(path, baseDir string) error {
+func ensureBlocklistPathInBaseDir(path, baseDir string) (string, error) {
 	realPath, err := filepath.EvalSymlinks(path)
 	if err != nil {
-		return fmt.Errorf("blocklist path: %w", err)
+		return "", fmt.Errorf("blocklist path: %w", err)
 	}
 	realBaseDir, err := filepath.EvalSymlinks(baseDir)
 	if err != nil {
-		return fmt.Errorf("blocklist basedir: %w", err)
+		return "", fmt.Errorf("blocklist basedir: %w", err)
 	}
 	rel, err := filepath.Rel(realBaseDir, realPath)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("blocklist path %q is outside BaseDir %q", path, baseDir)
+		return "", fmt.Errorf("blocklist path %q is outside BaseDir %q", path, baseDir)
 	}
-	return nil
+	return realPath, nil
+}
+
+// BaseDir returns the directory file sources are confined to ("" if unset).
+func (bl *Blocklist) BaseDir() string {
+	return bl.baseDir
 }
 
 // IsBlocked checks if a domain is blocked.

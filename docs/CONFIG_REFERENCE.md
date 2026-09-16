@@ -162,6 +162,7 @@ yeniden başlatma gerekir.
 | `enabled` | bool | `false` | evet | Domain bloklamayı etkinleştir |
 | `files` | []string | `[]` | evet | Yerel hosts-format blocklist dosyaları |
 | `urls` | []string | `[]` | evet | Otomatik indirilen blocklist URL'leri |
+| `base_dir` | string | `""` | hayır | Dosya kaynaklarını bu dizinle sınırlar (symlink'ler çözülerek). API üzerinden çalışma anında dosya eklemek için zorunludur |
 
 ## `zones`
 

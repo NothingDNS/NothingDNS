@@ -329,6 +329,10 @@ blocklist:
   urls:
     # - https://example.com/blocklist.txt
 
+  # Confine blocklist file sources to this directory. Required to add
+  # file sources at runtime through the API (POST /api/v1/blocklists).
+  # base_dir: /etc/nothingdns/blocklists
+
 # =============================================================================
 # RESPONSE POLICY ZONES (RPZ)
 # =============================================================================
