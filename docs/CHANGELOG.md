@@ -5,6 +5,32 @@ All notable changes to NothingDNS are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.11] — 2026-09-16
+
+Security scan release. 1.1.9 and 1.1.10 were documented but never tagged;
+their fixes ship in this release as well.
+
+### Security
+
+- **Message pool: DoH, DNS-over-WebSocket and DoQ writers no longer double-Release responses**: `ResponseWriter.Write` in `doh.dohResponseWriter`, `doh.wsResponseWriter` and the DoQ adapter called `msg.Release()` on the message the pipeline owns and releases itself at stage exit. The resulting double `Put` could hand the same `*protocol.Message` to two concurrent requests — responses mixed between clients. Writers now leave ownership with the caller. Caught by the race detector in `internal/doh`.
+- **DNS-over-WebSocket releases each query per frame**: a `defer query.Release()` inside the read loop held every query of a long-lived connection until it closed (unbounded per-connection memory). Each query is now served and released in `serveQuery`.
+- **Blocklist API: runtime file sources require `blocklist.base_dir`**: `BaseDir` (VULN-067) was never wired from config, so an admin API call could make the server read any process-visible path. New `blocklist.base_dir` config key; `POST /api/v1/blocklists` with a `file` is rejected unless it is set, and the file is opened via its symlink-resolved path.
+- **Resolver: no TXID 0 exemption**: `sendQuery` accepted responses with ID 0, which a blind spoofer could always send. Responses must now echo the query ID.
+- **deps**: `google.golang.org/grpc` v1.83.2 (GO-2026-6443, indirect via the OTLP exporter), `golang.org/x/net` v0.58.0; web `vitest` / `@vitest/coverage-v8` 4.1.11 (path traversal in `@vitest/mocker`, dev only).
+
+### Fixed
+
+- **cache: hot-reload no longer races with lookups**: `UpdateConfig` wrote TTL/prefetch/stale settings that `Get`/`Set` read lock-free. The configuration is now an immutable snapshot behind `atomic.Pointer`.
+- **reload: whole reloads are serialized**: the lock added in 1.1.10 covered only the final pointer swap, so concurrent SIGHUP + API reloads could both snapshot and stop the same managers and leak one new set. The duplicate `Stop()` of the old security manager is removed.
+- **upstream: `QueryContext` returns promptly on cancellation**: it waited for the upstream timeout (plus TCP fallback) after ctx was cancelled. The query now runs on a copy of the message and a late response is released in the background. Guarded by `TestQueryContextReturnsPromptlyOnCancel`.
+- **dnssec: chain links hold detached DS records** instead of records from a released pooled message.
+- **web: TXT/CAA quoting escapes backslashes where needed**: a trailing backslash swallowed the closing quote; `quoteDNSString` / `stripOuterQuotes` are now exact inverses while `\.`-style escapes pass through.
+- **CI**: gofmt drift, staticcheck/errorlint findings, a `sync.Pool` identity assumption in `TestUpstreamPoolTypeConsistency` that failed under `-race`, and a hardcoded asset hash in `TestSPAHandlerCacheControl`. The pinned staticcheck moves to 2026.2.1 (Go 1.26 aware).
+
+### Upgrade notes
+
+- Adding blocklist **files** through the API now requires `blocklist.base_dir`. Files listed in the config are unaffected unless `base_dir` is set, in which case they must live inside it.
+
 ## [1.1.10] — 2026-09-10
 
 ### Fixed
