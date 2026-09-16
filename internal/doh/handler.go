@@ -346,10 +346,9 @@ func (rw *dohResponseWriter) Write(msg *protocol.Message) (int, error) {
 		msg.Questions = rw.query.Questions
 	}
 
-	// msg is from the server.Handler's upstream/resolver pool. Release it after
-	// wire-packing completes so ServeDNS can still mutate it and we keep the
-	// wire bytes.
-	defer msg.Release()
+	// The caller (the DNS pipeline) owns msg and releases it after Write
+	// returns; releasing it here too would double-Put it into the message
+	// pool and hand the same *Message to two concurrent requests.
 
 	// Pack the message to wire format
 	buf := make([]byte, msg.WireLength())
