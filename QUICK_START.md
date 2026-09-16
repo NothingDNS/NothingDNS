@@ -13,16 +13,37 @@ Get NothingDNS up and running in 5 minutes.
 # Download docker-compose.yml (or use the one from this repo)
 curl -O https://raw.githubusercontent.com/NothingDNS/NothingDNS/main/docker-compose.yml
 
-# Start NothingDNS
-docker-compose up -d
+# Start NothingDNS (the image ships a working default config)
+docker compose up -d
 
 # Test it
-dig @localhost example.com
+dig @127.0.0.1 example.com
+
+# Create the dashboard admin. The bootstrap endpoint only accepts localhost,
+# so run it inside the container; the password is read from stdin.
+docker exec -i nothingdns dnsctl server bootstrap --username admin
 ```
 
-That's it! DNS server running on `localhost:53`.
+That's it! DNS on port 53, dashboard on `http://<host>:8080`. Users, zones
+and journals persist in the `nothingdns-data` volume. To use your own config,
+mount it over `/etc/nothingdns/nothingdns.yaml` (see `docker-compose.yml`).
 
-## Option 2: Binary Installation
+## Option 2: Install Script (Linux/macOS)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NothingDNS/NothingDNS/main/install.sh | bash
+```
+
+The script verifies the release checksums, creates a `nothingdns` system
+user, writes `/etc/nothingdns/nothingdns.yaml`, installs and starts a systemd
+service, and creates the dashboard admin. The generated password is stored in
+the root-only file `/etc/nothingdns/credentials`. If port 53 is taken by
+another resolver it falls back to port 5353 (set `NOTHINGDNS_STOP_HOST_DNS=1`
+to take over port 53 instead).
+
+Windows: run `install.ps1` from an elevated PowerShell.
+
+## Option 3: Manual Binary Installation
 
 ### Download Pre-built Binary
 
@@ -141,6 +162,8 @@ a random password that is never shown. Create your admin account from the
 server host itself (the endpoint only accepts localhost):
 
 ```bash
+dnsctl server bootstrap --username admin      # prompts for the password on stdin
+# or
 curl -X POST http://127.0.0.1:8080/api/v1/auth/bootstrap \
   -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"choose-a-strong-password"}'
@@ -148,6 +171,10 @@ curl -X POST http://127.0.0.1:8080/api/v1/auth/bootstrap \
 
 Then sign in to the dashboard with those credentials. Signing in revokes that
 user's earlier tokens, so each login ends the user's other sessions.
+
+Users created this way (or from the dashboard) are stored in
+`server.http.users_file`, which defaults to `<storage.data_dir>/users.json`.
+Without either setting they live in memory only and are lost on restart.
 
 ## Using the CLI
 
@@ -269,8 +296,9 @@ sudo nothingdns
 # Check logs
 docker-compose logs nothingdns
 
-# Run interactively
-docker-compose run --rm nothingdns /bin/sh
+# The image is FROM scratch (no shell); validate a config with the binary
+docker run --rm -v "$PWD/nothingdns.yaml:/etc/nothingdns/nothingdns.yaml:ro" \
+  ghcr.io/nothingdns/nothingdns:latest -config /etc/nothingdns/nothingdns.yaml -validate-config
 ```
 
 ## Next Steps

@@ -42,7 +42,8 @@ DNS dinleyicileri ve yönetim arayüzleri.
 | `http.allowed_origins` | `[]string` | — | evet | CORS izin verilen originler. **⚠️ GÜVENLİK:** Public bind'da wildcard (`["*"]`) production validator tarafından **reddedilir**. Production'da açık liste kullanın: `["https://dns.example.com"]` |
 | `http.auth_token` | string | "" | evet | API bearer token (boş = auth yok) |
 | `http.users` | []object | — | evet | Çoklu kullanıcı: `username`, `password`, `role` (admin/operator/viewer) |
-| `http.auth_secret` | string | otomatik | hayır | JWT imzalama anahtarı (boşsa otomatik üretilir, restart'ta korunur) |
+| `http.auth_secret` | string | otomatik | hayır | Token imzalama anahtarı (boşsa her açılışta rastgele üretilir; restart'ta tüm oturumlar kapanır) |
+| `http.users_file` | string | `<storage.data_dir>/users.json` | hayır | Bootstrap, dashboard veya API ile oluşturulan kullanıcıların saklandığı dosya (0600). `storage.data_dir` de boşsa bu kullanıcılar yalnızca bellekte tutulur ve restart'ta kaybolur. Config'teki `http.users` her zaman önceliklidir ve dosyaya yazılmaz |
 | `http.doh_enabled` | bool | `false` | evet | DNS over HTTPS (RFC 8484) |
 | `http.doh_path` | string | `/dns-query` | evet | DoH yolu |
 | `http.dows_enabled` | bool | `false` | evet | DNS over WebSocket |
@@ -106,8 +107,9 @@ LRU cache ayarları.
 | Alan | Tip | Varsayılan | Hot-reload | Açıklama |
 |---|---|---|---|---|
 | `enabled` | bool | `false` | hayır | Prometheus exporter |
-| `bind` | string | `:9153` | hayır | Metrik dinleme adresi |
+| `bind` | string | `:9153` | hayır | Metrik dinleme adresi. `auth_token` yoksa yalnızca loopback (`127.0.0.1:9153`) kabul edilir; aksi halde sunucu başlamaz ve `-validate-config` hata verir |
 | `path` | string | `/metrics` | hayır | Metrik HTTP yolu |
+| `auth_token` | string | "" | hayır | `Authorization: Bearer` token'ı. Loopback dışı bir `bind` için zorunlu |
 
 ## `tracing`
 

@@ -228,9 +228,9 @@ curl http://localhost:8080/readyz
 # StandardOutput/StandardError directives so this glob catches real app logs
 # and not just the query log.
 #
-# Note: deploy/nothingdns.service writes the log file with `nobody:nogroup`
-# ownership (matching the user/group the systemd unit runs under); the rule
-# below recreates rotated files with that same ownership.
+# Note: deploy/nothingdns.service runs as the dedicated `nothingdns` system
+# user created by install.sh / setup.sh; the rule below recreates rotated files
+# with that ownership.
 /var/log/nothingdns/*.log {
     daily
     rotate 7
@@ -238,7 +238,7 @@ curl http://localhost:8080/readyz
     delaycompress
     notifempty
     missingok
-    create 0644 nobody nogroup
+    create 0640 nothingdns nothingdns
     sharedscripts
     postrotate
         systemctl reload nothingdns > /dev/null 2>&1 || true
