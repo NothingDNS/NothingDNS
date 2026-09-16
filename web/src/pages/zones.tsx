@@ -108,7 +108,10 @@ function CreateZoneDialog({ open, onClose, onCreated }: { open: boolean; onClose
   const handle = async () => {
     setError(''); if (!name.trim()) { setError('Zone name is required'); return; } const nameservers = ns.split('\n').map((s) => s.trim()).filter(Boolean); if (!nameservers.length) { setError('At least one nameserver is required'); return; }
     const zoneName = normalizeZoneName(name);
-    setSaving(true); try { await api('POST', '/api/v1/zones', { name: zoneName, ttl: parseInt(ttl) || 3600, admin_email: email.trim(), nameservers }); setName(''); setTTL('3600'); setEmail(defaultAdminEmailFor('')); setNs(defaultNameserverFor('')); setEmailTouched(false); setNsTouched(false); toast.success(`Zone ${zoneName} created`); onCreated(); onClose(); } catch (e) { setError(e instanceof Error ? e.message : 'Failed'); } finally { setSaving(false); }
+    // parseInt('0') is 0 — falsy — so `|| 3600` silently rewrote an explicit
+    // default TTL of 0 (no caching) to an hour. Only NaN falls back.
+    const parsedTtl = Number.parseInt(ttl, 10);
+    setSaving(true); try { await api('POST', '/api/v1/zones', { name: zoneName, ttl: Number.isNaN(parsedTtl) ? 3600 : parsedTtl, admin_email: email.trim(), nameservers }); setName(''); setTTL('3600'); setEmail(defaultAdminEmailFor('')); setNs(defaultNameserverFor('')); setEmailTouched(false); setNsTouched(false); toast.success(`Zone ${zoneName} created`); onCreated(); onClose(); } catch (e) { setError(e instanceof Error ? e.message : 'Failed'); } finally { setSaving(false); }
   };
   return (<Dialog open={open} onClose={onClose}><DialogTitle>Create New Zone</DialogTitle><div className="space-y-4 mt-5">
     {error && <div className="text-sm text-destructive bg-destructive/10 px-3 py-2 rounded-lg">{error}</div>}

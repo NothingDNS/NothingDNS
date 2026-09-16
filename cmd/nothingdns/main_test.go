@@ -52,7 +52,15 @@ type captureWriter struct {
 }
 
 func (w *captureWriter) Write(msg *protocol.Message) (int, error) {
-	w.msg = msg
+	if msg == nil {
+		w.msg = nil
+		return 0, nil
+	}
+	// Field-faithful deep copy: tests read w.msg after ServeDNS returns,
+	// while the pipeline Releases pooled responses at stage exit. Copy()
+	// preserves in-memory-only state (e.g. extended RCODEs in Header.Flags
+	// that a wire round-trip would mask to the low nibble).
+	w.msg = msg.Copy()
 	return 0, nil
 }
 func (w *captureWriter) ClientInfo() *server.ClientInfo { return w.client }
@@ -3968,6 +3976,18 @@ func TestServeDNS_DNSCookie_Invalid(t *testing.T) {
 	if w.msg.Header.Flags.RCODE != protocol.RcodeBadCookie {
 		t.Errorf("expected BADCOOKIE for invalid cookie, got %d", w.msg.Header.Flags.RCODE)
 	}
+	// Wire fidelity: BADCOOKIE is extended RCODE 23 — the OPT TTL must carry
+	// the extended byte (23>>4) or external clients decode the response as
+	// YXRRSET (7). CaptureWriter hands back a Message.Copy(), so this reads
+	// the response exactly as it was written.
+	respOpt := w.msg.GetOPT()
+	if respOpt == nil {
+		t.Fatal("expected OPT record on BADCOOKIE response")
+	}
+	eh := protocol.ParseEDNS0Header(respOpt)
+	if eh == nil || eh.ExtendedRCODE != protocol.RcodeBadCookie>>4 {
+		t.Errorf("OPT TTL extended RCODE mismatch: got %+v, want %d", eh, protocol.RcodeBadCookie>>4)
+	}
 }
 
 func TestCookieStage_ReturnsBadCookieWriteError(t *testing.T) {
@@ -4743,7 +4763,23 @@ type mockUpstream struct {
 }
 
 func (m *mockUpstream) Query(msg *protocol.Message) (*protocol.Message, error) {
-	return m.resp, m.err
+	if m.resp == nil {
+		return nil, m.err
+	}
+	// Single ownership: the pipeline Releases the response message it
+	// receives (upstreamStage defer resp.Release()), so return a detached
+	// Pack/Unpack copy — never the stored template, whose reuse across
+	// calls would put the same pointer into messagePool repeatedly.
+	packed := make([]byte, m.resp.WireLength())
+	n, err := m.resp.Pack(packed)
+	if err != nil {
+		return nil, err
+	}
+	detached, err := protocol.UnpackMessage(packed[:n])
+	if err != nil {
+		return nil, err
+	}
+	return detached, m.err
 }
 
 func TestDNSSECResolverAdapter(t *testing.T) {
@@ -6738,7 +6774,26 @@ type mockResolverTransport struct {
 }
 
 func (m *mockResolverTransport) QueryContext(ctx context.Context, msg *protocol.Message, addr string) (*protocol.Message, error) {
-	return m.resp, m.err
+	if m.resp == nil {
+		return nil, m.err
+	}
+	// Single ownership: the resolver Releases the response message it
+	// receives, so return a detached Pack/Unpack copy — never the shared
+	// stored template, whose reuse across queries would leave the same
+	// pointer simultaneously in messagePool and in use by the resolver.
+	packed := make([]byte, m.resp.WireLength())
+	n, err := m.resp.Pack(packed)
+	if err != nil {
+		return nil, err
+	}
+	detached, err := protocol.UnpackMessage(packed[:n])
+	if err != nil {
+		return nil, err
+	}
+	// Real upstreams echo the query's transaction ID (RFC 1035 §4.1.1);
+	// the resolver's TXID binding (RFC 5452) rejects responses that do not.
+	detached.Header.ID = msg.Header.ID
+	return detached, m.err
 }
 
 // failingResolverTransport always returns an error.
@@ -11449,5 +11504,68 @@ func TestMainDispatch_RunWithFakeSignal_TriggersRun(t *testing.T) {
 		}
 	case <-time.After(20 * time.Second):
 		t.Fatal("MainDispatch did not return within 20s")
+	}
+}
+
+// --- Zone mutation hook rebuild wiring tests ---
+
+// TestZoneMutationWithoutRebuildLeavesRoutingStale documents the mechanism
+// requirement: a zone created through the manager alone (the exact shape of
+// the REST create handler and the Raft create_zone apply — both call
+// zoneManager.CreateZone without rebuilding the query-routing structures)
+// is invisible to zone routing until RebuildZoneTree runs.
+func TestZoneMutationWithoutRebuildLeavesRoutingStale(t *testing.T) {
+	h := newTestHandler()
+	h.zoneManager = zone.NewManager()
+
+	soa := &zone.SOARecord{TTL: 3600, MName: "ns1.stale.example.", RName: "admin.stale.example.",
+		Serial: 1, Refresh: 3600, Retry: 600, Expire: 604800, Minimum: 86400}
+	ns := []zone.NSRecord{{TTL: 3600, NSDName: "ns1.stale.example."}}
+	if err := h.zoneManager.CreateZone("stale.example.", 3600, soa, ns); err != nil {
+		t.Fatalf("CreateZone: %v", err)
+	}
+
+	if h.zoneProvider != nil {
+		matches := h.zoneProvider.FindZones("x.stale.example.")
+		if len(matches) != 0 {
+			t.Fatalf("expected no matches without RebuildZoneTree, got %d", len(matches))
+		}
+	}
+}
+
+// TestZoneMutationHookRebuildTriggersRoutingRefresh locks the production
+// composition: the mutation hook installed by runWithContext (chaining the
+// previously registered hook — KV persistence — and RebuildZoneTree) must
+// make manager-created zones visible to zone routing.
+func TestZoneMutationHookRebuildTriggersRoutingRefresh(t *testing.T) {
+	h := newTestHandler()
+	h.zoneManager = zone.NewManager()
+
+	prevHookCalls := 0
+	prevHook := func(zoneName string, deleted bool) { prevHookCalls++ }
+	h.zoneManager.SetMutationHook(prevHook)
+
+	// The same composition runWithContext installs (chained hooks, rebuild).
+	h.zoneManager.SetMutationHook(func(zoneName string, deleted bool) {
+		prevHook(zoneName, deleted)
+		h.RebuildZoneTree()
+	})
+
+	soa := &zone.SOARecord{TTL: 3600, MName: "ns1.wired.example.", RName: "admin.wired.example.",
+		Serial: 1, Refresh: 3600, Retry: 600, Expire: 604800, Minimum: 86400}
+	ns := []zone.NSRecord{{TTL: 3600, NSDName: "ns1.wired.example."}}
+	if err := h.zoneManager.CreateZone("wired.example.", 3600, soa, ns); err != nil {
+		t.Fatalf("CreateZone: %v", err)
+	}
+
+	if prevHookCalls != 1 {
+		t.Fatalf("composed hook did not chain to the earlier hook: prevHookCalls = %d", prevHookCalls)
+	}
+	if h.zoneProvider == nil {
+		t.Fatal("expected zone provider to be rebuilt by the hook")
+	}
+	matches := h.zoneProvider.FindZones("x.wired.example.")
+	if len(matches) == 0 {
+		t.Fatal("zone created via manager mutation is invisible to query routing after the wired hook ran — RebuildZoneTree composition missing")
 	}
 }

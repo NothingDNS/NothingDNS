@@ -86,7 +86,25 @@ export function isReverseIPv4Zone(zoneName: string): boolean {
 export function stripOuterQuotes(value: string): string {
   const trimmed = value.trim();
   if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
-    return trimmed.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+    const inner = trimmed.slice(1, -1);
+    // Single-pass unescape, the exact inverse of quoteDNSString's escape
+    // (" → \" ; backslash passes through untouched): a backslash escapes
+    // only the immediately following character — a quote or another
+    // backslash — and a backslash before anything else (e.g. the \. of a
+    // NAPTR regexp) is a literal backslash and must survive the round
+    // trip. The previous two-pass regex decode consumed an isolated
+    // backslash into a following quote escape and halved backslash pairs,
+    // corrupting values on every edit.
+    let out = '';
+    for (let i = 0; i < inner.length; i++) {
+      if (inner[i] === '\\' && inner[i + 1] === '"') {
+        out += '"';
+        i += 1;
+      } else {
+        out += inner[i];
+      }
+    }
+    return out;
   }
   return trimmed;
 }
@@ -96,7 +114,11 @@ export function quoteDNSString(value: string): string {
   if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
     return trimmed;
   }
-  return `"${trimmed.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  // Escape only the field delimiter quote. Backslashes pass through
+  // untouched: doubling them (the old behavior) changed the meaning of
+  // DNS data such as NAPTR regexps (\. is an escaped dot) and made
+  // stripOuterQuotes non-idempotent on edit round trips.
+  return `"${trimmed.replace(/"/g, '\\"')}"`;
 }
 
 export function requireField(label: string, value: string): string | null {
@@ -195,7 +217,11 @@ export function buildRecordData(type: string, fields: RecordFormFields): { data:
       missing = requireField('Public key', f('publicKey'));
       return missing ? { error: missing } : { data: `${f('flags') || '256'} ${f('protocol') || '3'} ${f('algorithm') || '13'} ${f('publicKey')}` };
     case 'NAPTR':
-      missing = requireField('Service', f('service')) || requireField('Replacement', f('replacement'));
+      // RFC 3403 §4.2: the Services field may be empty (the textbook
+      // terminal-NAPTR form is `100 10 "" "" "<regexp>" target`), so only
+      // the Replacement is mandatory. Requiring Service made every
+      // empty-service NAPTR re-save-averse in the zone editor.
+      missing = requireField('Replacement', f('replacement'));
       return missing ? { error: missing } : { data: `${f('order') || '100'} ${f('preference') || '10'} ${quoteDNSString(f('flags'))} ${quoteDNSString(f('service'))} ${quoteDNSString(f('regexp'))} ${f('replacement') || '.'}` };
     default:
       missing = requireField('Raw data', f('raw'));

@@ -114,11 +114,22 @@ func (n *Name) Release() {
 		return
 	}
 	if n.wire != nil {
-		releaseWireNameBuffer(&n.wire)
+		// Release a LOCAL header, not &n.wire: pooling an interior pointer
+		// into this Name struct lets a later acquireWireNameBuffer() alias
+		// this struct's backing array after n is recycled from namePool and
+		// given fresh content — the next Release of n then zeroes the other
+		// name's bytes (order-dependent corruption under pool churn).
+		buf := n.wire
 		n.wire = nil
+		releaseWireNameBuffer(&buf)
 	}
 	n.stringCache.Store(nil)
-	namePool.Put(n)
+	// NOTE: the struct is deliberately NOT returned to namePool. Records
+	// routinely share one *Name (same owner across RRsets), and Release runs
+	// once per record — a shared Name was multi-Put, so subsequent
+	// acquireName calls returned the same struct to independent callers and
+	// the last write clobbered every other name's content. Wire buffers are
+	// still recycled above; the small Name header is re-allocated instead.
 }
 
 // ParseName parses a domain name string into a Name struct.

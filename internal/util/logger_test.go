@@ -2,6 +2,7 @@ package util
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -371,4 +372,36 @@ func TestPackageLevelFatalf(t *testing.T) {
 	SetDefaultLogger(NewLogger(FATAL, TextFormat, os.Stdout))
 	// See TestPackageLevelFatal.
 	_ = GetDefaultLogger()
+}
+
+// Log-injection guard: formatText sanitizes field values (CR/LF → spaces),
+// but interpolated the raw msg — an upstream error string carrying newlines
+// (the established `util.Warnf("...: %v", err)` pattern) forged fake log
+// entries in the text format.
+func TestWarnfMsgSanitizedInTextFormat(t *testing.T) {
+	var buf bytes.Buffer
+	logger := NewLogger(INFO, TextFormat, &buf)
+
+	logger.Warnf("upstream query failed: %v", errors.New("boom\nINFO  forged-entry: attacker-controlled"))
+
+	out := buf.String()
+	if strings.Contains(out, "\nINFO") {
+		t.Fatalf("FAIL: text-format log injection — the raw msg newline produced a forged log line: %q", out)
+	}
+	if !strings.Contains(out, "upstream query failed") {
+		t.Fatalf("FAIL: the legitimate message was lost: %q", out)
+	}
+}
+
+// The existing field-value sanitization (CR/LF → spaces) must keep holding.
+func TestLogFieldsSanitizedInTextFormat(t *testing.T) {
+	var buf bytes.Buffer
+	logger := NewLogger(INFO, TextFormat, &buf)
+
+	logger.WithField("client", "1.2.3.4\nINFO  forged").Warn("hello")
+
+	out := buf.String()
+	if strings.Contains(out, "\nINFO") {
+		t.Fatalf("FAIL: field-value log injection — CR/LF survived in a field value: %q", out)
+	}
 }

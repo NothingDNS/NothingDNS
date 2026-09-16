@@ -596,10 +596,17 @@ func TestAXFRClient_buildAXFRRequest_SigningError(t *testing.T) {
 
 	// Create a simple message first
 	req, err := client.buildAXFRRequest("example.com.", key)
-	// The message will be built but TSIG signing might fail
-	// Let's check the actual behavior
-	_ = req
-	_ = err
+	// The message must be built offline: a nil error means a non-nil request
+	// carrying the AXFR question for the zone.
+	if err != nil {
+		t.Fatalf("buildAXFRRequest failed: %v", err)
+	}
+	if req == nil {
+		t.Fatal("buildAXFRRequest returned a nil message")
+	}
+	if len(req.Questions) != 1 || req.Questions[0].Name.String() != "example.com." {
+		t.Fatalf("AXFR request question = %+v, want example.com.", req.Questions)
+	}
 }
 
 // ---------------------------------------------------------------------------

@@ -62,9 +62,12 @@ jobs:
         if: steps.advisories.outputs.count > 0
         env:
           GH_TOKEN: ${{ github.token }}
+          # Expressions expand literally in run blocks before shell parsing;
+          # env values stay data (GitHub security-hardening guide).
+          ADVISORY_COUNT: ${{ steps.advisories.outputs.count }}
         run: |
           gh issue create \
-            --title "Weekly advisory scan: ${{ steps.advisories.outputs.count }} new react-router advisory(ies)" \
+            --title "Weekly advisory scan: ${ADVISORY_COUNT} new react-router advisory(ies)" \
             --body "$(cat <<'ISSUE'
           The weekly advisory monitor found new GitHub Security Advisories affecting
           react-router or react-router-dom. Review each one and decide whether to

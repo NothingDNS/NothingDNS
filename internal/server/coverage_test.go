@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -1485,7 +1486,11 @@ func TestTCPResponseWriterTruncationEdgeCase(t *testing.T) {
 	defer serverConn.Close()
 	defer clientConn.Close()
 
-	go io.Copy(io.Discard, clientConn)
+	var clientBuf bytes.Buffer
+	go func() {
+		// Copy into a buffer so the assertion can inspect the wire bytes.
+		_, _ = io.Copy(&clientBuf, clientConn)
+	}()
 
 	rw := &tcpResponseWriter{
 		conn:    serverConn,
@@ -1509,8 +1514,11 @@ func TestTCPResponseWriterTruncationEdgeCase(t *testing.T) {
 	}
 
 	_, err := rw.Write(msg)
-	// May or may not error, but should exercise the truncation path
-	_ = err
+	// maxSize=0 can never fit a packed response: the write must fail with an
+	// error rather than silently succeeding or returning empty output.
+	if err == nil {
+		t.Fatal("Write with maxSize=0 must return an error (impossible fit)")
+	}
 }
 
 // ==============================================================================
@@ -1565,7 +1573,11 @@ func TestTLSResponseWriterTruncationEdgeCase(t *testing.T) {
 	}
 
 	_, err = rw.Write(msg)
-	_ = err
+	// maxSize=0 can never fit a packed response over TLS either: the write must
+	// fail with an error rather than silently succeeding.
+	if err == nil {
+		t.Fatal("TLS Write with maxSize=0 must return an error (impossible fit)")
+	}
 }
 
 // ==============================================================================
@@ -2308,7 +2320,14 @@ func TestTCPResponseWriterTruncationSmallMaxSize3(t *testing.T) {
 	}
 
 	_, err := rw.Write(msg)
-	_ = err
+	// maxSize=50 must force record-boundary truncation: TC set on the caller's
+	// message and the write itself succeeding.
+	if err != nil {
+		t.Fatalf("truncating write failed: %v", err)
+	}
+	if !msg.Header.Flags.TC {
+		t.Error("truncated response must set the TC flag on the message")
+	}
 }
 
 // ==============================================================================
@@ -2373,7 +2392,14 @@ func TestTLSResponseWriterTruncationSmallMaxSize3(t *testing.T) {
 	}
 
 	_, err = rw.Write(msg)
-	_ = err
+	// maxSize=50 must force record-boundary truncation over TLS: TC set on the
+	// caller's message and the write itself succeeding.
+	if err != nil {
+		t.Fatalf("truncating TLS write failed: %v", err)
+	}
+	if !msg.Header.Flags.TC {
+		t.Error("truncated TLS response must set the TC flag on the message")
+	}
 }
 
 // ==============================================================================
@@ -3003,9 +3029,17 @@ func TestUDPResponseWriterTruncationWriteV2(t *testing.T) {
 	}
 
 	written, err := rw.Write(msg)
-	// May succeed or fail depending on truncation result
-	_ = written
-	_ = err
+	// Truncation is a success path: the oversized message must be truncated
+	// (TC set, whole RRs dropped), not rejected.
+	if err != nil {
+		t.Fatalf("truncating write failed: %v", err)
+	}
+	if written <= 0 {
+		t.Fatalf("truncating write reported %d bytes written", written)
+	}
+	if !msg.Header.Flags.TC {
+		t.Error("truncated response must set the TC flag on the message")
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -5384,8 +5418,15 @@ func TestTCPResponseWriterTruncationSmallMaxSize(t *testing.T) {
 	}
 
 	_, err := rw.Write(msg)
-	// May or may not succeed depending on whether truncated message fits
-	_ = err
+	// maxSize=20 is smaller than even the truncated question-only form (38
+	// bytes): the write must fail with the exceeds-max error, after Truncate
+	// has still marked TC on the caller's message.
+	if err == nil {
+		t.Fatal("write with maxSize=20 must fail (cannot fit even truncated)")
+	}
+	if !msg.Header.Flags.TC {
+		t.Error("truncated response must set the TC flag on the message")
+	}
 }
 
 // ==============================================================================
@@ -5600,7 +5641,15 @@ func TestTLSResponseWriterTruncationSmallMaxSize(t *testing.T) {
 	}
 
 	_, err = rw.Write(msg)
-	_ = err
+	// maxSize=20 is smaller than even the truncated question-only form (38
+	// bytes): the TLS write must fail with the exceeds-max error, after
+	// Truncate has still marked TC on the caller's message.
+	if err == nil {
+		t.Fatal("TLS write with maxSize=20 must fail (cannot fit even truncated)")
+	}
+	if !msg.Header.Flags.TC {
+		t.Error("truncated TLS response must set the TC flag on the message")
+	}
 }
 
 // ==============================================================================

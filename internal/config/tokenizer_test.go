@@ -495,3 +495,63 @@ func TestTokenizerUnsupportedFeatures(t *testing.T) {
 		})
 	}
 }
+
+// YAML 1.2 §7.3.1: inside a single-quoted string, a doubled quote ('') is an
+// escaped literal quote. The tokenizer must not terminate the string at the
+// first quote of the pair.
+func TestSingleQuotedStringHandlesDoubledQuote(t *testing.T) {
+	tk := NewTokenizer("key: 'it''s'")
+
+	var tokens []Token
+	for {
+		tok := tk.Next()
+		tokens = append(tokens, tok)
+		if tok.Type == TokenEOF || tok.Type == TokenError {
+			break
+		}
+	}
+
+	var stringValue string
+	found := false
+	for _, tok := range tokens {
+		if tok.Type == TokenString {
+			stringValue = tok.Value
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("FAIL: no string token found for a single-quoted value with a doubled quote")
+	}
+	if stringValue != "it's" {
+		t.Fatalf("FAIL: single-quoted '' doubling not handled: got %q, want %q", stringValue, "it's")
+	}
+}
+
+// The control: a plain single-quoted string still terminates correctly.
+func TestSingleQuotedStringPlainTermination(t *testing.T) {
+	tk := NewTokenizer("key: 'hello'")
+
+	var tokens []Token
+	for {
+		tok := tk.Next()
+		tokens = append(tokens, tok)
+		if tok.Type == TokenEOF || tok.Type == TokenError {
+			break
+		}
+	}
+
+	var stringValue string
+	found := false
+	for _, tok := range tokens {
+		if tok.Type == TokenString {
+			stringValue = tok.Value
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("FAIL: no string token found for a plain single-quoted value")
+	}
+	if stringValue != "hello" {
+		t.Fatalf("FAIL: plain single-quoted value: got %q, want %q", stringValue, "hello")
+	}
+}

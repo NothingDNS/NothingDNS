@@ -98,13 +98,13 @@ detect_os() {
     case "$ARCH" in
         x86_64) ARCH="amd64" ;;
         aarch64|arm64) ARCH="arm64" ;;
-        *) error "Unsupported architecture: $ARCH" ;;
+        *) error "Unsupported architecture: $ARCH"; exit 1 ;;
     esac
 
     case "$OS" in
         linux) PLATFORM="linux-${ARCH}" ;;
         darwin) PLATFORM="darwin-${ARCH}" ;;
-        *) error "Unsupported OS: $OS (only Linux and macOS supported)" ;;
+        *) error "Unsupported OS: $OS (only Linux and macOS supported)"; exit 1 ;;
     esac
 
     info "Platform: $PLATFORM"

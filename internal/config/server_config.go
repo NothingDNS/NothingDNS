@@ -167,7 +167,7 @@ type HTTPConfig struct {
 	// ODoH (Oblivious DNS over HTTPS, RFC 9230) settings
 	ODoHEnabled bool   `yaml:"odoh_enabled"` // Enable ODoH endpoint
 	ODoHPath    string `yaml:"odoh_path"`    // ODoH endpoint path (default: /odoh)
-	ODoHKEM     int    `yaml:"odoh_kem"`     // HPKE KEM for target (default: 4 = X25519)
+	ODoHKEM     int    `yaml:"odoh_kem"`     // HPKE KEM for target (default: 32 = X25519 / 0x0020)
 	ODoHKDF     int    `yaml:"odoh_kdf"`     // HPKE KDF for target (default: 1 = HKDF-SHA256)
 	ODoHAEAD    int    `yaml:"odoh_aead"`    // HPKE AEAD for target (default: 1 = AES-256-GCM)
 
@@ -264,7 +264,7 @@ func unmarshalServer(node *Node, cfg *ServerConfig) error {
 			return fmt.Errorf("http: %w", err)
 		}
 		if cfg.HTTP.ODoHKEM == 0 {
-			cfg.HTTP.ODoHKEM = 4 // X25519
+			cfg.HTTP.ODoHKEM = 32 // X25519 (0x0020) — the KEM the odoh runtime implements
 		}
 		if cfg.HTTP.ODoHKDF, err = getRequiredInt(httpNode, "odoh_kdf", cfg.HTTP.ODoHKDF); err != nil {
 			return fmt.Errorf("http: %w", err)

@@ -223,20 +223,22 @@ func (k *KVPersistence) storedRecordsToZone(meta storage.ZoneMeta, records map[s
 		}
 	}
 
-	// Find SOA record
+	// Find SOA record — scan every name until it is found: the Records map
+	// iterates in randomized order, so the apex (which holds the SOA) is not
+	// guaranteed to be visited first.
 	for _, recs := range z.Records {
 		for _, rr := range recs {
-			if rr.Type == "SOA" {
-				// Parse SOA record from RData
-				soa := parseSOAFromRData(rr.RData)
-				if soa != nil {
-					z.SOA = soa
-				}
-				break
+			if rr.Type != "SOA" {
+				continue
 			}
+			if soa := parseSOAFromRData(rr.RData); soa != nil {
+				z.SOA = soa
+			}
+			break
 		}
-		// Only one SOA per zone, break after first set
-		break
+		if z.SOA != nil {
+			break
+		}
 	}
 
 	return z

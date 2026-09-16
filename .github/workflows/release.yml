@@ -39,11 +39,19 @@ jobs:
 
       - name: Resolve release tag
         id: tag
+        # Route user-controlled values through env: expressions interpolated
+        # into run: blocks expand literally before shell parsing (script
+        # injection); env values always stay data (GitHub security-hardening
+        # guide).
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            tag="${{ github.event.inputs.tag }}"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            tag="$INPUT_TAG"
           else
-            tag="${{ github.event.release.tag_name }}"
+            tag="$RELEASE_TAG"
           fi
           if [ -z "${tag}" ]; then
             echo "could not resolve a release tag" >&2
@@ -59,6 +67,7 @@ jobs:
       - name: Upload assets to release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          gh release upload "${{ steps.tag.outputs.tag }}" dist/* \
+          gh release upload "${RELEASE_TAG}" dist/* \
             --clobber --repo "${{ github.repository }}"

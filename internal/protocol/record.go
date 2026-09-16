@@ -170,7 +170,11 @@ func (rr *ResourceRecord) Release() {
 	rr.Type = 0
 	rr.Class = 0
 	rr.TTL = 0
-	resourceRecordPool.Put(rr)
+	// Struct recycling removed: Release can run twice on one shared
+	// *ResourceRecord (records aliased across messages or sections), and
+	// the double Put aliased the struct across unrelated acquisitions. The
+	// struct is left to the GC; the Name wire buffer and RData structs are
+	// still recycled by Name.Release and releaseRData.
 }
 
 // UnpackResourceRecord deserializes a resource record from wire format.

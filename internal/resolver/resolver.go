@@ -431,8 +431,19 @@ func (r *Resolver) resolve(ctx context.Context, name string, qtype uint16, cname
 					// Copy the DNAME record and capture Questions from the pooled response
 					// before releasing it. The pool zeroes backing arrays on Release;
 					// findDNAME returns a pointer into that array, so dname.dnameRR
-					// would be zeroed if captured after Release.
-					dnameRR := *dname.dnameRR // deep copy: struct lives in pooled backing array
+					// would be zeroed if captured after Release. The struct copy alone
+					// is not enough either: it shares the *Name and *RDataDNAME with
+					// records in the pooled response, and Release recycles both (the
+					// wire buffer and the rdata struct) — so deep-copy the owner name
+					// and wrap the target name in a fresh RDataDNAME.
+					dnameData, _ := dname.dnameRR.Data.(*protocol.RDataDNAME)
+					dnameRR := *dname.dnameRR
+					if dname.dnameRR.Name != nil {
+						dnameRR.Name = dname.dnameRR.Name.Copy()
+					}
+					if dnameData != nil && dnameData.DName != nil {
+						dnameRR.Data = &protocol.RDataDNAME{DName: dnameData.DName.Copy()}
+					}
 					respQuestions := resp.Questions
 					resp.Release()
 
@@ -622,12 +633,20 @@ func (r *Resolver) sendQuery(ctx context.Context, name string, qtype uint16, add
 		return nil, fmt.Errorf("resolver: nil response from %s", addr)
 	}
 
-	// Verify the response TXID matches what we sent — prevents spoofed
-	// responses from reaching higher layers (including DNSSEC validation).
-	// Tolerate ID=0: some referral responses and non-compliant servers use it.
-	if resp.Header.ID != 0 && resp.Header.ID != id {
+	// TXID binding: we generated a random transaction ID via nextSecureID()
+	// precisely so a response can be bound to this query (RFC 5452 / RFC 1035
+	// §4.1.1). Without this check, a spoofed, stale, or replayed response
+	// with a different ID would be accepted as the answer to THIS query —
+	// and because sendQuery is the path the DNSSEC validator's chain-build
+	// fetches (fetchDS / fetchDNSKEYAndSigs / fetchNSEC3PARAM) take via
+	// Resolve(), a forged DNSKEY/DS/NSEC3PARAM could authenticate the chain
+	// and compromise DNSSEC validation for the entire subtree. The same
+	// guard already exists in upstream.Client and LoadBalancer (commit
+	// dac7975). UnpackMessage returns a pooled *Message; release it before
+	// returning so the pool isn't drained on mismatch.
+	if resp.Header.ID != id {
 		resp.Release()
-		return nil, fmt.Errorf("resolver: TXID mismatch from %s", addr)
+		return nil, fmt.Errorf("resolver: TXID mismatch (got %d, want %d)", resp.Header.ID, id)
 	}
 
 	// Handle referral with TC bit — re-query over TCP (handled by transport)

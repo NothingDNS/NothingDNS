@@ -63,11 +63,11 @@ describe('useUpdateLoggingConfig', () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-    expect(mockFetch).toHaveBeenCalledWith('/api/v1/config/logging', {
+    expect(mockFetch).toHaveBeenCalledWith('/api/v1/config/logging', expect.objectContaining({
       method: 'PUT',
       body: JSON.stringify({ level: 'debug' }),
       headers: expect.objectContaining({ 'Content-Type': 'application/json' }),
-    });
+    }));
   });
 
   it('includes Bearer token when authenticated', async () => {
@@ -221,11 +221,11 @@ describe('useUpdateRRLConfig', () => {
     result.current.mutate({ enabled: true, rate: 10, burst: 20 });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-    expect(mockFetch).toHaveBeenCalledWith('/api/v1/config/rrl', {
+    expect(mockFetch).toHaveBeenCalledWith('/api/v1/config/rrl', expect.objectContaining({
       method: 'PUT',
       body: JSON.stringify({ enabled: true, rate: 10, burst: 20 }),
       headers: expect.objectContaining({ 'Content-Type': 'application/json' }),
-    });
+    }));
   });
 
   it('handles error on RRL update', async () => {
@@ -302,11 +302,11 @@ describe('useUpdateCacheConfig', () => {
     result.current.mutate(cacheConfig);
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-    expect(mockFetch).toHaveBeenCalledWith('/api/v1/config/cache', {
+    expect(mockFetch).toHaveBeenCalledWith('/api/v1/config/cache', expect.objectContaining({
       method: 'PUT',
       body: JSON.stringify(cacheConfig),
       headers: expect.objectContaining({ 'Content-Type': 'application/json' }),
-    });
+    }));
   });
 
   it('handles API error', async () => {

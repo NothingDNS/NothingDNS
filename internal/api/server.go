@@ -1565,7 +1565,8 @@ func (s *Server) writeError(w http.ResponseWriter, status int, message string) {
 
 // requireMethod checks that r.Method is one of the allowed methods and writes
 // a 405 response if not. Returns true if the caller should return (method
-// rejected), false if the method is allowed. Use:
+// rejected), false if the method is allowed. The 405 carries the RFC 7231
+// §6.5.5-mandated Allow header listing the permitted methods. Use:
 //
 //	if s.requireMethod(w, r, http.MethodGet, http.MethodPost) { return }
 func (s *Server) requireMethod(w http.ResponseWriter, r *http.Request, methods ...string) bool {
@@ -1574,6 +1575,7 @@ func (s *Server) requireMethod(w http.ResponseWriter, r *http.Request, methods .
 			return false
 		}
 	}
+	w.Header().Set("Allow", strings.Join(methods, ", "))
 	s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 	return true
 }

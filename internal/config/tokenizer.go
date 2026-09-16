@@ -291,6 +291,14 @@ func (t *Tokenizer) readQuotedString() Token {
 		}
 
 		if ch == quote {
+			if quote == '\'' && t.peekNext() == '\'' {
+				// YAML 1.2 §7.3.1: '' inside a single-quoted string is an
+				// escaped literal quote — consume both, emit one.
+				t.next()
+				t.next()
+				value.WriteByte('\'')
+				continue
+			}
 			t.next()
 			break
 		}

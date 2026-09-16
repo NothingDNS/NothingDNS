@@ -220,4 +220,42 @@ describe('ZonesPage', () => {
       expect(screen.getByText('example.com.')).toBeInTheDocument();
     });
   });
+
+  it('preserves an explicit TTL 0 when creating a zone', async () => {
+    // TTL 0 is a legitimate DNS value (no caching). The create dialog parsed
+    // the TTL with `parseInt(ttl) || 3600`, whose falsy-zero branch silently
+    // rewrote an explicit 0 to 3600 on the POST body.
+    mockFetch
+      .mockResolvedValueOnce(mockJsonResponse(sampleZones))
+      .mockResolvedValueOnce(mockJsonResponse({ success: true }))
+      .mockResolvedValueOnce(mockJsonResponse(sampleZones));
+    const user = userEvent.setup();
+    render(<ZonesPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('example.com.')).toBeInTheDocument();
+    });
+
+    const createBtns = screen.getAllByRole('button', { name: /Create Zone/ });
+    await user.click(createBtns[0]);
+
+    await user.type(screen.getByLabelText('Zone Name'), 'ttl0.example.com');
+    const ttl = screen.getByLabelText('Default TTL');
+    await user.clear(ttl);
+    await user.type(ttl, '0');
+
+    // The project's radix Dialog wrapper exposes no "dialog" role in this
+    // build; the dialog's submit renders after the toolbar button, so the
+    // last match is the submit.
+    const submitBtns = screen.getAllByRole('button', { name: 'Create Zone' });
+    await user.click(submitBtns[submitBtns.length - 1]);
+
+    await waitFor(() => {
+      expect(mockFetch.mock.calls.some(([, init]) => (init as RequestInit)?.method === 'POST')).toBe(true);
+    });
+    const postCall = mockFetch.mock.calls.find(([, init]) => (init as RequestInit)?.method === 'POST');
+    const body = JSON.parse((postCall as [string, RequestInit])[1].body as string);
+    expect(body.name).toBe('ttl0.example.com.');
+    expect(body.ttl).toBe(0);
+  });
 });

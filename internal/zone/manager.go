@@ -127,6 +127,16 @@ func (m *Manager) SetMutationHook(hook func(zoneName string, deleted bool)) {
 	m.mutationHook = hook
 }
 
+// MutationHook returns the currently registered mutation hook, or nil if
+// none is set. Used to compose hooks (e.g. layering the query-routing
+// rebuild on top of the KV-persistence hook) without losing the earlier
+// registration.
+func (m *Manager) MutationHook() func(zoneName string, deleted bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.mutationHook
+}
+
 // NotifyMutated fires the mutation hook for a zone that was mutated OUTSIDE
 // the manager's mutation methods — e.g. DDNS (transfer.ApplyUpdate) mutates
 // the *Zone object directly. Such paths must call this once after applying
@@ -512,6 +522,12 @@ func (m *Manager) DeleteRecord(zoneName, name, rtype string) error {
 func (m *Manager) UpdateRecord(zoneName string, name, rtype, oldData string, newRecord Record) error {
 	zoneName = normalizeZoneName(zoneName)
 	rtype = strings.ToUpper(rtype)
+	// Parity with AddRecord: reject injection-shaped RDATA (embedded newlines,
+	// NULs) before it reaches the zone file writer — otherwise an update could
+	// inject a live record into the authoritative zone on the next persist.
+	if err := ValidateRecordData(newRecord.Name, newRecord.RData); err != nil {
+		return err
+	}
 	if newRecord.Class == "" {
 		newRecord.Class = "IN"
 	}

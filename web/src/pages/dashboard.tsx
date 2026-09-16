@@ -13,6 +13,11 @@ export function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
+
+  // Generation guard for loadStats(): the 5s polling interval and the
+  // Refresh button can overlap an in-flight load, and an older response —
+  // or its late abort rejection — must not overwrite fresher state.
+  const loadStatsGeneration = useRef(0);
   const streamRef = useRef<HTMLDivElement>(null);
 
   // Live query events + connection state come from the app-wide shared
@@ -21,15 +26,18 @@ export function DashboardPage() {
   const connected = useQueryStream((s) => s.connected);
 
   const loadStats = async () => {
+    const gen = ++loadStatsGeneration.current;
     try {
       const data = await api<DashboardStats>('GET', '/api/dashboard/stats');
+      if (gen !== loadStatsGeneration.current) return; // superseded by a newer load
       setStats(data);
       setLastUpdate(new Date());
       setError(null);
     } catch (e) {
+      if (gen !== loadStatsGeneration.current) return; // superseded
       setError(e instanceof Error ? e.message : 'Failed to load stats');
     } finally {
-      setLoading(false);
+      if (gen === loadStatsGeneration.current) setLoading(false);
     }
   };
 

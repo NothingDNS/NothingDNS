@@ -90,8 +90,14 @@ func WriteZone(z *Zone) (string, error) {
 // file (see formatRDataForZone) would inject additional, attacker-controlled
 // zone-file lines. Enforced at every untrusted write path (API, DDNS).
 func ValidateRecordData(name, rdata string) error {
-	if i := strings.IndexAny(name, "\n\r\x00"); i >= 0 {
-		return fmt.Errorf("record name contains a control character (\\n/\\r/NUL)")
+	// Zone-file-hostile characters in the name: the owner is written into
+	// the zone file unquoted, so a semicolon, whitespace, quote, or
+	// parenthesis corrupts the written file — the reload truncates at the
+	// semicolon or mis-tokenizes at whitespace. DNS names cannot legally
+	// contain them anyway (RFC 1035 §2.3.1).
+	const nameHostile = "; \t\"()"
+	if i := strings.IndexAny(name, nameHostile+"\n\r\x00"); i >= 0 {
+		return fmt.Errorf("record name contains a character that breaks the zone-file format (semicolon, space, quote, or parenthesis)")
 	}
 	if i := strings.IndexAny(rdata, "\n\r\x00"); i >= 0 {
 		return fmt.Errorf("record data contains a control character (\\n/\\r/NUL) that could inject a zone-file line")

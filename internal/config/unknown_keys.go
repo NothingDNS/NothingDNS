@@ -65,7 +65,7 @@ func walkUnknownKeys(node *Node, path string, t reflect.Type) {
 			continue
 		}
 		child := node.Get(key)
-		if child == nil || child.Type != NodeMapping {
+		if child == nil {
 			continue
 		}
 		// A mapping received by a Go map has operator-chosen keys (view
@@ -73,7 +73,23 @@ func walkUnknownKeys(node *Node, path string, t reflect.Type) {
 		if derefType(ft).Kind() == reflect.Map {
 			continue
 		}
-		walkUnknownKeys(child, path+"."+key, ft)
+		switch child.Type {
+		case NodeMapping:
+			walkUnknownKeys(child, path+"."+key, ft)
+		case NodeSequence:
+			// A sequence of structs (dnssec.keys, slave zones, ...): each
+			// item is a mapping checked against the element type — derefType
+			// has already stripped the slice. Keys inside items go just as
+			// silent when typo'd as mapping keys.
+			if derefType(ft).Kind() != reflect.Struct {
+				continue
+			}
+			for _, item := range child.Children {
+				if item != nil && item.Type == NodeMapping {
+					walkUnknownKeys(item, path+"."+key, ft)
+				}
+			}
+		}
 	}
 }
 

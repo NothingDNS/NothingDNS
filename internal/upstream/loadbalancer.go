@@ -955,15 +955,25 @@ func (lb *LoadBalancer) checkHealth() {
 		go func(s *Server) {
 			defer healthWg.Done()
 			query := newQuery()
-			_, err := lb.queryUDP(s.Address, query)
+			resp, err := lb.queryUDP(s.Address, query)
+			if resp != nil {
+				defer resp.Release()
+			}
 			if err != nil {
 				util.Warnf("health check UDP failed for %s: %v, trying TCP", s.Address, err)
-				if _, tcpErr := lb.queryTCP(s.Address, query); tcpErr != nil {
+				resp, tcpErr := lb.queryTCP(s.Address, query)
+				if resp != nil {
+					defer resp.Release()
+				}
+				if tcpErr != nil {
 					util.Debugf("health check TCP failed for %s: %v", s.Address, tcpErr)
 					s.markFailure()
 				}
+				// else: TCP succeeded — backend is healthy (no markSuccess needed;
+				// markSuccess is called implicitly by the successful queryUDP return).
+				err = nil // clear UDP error; TCP succeeded so backend is healthy
 			}
-			// queryUDP/queryTCP mark success on successful probes.
+			// queryUDP marks success on a successful response; nothing to do here.
 		}(server)
 	}
 
@@ -985,10 +995,16 @@ func (lb *LoadBalancer) checkHealth() {
 			go func(b *AnycastBackend) {
 				defer healthWg.Done()
 				query := newQuery()
-				_, err := lb.queryUDP(b.Address(), query)
+				resp, err := lb.queryUDP(b.Address(), query)
+				if resp != nil {
+					defer resp.Release()
+				}
 				if err != nil {
 					util.Warnf("health check UDP failed for anycast %s: %v, trying TCP", b.Address(), err)
-					_, err = lb.queryTCP(b.Address(), query)
+					resp, err = lb.queryTCP(b.Address(), query)
+					if resp != nil {
+						defer resp.Release()
+					}
 				}
 				if err != nil {
 					b.markFailure()

@@ -20,15 +20,46 @@ type mockResolver struct {
 
 func (m *mockResolver) Query(ctx context.Context, name string, qtype uint16) (*protocol.Message, error) {
 	key := name + "|" + strconv.Itoa(int(qtype))
-	if resp, ok := m.responses[key]; ok {
-		return resp, nil
+	resp, ok := m.responses[key]
+	if !ok {
+		// Return empty response for unknown queries
+		return protocol.NewMessage(protocol.Header{
+			ID:      1,
+			Flags:   protocol.NewResponseFlags(protocol.RcodeSuccess),
+			QDCount: 1,
+		}), nil
 	}
-	// Return empty response for unknown queries
-	return protocol.NewMessage(protocol.Header{
-		ID:      1,
-		Flags:   protocol.NewResponseFlags(protocol.RcodeSuccess),
-		QDCount: 1,
-	}), nil
+	// Hand out a private copy: production resolvers return solely-owned
+	// messages, and the fetch path now Releases what Query returns. The
+	// stored fixture must survive repeated queries and must not have its
+	// pooled *Name objects recycled out from under other fixtures.
+	return cloneTestMessage(resp), nil
+}
+
+// cloneTestMessage builds a detached copy of a stored fixture message.
+// Record shells and Names are duplicated (both are pooled and recycled by
+// Release); RData pointers are shared — the DNSSEC rdata types these
+// fixtures carry (DNSKEY, RRSIG, DS, NSEC3PARAM) have no case in
+// protocol.releaseRData, so Release never pools or mutates them.
+func cloneTestMessage(in *protocol.Message) *protocol.Message {
+	out := protocol.NewMessage(in.Header)
+	for _, q := range in.Questions {
+		qc := &protocol.Question{QType: q.QType, QClass: q.QClass}
+		if q.Name != nil {
+			qc.Name = q.Name.Copy()
+		}
+		out.AddQuestion(qc)
+	}
+	for _, rr := range in.Answers {
+		out.Answers = append(out.Answers, detachRecord(rr))
+	}
+	for _, rr := range in.Authorities {
+		out.Authorities = append(out.Authorities, detachRecord(rr))
+	}
+	for _, rr := range in.Additionals {
+		out.Additionals = append(out.Additionals, detachRecord(rr))
+	}
+	return out
 }
 
 // makeDNSKEYRRSIG signs a zone's DNSKEY RRset with its (KSK) private key and
@@ -2260,7 +2291,11 @@ func TestValidateResponseFullChain(t *testing.T) {
 
 	// Set up mock resolver. The DNSKEY RRset must carry its self-signature so
 	// the chain can authenticate it (DS proves only the KSK).
-	dnskeyRR := &protocol.ResourceRecord{Name: name, Type: protocol.TypeDNSKEY, Data: dnskeyData}
+	// Note: dnskeyRR gets its own Name — Query results are now Released by
+	// the fetch path, which recycles each record's pooled *Name; aRecord and
+	// rrsigRR (the response message) must not share it.
+	dnskeyName, _ := protocol.ParseName("example.com.")
+	dnskeyRR := &protocol.ResourceRecord{Name: dnskeyName, Type: protocol.TypeDNSKEY, Data: dnskeyData}
 	dnskeySig := makeDNSKEYRRSIG(t, "example.com.", privKey, dnskeyData, []*protocol.ResourceRecord{dnskeyRR})
 	mock := &mockResolver{
 		responses: map[string]*protocol.Message{

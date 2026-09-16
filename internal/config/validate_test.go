@@ -1675,3 +1675,47 @@ func TestLooksLikePlaceholderSecret(t *testing.T) {
 		}
 	}
 }
+
+// TestSignatureValidityMustBeValidDuration locks the load-time gate for
+// dnssec.signing.signature_validity: an operator writing the natural "30d"
+// idiom (Go durations reject the d unit) must get a validation error at
+// startup, not a silently-ignored setting that signs at the default
+// validity. main.go's loadZoneSigner drops ParseDuration errors, so this
+// gate is the only thing standing between the typo and production
+// signatures with the wrong lifetime.
+func TestSignatureValidityMustBeValidDuration(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.DNSSEC.Enabled = true
+	cfg.DNSSEC.Signing.Enabled = true
+	cfg.DNSSEC.Signing.Keys = []KeyConfig{{PrivateKey: "dummy-key-material", Type: "ksk", Algorithm: 13}}
+	cfg.DNSSEC.Signing.SignatureValidity = "30d"
+
+	errs := cfg.Validate()
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e, "signature_validity") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("FAIL: signature_validity %q was accepted without validation — the typo silently changes DNSSEC signature lifetimes (got %d errors: %v)", "30d", len(errs), errs)
+	}
+}
+
+// TestSignatureValidityAcceptsGoDuration is the not-overcorrected control:
+// a valid Go duration for the same field passes validation cleanly.
+func TestSignatureValidityAcceptsGoDuration(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.DNSSEC.Enabled = true
+	cfg.DNSSEC.Signing.Enabled = true
+	cfg.DNSSEC.Signing.Keys = []KeyConfig{{PrivateKey: "dummy-key-material", Type: "ksk", Algorithm: 13}}
+	cfg.DNSSEC.Signing.SignatureValidity = "720h"
+
+	errs := cfg.Validate()
+	for _, e := range errs {
+		if strings.Contains(e, "signature_validity") {
+			t.Fatalf("FAIL: valid Go duration %q was rejected: %v", "720h", e)
+		}
+	}
+}

@@ -3720,8 +3720,15 @@ func TestSigner_SignRRSetExpiredInception(t *testing.T) {
 	expiration := uint32(time.Now().Add(-1 * time.Hour).Unix())
 
 	// SignRRSet does not validate timestamps - it signs regardless
-	_, err = s.SignRRSet(rrSet, key, inception, expiration)
-	_ = err
+	sig, err := s.SignRRSet(rrSet, key, inception, expiration)
+	// SignRRSet signs regardless of timestamps: for this expired-inception
+	// fixture it must still produce an RRSIG record without error.
+	if err != nil {
+		t.Fatalf("SignRRSet failed on expired-inception fixture: %v", err)
+	}
+	if sig == nil {
+		t.Fatal("SignRRSet returned a nil signature")
+	}
 }
 
 // ---------------------------------------------------------------------------

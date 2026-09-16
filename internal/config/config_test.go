@@ -1893,7 +1893,7 @@ func TestValidateDNSSEC(t *testing.T) {
 								Algorithm:  13, // ECDSAP256SHA256
 							},
 						},
-						SignatureValidity: "30d",
+						SignatureValidity: "720h",
 					},
 				},
 			},
@@ -1918,7 +1918,7 @@ func TestValidateDNSSEC(t *testing.T) {
 								Algorithm:  13, // ECDSAP256SHA256
 							},
 						},
-						SignatureValidity: "14d",
+						SignatureValidity: "336h",
 					},
 				},
 			},

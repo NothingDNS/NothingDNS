@@ -80,9 +80,6 @@ func TestCluster_Start_WithSuccessfulSeedJoin(t *testing.T) {
 		t.Error("Expected cluster to be started")
 	}
 }
-
-
-
 func TestCluster_InvalidateCache_Enabled(t *testing.T) {
 	logger := util.NewLogger(util.INFO, util.TextFormat, nil)
 	cacheCfg := cache.Config{Capacity: 1000}
@@ -756,8 +753,8 @@ func TestCluster_Stop_Twice(t *testing.T) {
 
 	c.Stop()
 
-	// Stopping again should not panic (though cacheSyncChan is already closed)
-	// The second Stop call checks !c.started and returns nil
+	// Stopping again should not panic — the second Stop call checks
+	// !c.started and returns nil.
 	err := c.Stop()
 	if err != nil {
 		t.Errorf("Second Stop() should return nil, got %v", err)
