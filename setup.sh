@@ -6,7 +6,6 @@
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/nothingdns"
 # Canonical config name; legacy installs (pre-v1.0.0) used config.yaml.
@@ -28,7 +27,6 @@ CHECKSUMS_FILE=""
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
@@ -118,9 +116,8 @@ check_prereqs() {
     local missing=()
 
     command -v curl &> /dev/null || missing+=("curl")
-    command -v gzip &> /dev/null || missing+=("gzip")
 
-    if [ ${#missing[@} -gt 0 ]; then
+    if [ ${#missing[@]} -gt 0 ]; then
         error "Missing required commands: ${missing[*]}"
         info "Install with: sudo apt install ${missing[*]} # Debian/Ubuntu"
         info "         or: sudo yum install ${missing[*]} # RHEL/CentOS"
@@ -150,7 +147,9 @@ download_and_install() {
     local download_url="https://github.com/NothingDNS/NothingDNS/releases/download/${LATEST_VERSION}/${BINARY_NAME}-${PLATFORM}"
     info "Downloading ${BINARY_NAME} from ${download_url}..."
 
-    local temp_bin=$(mktemp)
+    local temp_bin
+    temp_bin=$(mktemp)
+    # shellcheck disable=SC2064 # expand the temp paths now, while they are set
     trap "rm -f ${temp_bin} ${CHECKSUMS_FILE}" RETURN
 
     curl -fsSL -o "${temp_bin}" "${download_url}" || {
@@ -158,31 +157,42 @@ download_and_install() {
         return 1
     }
     verify_checksum "${temp_bin}" "${BINARY_NAME}-${PLATFORM}"
-    chmod +x "${temp_bin}"
-
-    if [ -w "${INSTALL_DIR}" ]; then
-        mv "${temp_bin}" "${INSTALL_DIR}/${BINARY_NAME}"
-    else
-        sudo mv "${temp_bin}" "${INSTALL_DIR}/${BINARY_NAME}"
-    fi
+    sudo install -m 0755 "${temp_bin}" "${INSTALL_DIR}/${BINARY_NAME}"
     info "Installed to ${INSTALL_DIR}/${BINARY_NAME}"
 
     # Download dnsctl
     local dnsctl_url="https://github.com/NothingDNS/NothingDNS/releases/download/${LATEST_VERSION}/${DNSCTL_NAME}-${PLATFORM}"
     info "Downloading ${DNSCTL_NAME}..."
 
-    local temp_dnsctl=$(mktemp)
+    local temp_dnsctl
+    temp_dnsctl=$(mktemp)
     if curl -fsSL -o "${temp_dnsctl}" "${dnsctl_url}" 2>/dev/null; then
         verify_checksum "${temp_dnsctl}" "${DNSCTL_NAME}-${PLATFORM}"
-        chmod +x "${temp_dnsctl}"
-        if [ -w "${INSTALL_DIR}" ]; then
-            mv "${temp_dnsctl}" "${INSTALL_DIR}/${DNSCTL_NAME}"
-        else
-            sudo mv "${temp_dnsctl}" "${INSTALL_DIR}/${DNSCTL_NAME}"
-        fi
+        sudo install -m 0755 "${temp_dnsctl}" "${INSTALL_DIR}/${DNSCTL_NAME}"
+        rm -f "${temp_dnsctl}"
         info "Installed ${DNSCTL_NAME} to ${INSTALL_DIR}/${DNSCTL_NAME}"
     else
         warn "dnsctl download failed, skipping..."
+    fi
+}
+
+SERVICE_USER="nothingdns"
+
+# Dedicated unprivileged service account (see install.sh).
+create_service_user() {
+    if [ "$(uname -s)" != "Linux" ] || id -u "${SERVICE_USER}" &> /dev/null; then
+        return 0
+    fi
+    info "Creating system user ${SERVICE_USER}..."
+    local nologin=/usr/sbin/nologin
+    [ -x "${nologin}" ] || nologin=/sbin/nologin
+    if command -v useradd &> /dev/null; then
+        sudo useradd --system --no-create-home --home-dir "${DATA_DIR}" --shell "${nologin}" "${SERVICE_USER}"
+    elif command -v adduser &> /dev/null; then
+        sudo addgroup -S "${SERVICE_USER}" 2>/dev/null || true
+        sudo adduser -S -D -H -h "${DATA_DIR}" -s "${nologin}" -G "${SERVICE_USER}" "${SERVICE_USER}"
+    else
+        fatal "Cannot create the ${SERVICE_USER} system user (no useradd/adduser)"
     fi
 }
 
@@ -190,23 +200,13 @@ download_and_install() {
 create_dirs() {
     section "Creating Directory Structure"
 
-    if [ ! -d "${CONFIG_DIR}" ]; then
-        if [ -w "$(dirname ${CONFIG_DIR})" ]; then
-            mkdir -p "${CONFIG_DIR}/zones" "${CONFIG_DIR}/keys" "${CONFIG_DIR}/tls"
-        else
-            sudo mkdir -p "${CONFIG_DIR}/zones" "${CONFIG_DIR}/keys" "${CONFIG_DIR}/tls"
-        fi
+    create_service_user
+    sudo mkdir -p "${CONFIG_DIR}/zones" "${CONFIG_DIR}/keys" "${CONFIG_DIR}/tls" "${DATA_DIR}" /var/log/nothingdns
+    if id -u "${SERVICE_USER}" &> /dev/null; then
+        sudo chown -R "${SERVICE_USER}:${SERVICE_USER}" "${DATA_DIR}" /var/log/nothingdns "${CONFIG_DIR}/zones"
+        sudo chown "root:${SERVICE_USER}" "${CONFIG_DIR}"
+        sudo chmod 0750 "${CONFIG_DIR}"
     fi
-
-    if [ ! -d "${DATA_DIR}" ]; then
-        if [ -w "$(dirname ${DATA_DIR})" ]; then
-            sudo mkdir -p "${DATA_DIR}"
-        else
-            sudo mkdir -p "${DATA_DIR}"
-        fi
-    fi
-
-    sudo mkdir -p /var/log/nothingdns
 
     info "Config directory: ${CONFIG_DIR}"
     info "Data directory: ${DATA_DIR}"
@@ -238,11 +238,12 @@ create_config() {
         fi
     fi
 
-    local secret=$(generate_secret)
+    local secret
+    secret=$(generate_secret)
 
     info "Creating default config..."
 
-    cat > "${config_file}" << EOF
+    sudo tee "${config_file}" > /dev/null << EOF
 # NothingDNS Configuration
 # https://github.com/NothingDNS/NothingDNS
 # Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -255,6 +256,8 @@ server:
     - "::"
   udp_workers: 0
   tcp_workers: 0
+  # Web dashboard and REST API on every interface. Put it behind a TLS reverse
+  # proxy or restrict it with a firewall on untrusted networks.
   http:
     enabled: true
     bind: "0.0.0.0:8080"
@@ -266,7 +269,6 @@ upstream:
     - 1.1.1.1:53
     - 8.8.8.8:53
     - 8.8.4.4:53
-  timeout: 5s
   health_check: 30s
   failover_timeout: 5s
 
@@ -300,10 +302,30 @@ logging:
   query_log: false
   query_log_file: /var/log/nothingdns/query.log
 
+# Prometheus metrics. Without auth_token the endpoint may only listen on
+# loopback; set auth_token before binding it to a reachable address.
 metrics:
   enabled: true
-  bind: ":9153"
+  bind: "127.0.0.1:9153"
   path: /metrics
+
+# Zone database, IXFR journals and dashboard users (users.json). Must be
+# writable by the service user.
+storage:
+  data_dir: /var/lib/nothingdns
+
+# Answer only loopback and private networks, so the server is not an open
+# resolver. Add your public client ranges here if needed.
+acl:
+  - name: allow-local-networks
+    action: allow
+    networks:
+      - 127.0.0.0/8
+      - ::1/128
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+      - fc00::/7
 
 cluster:
   enabled: false
@@ -320,13 +342,15 @@ blocklist:
   enabled: false
 EOF
 
-    if [ ! -w "${config_file}" ]; then
-        sudo chown root:root "${config_file}"
-        sudo chmod 600 "${config_file}"
+    if id -u "${SERVICE_USER}" &> /dev/null; then
+        sudo chown "root:${SERVICE_USER}" "${config_file}"
+        sudo chmod 0640 "${config_file}"
+    else
+        sudo chmod 0600 "${config_file}"
     fi
 
     info "Config created at ${config_file}"
-    info "Auth secret generated - save this for dashboard login!"
+    info "Create the dashboard admin after the service starts (see next steps)."
 }
 
 # Setup systemd service
@@ -339,7 +363,9 @@ setup_service() {
     fi
 
     if [ ! -f "/etc/systemd/system/nothingdns.service" ]; then
-        cat > /tmp/nothingdns.service << EOF
+        local unit_tmp
+        unit_tmp=$(mktemp)
+        cat > "${unit_tmp}" << EOF
 [Unit]
 Description=NothingDNS Authoritative DNS Server
 Documentation=https://github.com/NothingDNS/NothingDNS
@@ -348,20 +374,25 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=nobody
-Group=nogroup
-ExecStart=/usr/local/bin/nothingdns --config ${CONFIG_FILE}
+User=nothingdns
+Group=nothingdns
+WorkingDirectory=/var/lib/nothingdns
+ExecStart=/usr/local/bin/nothingdns -config ${CONFIG_FILE}
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=30s
 LimitNOFILE=1048576
 
+# Bind port 53 without running as root
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_RAW
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_RAW
+
 # Security hardening
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/etc/nothingdns /var/lib/nothingdns /var/log/nothingdns
+ReadWritePaths=/var/lib/nothingdns /var/log/nothingdns -/etc/nothingdns/zones
 PrivateTmp=true
 
 # Pin stdout/stderr to a file under /var/log/nothingdns so the logrotate
@@ -376,7 +407,8 @@ SyslogIdentifier=nothingdns
 [Install]
 WantedBy=multi-user.target
 EOF
-        sudo mv /tmp/nothingdns.service /etc/systemd/system/
+        sudo install -m 0644 "${unit_tmp}" /etc/systemd/system/nothingdns.service
+        rm -f "${unit_tmp}"
         sudo systemctl daemon-reload
         info "Service installed"
     else
@@ -398,8 +430,10 @@ EOF
 setup_logging() {
     section "Setting Up Log Rotation"
 
-    if [ -d /etc/logrotate.d ] || [ -w /etc/logrotate.d ]; then
-        cat > /tmp/nothingdns.logrotate << 'EOF'
+    if [ -d /etc/logrotate.d ]; then
+        local rotate_tmp
+        rotate_tmp=$(mktemp)
+        cat > "${rotate_tmp}" << 'EOF'
 /var/log/nothingdns/*.log {
     daily
     rotate 7
@@ -407,20 +441,15 @@ setup_logging() {
     delaycompress
     missingok
     notifempty
-    create 0644 nobody nogroup
+    create 0640 nothingdns nothingdns
     sharedscripts
     postrotate
         systemctl reload nothingdns > /dev/null 2>&1 || true
     endscript
 }
 EOF
-        if [ -w /etc/logrotate.d ]; then
-            mv /tmp/nothingdns.logrotate /etc/logrotate.d/nothingdns
-        else
-            sudo mv /tmp/nothingdns.logrotate /etc/logrotate.d/nothingdns
-        fi
-        sudo mkdir -p /var/log/nothingdns
-        sudo chown nobody:nogroup /var/log/nothingdns
+        sudo install -m 0644 "${rotate_tmp}" /etc/logrotate.d/nothingdns
+        rm -f "${rotate_tmp}"
         info "Log rotation configured"
     fi
 }
@@ -445,17 +474,21 @@ print_next_steps() {
     echo "   sudo systemctl status nothingdns  # Status"
     echo ""
     echo -e "${CYAN}3. View logs:${NC}"
-    echo "   sudo journalctl -u nothingdns -f   # Live logs"
-    echo "   sudo journalctl -u nothingdns --since '1 hour ago'"
+    echo "   sudo tail -f /var/log/nothingdns/server.log"
     echo ""
     echo -e "${CYAN}4. Check health:${NC}"
-    echo "   curl http://localhost:8080/health"
+    echo "   curl http://127.0.0.1:8080/health"
     echo ""
-    echo -e "${CYAN}5. Update to new version:${NC}"
+    echo -e "${CYAN}5. Create the dashboard admin (run on this host):${NC}"
+    echo "   curl -X POST http://127.0.0.1:8080/api/v1/auth/bootstrap \\"
+    echo "     -H 'Content-Type: application/json' \\"
+    echo "     -d '{\"username\":\"admin\",\"password\":\"<strong-password>\"}'"
+    echo ""
+    echo -e "${CYAN}6. Update to new version:${NC}"
     echo "   curl -fsSL https://raw.githubusercontent.com/NothingDNS/NothingDNS/main/update.sh | bash"
     echo ""
     echo -e "${CYAN}Dashboard:${NC}"
-    echo "   http://localhost:8080"
+    echo "   http://<this-host>:8080"
     echo ""
     echo "======================================"
 }

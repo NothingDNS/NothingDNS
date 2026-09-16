@@ -123,6 +123,14 @@ prompt_cleanup() {
     if [ "$remove_data" = true ]; then
         info "Removing data and log files..."
         sudo rm -rf /var/lib/nothingdns /var/log/nothingdns
+        if id -u nothingdns &> /dev/null; then
+            info "Removing system user nothingdns..."
+            if command -v userdel &> /dev/null; then
+                sudo userdel nothingdns 2>/dev/null || warn "Could not remove user nothingdns"
+            elif command -v deluser &> /dev/null; then
+                sudo deluser nothingdns 2>/dev/null || warn "Could not remove user nothingdns"
+            fi
+        fi
     else
         info "Keeping data and log files"
     fi

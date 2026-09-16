@@ -31,6 +31,9 @@ CHECKSUMS_FILE=""
 # can break system DNS. Default: fall back to port 5353. Set
 # NOTHINGDNS_STOP_HOST_DNS=1 to explicitly consent to taking over port 53.
 STOP_HOST_DNS="${NOTHINGDNS_STOP_HOST_DNS:-0}"
+TEMP_FILES=()
+cleanup() { rm -f "${TEMP_FILES[@]}"; }
+trap cleanup EXIT
 
 # Colors
 RED='\033[0;31m'
@@ -72,7 +75,7 @@ fetch_checksums() {
         error "No sha256sum/shasum tool available to verify the release. Install coreutils, or set NOTHINGDNS_SKIP_CHECKSUM=1 to bypass (NOT recommended)."
     fi
     CHECKSUMS_FILE=$(mktemp)
-    trap "rm -f ${CHECKSUMS_FILE}" EXIT
+    TEMP_FILES+=("${CHECKSUMS_FILE}")
     local url="https://github.com/${REPO}/releases/download/${LATEST_VERSION}/SHA256SUMS"
     curl -fsSL -o "${CHECKSUMS_FILE}" "${url}" || \
         error "Could not download release checksums (${url}). Refusing to install unverified binaries; set NOTHINGDNS_SKIP_CHECKSUM=1 to bypass (NOT recommended)."
@@ -98,10 +101,11 @@ verify_checksum() {
 
 # Check if port 53 is in use and find what's using it
 check_port_53() {
+    # Match port 53 exactly (not :5353 or :530).
     if command -v ss &> /dev/null; then
-        PORT_53_USERS=$(ss -tulpn | grep ':53' | grep -v nothingdns || true)
+        PORT_53_USERS=$(ss -tulpn 2>/dev/null | grep -E '[:.]53[[:space:]]' | grep -v nothingdns || true)
     elif command -v netstat &> /dev/null; then
-        PORT_53_USERS=$(netstat -tulpn 2>/dev/null | grep ':53' | grep -v nothingdns || true)
+        PORT_53_USERS=$(netstat -tulpn 2>/dev/null | grep -E '[:.]53[[:space:]]' | grep -v nothingdns || true)
     else
         PORT_53_USERS=""
     fi
@@ -131,11 +135,9 @@ stop_existing_nothingdns() {
         sudo systemctl disable nothingdns 2>/dev/null || true
     fi
 
-    # Remove old binary
-    if [ -f /usr/local/bin/nothingdns ]; then
-        info "Removing old NothingDNS binary..."
-        sudo rm -f /usr/local/bin/nothingdns
-    fi
+    # The binary itself is left in place: download_binary replaces it
+    # atomically, and when the download is skipped (already up to date)
+    # deleting it here would leave no binary at all.
 
     # Remove old service file
     if [ -f /etc/systemd/system/nothingdns.service ]; then
@@ -144,7 +146,7 @@ stop_existing_nothingdns() {
         sudo systemctl daemon-reload
     fi
 
-    info "Existing NothingDNS installation removed"
+    info "Existing NothingDNS service stopped"
 }
 
 # Try to stop common DNS services
@@ -223,11 +225,14 @@ get_latest_version() {
 # Check if NothingDNS is already installed
 check_existing_install() {
     if [ -f "${INSTALL_DIR}/${BINARY_NAME}" ]; then
-        local current_version=$("${INSTALL_DIR}/${BINARY_NAME}" --version 2>/dev/null | grep -oP 'v?\d+\.\d+\.\d+' | head -1 || echo "unknown")
+        local current_version
+        current_version=$("${INSTALL_DIR}/${BINARY_NAME}" -version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+        current_version="${current_version:-unknown}"
         info "NothingDNS already installed: ${current_version}"
         info "Latest release: ${LATEST_VERSION}"
 
-        if [ "$current_version" = "v${LATEST_VERSION}" ] || [ "$current_version" = "${LATEST_VERSION}" ]; then
+        # Release tags carry a "v" prefix; the binary reports bare semver.
+        if [ "${current_version}" = "${LATEST_VERSION#v}" ]; then
             info "NothingDNS is up to date!"
             if is_interactive; then
                 echo ""
@@ -277,19 +282,12 @@ download_binary() {
     info "Downloading from ${DOWNLOAD_URL}..."
 
     TEMP_FILE=$(mktemp)
-    trap "rm -f ${TEMP_FILE} ${CHECKSUMS_FILE}" EXIT
+    TEMP_FILES+=("${TEMP_FILE}")
 
     curl -fsSL -o "${TEMP_FILE}" "${DOWNLOAD_URL}" || error "Download failed"
     verify_checksum "${TEMP_FILE}" "${BINARY_NAME}-${PLATFORM}"
-    chmod +x "${TEMP_FILE}"
-
-    if [ -d "${INSTALL_DIR}" ] && [ -w "${INSTALL_DIR}" ]; then
-        mv "${TEMP_FILE}" "${INSTALL_DIR}/${BINARY_NAME}" || error "Failed to install to ${INSTALL_DIR}"
-        info "Installed to ${INSTALL_DIR}/${BINARY_NAME}"
-    else
-        sudo mv "${TEMP_FILE}" "${INSTALL_DIR}/${BINARY_NAME}" || error "Failed to install to ${INSTALL_DIR}"
-        info "Installed to ${INSTALL_DIR}/${BINARY_NAME}"
-    fi
+    sudo install -m 0755 "${TEMP_FILE}" "${INSTALL_DIR}/${BINARY_NAME}" || error "Failed to install to ${INSTALL_DIR}"
+    info "Installed to ${INSTALL_DIR}/${BINARY_NAME}"
 
     # Set capability for privileged port binding (port 53)
     if command -v setcap &> /dev/null; then
@@ -314,20 +312,79 @@ download_dnsctl() {
     info "Downloading dnsctl..."
 
     TEMP_FILE=$(mktemp)
+    TEMP_FILES+=("${TEMP_FILE}")
     curl -fsSL -o "${TEMP_FILE}" "${DOWNLOAD_URL}" 2>/dev/null || {
         warn "dnsctl download failed, skipping..."
         return
     }
     verify_checksum "${TEMP_FILE}" "${DNSCTL_NAME}-${PLATFORM}"
-    chmod +x "${TEMP_FILE}"
+    sudo install -m 0755 "${TEMP_FILE}" "${INSTALL_DIR}/${DNSCTL_NAME}" || { warn "Failed to install dnsctl"; return; }
+    info "Installed dnsctl to ${INSTALL_DIR}/${DNSCTL_NAME}"
+}
 
-    if [ -d "${INSTALL_DIR}" ] && [ -w "${INSTALL_DIR}" ]; then
-        mv "${TEMP_FILE}" "${INSTALL_DIR}/${DNSCTL_NAME}" 2>/dev/null || sudo mv "${TEMP_FILE}" "${INSTALL_DIR}/${DNSCTL_NAME}"
-        info "Installed dnsctl to ${INSTALL_DIR}/${DNSCTL_NAME}"
-    else
-        sudo mv "${TEMP_FILE}" "${INSTALL_DIR}/${DNSCTL_NAME}" 2>/dev/null || mv "${TEMP_FILE}" "${INSTALL_DIR}/${DNSCTL_NAME}"
-        info "Installed dnsctl to ${INSTALL_DIR}/${DNSCTL_NAME}"
+# Dedicated unprivileged service account. "nobody" is shared with other
+# daemons and its group is "nogroup" on Debian but "nobody" on RHEL, so a unit
+# hardcoding nobody:nogroup fails to start there.
+SERVICE_USER="nothingdns"
+DATA_DIR="/var/lib/nothingdns"
+LOG_DIR="/var/log/nothingdns"
+
+create_service_user() {
+    if [ "$(uname -s)" != "Linux" ]; then
+        return
     fi
+    if id -u "${SERVICE_USER}" &> /dev/null; then
+        return
+    fi
+    info "Creating system user ${SERVICE_USER}..."
+    local nologin=/usr/sbin/nologin
+    [ -x "${nologin}" ] || nologin=/sbin/nologin
+    if command -v useradd &> /dev/null; then
+        sudo useradd --system --no-create-home --home-dir "${DATA_DIR}" --shell "${nologin}" "${SERVICE_USER}"
+    elif command -v adduser &> /dev/null; then
+        # BusyBox/Alpine
+        sudo addgroup -S "${SERVICE_USER}" 2>/dev/null || true
+        sudo adduser -S -D -H -h "${DATA_DIR}" -s "${nologin}" -G "${SERVICE_USER}" "${SERVICE_USER}"
+    else
+        error "Cannot create the ${SERVICE_USER} system user (no useradd/adduser)"
+    fi
+}
+
+# Create directories with ownership the service account can use.
+setup_dirs() {
+    sudo mkdir -p "${CONFIG_DIR}/tls" "${CONFIG_DIR}/zones" "${DATA_DIR}" "${LOG_DIR}"
+    if id -u "${SERVICE_USER}" &> /dev/null; then
+        sudo chown -R "${SERVICE_USER}:${SERVICE_USER}" "${DATA_DIR}" "${LOG_DIR}" "${CONFIG_DIR}/zones"
+        sudo chown "root:${SERVICE_USER}" "${CONFIG_DIR}"
+        sudo chmod 0750 "${CONFIG_DIR}"
+    fi
+}
+
+# Make the config readable by the service account but not by other users
+# (it holds auth_secret).
+secure_config_file() {
+    if id -u "${SERVICE_USER}" &> /dev/null; then
+        sudo chown "root:${SERVICE_USER}" "${CONFIG_FILE}"
+        sudo chmod 0640 "${CONFIG_FILE}"
+    else
+        sudo chmod 0600 "${CONFIG_FILE}"
+    fi
+}
+
+# Rewrite "port:" under server: in an existing config.
+set_config_port() {
+    local port="$1"
+    info "Applying port change to ${port}..."
+    local tmp
+    tmp=$(mktemp)
+    sudo cat "${CONFIG_FILE}" | awk -v port="${port}" '
+        /^server:/ { in_server = 1; print; next }
+        /^[^[:space:]#]/ { in_server = 0 }
+        in_server && !done && /^  port:[[:space:]]*[0-9]+[[:space:]]*$/ { print "  port: " port; done = 1; next }
+        { print }
+    ' > "${tmp}"
+    sudo cp "${tmp}" "${CONFIG_FILE}"
+    rm -f "${tmp}"
 }
 
 # Create default config
@@ -348,16 +405,14 @@ create_config() {
             if [[ ! $REPLY =~ ^[Yy]$ ]]; then
                 info "Keeping existing config"
                 if [ "$port" != "53" ]; then
-                    info "Applying port change to ${port}..."
-                    sed -i "s/port: 53/port: ${port}/" "${CONFIG_FILE}" 2>/dev/null || true
+                    set_config_port "${port}"
                 fi
                 return
             fi
         else
             info "Non-interactive: keeping existing config"
             if [ "$port" != "53" ]; then
-                info "Applying port change to ${port}..."
-                sed -i "s/port: 53/port: ${port}/" "${CONFIG_FILE}" 2>/dev/null || true
+                set_config_port "${port}"
             fi
             return
         fi
@@ -365,14 +420,12 @@ create_config() {
 
     info "Creating default config at ${CONFIG_FILE}..."
 
-    sudo mkdir -p "${CONFIG_DIR}"
-    sudo mkdir -p "${CONFIG_DIR}/tls"
-    sudo mkdir -p "${CONFIG_DIR}/zones"
+    setup_dirs
 
     # Generate a random auth secret
     AUTH_SECRET=$(openssl rand -base64 32 2>/dev/null || head -c 32 /dev/urandom | base64)
 
-    cat > "${CONFIG_FILE}" << EOF
+    sudo tee "${CONFIG_FILE}" > /dev/null << EOF
 # NothingDNS Configuration
 # https://github.com/NothingDNS/NothingDNS
 # Generated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
@@ -386,6 +439,8 @@ server:
   udp_workers: 0
   tcp_workers: 0
 
+  # Web dashboard and REST API on every interface. Put it behind a TLS reverse
+  # proxy or restrict it with a firewall on untrusted networks.
   http:
     enabled: true
     bind: "0.0.0.0:8080"
@@ -404,7 +459,6 @@ upstream:
     - 1.1.1.1:53
     - 8.8.8.8:53
     - 8.8.4.4:53
-  timeout: 5s
   health_check: 30s
   failover_timeout: 5s
 
@@ -438,10 +492,29 @@ logging:
   query_log: false
   query_log_file: /var/log/nothingdns/query.log
 
+# Prometheus metrics. Without auth_token the endpoint may only listen on
+# loopback; set auth_token before binding it to a reachable address.
 metrics:
   enabled: true
-  bind: ":9153"
+  bind: "127.0.0.1:9153"
   path: /metrics
+
+# Zone database and IXFR journals. Must be writable by the service user.
+storage:
+  data_dir: /var/lib/nothingdns
+
+# Answer only loopback and private networks, so the server is not an open
+# resolver. Add your public client ranges here if needed.
+acl:
+  - name: allow-local-networks
+    action: allow
+    networks:
+      - 127.0.0.0/8
+      - ::1/128
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+      - fc00::/7
 
 cluster:
   enabled: false
@@ -458,7 +531,7 @@ blocklist:
   enabled: false
 EOF
 
-    sudo chmod 600 "${CONFIG_FILE}"
+    secure_config_file
     info "Config created at ${CONFIG_FILE}"
     # Persist the API auth secret to a root-only file rather than echoing it to
     # stdout, which can leak into terminal scrollback or logs — especially under
@@ -478,7 +551,7 @@ create_bootstrap_user() {
 
     info "Waiting for server to start..."
     while [ $attempt -lt $max_attempts ]; do
-        if curl -s --max-time 2 http://localhost:8080/health > /dev/null 2>&1; then
+        if curl -s --max-time 2 http://127.0.0.1:8080/health > /dev/null 2>&1; then
             break
         fi
         attempt=$((attempt + 1))
@@ -486,26 +559,27 @@ create_bootstrap_user() {
     done
 
     if [ $attempt -eq $max_attempts ]; then
+        BOOTSTRAP_PASS=""
         warn "Server did not start in time, skipping bootstrap user creation"
-        warn "Generated password (save this): ${BOOTSTRAP_PASS}"
-        warn "Start server manually and create user with:"
-        warn "curl -X POST http://localhost:8080/api/v1/auth/bootstrap -H 'Content-Type: application/json' -d '{\"username\":\"admin\",\"password\":\"${BOOTSTRAP_PASS}\"}'"
+        if command -v systemctl &> /dev/null; then
+            warn "Recent service log:"
+            sudo journalctl -u nothingdns -n 20 --no-pager 2>/dev/null || true
+        fi
+        warn "Once the server runs, create the admin account on this host with:"
+        warn "curl -X POST http://127.0.0.1:8080/api/v1/auth/bootstrap -H 'Content-Type: application/json' -d '{\"username\":\"admin\",\"password\":\"<your-password>\"}'"
         return
     fi
 
     local bootstrap_needed=true
-    local users_response
-    users_response=$(curl -s -X GET http://localhost:8080/api/v1/auth/users \
-        -H "Content-Type: application/json" 2>/dev/null)
-
-    if echo "$users_response" | grep -q "username"; then
-        info "Users already exist, skipping bootstrap"
+    if sudo grep -q '^password:' "${CONFIG_DIR}/credentials" 2>/dev/null; then
+        info "Admin credentials already exist in ${CONFIG_DIR}/credentials, skipping bootstrap"
+        BOOTSTRAP_PASS=""
         bootstrap_needed=false
     fi
 
     if [ "$bootstrap_needed" = true ]; then
         local response
-        response=$(curl -s -X POST http://localhost:8080/api/v1/auth/bootstrap \
+        response=$(curl -s -X POST http://127.0.0.1:8080/api/v1/auth/bootstrap \
             -H "Content-Type: application/json" \
             -d "{\"username\":\"${BOOTSTRAP_USER}\",\"password\":\"${BOOTSTRAP_PASS}\"}" 2>&1)
 
@@ -517,25 +591,30 @@ create_bootstrap_user() {
             sudo chmod 600 "${CONFIG_DIR}/credentials"
             info "Admin credentials saved to ${CONFIG_DIR}/credentials (root-only). Retrieve with: sudo cat ${CONFIG_DIR}/credentials"
         else
+            BOOTSTRAP_PASS=""
             warn "Bootstrap response: $response"
-            warn "Generated password (save this): ${BOOTSTRAP_PASS}"
-            warn "If login fails, create user manually after server starts"
+            warn "The admin account was not created. If an admin already exists, sign in with its password;"
+            warn "otherwise create one on this host via POST http://127.0.0.1:8080/api/v1/auth/bootstrap"
         fi
     fi
 }
 
 # Setup service (systemd)
 setup_service() {
-    sudo mkdir -p /etc/nothingdns/tls
-    sudo mkdir -p /var/log/nothingdns
-    sudo mkdir -p /var/lib/nothingdns/zones
+    create_service_user
+    setup_dirs
+    if [ -f "${CONFIG_FILE}" ]; then
+        secure_config_file
+    fi
 
     if command -v systemctl &> /dev/null; then
         info "Setting up systemd service..."
 
         SERVICE_FILE="/etc/systemd/system/nothingdns.service"
 
-        cat > /tmp/nothingdns.service << EOF
+        local unit_tmp
+        unit_tmp=$(mktemp)
+        cat > "${unit_tmp}" << EOF
 [Unit]
 Description=NothingDNS DNS Server
 After=network-online.target
@@ -543,9 +622,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=nobody
-Group=nogroup
-ExecStart=/usr/local/bin/nothingdns --config ${CONFIG_FILE}
+User=nothingdns
+Group=nothingdns
+WorkingDirectory=/var/lib/nothingdns
+ExecStart=/usr/local/bin/nothingdns -config ${CONFIG_FILE}
 
 # Reload configuration on SIGHUP
 ExecReload=/bin/kill -HUP \$MAINPID
@@ -567,7 +647,7 @@ ProtectKernelTunables=true
 ProtectControlGroups=true
 PrivateTmp=true
 PrivateDevices=true
-ReadWritePaths=/etc/nothingdns /var/lib/nothingdns /var/log/nothingdns
+ReadWritePaths=/var/lib/nothingdns /var/log/nothingdns -/etc/nothingdns/zones
 
 # Logging
 StandardOutput=journal
@@ -578,7 +658,8 @@ SyslogIdentifier=nothingdns
 WantedBy=multi-user.target
 EOF
 
-        sudo mv /tmp/nothingdns.service "${SERVICE_FILE}"
+        sudo install -m 0644 "${unit_tmp}" "${SERVICE_FILE}"
+        rm -f "${unit_tmp}"
         sudo systemctl daemon-reload
         sudo systemctl enable nothingdns
         info "Service installed. Run 'sudo systemctl start nothingdns' to start"
@@ -589,9 +670,11 @@ EOF
 
 # Setup log rotation
 setup_logrotate() {
-    if [ ! -f /etc/logrotate.d/nothingdns ]; then
+    if [ -d /etc/logrotate.d ] && [ ! -f /etc/logrotate.d/nothingdns ]; then
         info "Setting up log rotation..."
-        cat > /tmp/nothingdns.logrotate << 'EOF'
+        local rotate_tmp
+        rotate_tmp=$(mktemp)
+        cat > "${rotate_tmp}" << 'EOF'
 /var/log/nothingdns/*.log {
     daily
     rotate 7
@@ -599,15 +682,15 @@ setup_logrotate() {
     delaycompress
     missingok
     notifempty
-    create 0644 nobody nogroup
+    create 0640 nothingdns nothingdns
     sharedscripts
     postrotate
         systemctl reload nothingdns > /dev/null 2>&1 || true
     endscript
 }
 EOF
-        sudo mv /tmp/nothingdns.logrotate /etc/logrotate.d/nothingdns
-        sudo chown root:root /etc/logrotate.d/nothingdns
+        sudo install -m 0644 -o root -g root "${rotate_tmp}" /etc/logrotate.d/nothingdns
+        rm -f "${rotate_tmp}"
         info "Log rotation configured"
     fi
 }
@@ -643,7 +726,6 @@ main() {
     fi
 
     command -v curl &> /dev/null || error "curl is required but not installed"
-    command -v gzip &> /dev/null || error "gzip is required but not installed"
 
     detect_os
     get_latest_version
@@ -696,10 +778,14 @@ main() {
 
     info "Starting NothingDNS..."
     if command -v systemctl &> /dev/null; then
-        sudo systemctl start nothingdns
+        sudo systemctl restart nothingdns
         sleep 2
+        if ! systemctl is-active --quiet nothingdns; then
+            warn "NothingDNS failed to start. Recent log:"
+            sudo journalctl -u nothingdns -n 30 --no-pager 2>/dev/null || true
+        fi
     else
-        sudo ${INSTALL_DIR}/${BINARY_NAME} --config ${CONFIG_FILE} &
+        sudo "${INSTALL_DIR}/${BINARY_NAME}" -config "${CONFIG_FILE}" &
         sleep 3
     fi
 
@@ -710,11 +796,13 @@ main() {
     echo -e "${GREEN}  Installation Complete!${NC}"
     echo "======================================"
     echo ""
-    echo "Dashboard: http://localhost:8080"
+    echo "Dashboard: http://<this-host>:8080"
     echo ""
-    echo "Login credentials:"
-    echo "  Username: ${BOOTSTRAP_USER}"
-    echo "  Password: ${BOOTSTRAP_PASS}"
+    if [ -n "${BOOTSTRAP_PASS}" ]; then
+        echo "Login: user '${BOOTSTRAP_USER}', password in ${CONFIG_DIR}/credentials"
+        echo "  sudo cat ${CONFIG_DIR}/credentials"
+    fi
+    echo "DNS port: ${port}"
     echo ""
     echo "Edit config: sudo nano ${CONFIG_FILE}"
     echo ""

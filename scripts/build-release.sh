@@ -6,7 +6,7 @@ OUT_DIR="${OUT_DIR:-${ROOT_DIR}/dist}"
 VERSION="${VERSION:-}"
 COMMIT="${COMMIT:-}"
 DATE="${DATE:-}"
-TARGETS="${TARGETS:-linux/amd64 linux/arm64 darwin/amd64 darwin/arm64}"
+TARGETS="${TARGETS:-linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64}"
 
 if [[ -z "${VERSION}" ]]; then
   if git -C "${ROOT_DIR}" describe --tags --exact-match >/dev/null 2>&1; then

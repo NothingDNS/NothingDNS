@@ -6,8 +6,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=nobody
-Group=nogroup
+# Dedicated system account created by install.sh / setup.sh:
+#   useradd --system --no-create-home --shell /usr/sbin/nologin nothingdns
+User=nothingdns
+Group=nothingdns
 
 # Main executable
 ExecStart=/usr/local/bin/nothingdns -config /etc/nothingdns/nothingdns.yaml
@@ -36,8 +38,9 @@ ProtectControlGroups=true
 PrivateTmp=true
 PrivateDevices=true
 
-# Allow write access to data and log directories
-ReadWritePaths=/var/lib/nothingdns /var/log/nothingdns
+# Allow write access to data and log directories, and to zone files the API
+# edits ("-" ignores the path if it does not exist).
+ReadWritePaths=/var/lib/nothingdns /var/log/nothingdns -/etc/nothingdns/zones
 
 # Pin stdout/stderr to a file under /var/log/nothingdns so the logrotate
 # rule written by install.sh/setup.sh (which globs /var/log/nothingdns/*.log)

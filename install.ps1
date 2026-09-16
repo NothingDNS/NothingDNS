@@ -165,7 +165,14 @@ function Create-DefaultConfig {
     Write-Info "Creating default config at $Path..."
 
     # Generate a random auth secret
-    $AUTH_SECRET = [System.Convert]::ToBase64String([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
+    # RandomNumberGenerator.GetBytes(int) is .NET 6+ only; Windows PowerShell 5.1
+    # runs on .NET Framework, so fill a buffer through an RNG instance instead.
+    $secretBytes = New-Object byte[] 32
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    $rng.GetBytes($secretBytes)
+    $rng.Dispose()
+    $AUTH_SECRET = [System.Convert]::ToBase64String($secretBytes)
+    $DATA_DIR_YAML = ("$env:ProgramData\NothingDNS\data" -replace '\\', '/')
 
     $CONFIG = @"
 # NothingDNS Configuration
@@ -177,6 +184,8 @@ server:
   bind:
     - 0.0.0.0
     - "::"
+  # Web dashboard and REST API on every interface. Restrict it with the
+  # Windows firewall or a TLS reverse proxy on untrusted networks.
   http:
     enabled: true
     bind: "0.0.0.0:8080"
@@ -188,7 +197,6 @@ upstream:
     - 1.1.1.1:53
     - 8.8.8.8:53
     - 8.8.4.4:53
-  timeout: 5s
   health_check: 30s
 
 cache:
@@ -212,10 +220,29 @@ logging:
   output: stdout
   query_log: false
 
+# Prometheus metrics. Without auth_token the endpoint may only listen on
+# loopback; set auth_token before binding it to a reachable address.
 metrics:
   enabled: true
-  bind: ":9153"
+  bind: "127.0.0.1:9153"
   path: /metrics
+
+# Zone database, IXFR journals and dashboard users (users.json).
+storage:
+  data_dir: "${DATA_DIR_YAML}"
+
+# Answer only loopback and private networks, so the server is not an open
+# resolver. Add your public client ranges here if needed.
+acl:
+  - name: allow-local-networks
+    action: allow
+    networks:
+      - 127.0.0.0/8
+      - ::1/128
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+      - fc00::/7
 
 rrl:
   enabled: true
@@ -233,7 +260,9 @@ cluster:
   enabled: false
 "@
 
-    $CONFIG | Out-File -FilePath $Path -Encoding UTF8
+    # UTF-8 without a byte order mark (Out-File -Encoding UTF8 adds one in
+    # Windows PowerShell 5.1).
+    [System.IO.File]::WriteAllText($Path, $CONFIG, (New-Object System.Text.UTF8Encoding $false))
     Write-Info "Config created at $Path"
     # Persist the API auth secret to an Administrators-only file rather than
     # echoing it to stdout, which can leak into terminal scrollback or logs
@@ -267,12 +296,18 @@ function Protect-CredentialsFile {
     Set-Acl -Path $Path -AclObject $acl
 }
 
-Create-DefaultConfig -Path $ConfigPath
-
 # Create data directory
 $DATA_DIR = "$env:ProgramData\NothingDNS\data"
 if (!(Test-Path $DATA_DIR)) {
     New-Item -ItemType Directory -Path $DATA_DIR -Force | Out-Null
+}
+
+Create-DefaultConfig -Path $ConfigPath
+
+# Check the config with the installed binary before telling the user to start it.
+& $BINARY_PATH -config $ConfigPath -validate-config
+if ($LASTEXITCODE -ne 0) {
+    Write-Warn "Config validation failed - fix $ConfigPath before starting the server"
 }
 
 Write-Host ""
@@ -283,13 +318,16 @@ Write-Host ""
 Write-Host "Next steps:"
 Write-Host "  1. Edit config: notepad $ConfigPath"
 Write-Host "  2. Start server:"
-Write-Host "       $BINARY_PATH --config $ConfigPath"
+Write-Host "       & '$BINARY_PATH' -config '$ConfigPath'"
+Write-Host "  3. Create the dashboard admin (on this machine):"
+Write-Host "       Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8080/api/v1/auth/bootstrap -ContentType 'application/json' -Body '{`"username`":`"admin`",`"password`":`"<strong-password>`"}'"
 Write-Host ""
-Write-Host "Dashboard: http://localhost:8080"
+Write-Host "Dashboard: http://<this-host>:8080"
 Write-Host ""
 Write-Host "To run as Windows Service, install NSSM:"
 Write-Host "  choco install nssm"
-Write-Host "  nssm install NothingDNS $BINARY_PATH '--config $ConfigPath'"
+Write-Host "  nssm install NothingDNS `"$BINARY_PATH`" -config `"$ConfigPath`""
+Write-Host "  nssm set NothingDNS AppDirectory `"$DATA_DIR`""
 Write-Host "  nssm start NothingDNS"
 Write-Host "======================================" -ForegroundColor Cyan
 Write-Host ""
