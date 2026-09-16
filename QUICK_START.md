@@ -136,6 +136,19 @@ server:
 Configure `server.http.users` for per-user dashboard login, or use the legacy
 `server.http.auth_token` mode for a single shared bearer token.
 
+With no users configured, the server creates a placeholder `admin` account with
+a random password that is never shown. Create your admin account from the
+server host itself (the endpoint only accepts localhost):
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/v1/auth/bootstrap \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"choose-a-strong-password"}'
+```
+
+Then sign in to the dashboard with those credentials. Signing in revokes that
+user's earlier tokens, so each login ends the user's other sessions.
+
 ## Using the CLI
 
 ```bash
