@@ -115,6 +115,11 @@ func UnmarshalYAML(data string) (*Config, error) {
 
 // UnmarshalYAMLWithEnv parses YAML with optional environment variable expansion.
 func UnmarshalYAMLWithEnv(data string, expandEnv bool) (*Config, error) {
+	// A UTF-8 byte order mark (written by Windows PowerShell 5.1's
+	// Out-File -Encoding UTF8 and some editors) would otherwise glue onto the
+	// first key, turning "server:" into an unknown key and silently dropping
+	// that whole section.
+	data = strings.TrimPrefix(data, "\ufeff")
 	parser := NewParser(data)
 	node, err := parser.ParseMapping()
 	if err != nil {

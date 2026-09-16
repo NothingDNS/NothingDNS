@@ -1372,3 +1372,46 @@ func TestParser_PlainScalarStartingWithColon(t *testing.T) {
 		t.Fatalf("acl = %+v, want networks [127.0.0.0/8 ::1/128]", cfg.ACL)
 	}
 }
+
+// A leading UTF-8 BOM must not hide the first top-level section.
+func TestUnmarshalYAML_StripsUTF8BOM(t *testing.T) {
+	cfg, err := UnmarshalYAML("\xef\xbb\xbfserver:\n  port: 5360\n")
+	if err != nil {
+		t.Fatalf("UnmarshalYAML: %v", err)
+	}
+	if cfg.Server.Port != 5360 {
+		t.Fatalf("server.port = %d, want 5360 (BOM hid the server section)", cfg.Server.Port)
+	}
+}
+
+// -validate-config must reject what metrics.Start refuses at runtime:
+// an unauthenticated metrics endpoint on a non-loopback address.
+func TestValidateMetrics_RequiresTokenOffLoopback(t *testing.T) {
+	cases := []struct {
+		bind, token string
+		wantErr     bool
+	}{
+		{":9153", "", true},
+		{"0.0.0.0:9153", "", true},
+		{"127.0.0.1:9153", "", false},
+		{"[::1]:9153", "", false},
+		{"localhost:9153", "", false},
+		{":9153", "a-long-enough-token-value", false},
+	}
+	for _, tc := range cases {
+		c := &Config{}
+		c.Metrics.Enabled = true
+		c.Metrics.Bind = tc.bind
+		c.Metrics.Path = "/metrics"
+		c.Metrics.AuthToken = tc.token
+		gotErr := false
+		for _, e := range c.validateMetrics() {
+			if strings.Contains(e, "auth_token") {
+				gotErr = true
+			}
+		}
+		if gotErr != tc.wantErr {
+			t.Errorf("bind=%q token=%q: auth_token error = %v, want %v", tc.bind, tc.token, gotErr, tc.wantErr)
+		}
+	}
+}
