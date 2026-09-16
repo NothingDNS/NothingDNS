@@ -14,9 +14,9 @@ import (
 func TestODoHValidationAcceptsRuntimeImplementedKEM(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.ODoH.Enabled = true
-	cfg.ODoH.KEM = 32  // hpkeKEMX25519HKDFSHA256 (0x0020)
-	cfg.ODoH.KDF = 1   // HKDF-SHA256
-	cfg.ODoH.AEAD = 1  // AES-128-GCM
+	cfg.ODoH.KEM = 32 // hpkeKEMX25519HKDFSHA256 (0x0020)
+	cfg.ODoH.KDF = 1  // HKDF-SHA256
+	cfg.ODoH.AEAD = 1 // AES-128-GCM
 
 	var odohErrors []string
 	for _, err := range cfg.Validate() {

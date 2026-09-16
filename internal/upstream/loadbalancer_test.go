@@ -3094,8 +3094,8 @@ func TestLoadBalancerCheckHealthFullWithServers(t *testing.T) {
 // This is the same bug fixed in upstream/client.go by commit daaae3e.
 func TestLoadBalancerPoolTypeConsistency(t *testing.T) {
 	config := LoadBalancerConfig{
-		Servers:      []string{"1.1.1.1:53", "9.9.9.9:53"},
-		Strategy:     "random",
+		Servers:         []string{"1.1.1.1:53", "9.9.9.9:53"},
+		Strategy:        "random",
 		FailoverTimeout: 2 * time.Second,
 	}
 

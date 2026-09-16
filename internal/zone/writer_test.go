@@ -31,9 +31,9 @@ func TestValidateRecordDataRejectsZoneFileHostileNames(t *testing.T) {
 func TestValidateRecordDataAcceptsSafeNames(t *testing.T) {
 	safe := []string{
 		"www.example.com.",
-		"_d.example.com.",       // the round-10/10-era covered-name shape
-		"_test.example.com.",    // underscore labels (DKIM/ACME selectors)
-		"*.wild.example.com.",   // wildcard labels
+		"_d.example.com.",     // the round-10/10-era covered-name shape
+		"_test.example.com.",  // underscore labels (DKIM/ACME selectors)
+		"*.wild.example.com.", // wildcard labels
 		"Mixed.Case.Example.com.",
 	}
 	for _, name := range safe {

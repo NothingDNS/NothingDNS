@@ -496,7 +496,7 @@ func TestTokenizerUnsupportedFeatures(t *testing.T) {
 	}
 }
 
-// YAML 1.2 §7.3.1: inside a single-quoted string, a doubled quote ('') is an
+// YAML 1.2 §7.3.1: inside a single-quoted string, a doubled quote (”) is an
 // escaped literal quote. The tokenizer must not terminate the string at the
 // first quote of the pair.
 func TestSingleQuotedStringHandlesDoubledQuote(t *testing.T) {

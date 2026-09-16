@@ -304,7 +304,7 @@ func (p *parser) parse() (*Zone, error) {
 				stripped := make([]rune, 0, len(combined))
 				inQuote = false
 				escape = false
-				for _, ch := range []rune(combined) {
+				for _, ch := range combined {
 					if escape {
 						stripped = append(stripped, ch)
 						escape = false
