@@ -1359,3 +1359,16 @@ func TestParserRejectsTag(t *testing.T) {
 		t.Fatal("expected error for YAML tag (!), got nil")
 	}
 }
+
+// A plain scalar may begin with a colon when no whitespace follows it, as in
+// the IPv6 loopback network "::1/128" in an ACL list (YAML 1.2 §7.3.3).
+func TestParser_PlainScalarStartingWithColon(t *testing.T) {
+	input := "acl:\n  - name: loopback\n    action: allow\n    networks:\n      - 127.0.0.0/8\n      - ::1/128\n"
+	cfg, err := UnmarshalYAML(input)
+	if err != nil {
+		t.Fatalf("UnmarshalYAML: %v", err)
+	}
+	if len(cfg.ACL) != 1 || len(cfg.ACL[0].Networks) != 2 || cfg.ACL[0].Networks[1] != "::1/128" {
+		t.Fatalf("acl = %+v, want networks [127.0.0.0/8 ::1/128]", cfg.ACL)
+	}
+}
