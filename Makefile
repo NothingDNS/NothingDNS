@@ -172,7 +172,7 @@ staticcheck:
 ## files by CI, which is where its findings would differ).
 staticcheck-ci:
 	@echo "Running staticcheck (CI-pinned 2025.1.1)..."
-	@go run honnef.co/go/tools/cmd/staticcheck@2025.1.1 ./...
+	@go run honnef.co/go/tools/cmd/staticcheck@2026.2.1 ./...
 
 # =============================================================================
 # Development Targets
@@ -264,7 +264,7 @@ security-check:
 	@echo "Running security checks..."
 	@go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
 	@govulncheck ./...
-	@go install honnef.co/go/tools/cmd/staticcheck@2025.1.1
+	@go install honnef.co/go/tools/cmd/staticcheck@2026.2.1
 	@staticcheck ./...
 	@echo "✓ Security checks passed"
 

@@ -68,7 +68,7 @@ describe('SPA mode (no RSC / no SSR)', () => {
   describe('no server-rendered script payloads', () => {
     it('has no inline <script> with server data', () => {
       if (!built) return;
-      for (const match of html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/gi)) {
+      for (const match of html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script[^>]*>/gi)) {
         const inner = match[1].trim();
         if (inner.length > 0) {
           expect(inner).not.toMatch(/window\.__/);
