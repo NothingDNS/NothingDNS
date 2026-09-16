@@ -5,6 +5,19 @@ All notable changes to NothingDNS are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **DNS listens on every `server.bind` address**: only the first entry was used and the rest were silently ignored, so `bind: [127.0.0.1, 192.168.0.18]` never answered on the second address. Each address (and each `udp_bind` / `tcp_bind` entry) now gets its own listener. A wildcard (`0.0.0.0` / `::`) already covers every local address through a dual-stack socket, so other entries on the same port are folded into it instead of failing with "address already in use".
+- **Example config answers local queries**: the sample ACL allowed only RFC 1918 ranges, so `dig @127.0.0.1` against the shipped `config.example.yaml` returned REFUSED. Loopback (`127.0.0.0/8`, `::1/128`) is now allowed.
+- **config: plain scalars may start with a colon**: the YAML tokenizer treated the leading `:` of an unquoted `- ::1/128` as a mapping indicator and failed to parse. A colon is now an indicator only when followed by whitespace, end of line or a flow indicator.
+- **Version fallback matches the release**: binaries built without `-ldflags` reported `v1.1.4`. The fallback now tracks `VERSION`, enforced by `TestVersionFallbackMatchesVersionFile`.
+
+### Documentation
+
+- `QUICK_START.md` explains how to create the first dashboard admin with the localhost-only `/api/v1/auth/bootstrap` endpoint, and that signing in ends the user's other sessions.
+
 ## [1.1.11] — 2026-09-16
 
 Security scan release. 1.1.9 and 1.1.10 were documented but never tagged;

@@ -1,6 +1,10 @@
 package util
 
-import "testing"
+import (
+	"os"
+	"strings"
+	"testing"
+)
 
 // TestNormalizeVersion pins the canonical version format: bare semver
 // without a leading "v"/"V". Exactly one prefix character is stripped —
@@ -44,5 +48,18 @@ func TestVersionIsBareSemver(t *testing.T) {
 	}
 	if Version[0] == 'v' || Version[0] == 'V' {
 		t.Errorf("Version = %q, want bare semver without v prefix", Version)
+	}
+}
+
+// TestVersionFallbackMatchesVersionFile keeps the non-ldflags fallback in
+// step with the VERSION file, so local `go build` binaries report the
+// release they were built from.
+func TestVersionFallbackMatchesVersionFile(t *testing.T) {
+	data, err := os.ReadFile("../../VERSION")
+	if err != nil {
+		t.Skipf("VERSION file not readable: %v", err)
+	}
+	if want := strings.TrimSpace(string(data)); Version != want {
+		t.Errorf("util.Version = %q, VERSION file = %q; bump the fallback in version.go", Version, want)
 	}
 }
