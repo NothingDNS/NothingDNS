@@ -56,29 +56,22 @@ with `_ =` / `_, _ =`.
 
 ### Request Pipeline (integratedHandler.ServeDNS)
 
-The core request handler in `cmd/nothingdns/handler.go` processes queries through 21 stages:
+`integratedHandler.ServeDNS` delegates to the stage pipeline built in `cmd/nothingdns/pipeline.go` (`NewPipeline`); stage functions live in `pipeline_stages.go`. Every response passes through `headerPolicyResponseWriter` (`response_header_policy.go`), which echoes OPCODE/RD/CD and clears RA when recursion is unavailable or not allowed for the client. Stage order:
 
-1. **Panic recovery** — defer recovers any panic, returns SERVFAIL
-2. **IDNA validation** (RFC 5891) — validate internationalized domain names
-3. **ACL check** — allow/deny by client IP
-4. **RPZ client IP policy** — check if client IP triggers an RPZ rule
-5. **Rate limiting** — per-client token bucket
-6. **DNS Cookie validation** (RFC 7873) — anti-spoofing
-7. **AXFR/IXFR/NOTIFY/UPDATE** — special request type handling
-8. **Blocklist check** — return NXDOMAIN with EDE Filtered
-9. **RPZ QNAME policy** — check if queried domain is blocked
-10. **Cache lookup** — positive cache hit returns immediately
-11. **NSEC aggressive cache** (RFC 8198) — synthesize negative from cached NSEC
-12. **Split-horizon view zones** — view-specific zone lookup
-13. **Authoritative zone lookup** — radix tree O(log n) matching
-14. **CNAME chasing** — follow CNAME chains within zones
-15. **Iterative recursive resolver** — full recursion with QNAME minimization
-16. **Upstream forwarding** — load-balanced upstream with health checks
-17. **DNSSEC validation** — validate signatures on signed responses
-18. **RPZ response IP/NSDNAME checks** — resolved IP policy
-19. **DNS64 synthesis** (RFC 6147) — synthesize AAAA from A
-20. **Cache the response** — positive or negative (RFC 2308)
-21. **Stale serving** — serve stale entries on upstream failure (RFC 8767)
+1. **setup / queryDirection / validation** — request IDs, drop responses, FORMERR on bad questions, IDNA (RFC 5891)
+2. **metrics**
+3. **acl** — general ACL for every query (first match wins; unmatched clients are refused once any rule exists)
+4. **recursionPolicy** — marks whether the client may recurse (`allow_recursion`)
+5. **rpzClient** — RPZ client-IP policy
+6. **rateLimit** — per-client token bucket
+7. **requestPolicy / cookie** — EDNS/opcode policy, DNS Cookies (RFC 7873)
+8. **any / transfer** — ANY handling, AXFR/IXFR/NOTIFY/UPDATE
+9. **blocklist / rpzQname** — filtering before the cache
+10. **doBit / cache / nsecCache** — cache lookups (skipped for clients without recursion)
+11. **splitHorizon / authoritative / cname** — local zones and in-zone CNAME chasing
+12. **authoritativeOnly** — REFUSED outside zones when `resolution.authoritative_only`
+13. **recursionRefused** — REFUSED (EDE 18) outside zones for clients without recursion
+14. **resolver / upstream / noUpstream** — iterative resolution or forwarding, DNSSEC validation, RPZ response checks, DNS64, caching, stale serving (RFC 8767)
 
 ### Manager Pattern
 
@@ -86,12 +79,12 @@ The core request handler in `cmd/nothingdns/handler.go` processes queries throug
 - `cache_manager.go` — cache with persistence and prefetch
 - `upstream_manager.go` — upstream pool with health checks
 - `zone_manager.go` — zone file loading and radix tree
-- `security_manager.go` — blocklist, RPZ, geo, ACL, rate limiter
+- `security_manager.go` — blocklist, RPZ, geo, ACL + recursion allow list (and the persisted `access_policy.json`), rate limiter
 - `dnssec_manager.go` — validator and key rollover
 - `cluster_manager.go` — gossip membership + Raft consensus
 - `transfer_manager.go` — AXFR/IXFR/NOTIFY/DDNS
 
-All are wired into a single `integratedHandler` in `handler.go` (1255 lines).
+All are wired into a single `integratedHandler` (`handler.go`, `handler_deps.go`).
 
 ### Hot Config Reload
 
@@ -117,7 +110,7 @@ SIGHUP triggers config reload without downtime: zones, blocklists, RPZ rules, sp
 
 ```
 cmd/
-├── nothingdns/     # Main DNS server (1020-line main.go + 12 supporting files)
+├── nothingdns/     # Main DNS server (main.go wiring, pipeline, managers, transports)
 └── dnsctl/        # CLI management tool (zone, record, cache, cluster, blocklist, config, dig, dnssec, server)
 
 internal/
@@ -164,6 +157,10 @@ internal/
 
 ## Known Gotchas
 
+- **Config struct tags are documentation only** — `yaml:"..."` tags do not drive parsing. Every new key must also be read in the matching `unmarshal*` function in `internal/config` (and listed in `knownTopLevelKeys` for top-level keys), otherwise it is silently ignored. Add a parse test (`UnmarshalYAML`) for each new key.
+- **Dashboard-managed state overrides the config file**: users created at runtime live in `server.http.users_file` (default `<storage.data_dir>/users.json`); ACL and `allow_recursion` changes made via API/dashboard live in `<storage.data_dir>/access_policy.json`, which replaces the config's `acl`/`allow_recursion` at start and on reload.
+- **ODoH suite ids are RFC 9180 values** (KEM 0x0020, KDF 0x0001, AEAD 0x0001/0x0002) in both config and `internal/odoh`.
+- **Shipped configs are validated in CI** by `scripts/validate-shipped-configs.sh` (example, deploy, Docker, k8s and installer-generated configs) — run it after touching any of them.
 - **Port 53** requires root on Unix; use 5354+ for testing
 - **YAML parser** is custom — does not support anchors/aliases or multiline strings. Block-sequence indent handling in `parseBlockSequence` uses column-based peek: the inline-mapping continuation loops break on `TokenDedent` when the post-dedent token doesn't share the item's first-key column, and the sequence main loop absorbs dedents only when a Dash at the sequence's own column waits behind them. Regression test: `TestParser_BlockSeqOfInlineMaps_ThenSiblingKey` in `parser_test.go`; smoke-test via `nothingdns -config config.example.yaml -validate-config`.
 - **`protocol.CanonicalWireName()`** is the shared canonical name encoder — do not create new ones

@@ -58,7 +58,7 @@ graph TB
     subgraph Pipeline["21-Stage Integrated Handler"]
         P1[1. Panic Recovery]
         P2[2. IDNA Validation]
-        P3[3. ACL Check]
+        P3[3. ACL + Recursion Policy]
         P4[4. RPZ Client IP]
         P5[5. Rate Limiting]
         P6[6. DNS Cookie]
@@ -200,7 +200,7 @@ flowchart LR
     Q[Query] --> P1
     P1[1. Panic Recovery] --> P2
     P2[2. IDNA Validation] --> P3
-    P3[3. ACL Check] --> P4
+    P3[3. ACL + Recursion Policy] --> P4
     P4[4. RPZ Client IP] --> P5
     P5[5. Rate Limiting] --> P6
     P6[6. DNS Cookie] --> P7
@@ -214,6 +214,7 @@ flowchart LR
     P13[13. Zone Lookup] --> |found| E
     P13 --> |miss| P14
     P14[14. CNAME Chase] --> |found| E
+    P14 --> |recursion not allowed| R[REFUSED, EDE 18]
     P14 --> P15
     P15[15. Resolver] --> P16
     P16[16. Upstream] --> P17
@@ -230,7 +231,7 @@ flowchart LR
 |-------|-----------|-----|-------------|
 | 1 | `defer recover()` | — | Recovers panics, returns SERVFAIL |
 | 2 | `idna.Validate()` | 5891 | Validates internationalized domain names |
-| 3 | `ACLChecker.Check()` | — | IP allow/deny by CIDR |
+| 3 | `ACLChecker.IsAllowed()`, `RecursionPolicy.Allowed()` | 8914 | General ACL for every query; then marks whether the client may recurse (`allow_recursion`). Clients without recursion skip stages 10–11 and 15–16 and get REFUSED (EDE 18) for names outside local zones, with RA=0 |
 | 4 | `RPZEngine.CheckClientIP()` | — | RPZ client-IP trigger |
 | 5 | `RateLimiter.Allow()` | — | Per-IP token bucket rate limiting |
 | 6 | `CookieJar.Validate()` | 7873 | DNS Cookie anti-spoofing validation |

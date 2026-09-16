@@ -13,6 +13,7 @@ import (
 // the /api/v1/zones/ prefix and are matched as templates in the phantom gate.
 var registeredRoutes = []string{
 	"/api/v1/acl",
+	"/api/v1/acl/recursion",
 	"/api/v1/auth/bootstrap",
 	"/api/v1/auth/login",
 	"/api/v1/auth/logout",
@@ -46,7 +47,22 @@ var registeredRoutes = []string{
 	"/api/v1/cluster/status",
 	"/api/v1/status",
 	"/health",
+	"/readyz",
+	"/livez",
 	"/api/dashboard/stats",
+	"/api/dashboard/queries",
+	"/api/dashboard/zones",
+	"/api/openapi.json",
+	"/api/docs",
+}
+
+// prefixSubRoutes are fixed action paths served by a registered prefix
+// handler (/api/v1/blocklists/, /api/v1/rpz/) rather than their own mux
+// entry. They must be documented too, and the phantom gate accepts them.
+var prefixSubRoutes = []string{
+	"/api/v1/blocklists/sources",
+	"/api/v1/blocklists/toggle",
+	"/api/v1/rpz/toggle",
 }
 
 // TestOpenAPISpecDocumentsEveryRegisteredRoute is the route-drift guard:
@@ -69,7 +85,7 @@ func TestOpenAPISpecDocumentsEveryRegisteredRoute(t *testing.T) {
 		documented[path] = true
 	}
 
-	for _, route := range registeredRoutes {
+	for _, route := range append(append([]string{}, registeredRoutes...), prefixSubRoutes...) {
 		if !documented[route] {
 			t.Errorf("route %s is registered but not documented in OpenAPISpec", route)
 		}
@@ -82,7 +98,7 @@ func TestOpenAPISpecDocumentsEveryRegisteredRoute(t *testing.T) {
 			continue // parameterized template, matched by prefix below
 		}
 		found := false
-		for _, route := range registeredRoutes {
+		for _, route := range append(append([]string{}, registeredRoutes...), prefixSubRoutes...) {
 			if route == path || strings.HasPrefix(route, path+"/") {
 				found = true
 				break

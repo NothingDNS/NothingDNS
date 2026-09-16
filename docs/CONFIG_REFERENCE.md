@@ -177,21 +177,45 @@ BIND format yetkili zone dosyalarının liste — hot-reload destekler.
 
 ## `acl`
 
+Tüm sorgulara uygulanan genel erişim kontrolü (sunucunun kendi zone'ları dahil).
+
 ```yaml
 acl:
-  - name: "allow-local"
-    action: allow      # allow | deny
+  - name: "block-abuser"
+    action: deny       # allow | deny | redirect
     networks:
-      - 127.0.0.0/8
-      - "::1/128"      # ⚠️ IPv6 CIDR'leri tırnak içine alın!
+      - 198.51.100.0/24
+      - "2001:db8:bad::/48"   # ⚠️ IPv6 CIDR'leri tırnak içine alın!
     # types:           # ⚠️ Kuralı belirli QTYPE'lara daraltır.
     #   - MX           #    HER tip için eşleşsin istiyorsanız BU ALANI YAZMAYIN.
     #                  #    "ANY" tüm tipler demek DEĞİLDİR — QTYPE 255'tir; öyle
-    #                  #    bir kural yalnızca literal ANY sorgularıyla eşleşir ve
-    #                  #    sıradan A/AAAA sorguları varsayılana düşer.
+    #                  #    bir kural yalnızca literal ANY sorgularıyla eşleşir.
 ```
 
-Sırayla değerlendirilir; ilk eşleşme kazanır. Hot-reload destekler.
+- Kural yoksa (`acl: []` ya da hiç yazılmamışsa) **her istemci** sunucunun kendi kayıtlarını sorgulayabilir.
+- Kural varsa sırayla değerlendirilir, ilk eşleşen kazanır; **hiçbir kurala uymayan istemci REFUSED** alır.
+- Hot-reload destekler.
+
+## `allow_recursion`
+
+Recursion kullanabilecek istemciler: upstream'e yönlendirme, iterative çözümleme ve önbellekten yanıt. Listede olmayan (ama genel ACL'i geçen) istemciler sunucunun **kendi zone'larından** yanıt almaya devam eder; bunun dışındaki adlar için `REFUSED` (EDE 18 "Prohibited") döner ve yanıtlarda `RA` biti 0 olur. Önbellek bu istemcilere sunulmaz (cache snooping önlemi).
+
+```yaml
+allow_recursion:
+  - 127.0.0.0/8
+  - "::1/128"
+  - 192.168.1.0/24
+  - 203.0.113.10        # tek IP de yazılabilir (/32 veya /128 olarak saklanır)
+```
+
+| Durum | Recursion kimlere açık |
+|---|---|
+| `allow_recursion` yazılmış | Yalnızca listedeki ağlar (`[]` = kimse) |
+| `allow_recursion` yok, `server.acl_allow_unrestricted_recursion: true` | ACL'i geçen herkes (açık resolver — önerilmez) |
+| `allow_recursion` yok, `acl` kuralları var | ACL'i geçen herkes (eski davranış) |
+| İkisi de yok | Loopback ve özel ağlar: `127.0.0.0/8`, `::1/128`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`, `fe80::/10` |
+
+**Dashboard / API ile yönetim:** ACL sayfasındaki "Allow Recursion" bölümünden (veya `PUT /api/v1/acl/recursion`) ağ eklenip çıkarılabilir; yalnızca admin rolü değiştirebilir. Değişiklikler `<storage.data_dir>/access_policy.json` dosyasına (0600) yazılır ve bu dosya varsa başlangıçta ve reload'da config dosyasındaki `acl` ile `allow_recursion` değerlerinin **yerine geçer**. `storage.data_dir` tanımlı değilse değişiklikler yalnızca bellekte kalır. Config dosyasına geri dönmek için servisi durdurup `access_policy.json` dosyasını silin.
 
 ## `slave_zones`
 
@@ -293,9 +317,9 @@ fixed by the implementation; only the values below are accepted.
 | `bind` | string | `:8080` | hayır | ODoH dinleme adresi |
 | `target_url` | string | — | evet | ODoH target endpoint URL'i |
 | `proxy_url` | string | — | evet | ODoH proxy URL'i |
-| `kem` | int | `4` | hayır | HPKE KEM — yalnızca `4` (DHKEM X25519, HKDF-SHA256) destekleniyor |
+| `kem` | int | `32` | hayır | HPKE KEM (RFC 9180 kimliği) — yalnızca `32` (0x0020, DHKEM X25519 / HKDF-SHA256) destekleniyor |
 | `kdf` | int | `1` | hayır | HPKE KDF — yalnızca `1` (HKDF-SHA256) destekleniyor |
-| `aead` | int | `1` | hayır | HPKE AEAD — `1` (AES-256-GCM, varsayılan) veya `3` (AES-128-GCM). ChaCha20-Poly1305 stdlib dışı olduğu için desteklenmiyor. |
+| `aead` | int | `1` | hayır | HPKE AEAD (RFC 9180 kimlikleri) — `1` (AES-128-GCM, varsayılan) veya `2` (AES-256-GCM). `3` (ChaCha20-Poly1305) desteklenmiyor. |
 
 ## Üst Seviye Alanlar
 

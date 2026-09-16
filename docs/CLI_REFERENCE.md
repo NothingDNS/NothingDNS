@@ -476,7 +476,7 @@ dnsctl server status
 ```
 Server Status:
   Status:    ok
-  Version:   1.0.0
+  Version:   1.1.12
   Timestamp: 2026-07-06T12:00:00Z
   Cache:
     Size:     123
@@ -496,6 +496,40 @@ Check server health.
 dnsctl server health
 ```
 
+### server bootstrap
+
+Create the first dashboard admin, or reset an admin's password, through the
+localhost-only `POST /api/v1/auth/bootstrap` endpoint. Run it on the server host
+(for the container image: `docker exec -i nothingdns dnsctl server bootstrap`).
+
+The password is read from `NOTHINGDNS_ADMIN_PASSWORD` or the first line of
+stdin — never from the command line, so it does not show up in process listings
+or shell history.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--username NAME` | `admin` | Admin account to create or reset |
+| `--old-password` | off | Also read the current password (`NOTHINGDNS_ADMIN_OLD_PASSWORD` or the second stdin line); needed to reset an existing, non-placeholder admin |
+
+```bash
+# Interactive (prompts on stderr, reads stdin)
+dnsctl server bootstrap --username admin
+
+# From a secret file inside the container
+docker exec -i nothingdns dnsctl server bootstrap < admin-password.txt
+
+# Reset an existing admin's password
+printf '%s\n%s\n' "$NEW_PASSWORD" "$OLD_PASSWORD" | dnsctl server bootstrap --old-password
+```
+
+**Output**:
+```
+Admin account "admin" is ready. Sign in to the dashboard with it.
+```
+
+Users created this way persist in `server.http.users_file`
+(default `<storage.data_dir>/users.json`).
+
 ---
 
 ## Global Commands
@@ -510,7 +544,7 @@ dnsctl version
 
 **Output**:
 ```
-dnsctl version 1.0.0
+dnsctl version 1.1.12
 ```
 
 `dnsctl -version` prints the same version line.
