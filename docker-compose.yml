@@ -35,20 +35,22 @@ services:
       - "443:443/tcp"
       # REST API and Dashboard
       - "8080:8080/tcp"
-      # Prometheus metrics
-      - "9153:9153/tcp"
+      # Prometheus metrics (enable metrics + auth_token in your config first)
+      # - "9153:9153/tcp"
 
     # environment:
     #   TZ: "UTC"
     #   NOTHINGDNS_CONFIG: /etc/nothingdns/nothingdns.yaml
 
     volumes:
-      # Configuration file
-      - ./config.example.yaml:/etc/nothingdns/nothingdns.yaml:ro
-      # Zone files directory
-      - ./zones:/etc/nothingdns/zones:ro
-      # Data directory (cache, sessions, etc.)
+      # Persistent state: zone database, IXFR journals, dashboard users.
       - nothingdns-data:/data
+      # The image ships a working default config (deploy/docker/nothingdns.yaml).
+      # To use your own, mount it over the default and your zone files next to
+      # it; reference zones by absolute path (e.g. /etc/nothingdns/zones/x.zone)
+      # and keep storage.data_dir: /data.
+      # - ./nothingdns.yaml:/etc/nothingdns/nothingdns.yaml:ro
+      # - ./zones:/etc/nothingdns/zones:ro
 
     # Health check. M-9: the final image is FROM scratch and has no
     # shell, no wget, no curl — the previous wget probe was always
