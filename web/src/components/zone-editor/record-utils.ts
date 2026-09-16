@@ -87,18 +87,15 @@ export function stripOuterQuotes(value: string): string {
   const trimmed = value.trim();
   if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
     const inner = trimmed.slice(1, -1);
-    // Single-pass unescape, the exact inverse of quoteDNSString's escape
-    // (" → \" ; backslash passes through untouched): a backslash escapes
-    // only the immediately following character — a quote or another
-    // backslash — and a backslash before anything else (e.g. the \. of a
-    // NAPTR regexp) is a literal backslash and must survive the round
-    // trip. The previous two-pass regex decode consumed an isolated
-    // backslash into a following quote escape and halved backslash pairs,
-    // corrupting values on every edit.
+    // Single-pass unescape, the exact inverse of quoteDNSString's escape:
+    // a backslash escapes only the immediately following quote or
+    // backslash, and a backslash before anything else (e.g. the \. of a
+    // NAPTR regexp) is a literal backslash and must survive the round trip.
     let out = '';
     for (let i = 0; i < inner.length; i++) {
-      if (inner[i] === '\\' && inner[i + 1] === '"') {
-        out += '"';
+      const next = inner[i + 1];
+      if (inner[i] === '\\' && (next === '"' || next === '\\')) {
+        out += next;
         i += 1;
       } else {
         out += inner[i];
@@ -114,11 +111,24 @@ export function quoteDNSString(value: string): string {
   if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
     return trimmed;
   }
-  // Escape only the field delimiter quote. Backslashes pass through
-  // untouched: doubling them (the old behavior) changed the meaning of
-  // DNS data such as NAPTR regexps (\. is an escaped dot) and made
-  // stripOuterQuotes non-idempotent on edit round trips.
-  return `"${trimmed.replace(/"/g, '\\"')}"`;
+  // Escape every quote, and a backslash only where it would otherwise be
+  // read as an escape: before a quote, before another backslash, or at the
+  // end (where it would swallow the closing quote). Other backslashes pass
+  // through so DNS data such as NAPTR regexps (\. is an escaped dot) keeps
+  // its meaning. stripOuterQuotes is the exact inverse.
+  let out = '';
+  for (let i = 0; i < trimmed.length; i++) {
+    const ch = trimmed[i];
+    const next = trimmed[i + 1];
+    if (ch === '"') {
+      out += '\\"';
+    } else if (ch === '\\' && (next === undefined || next === '"' || next === '\\')) {
+      out += '\\\\';
+    } else {
+      out += ch;
+    }
+  }
+  return `"${out}"`;
 }
 
 export function requireField(label: string, value: string): string | null {

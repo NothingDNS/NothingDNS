@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"path"
 	"strings"
 	"testing"
 )
@@ -141,8 +142,13 @@ func TestSPAHandlerCacheControl(t *testing.T) {
 		t.Fatalf("FAIL: index response missing Cache-Control: no-cache — browsers heuristic-cache the entry point, and after a redeploy the cached stale index requests rotated assets that no longer exist (got %q)", cc)
 	}
 
-	// A content-hashed asset: safe to cache forever.
-	req2 := httptest.NewRequest("GET", "/assets/geoip-Cdizku_0.js", nil)
+	// A content-hashed asset: safe to cache forever. Pick whichever asset the
+	// current build embedded — the hashes rotate on every web rebuild.
+	assets, err := fs.Glob(staticFS, "static/dist/assets/*.js")
+	if err != nil || len(assets) == 0 {
+		t.Fatalf("no embedded JS assets found (err=%v)", err)
+	}
+	req2 := httptest.NewRequest("GET", "/assets/"+path.Base(assets[0]), nil)
 	w2 := httptest.NewRecorder()
 	handler.ServeHTTP(w2, req2)
 	if cc := w2.Header().Get("Cache-Control"); !strings.Contains(cc, "immutable") {
