@@ -94,9 +94,12 @@ including `viewer`.
 | POST | `/api/v1/cache/flush` | admin | |
 | GET | `/api/v1/config` | operator | Secrets redacted |
 | POST | `/api/v1/config/reload` | admin | Same as SIGHUP |
-| PUT | `/api/v1/config/logging` | admin | |
-| PUT | `/api/v1/config/rrl` | admin | |
-| PUT | `/api/v1/config/cache` | admin | |
+| PUT | `/api/v1/config/logging` | admin | Persisted to runtime overrides file |
+| PUT | `/api/v1/config/rrl` | admin | Persisted to runtime overrides file |
+| PUT | `/api/v1/config/cache` | admin | Persisted to runtime overrides file |
+| PUT | `/api/v1/config/resolution` | admin | Persisted to runtime overrides file |
+| PUT | `/api/v1/config/dns64` | admin | Persisted to runtime overrides file |
+| PUT | `/api/v1/config/cookie` | admin | Persisted to runtime overrides file |
 | GET | `/api/v1/acl` | operator | |
 | PUT | `/api/v1/acl` | admin | Persisted to access policy file |
 | GET | `/api/v1/acl/recursion` | operator | |
@@ -485,7 +488,7 @@ Operator or admin:
 {
   "status": "running",
   "timestamp": "2026-09-16T17:07:00Z",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "cache": {"size": 0, "capacity": 10000, "hits": 0, "misses": 0, "hit_ratio": 0},
   "cluster": {"enabled": false}
 }
@@ -494,7 +497,7 @@ Operator or admin:
 Viewer:
 
 ```json
-{"status":"running","timestamp":"2026-09-16T17:07:10Z","version":"1.2.1","cluster":{"enabled":false}}
+{"status":"running","timestamp":"2026-09-16T17:07:10Z","version":"1.2.2","cluster":{"enabled":false}}
 ```
 
 With clustering enabled, `cluster` also carries `node_id`, `node_count`,
@@ -506,7 +509,7 @@ Role: operator. A short summary of selected settings.
 
 ```json
 {
-  "version": "1.2.1",
+  "version": "1.2.2",
   "listen_port": 5399,
   "log_level": "info",
   "dns64": {"enabled": false, "prefix": "64:ff9b::", "prefix_len": 96},
@@ -597,9 +600,11 @@ curl -s -X POST http://127.0.0.1:8080/api/v1/cache/flush -H "Authorization: Bear
 ### GET /api/v1/config
 
 Role: operator. Returns the configuration as loaded from the file (at start or
-at the last reload) plus a `Version` key. Keys are Go field names in
-PascalCase, for example `Server.HTTP.Bind`, `Cache.Size`, `AllowRecursion`.
-Runtime changes made through the API are **not** reflected here.
+at the last reload), with the runtime overrides applied on top, plus a
+`Version` key. Keys are Go field names in PascalCase, for example
+`Server.HTTP.Bind`, `Cache.Size`, `AllowRecursion`. The settings changed
+through `PUT /api/v1/config/*` are reflected here; other runtime changes
+(blocklist sources, RPZ rules) are not.
 
 These fields are always blanked: `Server.HTTP.AuthToken`,
 `Server.HTTP.AuthSecret`, `Server.HTTP.Users[].Password`,
@@ -616,8 +621,8 @@ curl -s http://127.0.0.1:8080/api/v1/config -H "Authorization: Bearer $TOKEN" | 
  "Prefetch":true,"PrefetchThreshold":60,"ServeStale":true,"Size":10000,"StaleGraceSecs":604800}
 ```
 
-`Logging.Level` is the level in effect, which `PUT /api/v1/config/logging` may
-have changed at runtime; the other fields are the loaded config file.
+`Logging.Level` is always the level in effect, which
+`PUT /api/v1/config/logging` may have changed at runtime.
 
 `503 {"error":"Config not available"}` if the server has no config getter.
 
@@ -637,13 +642,38 @@ curl -s -X POST http://127.0.0.1:8080/api/v1/config/reload -H "Authorization: Be
 
 `500` with the reload error (for example an invalid config), `503` if reload is
 not wired. Reloading rebuilds the blocklist, RPZ engine and rate limiter from
-the file, so blocklist sources, RPZ rules and rate-limit settings changed
-through the API are discarded. The ACL and recursion list come back from
-`access_policy.json` when that file exists.
+the file, so blocklist sources and RPZ rules added through the API are
+discarded. The ACL and recursion list come back from `access_policy.json`, and
+the settings changed through `PUT /api/v1/config/*` come back from
+`runtime_overrides.json`, when those files exist.
+
+### Runtime overrides file
+
+The `PUT /api/v1/config/*` endpoints below change the running server *and*
+record the new value in `<storage.data_dir>/runtime_overrides.json`. Every
+config load — start-up and every reload — re-applies that file on top of the
+YAML, so a setting changed from the dashboard is not reverted by the next
+`SIGHUP`. Only the keys present in the file win over the config file;
+everything else keeps coming from the YAML.
+
+Without `storage.data_dir` there is no file: the change applies to the running
+server, the request still succeeds, and the value is lost on restart (the same
+contract as the ACL without an access policy file).
+
+The file is validated section by section when it is loaded. A section that
+would produce an invalid configuration is logged and skipped, and the config
+file value is used for it; the remaining sections still apply. A corrupt file is
+logged and ignored entirely.
+
+Settings that need file or socket validation before they can be trusted
+(`resolution.root_hints`, bind addresses, TLS files, zone paths, the DNS64
+prefix) are deliberately not settable here — they still require a config file
+edit so `-validate-config` can reject them up front.
 
 ### PUT /api/v1/config/logging
 
-Role: admin. Changes the log level of the running process. Not persisted.
+Role: admin. Changes the log level of the running process. Persisted (`warning`
+is stored as `warn`).
 
 | Field | Type | Values |
 |---|---|---|
@@ -665,14 +695,15 @@ field.
 ### PUT /api/v1/config/rrl
 
 Role: admin. Adjusts the per-client query token bucket built from the `rrl`
-config section (`rrl.enabled`, `rrl.rate`, `rrl.burst`). The separate
-response-side RRL is not changed. Not persisted.
+config section (`rrl.enabled`, `rrl.rate`, `rrl.burst`, `rrl.max_buckets`). The
+separate response-side RRL is not changed. Persisted.
 
 | Field | Type | Notes |
 |---|---|---|
 | `enabled` | boolean | optional |
 | `rate` | number | queries per second per client; ignored unless > 0 |
 | `burst` | integer | ignored unless > 0 |
+| `max_buckets` | integer | >= 1; tracked clients before eviction |
 
 Omitted fields keep their current value.
 
@@ -686,14 +717,16 @@ curl -s -X PUT http://127.0.0.1:8080/api/v1/config/rrl \
 {"message":"RRL configuration updated"}
 ```
 
+`400 {"error":"max_buckets must be at least 1"}` for a non-positive bucket cap.
 `503 {"error":"Rate limiter not available"}` when `rrl.enabled` was false at
-start or at the last reload.
+start or at the last reload. A `rate` or `burst` of 0 is ignored by the live
+limiter and is not persisted either.
 
 ### PUT /api/v1/config/cache
 
 Role: admin. Only `PUT` exists (`GET` returns 405; read the values from
-`GET /api/v1/config`). Not persisted. Every field is optional; omitted fields
-keep their current values.
+`GET /api/v1/config`). Persisted. Every field is optional; omitted fields keep
+their current values.
 
 | Field | Type | Constraint |
 |---|---|---|
@@ -720,6 +753,91 @@ curl -s -X PUT http://127.0.0.1:8080/api/v1/config/cache \
 | 400 | `size must be at least 1`, `<field> cannot be negative`, `<field> is too large` |
 | 400 | `cache cannot be disabled at runtime; set cache.enabled=false in the config file and reload` |
 | 503 | `Cache not available` |
+
+### PUT /api/v1/config/resolution
+
+Role: admin. Persisted. Every field is optional; omitted fields keep their
+current value.
+
+| Field | Type | Constraint |
+|---|---|---|
+| `recursive` | boolean | |
+| `authoritative_only` | boolean | |
+| `max_depth` | integer | >= 0 |
+| `timeout` | string | Go duration, e.g. `5s` |
+| `edns0_buffer_size` | integer | 0-65535 |
+| `qname_minimization` | boolean | |
+| `use_0x20` | boolean | |
+
+`authoritative_only` takes effect on the next query. The other fields are read
+when the iterative resolver is built, so they take effect on the next reload or
+restart — persisting them is what makes that reload keep the new value.
+`resolution.root_hints` is not settable here.
+
+```bash
+curl -s -X PUT http://127.0.0.1:8080/api/v1/config/resolution \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"qname_minimization":true,"timeout":"3s"}'
+```
+
+```json
+{"message":"Resolution configuration updated"}
+```
+
+`400` for a negative `max_depth`, an `edns0_buffer_size` outside 0-65535, or a
+`timeout` that is not a duration.
+
+### PUT /api/v1/config/dns64
+
+Role: admin. Enables or disables DNS64/NAT64 synthesis (RFC 6147) on the
+running server. Persisted.
+
+| Field | Type | Notes |
+|---|---|---|
+| `enabled` | boolean | required |
+
+```bash
+curl -s -X PUT http://127.0.0.1:8080/api/v1/config/dns64 \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"enabled":true}'
+```
+
+```json
+{"message":"DNS64 configuration updated"}
+```
+
+| Status | Body |
+|---|---|
+| 400 | `enabled is required` |
+| 400 | `dns64 not configured at startup; set dns64 in the config file and reload` |
+
+The second error means no synthesizer exists, because there is no prefix to
+synthesize from — the prefix is read at start-up and cannot be set at runtime.
+
+### PUT /api/v1/config/cookie
+
+Role: admin. Enables or disables DNS Cookies (RFC 7873). Enabling creates a
+cookie jar (rotating the server secret every `cookie.secret_rotation`,
+default 1h); disabling drops it, so clients stop being challenged. Persisted.
+
+| Field | Type | Notes |
+|---|---|---|
+| `enabled` | boolean | required |
+
+```bash
+curl -s -X PUT http://127.0.0.1:8080/api/v1/config/cookie \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"enabled":true}'
+```
+
+```json
+{"message":"DNS cookie configuration updated"}
+```
+
+| Status | Body |
+|---|---|
+| 400 | `enabled is required` |
+| 503 | `Cookie control not available` |
 
 ---
 

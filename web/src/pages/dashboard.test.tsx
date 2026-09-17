@@ -9,7 +9,23 @@ vi.stubGlobal('fetch', mockFetch);
 
 vi.mock('@/stores/queryStream', () => ({
   useQueryStream: (selector: (s: { events: unknown[]; connected: boolean }) => unknown) => {
-    const state = { events: [], connected: false };
+    const state = {
+      events: [
+        {
+          timestamp: '2026-09-17T12:00:00Z',
+          clientIp: '192.0.2.1',
+          domain: 'example.com.',
+          queryType: 'A',
+          responseCode: 'NOERROR',
+          answers: ['A 93.184.216.34'],
+          duration: 12,
+          cached: true,
+          blocked: false,
+          protocol: 'udp',
+        },
+      ],
+      connected: true,
+    };
     return selector ? selector(state) : state;
   },
 }));
@@ -77,7 +93,8 @@ describe('DashboardPage', () => {
     render(<DashboardPage />);
 
     expect(await screen.findByText('Live Query Stream')).toBeInTheDocument();
-    expect(screen.getByText('Waiting for DNS queries...')).toBeInTheDocument();
+    expect(screen.getByText('example.com.')).toBeInTheDocument();
+    expect(screen.getByText('A 93.184.216.34')).toBeInTheDocument();
   });
 
   it('shows last update timestamp', async () => {

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nothingdns/nothingdns/internal/config"
 	"github.com/nothingdns/nothingdns/internal/util"
 )
 
@@ -149,23 +150,35 @@ func (s *Server) handleConfigLogging(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var level util.LogLevel
+	// canonical is the spelling config.validateLogging accepts, so the
+	// persisted override survives the validation the loader re-runs.
+	var canonical string
 	switch strings.ToLower(req.Level) {
 	case "debug":
-		level = util.DEBUG
+		level, canonical = util.DEBUG, "debug"
 	case "info":
-		level = util.INFO
+		level, canonical = util.INFO, "info"
 	case "warn", "warning":
-		level = util.WARN
+		level, canonical = util.WARN, "warn"
 	case "error":
-		level = util.ERROR
+		level, canonical = util.ERROR, "error"
 	case "fatal":
-		level = util.FATAL
+		level, canonical = util.FATAL, "fatal"
 	default:
 		s.writeError(w, http.StatusBadRequest, "Invalid log level")
 		return
 	}
 
+	previous := util.GetDefaultLogger().Level()
 	util.GetDefaultLogger().SetLevel(level)
+	if err := s.persistAndApplyOverrides(&config.RuntimeOverrides{
+		Logging: &config.LoggingOverride{Level: &canonical},
+	}); err != nil {
+		util.GetDefaultLogger().SetLevel(previous)
+		util.Warnf("api: failed to persist logging override: %v", err)
+		s.writeError(w, http.StatusInternalServerError, sanitizeError(err, "Failed to save runtime overrides"))
+		return
+	}
 	s.writeJSON(w, http.StatusOK, &MessageResponse{Message: "Logging level updated"})
 }
 
@@ -197,12 +210,18 @@ func (s *Server) handleConfigRRL(w http.ResponseWriter, r *http.Request) {
 	// unmarshal zeroes missing fields. \`SetEnabled\` only runs
 	// when the JSON actually carries the key.
 	var req struct {
-		Enabled *bool    `json:"enabled"`
-		Rate    *float64 `json:"rate"`
-		Burst   *int     `json:"burst"`
+		Enabled    *bool    `json:"enabled"`
+		Rate       *float64 `json:"rate"`
+		Burst      *int     `json:"burst"`
+		MaxBuckets *int     `json:"max_buckets"`
 	}
 	// VULN-071: use MaxBytesReader to prevent unbounded body reading on config PUT
 	if !s.decode(w, r, &req) {
+		return
+	}
+
+	if req.MaxBuckets != nil && *req.MaxBuckets < 1 {
+		s.writeError(w, http.StatusBadRequest, "max_buckets must be at least 1")
 		return
 	}
 
@@ -214,6 +233,43 @@ func (s *Server) handleConfigRRL(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Burst != nil && *req.Burst > 0 {
 		rateLimiter.SetBurst(*req.Burst)
+	}
+	if req.MaxBuckets != nil {
+		// The bucket cap has no dedicated setter; Reload is the only way in.
+		// It rewrites rate, burst and enabled too, so feed it the merged
+		// values — the current config plus whatever this request changed —
+		// instead of letting it reset them from a bare config struct.
+		merged := config.RRLConfig{MaxBuckets: *req.MaxBuckets}
+		if cfg := s.currentConfig(); cfg != nil {
+			merged.Enabled = cfg.RRL.Enabled
+			merged.Rate = cfg.RRL.Rate
+			merged.Burst = cfg.RRL.Burst
+		}
+		if req.Enabled != nil {
+			merged.Enabled = *req.Enabled
+		}
+		if req.Rate != nil && *req.Rate > 0 {
+			merged.Rate = int(*req.Rate)
+		}
+		if req.Burst != nil && *req.Burst > 0 {
+			merged.Burst = *req.Burst
+		}
+		rateLimiter.Reload(merged)
+	}
+
+	patch := &config.RuntimeOverrides{RRL: &config.RRLOverride{Enabled: req.Enabled, MaxBuckets: req.MaxBuckets}}
+	// Mirror the setters above: a non-positive rate/burst is ignored, so it
+	// must not be persisted either.
+	if req.Rate != nil && *req.Rate > 0 {
+		patch.RRL.Rate = req.Rate
+	}
+	if req.Burst != nil && *req.Burst > 0 {
+		patch.RRL.Burst = req.Burst
+	}
+	if err := s.persistAndApplyOverrides(patch); err != nil {
+		util.Warnf("api: failed to persist rrl overrides: %v", err)
+		s.writeError(w, http.StatusInternalServerError, sanitizeError(err, "Failed to save runtime overrides"))
+		return
 	}
 
 	s.writeJSON(w, http.StatusOK, &MessageResponse{Message: "RRL configuration updated"})
@@ -312,6 +368,24 @@ func (s *Server) handleConfigCache(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.cache.UpdateConfig(cfg)
+
+	// The request body already speaks the config file's units (entries and
+	// seconds), so it maps straight onto the override — no duration round-trip.
+	if err := s.persistAndApplyOverrides(&config.RuntimeOverrides{Cache: &config.CacheOverride{
+		Size:              req.Size,
+		DefaultTTL:        req.DefaultTTL,
+		MaxTTL:            req.MaxTTL,
+		MinTTL:            req.MinTTL,
+		NegativeTTL:       req.NegativeTTL,
+		Prefetch:          req.Prefetch,
+		PrefetchThreshold: req.PrefetchThreshold,
+		ServeStale:        req.ServeStale,
+		StaleGraceSecs:    req.StaleGraceSecs,
+	}}); err != nil {
+		util.Warnf("api: failed to persist cache overrides: %v", err)
+		s.writeError(w, http.StatusInternalServerError, sanitizeError(err, "Failed to save runtime overrides"))
+		return
+	}
 
 	s.writeJSON(w, http.StatusOK, &MessageResponse{Message: "Cache configuration updated"})
 }

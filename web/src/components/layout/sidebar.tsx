@@ -1,6 +1,7 @@
 import {
 	ArrowLeftRight,
 	BarChart3,
+	BookOpen,
 	ChevronLeft,
 	ChevronRight,
 	CloudCog,
@@ -168,6 +169,20 @@ export function Sidebar({
 								</NavLink>
 							);
 						})}
+					<a
+						href="/api/docs"
+						target="_blank"
+						rel="noopener noreferrer"
+						title="API Docs"
+						className={cn(
+							"flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+							collapsed && "justify-center px-2",
+						)}
+						onClick={() => setMobileOpen(false)}
+					>
+						<BookOpen className="h-4 w-4 shrink-0" />
+						{!collapsed && <span className="truncate">API Docs</span>}
+					</a>
 				</nav>
 				<div className="border-t p-2 space-y-1">
 					{username && (

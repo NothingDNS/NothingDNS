@@ -40,6 +40,7 @@ export interface ServerConfig {
   };
   Resolution: {
     Recursive: boolean;
+    AuthoritativeOnly?: boolean;
     RootHints: string;
     MaxDepth: number;
     Timeout: string;
@@ -103,7 +104,7 @@ export interface ServerConfig {
   Zones: string[];
   ZoneDir: string;
   ACL: Array<{ Name: string; Networks: string[]; Types: string[]; Action: string; Redirect: string }>;
-  RRL: { Enabled: boolean; Rate: number; Burst: number };
+  RRL: { Enabled: boolean; Rate: number; Burst: number; MaxBuckets?: number };
   Blocklist: { Enabled: boolean; Files: string[]; URLs: string[] };
   RPZ: {
     Enabled: boolean;

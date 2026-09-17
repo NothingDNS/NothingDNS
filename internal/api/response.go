@@ -347,15 +347,16 @@ type RolesResponse struct {
 
 // QueryLogEntry represents a single query in the log.
 type QueryLogEntry struct {
-	Timestamp    string `json:"timestamp"`
-	ClientIP     string `json:"client_ip"`
-	Domain       string `json:"domain"`
-	QueryType    string `json:"query_type"`
-	ResponseCode string `json:"response_code"`
-	Duration     int64  `json:"duration_ms"`
-	Cached       bool   `json:"cached"`
-	Blocked      bool   `json:"blocked"`
-	Protocol     string `json:"protocol"`
+	Timestamp    string   `json:"timestamp"`
+	ClientIP     string   `json:"client_ip"`
+	Domain       string   `json:"domain"`
+	QueryType    string   `json:"query_type"`
+	ResponseCode string   `json:"response_code"`
+	Answers      []string `json:"answers,omitempty"`
+	Duration     int64    `json:"duration_ms"`
+	Cached       bool     `json:"cached"`
+	Blocked      bool     `json:"blocked"`
+	Protocol     string   `json:"protocol"`
 }
 
 // QueryLogResponse is returned by GET /api/v1/queries.

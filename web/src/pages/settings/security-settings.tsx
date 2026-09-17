@@ -34,23 +34,28 @@ export function SecuritySettings({ config, onReload }: { config: ServerConfig; o
   const [rrlEnabled, setRrlEnabled] = useState(rrl?.Enabled ?? false);
   const [rrlRate, setRrlRate] = useState(String(rrl?.Rate ?? 5));
   const [rrlBurst, setRrlBurst] = useState(String(rrl?.Burst ?? 20));
+  const [rrlMaxBuckets, setRrlMaxBuckets] = useState(String(rrl?.MaxBuckets ?? 10000));
+  const rrlMaxBucketsId = `${fieldId}-rrl-max-buckets`;
 
   useEffect(() => {
     setRrlEnabled(rrl?.Enabled ?? false);
     setRrlRate(String(rrl?.Rate ?? 5));
     setRrlBurst(String(rrl?.Burst ?? 20));
-  }, [rrl?.Enabled, rrl?.Rate, rrl?.Burst]);
+    setRrlMaxBuckets(String(rrl?.MaxBuckets ?? 10000));
+  }, [rrl?.Enabled, rrl?.Rate, rrl?.Burst, rrl?.MaxBuckets]);
 
   const resetRRLForm = () => {
     setRrlEnabled(rrl?.Enabled ?? false);
     setRrlRate(String(rrl?.Rate ?? 5));
     setRrlBurst(String(rrl?.Burst ?? 20));
+    setRrlMaxBuckets(String(rrl?.MaxBuckets ?? 10000));
   };
 
   const rrlDirty =
     rrlEnabled !== (rrl?.Enabled ?? false) ||
     rrlRate !== String(rrl?.Rate ?? 5) ||
-    rrlBurst !== String(rrl?.Burst ?? 20);
+    rrlBurst !== String(rrl?.Burst ?? 20) ||
+    rrlMaxBuckets !== String(rrl?.MaxBuckets ?? 10000);
 
   const handleSaveRRL = async () => {
     try {
@@ -58,6 +63,7 @@ export function SecuritySettings({ config, onReload }: { config: ServerConfig; o
         enabled: rrlEnabled,
         rate: floatOr(rrlRate, 5),
         burst: intOr(rrlBurst, 20),
+        max_buckets: intOr(rrlMaxBuckets, 10000),
       });
       await onReload();
       toast.success('RRL settings saved');
@@ -68,9 +74,9 @@ export function SecuritySettings({ config, onReload }: { config: ServerConfig; o
 
   return (
     <div className="space-y-4">
-      <ReadOnlyNotice title="File-backed security settings" />
+      <ReadOnlyNotice title="DNSSEC keys and trust anchors" />
       <Card>
-        <SectionHeader title="DNSSEC" description="DNS Security Extensions" icon={<Shield className="h-4 w-4" />} />
+        <SectionHeader title="DNSSEC" description="DNS Security Extensions (signing keys remain file-backed)" icon={<Shield className="h-4 w-4" />} />
         <CardContent className="space-y-1">
           <KVRow label="Validation" value={dnssec?.Enabled ? 'Enabled' : 'Disabled'} />
           <KVRow label="Trust Anchor" value={dnssec?.TrustAnchor || 'builtin'} mono />
@@ -117,6 +123,10 @@ export function SecuritySettings({ config, onReload }: { config: ServerConfig; o
             <div className="space-y-2">
               <Label htmlFor={rrlBurstId}>Burst</Label>
               <Input id={rrlBurstId} type="number" value={rrlBurst} onChange={(e) => setRrlBurst(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor={rrlMaxBucketsId}>Max buckets</Label>
+              <Input id={rrlMaxBucketsId} type="number" min="1" value={rrlMaxBuckets} onChange={(e) => setRrlMaxBuckets(e.target.value)} />
             </div>
           </div>
           <SaveBar dirty={rrlDirty} saving={updateRRL.isPending} onSave={handleSaveRRL} onReset={resetRRLForm} />

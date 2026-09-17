@@ -105,7 +105,10 @@ export function DashboardPage() {
               <span className="text-muted-foreground w-[70px] shrink-0">{new Date(q.timestamp).toLocaleTimeString()}</span>
               <Badge variant={q.responseCode === 'NOERROR' ? 'success' : q.blocked ? 'destructive' : 'warning'} className="w-[60px] justify-center text-[10px]">{q.responseCode}</Badge>
               <span className="text-muted-foreground w-[40px]">{q.queryType}</span>
-              <span className="font-medium truncate flex-1">{q.domain}</span>
+              <span className="font-medium truncate max-w-[28%]">{q.domain}</span>
+              <span className="text-muted-foreground truncate flex-1 min-w-0" title={(q.answers ?? []).join('\n')}>
+                {(q.answers && q.answers.length > 0) ? q.answers.join(', ') : '—'}
+              </span>
               <span className="text-muted-foreground hidden sm:inline">{q.clientIp}</span>
               <span className="text-muted-foreground w-[50px] text-right">{q.duration}ms</span>
               {q.cached && <Badge variant="secondary" className="text-[10px]">cached</Badge>}

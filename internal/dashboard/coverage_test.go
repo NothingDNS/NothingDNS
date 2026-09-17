@@ -361,11 +361,13 @@ func TestRecordQuery_AllFieldsPopulated(t *testing.T) {
 		Domain:       "full.example.com",
 		QueryType:    "AAAA",
 		ResponseCode: "NOERROR",
+		Answers:      []string{"AAAA 2001:db8::1"},
 		Cached:       true,
 		Blocked:      false,
 		Duration:     15000,
 	}
 	server.RecordQuery(event)
+	event.Answers[0] = "mutated"
 
 	server.stats.mu.RLock()
 	recent := server.stats.RecentQueries
@@ -382,6 +384,9 @@ func TestRecordQuery_AllFieldsPopulated(t *testing.T) {
 	}
 	if !recent[0].Cached {
 		t.Error("Expected Cached to be true")
+	}
+	if len(recent[0].Answers) != 1 || recent[0].Answers[0] != "AAAA 2001:db8::1" {
+		t.Errorf("Answers not cloned independently: %v", recent[0].Answers)
 	}
 }
 

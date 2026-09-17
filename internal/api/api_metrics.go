@@ -180,6 +180,7 @@ func (s *Server) handleQueryLog(w http.ResponseWriter, r *http.Request) {
 			Domain:       q.Domain,
 			QueryType:    q.QueryType,
 			ResponseCode: q.ResponseCode,
+			Answers:      q.Answers,
 			Duration:     q.Duration,
 			Cached:       q.Cached,
 			Blocked:      q.Blocked,

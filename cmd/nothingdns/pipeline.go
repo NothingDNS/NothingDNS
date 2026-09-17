@@ -181,12 +181,17 @@ func (p *Pipeline) ServeDNS(h *integratedHandler, w server.ResponseWriter, r *pr
 			if domain == "" {
 				domain = q.qname
 			}
+			var answers []string
+			if q.policyWriter != nil && len(q.policyWriter.answers) > 0 {
+				answers = q.policyWriter.answers
+			}
 			h.dashboardServer.RecordQuery(&dashboard.QueryEvent{
 				Timestamp:    start,
 				ClientIP:     clientIP,
 				Domain:       domain,
 				QueryType:    q.qtypeStr,
 				ResponseCode: rcodeToString(rcode),
+				Answers:      answers,
 				Duration:     latency.Milliseconds(),
 				Cached:       q.cacheHit,
 				Blocked:      q.blocked,

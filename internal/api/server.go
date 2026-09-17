@@ -23,6 +23,7 @@ import (
 	"github.com/nothingdns/nothingdns/internal/cluster"
 	"github.com/nothingdns/nothingdns/internal/config"
 	"github.com/nothingdns/nothingdns/internal/dashboard"
+	"github.com/nothingdns/nothingdns/internal/dns64"
 	"github.com/nothingdns/nothingdns/internal/dnssec"
 	"github.com/nothingdns/nothingdns/internal/doh"
 	"github.com/nothingdns/nothingdns/internal/filter"
@@ -60,6 +61,15 @@ type Server struct {
 	recursionPolicy  *filter.RecursionPolicy
 	accessPolicyFile string
 	accessPolicyMu   sync.Mutex // serializes ACL/recursion updates and their file write
+	overridesMu      sync.Mutex // serializes override merges and their file write
+	// overridesFile stores the settings the dashboard can change without a
+	// restart ("" when storage.data_dir is unset: changes then apply live but
+	// are lost on restart, like the ACL without an access policy file).
+	overridesFile string
+	dns64Synth    *dns64.Synthesizer
+	// setCookieEnabled toggles the DNS cookie jar on the live DNS handler.
+	// Registered by main (WithCookieControl) because the jar lives there.
+	setCookieEnabled func(enabled bool) error
 	authStore        *auth.Store
 	metrics          *metrics.MetricsCollector
 	validator        *dnssec.Validator
@@ -515,6 +525,33 @@ func (s *Server) WithAccessPolicy(policy *filter.RecursionPolicy, file string) *
 	return s
 }
 
+// WithRuntimeOverrides sets the file where settings changed through the API
+// that need no restart are persisted ("" keeps them in memory only, so they
+// apply live and are lost on restart).
+func (s *Server) WithRuntimeOverrides(file string) *Server {
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
+	s.overridesFile = file
+	return s
+}
+
+// WithDNS64 sets the DNS64 synthesizer so it can be toggled at runtime.
+func (s *Server) WithDNS64(synth *dns64.Synthesizer) *Server {
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
+	s.dns64Synth = synth
+	return s
+}
+
+// WithCookieControl registers the callback that enables or disables DNS
+// cookies (RFC 7873) on the live DNS handler.
+func (s *Server) WithCookieControl(fn func(enabled bool) error) *Server {
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
+	s.setCookieEnabled = fn
+	return s
+}
+
 // WithACL sets the ACL checker for the API server.
 func (s *Server) WithACL(acl *filter.ACLChecker) *Server {
 	s.runtimeMu.Lock()
@@ -748,6 +785,9 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/v1/config/logging", s.handleConfigLogging)
 	mux.HandleFunc("/api/v1/config/rrl", s.handleConfigRRL)
 	mux.HandleFunc("/api/v1/config/cache", s.handleConfigCache)
+	mux.HandleFunc("/api/v1/config/resolution", s.handleConfigResolution)
+	mux.HandleFunc("/api/v1/config/dns64", s.handleConfigDNS64)
+	mux.HandleFunc("/api/v1/config/cookie", s.handleConfigCookie)
 
 	// DNSSEC status (always registered)
 	mux.HandleFunc("/api/v1/dnssec/status", s.handleDNSSECStatus)

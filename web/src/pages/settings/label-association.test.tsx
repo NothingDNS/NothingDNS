@@ -30,9 +30,13 @@ vi.mock('sonner', () => ({
 }));
 
 vi.mock('@/hooks/useApi', () => ({
-  useUpdateCacheConfig: () => ({ mutate: vi.fn(), isPending: false }),
-  useUpdateRRLConfig: () => ({ mutate: vi.fn(), isPending: false }),
-  useUpdateLoggingConfig: () => ({ mutate: vi.fn(), isPending: false }),
+  useUpdateCacheConfig: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
+  useUpdateRRLConfig: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
+  useUpdateLoggingConfig: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
+  useUpdateCookieConfig: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
+  useUpdateResolutionConfig: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
+  useUpdateDNS64Config: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
+  useUpdateUpstreamServer: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
 }));
 
 // Every settings component reads its slice with optional chaining and supplies

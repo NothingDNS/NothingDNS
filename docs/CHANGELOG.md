@@ -5,6 +5,38 @@ All notable changes to NothingDNS are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.2] — 2026-09-17
+
+Dashboard and API improvements for live operations: ACL rule editing, answer
+RDATA in the live query stream, working Metrics History charts, a clearer path
+to the API explorer, and runtime-persisted settings that do not need a restart.
+
+### Added
+
+- **ACL Rules CRUD in the dashboard**: the ACL page can add, edit and remove
+  general ACL rules (ALLOW / DENY / REDIRECT) via `PUT /api/v1/acl`, alongside
+  the existing recursion allow list. Changes persist in `access_policy.json`.
+- **Answer RDATA in the live query stream and query log**: each event now
+  carries a short summary of answer records (type and RDATA), so the Dashboard
+  live stream and Query Log show what was returned, not only the question.
+- **Runtime config overrides (`runtime_overrides.json`)**: hot-reloadable
+  tunables changed through `PUT /api/v1/config/*` (logging level, RRL, cache,
+  resolution, DNS64/cookie toggles, upstream server list) are saved under
+  `<storage.data_dir>/runtime_overrides.json` and re-applied over the YAML at
+  start and on every reload.
+- **Settings UI for no-restart options**: Resolution, Upstream, Rate Limit,
+  DNS64 and DNS Cookie pages can edit the live config and persist it without
+  rewriting the YAML file.
+- **API Docs entry points**: the API explorer (`/api/docs`) is linked from the
+  sidebar and prominently from About, not only a footer line.
+
+### Fixed
+
+- **Metrics History charts drew flat / empty bars**: the bar chart used
+  `h-full` inside a flex `items-end` container (height collapsed to 0), and the
+  series were cumulative counters rather than per-minute rates. Charts now use
+  absolute pixel heights and delta-based per-minute values.
+
 ## [1.2.1] — 2026-09-17
 
 Fixes found by testing a real installation end to end: DNSSEC false SERVFAILs,

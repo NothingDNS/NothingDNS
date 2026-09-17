@@ -141,6 +141,7 @@ export interface QueryEvent {
 	domain: string;
 	queryType: string;
 	responseCode: string;
+	answers?: string[];
 	duration: number;
 	cached: boolean;
 	blocked: boolean;
@@ -203,6 +204,7 @@ export interface QueryLogEntry {
 	domain: string;
 	query_type: string;
 	response_code: string;
+	answers?: string[];
 	duration_ms: number;
 	cached: boolean;
 	blocked: boolean;

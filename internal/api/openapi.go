@@ -12,7 +12,7 @@ const OpenAPISpec = `{
   "info": {
     "title": "NothingDNS API",
     "description": "REST API for NothingDNS server management. See docs/API_REFERENCE.md for the full guide. Every operation carries x-required-role (viewer < operator < admin). DNS transports (DoH, DoWS, ODoH) and the /ws dashboard stream are described in the guide.",
-    "version": "1.2.1",
+    "version": "1.2.2",
     "contact": {
       "name": "ECOSTACK TECHNOLOGY OÜ"
     },
@@ -575,9 +575,67 @@ const OpenAPISpec = `{
           "burst": {
             "type": "integer",
             "description": "Ignored unless > 0"
+          },
+          "max_buckets": {
+            "type": "integer",
+            "minimum": 1
           }
         },
         "description": "Every field is optional; omitted fields keep their current value."
+      },
+      "ResolutionConfigUpdate": {
+        "type": "object",
+        "properties": {
+          "recursive": {
+            "type": "boolean"
+          },
+          "authoritative_only": {
+            "type": "boolean"
+          },
+          "max_depth": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "timeout": {
+            "type": "string",
+            "description": "Go duration string, e.g. 5s"
+          },
+          "edns0_buffer_size": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65535
+          },
+          "qname_minimization": {
+            "type": "boolean"
+          },
+          "use_0x20": {
+            "type": "boolean"
+          }
+        },
+        "description": "Every field is optional; omitted fields keep their current value. resolution.root_hints is not settable at runtime (a file path needs startup validation)."
+      },
+      "DNS64ConfigUpdate": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "description": "The DNS64 prefix is not settable at runtime; it is read when the synthesizer is built at startup."
+      },
+      "CookieConfigUpdate": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ]
       },
       "LoggingUpdate": {
         "type": "object",
@@ -847,6 +905,13 @@ const OpenAPISpec = `{
           "responseCode": {
             "type": "string"
           },
+          "answers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Compact answer-section RDATA (e.g. \"A 93.184.216.34\")"
+          },
           "duration": {
             "type": "integer"
           },
@@ -885,6 +950,13 @@ const OpenAPISpec = `{
                 },
                 "response_code": {
                   "type": "string"
+                },
+                "answers": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Compact answer-section RDATA"
                 },
                 "duration_ms": {
                   "type": "integer"
@@ -3658,7 +3730,7 @@ const OpenAPISpec = `{
         ],
         "summary": "Change the log level at runtime",
         "x-required-role": "admin",
-        "description": "Requires the admin role. Not persisted.",
+        "description": "Requires the admin role. Applies immediately and is persisted to <storage.data_dir>/runtime_overrides.json, which is re-applied over the config file on reload.",
         "requestBody": {
           "required": true,
           "content": {
@@ -3730,7 +3802,7 @@ const OpenAPISpec = `{
         ],
         "summary": "Change the per-client DNS rate limiter at runtime",
         "x-required-role": "admin",
-        "description": "Requires the admin role. Not persisted.",
+        "description": "Requires the admin role. Applies immediately and is persisted to <storage.data_dir>/runtime_overrides.json, which is re-applied over the config file on reload.",
         "requestBody": {
           "required": true,
           "content": {
@@ -3802,7 +3874,7 @@ const OpenAPISpec = `{
         ],
         "summary": "Change cache settings at runtime",
         "x-required-role": "admin",
-        "description": "Requires the admin role. Not persisted.",
+        "description": "Requires the admin role. Applies immediately and is persisted to <storage.data_dir>/runtime_overrides.json, which is re-applied over the config file on reload.",
         "requestBody": {
           "required": true,
           "content": {
@@ -3866,6 +3938,262 @@ const OpenAPISpec = `{
           },
           "503": {
             "description": "Cache disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/config/resolution": {
+      "put": {
+        "tags": [
+          "Config"
+        ],
+        "summary": "Change resolution settings at runtime",
+        "x-required-role": "admin",
+        "description": "Requires the admin role. Persisted to <storage.data_dir>/runtime_overrides.json and re-applied over the config file on reload. authoritative_only takes effect on the next query; the resolver-construction fields (recursive, max_depth, timeout, edns0_buffer_size, qname_minimization, use_0x20) take effect on the next reload or restart.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolutionConfigUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid value",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "API rate limit exceeded (100 requests per minute per client IP)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Failed to save runtime overrides",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/config/dns64": {
+      "put": {
+        "tags": [
+          "Config"
+        ],
+        "summary": "Enable or disable DNS64 synthesis at runtime (RFC 6147)",
+        "x-required-role": "admin",
+        "description": "Requires the admin role. Applies immediately and is persisted to <storage.data_dir>/runtime_overrides.json. Enabling fails with 400 when no dns64 prefix was configured at startup.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DNS64ConfigUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "enabled missing, or DNS64 not configured at startup",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "API rate limit exceeded (100 requests per minute per client IP)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Failed to save runtime overrides",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/config/cookie": {
+      "put": {
+        "tags": [
+          "Config"
+        ],
+        "summary": "Enable or disable DNS Cookies at runtime (RFC 7873)",
+        "x-required-role": "admin",
+        "description": "Requires the admin role. Creates or drops the cookie jar on the live DNS handler and is persisted to <storage.data_dir>/runtime_overrides.json.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CookieConfigUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "enabled missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "API rate limit exceeded (100 requests per minute per client IP)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Failed to save runtime overrides",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Cookie control not available",
             "content": {
               "application/json": {
                 "schema": {

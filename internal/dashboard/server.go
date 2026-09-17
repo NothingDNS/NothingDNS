@@ -85,10 +85,13 @@ type QueryEvent struct {
 	Domain       string    `json:"domain"`
 	QueryType    string    `json:"queryType"`
 	ResponseCode string    `json:"responseCode"`
-	Duration     int64     `json:"duration"`
-	Cached       bool      `json:"cached"`
-	Blocked      bool      `json:"blocked"`
-	Protocol     string    `json:"protocol"`
+	// Answers is a compact summary of answer-section RDATA (e.g. "A 93.184.216.34"),
+	// capped when recorded so the in-memory ring buffer stays small.
+	Answers  []string `json:"answers,omitempty"`
+	Duration int64    `json:"duration"`
+	Cached   bool     `json:"cached"`
+	Blocked  bool     `json:"blocked"`
+	Protocol string   `json:"protocol"`
 }
 
 // DashboardStats represents dashboard statistics
@@ -143,13 +146,21 @@ func cloneQueryEvents(events []*QueryEvent) []*QueryEvent {
 	}
 	clones := make([]*QueryEvent, len(events))
 	for i, event := range events {
-		if event == nil {
-			continue
-		}
-		eventCopy := *event
-		clones[i] = &eventCopy
+		clones[i] = cloneQueryEvent(event)
 	}
 	return clones
+}
+
+// cloneQueryEvent returns an independent copy, including the Answers slice.
+func cloneQueryEvent(event *QueryEvent) *QueryEvent {
+	if event == nil {
+		return nil
+	}
+	eventCopy := *event
+	if event.Answers != nil {
+		eventCopy.Answers = append([]string(nil), event.Answers...)
+	}
+	return &eventCopy
 }
 
 // GetRecentQueriesFiltered returns recent queries whose domain contains the
@@ -592,8 +603,7 @@ func (s *Server) RecordQuery(event *QueryEvent) {
 	if event == nil {
 		return
 	}
-	eventCopy := *event
-	storedEvent := &eventCopy
+	storedEvent := cloneQueryEvent(event)
 
 	// Update stats
 	s.stats.mu.Lock()
@@ -843,11 +853,7 @@ func (s *Server) GetStats() *DashboardStats {
 
 	recentQueries := make([]*QueryEvent, len(s.stats.RecentQueries))
 	for i, query := range s.stats.RecentQueries {
-		if query == nil {
-			continue
-		}
-		queryCopy := *query
-		recentQueries[i] = &queryCopy
+		recentQueries[i] = cloneQueryEvent(query)
 	}
 
 	return &DashboardStats{

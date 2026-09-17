@@ -278,7 +278,9 @@ func reloadSecurityComponents(cfg *config.Config, current *SecurityManager, hand
 			WithGeoDNS(result.GeoEngine).
 			WithACL(result.ACLChecker).
 			WithAccessPolicy(result.RecursionPolicy, result.AccessPolicyFile).
-			WithRateLimiter(result.RateLimiter)
+			WithRateLimiter(result.RateLimiter).
+			WithDNS64(result.DNS64Synth).
+			WithRuntimeOverrides(config.RuntimeOverridesFile(cfg.Storage.DataDir))
 	}
 	if current != nil {
 		current.Stop()
@@ -913,7 +915,33 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 		WithRPZ(rpzEngine).
 		WithGeoDNS(geoEngine).
 		WithSlaveManager(transferManager.Result().SlaveManager).
-		WithRateLimiter(rateLimiter)
+		WithRateLimiter(rateLimiter).
+		WithRuntimeOverrides(config.RuntimeOverridesFile(cfg.Storage.DataDir)).
+		WithDNS64(dns64Synth).
+		WithCookieControl(func(enabled bool) error {
+			// The cookie jar holds the rotating server secret, so enabling
+			// creates a fresh one and disabling drops it — clients simply stop
+			// being challenged. handler.config is the same *Config the API
+			// mutates through its config getter; set both so a reload that
+			// only swaps unrelated sections keeps the toggle.
+			handler.runtimeMu.Lock()
+			defer handler.runtimeMu.Unlock()
+			switch {
+			case enabled && handler.cookieJar == nil:
+				rotation := parseDurationOrDefault(handler.config.Cookie.SecretRotation, 1*time.Hour)
+				jar, err := dnscookie.NewCookieJar(rotation)
+				if err != nil {
+					return fmt.Errorf("initializing DNS cookie jar: %w", err)
+				}
+				handler.cookieJar = jar
+				logger.Infof("DNS cookies enabled at runtime (secret rotation: %s)", rotation)
+			case !enabled && handler.cookieJar != nil:
+				handler.cookieJar = nil
+				logger.Info("DNS cookies disabled at runtime")
+			}
+			handler.config.Cookie.Enabled = enabled
+			return nil
+		})
 	reloadState.apiServer = apiServer // wire apiServer back into reload state
 
 	// Initialize ODoH (RFC 9230) if enabled
@@ -1157,7 +1185,65 @@ func loadConfig(path string) (*config.Config, error) {
 		return nil, fmt.Errorf("configuration validation failed: %d error(s)", len(errs))
 	}
 
+	applyRuntimeOverrides(cfg)
+
 	return cfg, nil
+}
+
+// applyRuntimeOverrides layers the persisted dashboard/API changes
+// (<storage.data_dir>/runtime_overrides.json) on top of the YAML config, so a
+// setting an operator changed at runtime is not reverted by the next start or
+// SIGHUP. Overrides win over the config file for the keys they carry.
+//
+// Resilience over strictness: a missing file is normal, and a corrupt or
+// invalid one is logged and skipped rather than refusing to start — the server
+// then runs on the config file alone, which is always the safer fallback.
+func applyRuntimeOverrides(cfg *config.Config) {
+	file := config.RuntimeOverridesFile(cfg.Storage.DataDir)
+	if file == "" {
+		return
+	}
+	overrides, err := config.LoadRuntimeOverrides(file)
+	if err != nil {
+		util.Warnf("config: ignoring runtime overrides file %s: %v (using the config file values)", file, err)
+		return
+	}
+	if overrides == nil {
+		return
+	}
+
+	// Section by section, so one unusable section (say an upstream list the
+	// dashboard emptied) cannot discard every other stored setting. Each
+	// section is applied to a copy and validated before it is committed.
+	applied := 0
+	for _, section := range []struct {
+		name  string
+		patch *config.RuntimeOverrides
+	}{
+		{"logging", &config.RuntimeOverrides{Logging: overrides.Logging}},
+		{"rrl", &config.RuntimeOverrides{RRL: overrides.RRL}},
+		{"cache", &config.RuntimeOverrides{Cache: overrides.Cache}},
+		{"resolution", &config.RuntimeOverrides{Resolution: overrides.Resolution}},
+		{"dns64", &config.RuntimeOverrides{DNS64: overrides.DNS64}},
+		{"cookie", &config.RuntimeOverrides{Cookie: overrides.Cookie}},
+		{"upstream_servers", &config.RuntimeOverrides{UpstreamServers: overrides.UpstreamServers}},
+	} {
+		if *section.patch == (config.RuntimeOverrides{}) {
+			continue // not overridden
+		}
+		patched := *cfg
+		config.ApplyRuntimeOverrides(&patched, section.patch)
+		if errs := patched.Validate(); len(errs) > 0 {
+			util.Warnf("config: runtime override %q from %s is invalid (%s) — using the config file value",
+				section.name, file, strings.Join(errs, "; "))
+			continue
+		}
+		*cfg = patched
+		applied++
+	}
+	if applied > 0 {
+		util.Infof("Runtime overrides loaded from %s (%d section(s) override the config file)", file, applied)
+	}
 }
 
 // loadZoneFile loads a single zone file.

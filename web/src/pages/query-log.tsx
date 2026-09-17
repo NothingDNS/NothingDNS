@@ -95,6 +95,7 @@ export function QueryLogPage() {
                     <th className="text-left p-3 font-medium">Domain</th>
                     <th className="text-left p-3 font-medium">Type</th>
                     <th className="text-left p-3 font-medium">Status</th>
+                    <th className="text-left p-3 font-medium">Answer</th>
                     <th className="text-left p-3 font-medium">Duration</th>
                     <th className="text-left p-3 font-medium">Client</th>
                     <th className="text-left p-3 font-medium">Flags</th>
@@ -107,6 +108,9 @@ export function QueryLogPage() {
                       <td className="p-3 font-medium truncate max-w-[200px]">{q.domain}</td>
                       <td className="p-3"><Badge variant="outline">{q.query_type}</Badge></td>
                       <td className="p-3"><Badge variant={q.response_code === 'NOERROR' ? 'success' : 'warning'}>{q.response_code}</Badge></td>
+                      <td className="p-3 font-mono text-xs text-muted-foreground truncate max-w-[240px]" title={(q.answers ?? []).join('\n')}>
+                        {(q.answers && q.answers.length > 0) ? q.answers.join(', ') : '—'}
+                      </td>
                       <td className="p-3 text-muted-foreground">{q.duration_ms}ms</td>
                       <td className="p-3 text-muted-foreground font-mono text-xs">{q.client_ip}</td>
                       <td className="p-3">{q.cached && <Badge variant="secondary" className="mr-1">cached</Badge>}{q.blocked && <Badge variant="destructive">blocked</Badge>}</td>

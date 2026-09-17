@@ -1,9 +1,33 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { api, type MetricsHistory } from '@/lib/api';
 import { ErrorState } from '@/components/states';
 import { Activity, Database, Zap } from 'lucide-react';
+
+/** API returns newest-first cumulative counters; charts want oldest→newest per-interval deltas. */
+export function toPerIntervalSeries(values: number[], timestamps: number[]): { values: number[]; timestamps: number[] } {
+  const chronValues = [...values].reverse();
+  const chronTs = [...timestamps].reverse();
+  if (chronValues.length < 2) {
+    return { values: [], timestamps: [] };
+  }
+  const outValues: number[] = [];
+  const outTs: number[] = [];
+  for (let i = 1; i < chronValues.length; i++) {
+    outValues.push(Math.max(0, chronValues[i] - chronValues[i - 1]));
+    outTs.push(chronTs[i] ?? chronTs[i - 1] ?? 0);
+  }
+  return { values: outValues, timestamps: outTs };
+}
+
+/** Latency samples are gauges (not counters): reverse to chronological order only. */
+export function toChronological(values: number[], timestamps: number[]): { values: number[]; timestamps: number[] } {
+  return {
+    values: [...values].reverse(),
+    timestamps: [...timestamps].reverse(),
+  };
+}
 
 export function HistoricalChartsPage() {
   const [data, setData] = useState<MetricsHistory | null>(null);
@@ -29,6 +53,16 @@ export function HistoricalChartsPage() {
     return () => clearInterval(iv);
   }, []);
 
+  const series = useMemo(() => {
+    if (!data || data.count === 0) return null;
+    const ts = data.timestamps ?? [];
+    const queries = toPerIntervalSeries(data.queries ?? [], ts);
+    const hits = toPerIntervalSeries(data.cache_hits ?? [], ts);
+    const misses = toPerIntervalSeries(data.cache_misses ?? [], ts);
+    const latency = toChronological(data.latency_ms ?? [], ts);
+    return { queries, hits, misses, latency, sampleCount: data.count };
+  }, [data]);
+
   if (loading) return (
     <div className="space-y-6">
       <div><h1 className="text-2xl font-bold tracking-tight">Metrics History</h1><p className="text-muted-foreground text-sm">Time-series performance data</p></div>
@@ -43,7 +77,7 @@ export function HistoricalChartsPage() {
     </div>
   );
 
-  if (!data || data.count === 0) return (
+  if (!series || series.sampleCount === 0) return (
     <div className="space-y-6">
       <div><h1 className="text-2xl font-bold tracking-tight">Metrics History</h1><p className="text-muted-foreground text-sm">Time-series performance data</p></div>
       <Card><CardContent className="p-12 text-center text-muted-foreground">
@@ -54,26 +88,42 @@ export function HistoricalChartsPage() {
     </div>
   );
 
-  const maxQueries = Math.max(...data.queries, 1);
-  const maxHits = Math.max(...data.cache_hits, 1);
-  const maxLatency = Math.max(...data.latency_ms, 1);
+  if (series.sampleCount < 2) return (
+    <div className="space-y-6">
+      <div><h1 className="text-2xl font-bold tracking-tight">Metrics History</h1><p className="text-muted-foreground text-sm">Time-series performance data</p></div>
+      <Card><CardContent className="p-12 text-center text-muted-foreground">
+        <Activity className="h-8 w-8 mx-auto mb-2 opacity-50" />
+        <p>Collecting the first samples…</p>
+        <p className="text-xs mt-1">Per-minute charts need at least two snapshots (about two minutes after start)</p>
+      </CardContent></Card>
+    </div>
+  );
+
+  const maxQueries = Math.max(0, ...series.queries.values, 1);
+  const maxCache = Math.max(0, ...series.hits.values, ...series.misses.values, 1);
+  const maxLatency = Math.max(0, ...series.latency.values, 1);
 
   return (
     <div className="space-y-6">
-      <div><h1 className="text-2xl font-bold tracking-tight">Metrics History</h1><p className="text-muted-foreground text-sm">Last {data.count} minutes of performance data</p></div>
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">Metrics History</h1>
+        <p className="text-muted-foreground text-sm">
+          Last {series.sampleCount} minutes · {series.queries.values.length} interval{series.queries.values.length === 1 ? '' : 's'}
+        </p>
+      </div>
 
       <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
         <Card><CardContent className="p-6">
-          <div className="flex items-center gap-2 mb-1"><Activity className="h-4 w-4 text-primary" /><span className="text-xs text-muted-foreground">Total Points</span></div>
-          <div className="text-2xl font-bold">{data.count}</div>
+          <div className="flex items-center gap-2 mb-1"><Activity className="h-4 w-4 text-primary" /><span className="text-xs text-muted-foreground">Intervals</span></div>
+          <div className="text-2xl font-bold">{series.queries.values.length}</div>
         </CardContent></Card>
         <Card><CardContent className="p-6">
           <div className="flex items-center gap-2 mb-1"><Activity className="h-4 w-4 text-success" /><span className="text-xs text-muted-foreground">Peak Q/min</span></div>
           <div className="text-2xl font-bold">{maxQueries.toLocaleString()}</div>
         </CardContent></Card>
         <Card><CardContent className="p-6">
-          <div className="flex items-center gap-2 mb-1"><Database className="h-4 w-4 text-chart-2" /><span className="text-xs text-muted-foreground">Peak Cache Hits</span></div>
-          <div className="text-2xl font-bold">{(data.cache_hits.length ? Math.max(...data.cache_hits) : 0).toLocaleString()}</div>
+          <div className="flex items-center gap-2 mb-1"><Database className="h-4 w-4 text-chart-2" /><span className="text-xs text-muted-foreground">Peak Cache Hits/min</span></div>
+          <div className="text-2xl font-bold">{Math.max(0, ...series.hits.values, 0).toLocaleString()}</div>
         </CardContent></Card>
         <Card><CardContent className="p-6">
           <div className="flex items-center gap-2 mb-1"><Zap className="h-4 w-4 text-warning" /><span className="text-xs text-muted-foreground">Max Latency</span></div>
@@ -88,19 +138,23 @@ export function HistoricalChartsPage() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <BarChart data={data.queries} max={maxQueries} color="bg-primary" timestamps={data.timestamps} />
+          <BarChart data={series.queries.values} max={maxQueries} color="bg-primary" timestamps={series.queries.timestamps} />
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
-            <Database className="h-4 w-4" /> Cache Hits vs Misses
+            <Database className="h-4 w-4" /> Cache Hits vs Misses (per minute)
           </CardTitle>
         </CardHeader>
-        <CardContent>
-          <BarChart data={data.cache_hits} max={maxHits} color="bg-success" timestamps={data.timestamps} />
-          <BarChart data={data.cache_misses} max={maxHits} color="bg-muted" timestamps={data.timestamps} />
+        <CardContent className="space-y-3">
+          <div className="flex items-center gap-4 text-xs text-muted-foreground">
+            <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-sm bg-success" /> Hits</span>
+            <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-sm bg-warning" /> Misses</span>
+          </div>
+          <BarChart data={series.hits.values} max={maxCache} color="bg-success" timestamps={series.hits.timestamps} />
+          <BarChart data={series.misses.values} max={maxCache} color="bg-warning" timestamps={series.misses.timestamps} />
         </CardContent>
       </Card>
 
@@ -111,27 +165,48 @@ export function HistoricalChartsPage() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <BarChart data={data.latency_ms} max={maxLatency} color="bg-warning" timestamps={data.timestamps} />
+          <BarChart data={series.latency.values} max={maxLatency} color="bg-chart-2" timestamps={series.latency.timestamps} unit="ms" />
         </CardContent>
       </Card>
     </div>
   );
 }
 
-function BarChart({ data, max, color, timestamps }: { data: number[]; max: number; color: string; timestamps?: number[] }) {
+function BarChart({
+  data,
+  max,
+  color,
+  timestamps,
+  unit = '',
+}: {
+  data: number[];
+  max: number;
+  color: string;
+  timestamps?: number[];
+  unit?: string;
+}) {
+  if (data.length === 0) {
+    return <p className="text-sm text-muted-foreground py-8 text-center">No interval data yet</p>;
+  }
+
   return (
-    <div className="flex items-end gap-0.5 h-24">
-      {data.map((v, i) => (
-        <div key={i} className="flex-1 flex flex-col justify-end items-center group relative">
-          <div
-            className={`w-full rounded-sm ${color} transition-all hover:opacity-80`}
-            style={{ height: `${Math.max((v / max) * 100, 2)}%` }}
-          />
-          <div className="absolute bottom-full mb-1 hidden group-hover:block bg-background border rounded px-1 text-[10px] whitespace-nowrap z-10">
-            {v.toLocaleString()}{timestamps && timestamps[i] != null ? ` @ ${new Date(timestamps[i] * 1000).toLocaleTimeString()}` : ''}
+    <div className="flex items-end gap-0.5 h-32 w-full" role="img" aria-label="Bar chart">
+      {data.map((v, i) => {
+        const pct = max > 0 ? (v / max) * 100 : 0;
+        const heightPct = v > 0 ? Math.max(pct, 3) : 0;
+        return (
+          <div key={i} className="flex-1 h-full min-w-0 flex flex-col justify-end items-center group relative">
+            <div
+              className={`w-full min-h-0 rounded-sm ${color} transition-opacity hover:opacity-80`}
+              style={{ height: `${heightPct}%` }}
+            />
+            <div className="pointer-events-none absolute bottom-full mb-1 hidden group-hover:block bg-popover text-popover-foreground border rounded px-1.5 py-0.5 text-[10px] whitespace-nowrap z-10 shadow-sm">
+              {v.toLocaleString()}{unit}
+              {timestamps && timestamps[i] != null ? ` · ${new Date(timestamps[i] * 1000).toLocaleTimeString()}` : ''}
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

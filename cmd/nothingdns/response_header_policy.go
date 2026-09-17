@@ -17,6 +17,8 @@
 package main
 
 import (
+	"fmt"
+
 	"github.com/nothingdns/nothingdns/internal/protocol"
 	"github.com/nothingdns/nothingdns/internal/server"
 )
@@ -53,6 +55,49 @@ type headerPolicyResponseWriter struct {
 	// wrote reports whether a response was written at all.
 	rcode uint8
 	wrote bool
+
+	// answers is a compact RDATA summary of the last response's answer
+	// section, for the live query stream / query log.
+	answers []string
+}
+
+// maxLoggedAnswers caps how many answer RRs are kept per query event so the
+// in-memory ring buffer stays bounded under large responses (ANY, CNAME chains).
+const maxLoggedAnswers = 8
+
+// maxLoggedAnswerLen caps each answer string; long TXT/RRSIG values otherwise
+// dominate the live-stream payload.
+const maxLoggedAnswerLen = 160
+
+// summarizeAnswers builds compact "TYPE rdata" lines from msg's answer section.
+func summarizeAnswers(msg *protocol.Message) []string {
+	if msg == nil || len(msg.Answers) == 0 {
+		return nil
+	}
+	out := make([]string, 0, min(len(msg.Answers), maxLoggedAnswers+1))
+	for i, rr := range msg.Answers {
+		if i >= maxLoggedAnswers {
+			out = append(out, fmt.Sprintf("+%d more", len(msg.Answers)-maxLoggedAnswers))
+			break
+		}
+		if rr == nil {
+			continue
+		}
+		typeStr := protocol.TypeString(rr.Type)
+		dataStr := ""
+		if rr.Data != nil {
+			dataStr = rr.Data.String()
+			if len(dataStr) > maxLoggedAnswerLen {
+				dataStr = dataStr[:maxLoggedAnswerLen] + "…"
+			}
+		}
+		if dataStr == "" {
+			out = append(out, typeStr)
+			continue
+		}
+		out = append(out, typeStr+" "+dataStr)
+	}
+	return out
 }
 
 // RecursionAllowed reports whether the query this writer answers may use
@@ -110,6 +155,7 @@ func (hw *headerPolicyResponseWriter) Write(msg *protocol.Message) (int, error) 
 		}
 		hw.normalizeOPT(msg)
 		hw.rcode, hw.wrote = msg.Header.Flags.RCODE, true
+		hw.answers = summarizeAnswers(msg)
 	}
 	return hw.inner.Write(msg)
 }
