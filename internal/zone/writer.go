@@ -43,15 +43,32 @@ func WriteZone(z *Zone) (string, error) {
 		b.WriteString("\t)\n\n")
 	}
 
-	// NS records at apex
-	for _, ns := range z.NS {
-		ttl := ns.TTL
+	// NS records at apex. Records is the source of truth: records added or
+	// removed through the API never touch z.NS, and zones loaded from the KV
+	// store have no z.NS at all, so exporting from z.NS dropped every NS.
+	apexNS := 0
+	for _, r := range z.Records[z.Origin] {
+		if strings.ToUpper(r.Type) != "NS" {
+			continue
+		}
+		ttl := r.TTL
 		if ttl == 0 {
 			ttl = z.DefaultTTL
 		}
-		b.WriteString(fmt.Sprintf("@\t%d\tIN\tNS\t%s\n", ttl, ns.NSDName))
+		b.WriteString(fmt.Sprintf("@\t%d\tIN\tNS\t%s\n", ttl, stripZoneControlChars(r.RData)))
+		apexNS++
 	}
-	if len(z.NS) > 0 {
+	if apexNS == 0 {
+		for _, ns := range z.NS {
+			ttl := ns.TTL
+			if ttl == 0 {
+				ttl = z.DefaultTTL
+			}
+			b.WriteString(fmt.Sprintf("@\t%d\tIN\tNS\t%s\n", ttl, ns.NSDName))
+			apexNS++
+		}
+	}
+	if apexNS > 0 {
 		b.WriteString("\n")
 	}
 
@@ -118,10 +135,51 @@ func stripZoneControlChars(s string) string {
 func formatRDataForZone(r Record) string {
 	switch strings.ToUpper(r.Type) {
 	case "TXT", "SPF", "DKIM":
-		return quoteZoneCharacterString(stripZoneControlChars(r.RData))
+		data := stripZoneControlChars(r.RData)
+		// Records added through the API are already in presentation form
+		// ("v=spf1 mx -all"); quoting them again wrote literal quotes into
+		// the value. The zone-file parser stores raw text, which is quoted.
+		if isQuotedCharacterStrings(data) {
+			return data
+		}
+		return quoteZoneCharacterString(data)
 	default:
 		return stripZoneControlChars(r.RData)
 	}
+}
+
+// isQuotedCharacterStrings reports whether s is one or more complete quoted
+// character-strings separated by whitespace, e.g. `"a" "b\"c"`.
+func isQuotedCharacterStrings(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	for s != "" {
+		if s[0] != '"' {
+			return false
+		}
+		i := 1
+		for ; i < len(s); i++ {
+			if s[i] == '\\' {
+				i++
+				continue
+			}
+			if s[i] == '"' {
+				break
+			}
+		}
+		if i >= len(s) {
+			return false // unterminated
+		}
+		s = s[i+1:]
+		trimmed := strings.TrimLeft(s, " \t")
+		if trimmed != "" && len(trimmed) == len(s) {
+			return false // no separator between strings
+		}
+		s = trimmed
+	}
+	return true
 }
 
 func quoteZoneCharacterString(s string) string {
