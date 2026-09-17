@@ -57,27 +57,28 @@ func NewSecurityManager(cfg *config.Config, logger *util.Logger) (*SecurityManag
 		logger.Infof("Blocklist loaded with %d entries from %d files and %d URLs", stats.TotalBlocks, stats.Files, stats.URLs)
 	}
 
-	// Initialize RPZ engine
-	if cfg.RPZ.Enabled {
-		rpzFiles := make([]string, 0, len(cfg.RPZ.Files)+len(cfg.RPZ.Zones))
-		rpzFiles = append(rpzFiles, cfg.RPZ.Files...)
-		policies := make(map[string]int)
-		for _, pz := range cfg.RPZ.Zones {
-			rpzFiles = append(rpzFiles, pz.File)
-			policies[pz.File] = pz.Priority
-		}
-		mgr.result.RPZEngine = rpz.NewEngine(rpz.Config{
-			Enabled:  true,
-			Files:    rpzFiles,
-			Policies: policies,
-			Logger:   logger,
-		})
-		if err := mgr.result.RPZEngine.Load(); err != nil {
-			return nil, fmt.Errorf("loading RPZ zones: %w", err)
-		} else {
-			stats := mgr.result.RPZEngine.Stats()
-			logger.Infof("RPZ engine loaded with %d rules from %d files", stats.TotalRules, stats.Files)
-		}
+	// Initialize RPZ engine. Like the blocklist it always exists — disabled
+	// engines match nothing — so the dashboard/API can enable it and add
+	// rules at runtime. With a nil engine every toggle and rule request
+	// returned 503 "RPZ not available" unless rpz.enabled was set in config.
+	rpzFiles := make([]string, 0, len(cfg.RPZ.Files)+len(cfg.RPZ.Zones))
+	rpzFiles = append(rpzFiles, cfg.RPZ.Files...)
+	policies := make(map[string]int)
+	for _, pz := range cfg.RPZ.Zones {
+		rpzFiles = append(rpzFiles, pz.File)
+		policies[pz.File] = pz.Priority
+	}
+	mgr.result.RPZEngine = rpz.NewEngine(rpz.Config{
+		Enabled:  cfg.RPZ.Enabled,
+		Files:    rpzFiles,
+		Policies: policies,
+		Logger:   logger,
+	})
+	if err := mgr.result.RPZEngine.Load(); err != nil {
+		return nil, fmt.Errorf("loading RPZ zones: %w", err)
+	} else if cfg.RPZ.Enabled {
+		stats := mgr.result.RPZEngine.Stats()
+		logger.Infof("RPZ engine loaded with %d rules from %d files", stats.TotalRules, stats.Files)
 	}
 
 	// Initialize GeoDNS engine
