@@ -190,6 +190,11 @@ func (s *Server) handleCreateZone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if _, err := zone.SOAMailbox(req.AdminEmail, req.Name); err != nil {
+		s.writeError(w, http.StatusBadRequest, sanitizeError(err, "Invalid admin email"))
+		return
+	}
+
 	ttl := req.TTL
 	if ttl == 0 {
 		ttl = 3600
@@ -364,8 +369,10 @@ func (s *Server) handleUpdateRecord(w http.ResponseWriter, r *http.Request, zone
 		Name    string `json:"name"`
 		Type    string `json:"type"`
 		OldData string `json:"old_data"`
-		TTL     uint32 `json:"ttl"`
-		Data    string `json:"data"`
+		// TTL is optional: omitted keeps the record's current TTL, while an
+		// explicit 0 (no caching) is honoured.
+		TTL  *uint32 `json:"ttl"`
+		Data string  `json:"data"`
 	}
 	if !s.decode(w, r, &req) {
 		return
@@ -376,10 +383,20 @@ func (s *Server) handleUpdateRecord(w http.ResponseWriter, r *http.Request, zone
 		return
 	}
 
+	var ttl uint32
+	if req.TTL != nil {
+		ttl = *req.TTL
+	} else if current, ok := s.currentRecordTTL(zoneName, req.Name, req.Type, req.OldData); ok {
+		ttl = current
+	} else {
+		s.writeError(w, http.StatusNotFound, fmt.Sprintf("record not found: %s %s %s", req.Name, req.Type, req.OldData))
+		return
+	}
+
 	newRecord := zone.Record{
 		Name:  req.Name,
 		Type:  req.Type,
-		TTL:   req.TTL,
+		TTL:   ttl,
 		Class: "IN",
 		RData: req.Data,
 	}
@@ -398,6 +415,24 @@ func (s *Server) handleUpdateRecord(w http.ResponseWriter, r *http.Request, zone
 	s.writeJSON(w, http.StatusOK, &MessageResponse{
 		Message: "Record updated",
 	})
+}
+
+// currentRecordTTL returns the TTL of the record an update targets, so an
+// update that omits ttl keeps it instead of resetting it to 0.
+func (s *Server) currentRecordTTL(zoneName, name, rtype, oldData string) (uint32, bool) {
+	if s.zoneManager == nil {
+		return 0, false
+	}
+	records, err := s.zoneManager.GetRecords(zoneName, name)
+	if err != nil {
+		return 0, false
+	}
+	for _, rec := range records {
+		if strings.EqualFold(rec.Type, rtype) && strings.EqualFold(rec.RData, oldData) {
+			return rec.TTL, true
+		}
+	}
+	return 0, false
 }
 
 // handleDeleteRecord deletes a record from a zone.
