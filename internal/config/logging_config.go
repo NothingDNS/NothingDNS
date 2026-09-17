@@ -10,13 +10,14 @@ type LoggingConfig struct {
 	// Log format (json, text)
 	Format string `yaml:"format"`
 
-	// Log output (stdout, stderr, or file path)
+	// Log output: stdout, stderr, or an absolute file path (opened in append
+	// mode; rotate with logrotate copytruncate)
 	Output string `yaml:"output"`
 
 	// Query logging
 	QueryLog bool `yaml:"query_log"`
 
-	// Query log file (if empty, uses Output)
+	// Query log file (absolute path; if empty, query log lines go to stdout)
 	QueryLogFile string `yaml:"query_log_file"`
 }
 

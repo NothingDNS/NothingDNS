@@ -1465,3 +1465,18 @@ func TestValidateACLNetworksAndRedirect(t *testing.T) {
 		t.Fatalf("errors = %v, want the invalid network and the IP redirect target", errs)
 	}
 }
+
+func TestValidateLoggingOutputPaths(t *testing.T) {
+	c := &Config{Logging: LoggingConfig{Level: "info", Format: "json"}}
+	for _, out := range []string{"", "stdout", "stderr", "/var/log/nothingdns/server.log"} {
+		c.Logging.Output = out
+		if errs := c.validateLogging(); len(errs) != 0 {
+			t.Errorf("output %q: unexpected errors %v", out, errs)
+		}
+	}
+	c.Logging.Output = "server.log"
+	c.Logging.QueryLogFile = "logs/query.log"
+	if errs := c.validateLogging(); len(errs) != 2 {
+		t.Errorf("relative paths: errors = %v, want output and query_log_file rejected", errs)
+	}
+}

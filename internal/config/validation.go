@@ -568,6 +568,15 @@ func (c *Config) validateLogging() []string {
 		errors = append(errors, fmt.Sprintf("logging: invalid format '%s' (must be json or text)", c.Logging.Format))
 	}
 
+	switch out := c.Logging.Output; {
+	case out == "" || out == "stdout" || out == "stderr":
+	case !filepath.IsAbs(out):
+		errors = append(errors, fmt.Sprintf("logging: invalid output '%s' (must be stdout, stderr or an absolute file path)", out))
+	}
+	if f := c.Logging.QueryLogFile; f != "" && !filepath.IsAbs(f) {
+		errors = append(errors, fmt.Sprintf("logging: query_log_file '%s' must be an absolute path", f))
+	}
+
 	return errors
 }
 

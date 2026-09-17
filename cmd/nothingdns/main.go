@@ -414,11 +414,17 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 	// Initialize logger
 	level := logLevelFromString(cfg.Logging.Level)
 	format := logFormatFromString(cfg.Logging.Format)
-	var output *os.File = os.Stdout
-	if cfg.Logging.Output == "stderr" {
-		output = os.Stderr
-	}
+	output, closeOutput, outputErr := openLogOutput(cfg.Logging.Output)
+	defer closeOutput()
 	logger := util.NewLogger(level, format, output)
+	// Package-level util.Infof/Warnf callers (API, dashboard, config) must
+	// honour the configured level, format and output too.
+	prevDefaultLogger := util.GetDefaultLogger()
+	util.SetDefaultLogger(logger)
+	defer util.SetDefaultLogger(prevDefaultLogger) // runs before closeOutput
+	if outputErr != nil {
+		logger.Warnf("logging: %v; writing logs to stdout", outputErr)
+	}
 	logger.Infof("Starting %s v%s", Name, util.Version)
 
 	// Initialize cache manager
