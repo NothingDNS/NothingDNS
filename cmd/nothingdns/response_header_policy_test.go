@@ -3,6 +3,7 @@ package main
 import (
 	"testing"
 
+	"github.com/nothingdns/nothingdns/internal/cache"
 	"github.com/nothingdns/nothingdns/internal/protocol"
 	"github.com/nothingdns/nothingdns/internal/zone"
 )
@@ -105,4 +106,96 @@ func TestResponseHeader_RAReflectsRecursionSupport(t *testing.T) {
 			t.Error("RA set on the authoritative-only REFUSED response")
 		}
 	})
+}
+
+// The query log and dashboard record the RCODE actually sent when no stage
+// set one explicitly; an explicit (possibly extended) RCODE wins.
+func TestQueryResponseRcode(t *testing.T) {
+	q := &query{}
+	if _, ok := q.responseRcode(); ok {
+		t.Error("no response written: rcode must be unknown")
+	}
+
+	hw := newHeaderPolicyWriter(nil, newCaptureWriter("192.0.2.1", "udp"), nil).(*headerPolicyResponseWriter)
+	q.policyWriter = hw
+	resp := &protocol.Message{Header: protocol.Header{Flags: protocol.NewResponseFlags(protocol.RcodeNameError)}}
+	if _, err := hw.Write(resp); err != nil {
+		t.Fatal(err)
+	}
+	if rcode, ok := q.responseRcode(); !ok || rcode != protocol.RcodeNameError {
+		t.Errorf("rcode = %d, %v; want NXDOMAIN from the written response", rcode, ok)
+	}
+
+	q.rcode, q.rcodeSet = protocol.RcodeBadVers, true
+	if rcode, _ := q.responseRcode(); rcode != protocol.RcodeBadVers {
+		t.Errorf("rcode = %d; want the explicitly set BADVERS", rcode)
+	}
+}
+
+// Responses carry an OPT record only for EDNS requests, with the request's
+// DO bit and this server's payload size; recursive answers used to pass the
+// upstream's OPT (DO=1, udp 512) straight through.
+func TestHeaderPolicyWriterNormalizesOPT(t *testing.T) {
+	upstreamOPT := func() *protocol.ResourceRecord {
+		return &protocol.ResourceRecord{
+			Name: protocol.NewName([]string{}, true), Type: protocol.TypeOPT, Class: 512,
+			TTL: protocol.BuildEDNSTTL(0, 0, true, 0), Data: &protocol.RDataOPT{},
+		}
+	}
+	request := func(edns, do bool) *protocol.Message {
+		req := &protocol.Message{}
+		if edns {
+			req.SetEDNS0(1232, do)
+		}
+		return req
+	}
+	write := func(req *protocol.Message, resp *protocol.Message) *protocol.Message {
+		cw := newCaptureWriter("192.0.2.1", "udp")
+		if _, err := newHeaderPolicyWriter(nil, cw, req).Write(resp); err != nil {
+			t.Fatal(err)
+		}
+		return cw.msg
+	}
+
+	shared := upstreamOPT()
+	got := write(request(true, false), &protocol.Message{Additionals: []*protocol.ResourceRecord{shared}})
+	opt := got.GetOPT()
+	if opt == nil || hasDOBit(got) || opt.Class != ednsResponsePayloadSize {
+		t.Fatalf("EDNS request without DO: OPT = %+v, want DO=0 udp=%d", opt, ednsResponsePayloadSize)
+	}
+	if shared.TTL&0x8000 == 0 || shared.Class != 512 {
+		t.Fatal("the original (possibly cached) OPT record must not be modified")
+	}
+
+	got = write(request(true, true), &protocol.Message{Additionals: []*protocol.ResourceRecord{upstreamOPT()}})
+	if !hasDOBit(got) {
+		t.Fatal("DO must be echoed when the request set it")
+	}
+
+	got = write(request(false, false), &protocol.Message{Additionals: []*protocol.ResourceRecord{upstreamOPT()}})
+	if got.GetOPT() != nil {
+		t.Fatal("a non-EDNS request must not get an OPT record")
+	}
+
+	got = write(request(true, true), &protocol.Message{})
+	if got.GetOPT() == nil || !hasDOBit(got) {
+		t.Fatal("an EDNS request must get an OPT record even when the answer had none")
+	}
+}
+
+// Local zones must win over recursively cached data. A cached upstream
+// NXDOMAIN for a name inside a local zone (e.g. the root proving ".test" or
+// ".lan" does not exist) used to be served before the zone lookup, hiding the
+// zone from every client allowed recursion.
+func TestLocalZoneWinsOverCachedNegativeAnswer(t *testing.T) {
+	h := headerEchoHandler(t)
+	h.cache.SetNegativeWithTTL(cache.MakeKey("www.example.com.", protocol.TypeA, false), protocol.RcodeNameError, 300)
+
+	resp := serveOne(t, h, newTestQuery(t, "www.example.com.", protocol.TypeA))
+	if resp == nil {
+		t.Fatal("no response")
+	}
+	if resp.Header.Flags.RCODE != protocol.RcodeSuccess || len(resp.Answers) != 1 || !resp.Header.Flags.AA {
+		t.Fatalf("rcode=%d answers=%d aa=%v, want the authoritative A record", resp.Header.Flags.RCODE, len(resp.Answers), resp.Header.Flags.AA)
+	}
 }

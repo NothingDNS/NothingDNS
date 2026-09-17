@@ -42,6 +42,13 @@ type headerPolicyResponseWriter struct {
 	// (allow_recursion). Its responses must not advertise RA either.
 	recursionDenied bool
 
+	// EDNS state of the request. Responses carry an OPT record only when the
+	// request did (RFC 6891 §7), with the request's DO bit (RFC 3225 §3) and
+	// this server's UDP payload size — not the upstream's, which recursive
+	// answers used to pass through verbatim.
+	reqOPT bool
+	reqDO  bool
+
 	// rcode is the RCODE of the last response written, for the query log;
 	// wrote reports whether a response was written at all.
 	rcode uint8
@@ -101,9 +108,52 @@ func (hw *headerPolicyResponseWriter) Write(msg *protocol.Message) (int, error) 
 		if !hw.RecursionAllowed() {
 			msg.Header.Flags.RA = false
 		}
+		hw.normalizeOPT(msg)
 		hw.rcode, hw.wrote = msg.Header.Flags.RCODE, true
 	}
 	return hw.inner.Write(msg)
+}
+
+// normalizeOPT applies the request's EDNS state to msg's OPT record. The OPT
+// record is replaced, never modified in place: responses may share records
+// with the cache.
+func (hw *headerPolicyResponseWriter) normalizeOPT(msg *protocol.Message) {
+	idx := -1
+	for i, rr := range msg.Additionals {
+		if rr != nil && rr.Type == protocol.TypeOPT {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		if hw.reqOPT {
+			additionals := make([]*protocol.ResourceRecord, 0, len(msg.Additionals)+1)
+			additionals = append(additionals, msg.Additionals...)
+			msg.Additionals = append(additionals, &protocol.ResourceRecord{
+				Name:  protocol.NewName([]string{}, true),
+				Type:  protocol.TypeOPT,
+				Class: ednsResponsePayloadSize,
+				TTL:   protocol.BuildEDNSTTL(0, 0, hw.reqDO, 0),
+				Data:  &protocol.RDataOPT{},
+			})
+		}
+		return
+	}
+	opt := msg.Additionals[idx]
+	additionals := make([]*protocol.ResourceRecord, 0, len(msg.Additionals))
+	additionals = append(additionals, msg.Additionals[:idx]...)
+	if hw.reqOPT {
+		ttl := opt.TTL &^ 0x8000
+		if hw.reqDO {
+			ttl |= 0x8000
+		}
+		normalized := *opt
+		normalized.TTL = ttl
+		normalized.Class = ednsResponsePayloadSize
+		additionals = append(additionals, &normalized)
+	}
+	additionals = append(additionals, msg.Additionals[idx+1:]...)
+	msg.Additionals = additionals
 }
 
 // ClientInfo delegates to the inner writer.
@@ -130,6 +180,8 @@ func newHeaderPolicyWriter(h *integratedHandler, w server.ResponseWriter, req *p
 		hw.opcode = req.Header.Flags.Opcode
 		hw.rd = req.Header.Flags.RD
 		hw.cd = req.Header.Flags.CD
+		hw.reqOPT = req.GetOPT() != nil
+		hw.reqDO = hasDOBit(req)
 	}
 	return hw
 }
