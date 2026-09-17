@@ -60,7 +60,7 @@ func TestClusterIntegration_RPCTLSListener(t *testing.T) {
 	}
 	defer ci.Stop()
 
-	deadline := time.Now().Add(4 * time.Second)
+	deadline := time.Now().Add(10 * time.Second) // randomized 1s+ election timeout
 	for !ci.IsLeader() {
 		if time.Now().After(deadline) {
 			t.Fatal("node did not become leader over TLS RPC listener")

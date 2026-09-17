@@ -3752,7 +3752,10 @@ func TestCluster_LeadershipUsesRaftWhenGossipNil(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
+	// The election timeout starts at 1s and is randomized, so a single node
+	// can take about 2s to elect itself; leave ample headroom for loaded CI
+	// runners (the loop exits as soon as the node is leader).
+	deadline := time.Now().Add(10 * time.Second)
 	for !ci.IsLeader() && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}

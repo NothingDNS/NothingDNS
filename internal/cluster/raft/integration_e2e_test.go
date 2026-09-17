@@ -34,8 +34,9 @@ func TestClusterIntegration_ProposeAppliesViaHook(t *testing.T) {
 	}
 	defer ci.Stop()
 
-	// Single node with no peers becomes leader on its own.
-	deadline := time.Now().Add(4 * time.Second)
+	// Single node with no peers becomes leader on its own (randomized 1s+
+	// election timeout; generous deadline for loaded CI runners).
+	deadline := time.Now().Add(10 * time.Second)
 	for !ci.IsLeader() {
 		if time.Now().After(deadline) {
 			t.Fatal("node did not become leader")
