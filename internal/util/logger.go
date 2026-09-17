@@ -90,6 +90,13 @@ func (l *Logger) SetLevel(level LogLevel) {
 	l.level = level
 }
 
+// Level returns the current minimum log level.
+func (l *Logger) Level() LogLevel {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.level
+}
+
 // SetFormat sets the log output format.
 func (l *Logger) SetFormat(format LogFormat) {
 	l.mu.Lock()

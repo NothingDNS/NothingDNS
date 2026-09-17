@@ -71,6 +71,12 @@ func (s *Server) handleConfigGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	publicCfg["Version"] = util.Version
+	// PUT /api/v1/config/logging changes the level at runtime only; report the
+	// level in effect, not the one in the config file, or the dashboard shows
+	// a stale value and cannot switch back to it.
+	if logging, ok := publicCfg["Logging"].(map[string]any); ok {
+		logging["Level"] = strings.ToLower(util.GetDefaultLogger().Level().String())
+	}
 
 	// Redact sensitive fields. These structs carry only yaml tags (no json
 	// tags), so they serialize under their Go field names — redact by those.

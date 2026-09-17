@@ -160,7 +160,7 @@ func (s *Server) handleQueryLog(w http.ResponseWriter, r *http.Request) {
 	}
 
 	stats := dashboardServer.GetStats()
-	queries, total := stats.GetRecentQueriesFiltered(offset, limit, filter)
+	queries, total := stats.GetRecentQueriesNewestFirst(offset, limit, filter)
 
 	// Redact client IPs for non-admin operators (LOW-010)
 	isAdmin := hasRole(r.Context(), nil, auth.RoleAdmin)

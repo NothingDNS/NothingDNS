@@ -52,6 +52,9 @@ the API over TLS, replace the scheme with `https`.
   [Roles](#roles-and-what-they-can-do).
 - **Unknown methods.** Unsupported methods return `405`. Most handlers also set
   an `Allow` header listing the accepted methods.
+- **Unknown paths.** Any other path under `/api/` returns
+  `404 {"error":"Not found"}` (after authentication); only non-API paths serve
+  the dashboard.
 - **Timestamps.** RFC 3339. Some fields use UTC (`Z`), others the server's
   local offset (for example login `expires`, RPZ `last_reload`).
 - **Persistence.** Unless a section says otherwise, runtime changes are held in
@@ -193,7 +196,7 @@ and static dashboard assets.
 
 | Role | Access |
 |---|---|
-| `viewer` | `GET /api/v1/status` (basic fields only), `POST /api/v1/auth/logout`, `/api/openapi.json`, `/api/docs`, and the `/ws` live query stream. Every other management endpoint returns 403. |
+| `viewer` | `GET /api/v1/status` (basic fields only), `POST /api/v1/auth/logout`, `/api/openapi.json`, `/api/docs`, and the `/ws` live query stream (client IPs masked). Every other management endpoint returns 403. In the dashboard a viewer sees only the Dashboard live stream and About. |
 | `operator` | All read endpoints; zone and record changes (create, edit, delete, bulk PTR). |
 | `admin` | Everything, including users, ACL/recursion, cache flush and cache/RRL/logging settings, config reload, zone reload, blocklist and RPZ changes, upstream changes, DNSSEC keys, cluster join/leave. Only admins see unmasked client IPs in `/api/v1/queries`. |
 
@@ -482,7 +485,7 @@ Operator or admin:
 {
   "status": "running",
   "timestamp": "2026-09-16T17:07:00Z",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "cache": {"size": 0, "capacity": 10000, "hits": 0, "misses": 0, "hit_ratio": 0},
   "cluster": {"enabled": false}
 }
@@ -491,7 +494,7 @@ Operator or admin:
 Viewer:
 
 ```json
-{"status":"running","timestamp":"2026-09-16T17:07:10Z","version":"1.2.0","cluster":{"enabled":false}}
+{"status":"running","timestamp":"2026-09-16T17:07:10Z","version":"1.2.1","cluster":{"enabled":false}}
 ```
 
 With clustering enabled, `cluster` also carries `node_id`, `node_count`,
@@ -503,7 +506,7 @@ Role: operator. A short summary of selected settings.
 
 ```json
 {
-  "version": "1.2.0",
+  "version": "1.2.1",
   "listen_port": 5399,
   "log_level": "info",
   "dns64": {"enabled": false, "prefix": "64:ff9b::", "prefix_len": 96},
@@ -612,6 +615,9 @@ curl -s http://127.0.0.1:8080/api/v1/config -H "Authorization: Bearer $TOKEN" | 
 {"DefaultTTL":3600,"Enabled":true,"MaxTTL":86400,"MinTTL":300,"NegativeTTL":60,
  "Prefetch":true,"PrefetchThreshold":60,"ServeStale":true,"Size":10000,"StaleGraceSecs":604800}
 ```
+
+`Logging.Level` is the level in effect, which `PUT /api/v1/config/logging` may
+have changed at runtime; the other fields are the loaded config file.
 
 `503 {"error":"Config not available"}` if the server has no config getter.
 
@@ -979,9 +985,10 @@ returns 405.
 
 ## 11. RPZ
 
-Response Policy Zones must be enabled in the config (`rpz.enabled: true`).
-When disabled, `GET /api/v1/rpz` and `GET /api/v1/rpz/rules` return empty
-results and the write endpoints return `503 {"error":"RPZ not available"}`.
+The RPZ engine always exists. With `rpz.enabled: false` it starts disabled
+and matches nothing; `POST /api/v1/rpz/toggle` enables it at runtime and rules
+can be added before or after that. `rpz.enabled`, `rpz.files` and `rpz.zones`
+in the config decide the state and the file-backed rules at startup.
 
 ### GET /api/v1/rpz
 
@@ -1033,7 +1040,7 @@ restart.
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `pattern` | string | yes | Domain; lowercased. Wildcards such as `*.example.com` follow RPZ file syntax. |
+| `pattern` | string | yes | Domain; lowercased and stored without the trailing dot (`bad.example.` and `bad.example` are the same rule). Wildcards such as `*.example.com` follow RPZ file syntax. |
 | `action` | string | no | `NXDOMAIN`, `NODATA`, `CNAME`, `OVERRIDE`, `DROP`, `PASSTHROUGH`, `TCPONLY` (case-insensitive). **Missing or unknown values become `NXDOMAIN`.** |
 | `override_data` | string | no | Target for `CNAME`/`OVERRIDE` |
 
@@ -1117,19 +1124,24 @@ material is never returned.
 
 ### GET /api/v1/upstreams
 
-Role: operator. Aggregate counters, not a per-server list.
+Role: operator. Aggregate counters in `upstreams` and each configured server
+in `servers`.
 
 ```bash
 curl -s http://127.0.0.1:8080/api/v1/upstreams -H "Authorization: Bearer $TOKEN"
 ```
 
 ```json
-{"upstreams":[{"address":"direct-upstream","healthy":true,"queries":0,"failed":0,"failovers":0}]}
+{"upstreams":[{"address":"direct-upstream","healthy":true,"queries":30,"failed":0,"failovers":0}],
+ "servers":[{"address":"1.1.1.1:53","healthy":true,"latency_ms":21.4},
+            {"address":"8.8.8.8:53","healthy":true,"latency_ms":38.9}]}
 ```
 
-The array has an entry with `address: "load-balancer"` when a load balancer is
-configured and an entry `"direct-upstream"` for the upstream client. With
-neither, `upstreams` is `null`.
+`upstreams` has an entry with `address: "load-balancer"` when a load balancer is
+configured and an entry `"direct-upstream"` with the upstream client's totals.
+With neither, `upstreams` is `null`. `servers` lists the upstream client's
+servers (empty without one); `latency_ms` is the last successful query's round
+trip, 0 before the first one.
 
 ### PUT /api/v1/upstreams
 
@@ -1329,7 +1341,8 @@ owner names, not the number of records (use `GET /api/v1/zones` for that).
 
 ### GET /api/v1/queries
 
-Role: operator. Paginated query log.
+Role: operator. Paginated query log, newest first (the server keeps the last
+100 events).
 
 | Query parameter | Default | Notes |
 |---|---|---|

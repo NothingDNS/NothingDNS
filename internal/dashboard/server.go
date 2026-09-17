@@ -188,6 +188,37 @@ func (ds *DashboardStats) GetRecentQueriesFiltered(offset, limit int, filter str
 	return cloneQueryEvents(matched[offset:end]), total
 }
 
+// GetRecentQueriesNewestFirst is GetRecentQueriesFiltered with the newest
+// query first, which is how the paginated query log is read: page 1 holds the
+// latest activity.
+func (ds *DashboardStats) GetRecentQueriesNewestFirst(offset, limit int, filter string) ([]*QueryEvent, int) {
+	if offset < 0 || limit <= 0 {
+		return nil, 0
+	}
+
+	ds.mu.RLock()
+	defer ds.mu.RUnlock()
+
+	needle := strings.ToLower(filter)
+	matched := make([]*QueryEvent, 0, len(ds.RecentQueries))
+	for i := len(ds.RecentQueries) - 1; i >= 0; i-- {
+		q := ds.RecentQueries[i]
+		if q != nil && (needle == "" || strings.Contains(strings.ToLower(q.Domain), needle)) {
+			matched = append(matched, q)
+		}
+	}
+
+	total := len(matched)
+	if offset >= total {
+		return nil, total
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	return cloneQueryEvents(matched[offset:end]), total
+}
+
 // TopDomainsEntry represents a domain with its query count.
 type TopDomainsEntry struct {
 	Domain string `json:"domain"`
