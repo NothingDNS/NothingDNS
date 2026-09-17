@@ -127,11 +127,15 @@ func (zs *ZoneStore) LoadZone(origin string) (ZoneMeta, map[string][]StoredRecor
 			return fmt.Errorf("decode meta: %w", err)
 		}
 
-		// Load all record sets
-		metaPrefix := []byte("_")
+		// Load all record sets. Only the exact metadata key is skipped:
+		// owner names such as _sip._tcp.example.com. or _dmarc.example.com.
+		// also start with "_", and skipping by prefix silently dropped them
+		// on every restart. Owner keys are absolute names ending in ".", so
+		// they cannot collide with "_meta".
+		metaKey := []byte("_meta")
 		if err := zoneBucket.ForEach(func(k, v []byte) error {
-			if bytes.HasPrefix(k, metaPrefix) {
-				return nil // skip metadata keys
+			if bytes.Equal(k, metaKey) {
+				return nil
 			}
 			recs, err := decodeRecords(v)
 			if err != nil {
