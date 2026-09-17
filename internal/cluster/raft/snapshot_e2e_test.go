@@ -108,32 +108,55 @@ func TestSnapshot_FreshFollowerGetsFullStateViaInstallSnapshot(t *testing.T) {
 		}
 	}
 
-	// Wait for a leader.
+	// Wait for a leader and commit a record through it. An early election can
+	// still be settling (a split vote or a stepped-down leader), so retry
+	// against whichever node currently leads.
+	const diskKey = "example.com.|disk|A"
 	var leader *ClusterIntegration
 	var leaderID NodeID
-	deadline := time.Now().Add(8 * time.Second)
-	for leader == nil && time.Now().Before(deadline) {
+	var proposeErr error
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		leader = nil
 		for _, id := range ids {
 			if cis[id].IsLeader() {
 				leader, leaderID = cis[id], id
 			}
 		}
-		time.Sleep(20 * time.Millisecond)
+		if leader == nil {
+			time.Sleep(20 * time.Millisecond)
+			continue
+		}
+
+		// 1) A zone that exists on the leader but NEVER went through Raft (as
+		//    if loaded from disk at boot) — present ONLY on the leader's store.
+		stores[leaderID].putRaw(diskKey, "192.0.2.9")
+
+		// 2) A normal record via Raft so the applied index advances.
+		proposeErr = leader.ProposeZoneChangeWait(ZoneCommand{
+			Type: "add_record", Zone: "example.com.", Name: "www", RRTypeStr: "A", RData: []string{"192.0.2.10"},
+		}, 5*time.Second)
+		if proposeErr == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 	if leader == nil {
 		t.Fatal("no leader elected")
 	}
-
-	// 1) A zone that exists on the leader but NEVER went through Raft (as if
-	//    loaded from disk at boot) — present ONLY on the leader's store.
-	const diskKey = "example.com.|disk|A"
-	stores[leaderID].putRaw(diskKey, "192.0.2.9")
-
-	// 2) A normal record via Raft so the applied index advances.
-	if err := leader.ProposeZoneChangeWait(ZoneCommand{
-		Type: "add_record", Zone: "example.com.", Name: "www", RRTypeStr: "A", RData: []string{"192.0.2.10"},
-	}, 5*time.Second); err != nil {
-		t.Fatalf("propose: %v", err)
+	if proposeErr != nil {
+		t.Fatalf("propose: %v", proposeErr)
+	}
+	// A retry may have seeded the disk-only key on a node that lost the lead;
+	// it must exist only on the final leader so the follower can get it
+	// solely through InstallSnapshot.
+	for _, id := range ids {
+		if id != leaderID {
+			st := stores[id]
+			st.mu.Lock()
+			delete(st.m, diskKey)
+			st.mu.Unlock()
+		}
 	}
 
 	// 3) Snapshot (captures disk zone + applied record) and compact the log.
