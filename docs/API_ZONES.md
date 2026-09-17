@@ -537,8 +537,8 @@ Send the same body with `"preview": false` (or without `preview`).
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `cidr` | string | **Yes** | IPv4 CIDR, at most 65536 addresses (/16). The network must lie inside the reverse zone (for a /24 zone the prefix must be /24 or longer and match the zone's octets). Every address in the range is processed, including network and broadcast addresses. |
-| `pattern` | string | **Yes** | Up to 255 characters; must contain `[A]`, `[B]`, `[C]` and `[D]`. The result is used as PTR target and, with `addA`, as the A record owner. End it with a dot to make it absolute. |
-| `addA` | bool | No | Also create forward A records named by the pattern. The A records are added to **this reverse zone** (as absolute owner names), not to the forward zone. |
+| `pattern` | string | **Yes** | Up to 255 characters; must contain `[A]`, `[B]`, `[C]` and `[D]`. The result is a host name, always treated as absolute (a missing trailing dot is added), used as PTR target and, with `addA`, as the A record owner. A result that is not a valid DNS name is rejected with 400. |
+| `addA` | bool | No | Also create forward A records named by the pattern. Each A record is added to the most specific loaded zone that contains the name (e.g. `example.com.` for `host-1.example.com.`). If no loaded zone contains a generated name, the request (preview included) fails with 400 and nothing is written. |
 | `override` | bool | No | Replace existing PTR (and A) records instead of skipping them |
 | `preview` | bool | No | Only report what would change |
 
@@ -561,6 +561,7 @@ Created records have TTL 3600.
       "ip": "192.0.2.1",
       "ptrName": "host-192-0-2-1.example.com.",
       "aName": "host-192-0-2-1.example.com.",
+      "aZone": "example.com.",
       "action": "add",
       "ptrExist": false,
       "revRecord": "1"
@@ -575,7 +576,7 @@ Created records have TTL 3600.
 | `changes[].ptrName` | Generated name (PTR target) |
 | `changes[].revRecord` | PTR owner name relative to the zone (`1` for `1.2.0.192.in-addr.arpa.`) |
 | `changes[].oldPtr`, `oldA` | Existing values, when present |
-| `changes[].aName`, `aExist` | Present only with `addA` |
+| `changes[].aName`, `aZone`, `aExist` | Present only with `addA`; `aZone` is the forward zone that receives the A record |
 | `willOverride` | Counts both PTR and A overrides |
 
 ### Apply response
@@ -609,6 +610,8 @@ Created records have TTL 3600.
 | `400` | `Only IPv4 CIDR is supported` | IPv6 range |
 | `400` | `CIDR too large (max /16)` | More than 65536 addresses |
 | `400` | `Pattern must contain [A], [B], [C], [D] placeholders` | Placeholder missing |
+| `400` | `Pattern produces an invalid host name "..."` | Generated name is not a valid DNS name |
+| `400` | `No zone is authoritative for ...; create the forward zone before adding A records` | `addA` with a name outside every loaded zone |
 | `400` | `zone ... is not a reverse DNS zone (.in-addr.arpa)` | Not a reverse zone |
 | `400` | `CIDR network 198.51.100.0 does not belong to reverse zone 2.0.192.in-addr.arpa.` | Range outside the zone |
 | `400` | `CIDR prefix /16 is too small for zone ... (minimum /24)` | Range wider than the zone |

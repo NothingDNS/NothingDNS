@@ -38,6 +38,13 @@ func (s *Server) IsHealthy() bool {
 	return s.healthy
 }
 
+// Latency returns the round-trip time of the last successful query.
+func (s *Server) Latency() time.Duration {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.latency
+}
+
 func (s *Server) snapshot() *Server {
 	if s == nil {
 		return nil

@@ -12,7 +12,7 @@ const OpenAPISpec = `{
   "info": {
     "title": "NothingDNS API",
     "description": "REST API for NothingDNS server management. See docs/API_REFERENCE.md for the full guide. Every operation carries x-required-role (viewer < operator < admin). DNS transports (DoH, DoWS, ODoH) and the /ws dashboard stream are described in the guide.",
-    "version": "1.2.0",
+    "version": "1.2.1",
     "contact": {
       "name": "ECOSTACK TECHNOLOGY OÜ"
     },
@@ -375,13 +375,14 @@ const OpenAPISpec = `{
             "type": "string",
             "maxLength": 255,
             "example": "host-[A]-[B]-[C]-[D].example.com.",
-            "description": "Must contain [A], [B], [C] and [D]"
+            "description": "Must contain [A], [B], [C] and [D]; the result is an absolute host name"
           },
           "override": {
             "type": "boolean"
           },
           "addA": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "Also add A records in the loaded forward zone that contains each generated name"
           },
           "preview": {
             "type": "boolean"
@@ -426,6 +427,10 @@ const OpenAPISpec = `{
                 },
                 "aName": {
                   "type": "string"
+                },
+                "aZone": {
+                  "type": "string",
+                  "description": "Forward zone that receives the A record"
                 },
                 "action": {
                   "type": "string",
@@ -1388,6 +1393,25 @@ const OpenAPISpec = `{
                 },
                 "failovers": {
                   "type": "integer"
+                }
+              }
+            }
+          },
+          "servers": {
+            "type": "array",
+            "description": "Each configured upstream server with its health and last query latency",
+            "items": {
+              "type": "object",
+              "properties": {
+                "address": {
+                  "type": "string",
+                  "example": "1.1.1.1:53"
+                },
+                "healthy": {
+                  "type": "boolean"
+                },
+                "latency_ms": {
+                  "type": "number"
                 }
               }
             }

@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/nothingdns/nothingdns/internal/protocol"
 	"github.com/nothingdns/nothingdns/internal/util"
 	"github.com/nothingdns/nothingdns/internal/zone"
 )
@@ -560,7 +561,7 @@ func (s *Server) handleBulkPTR(w http.ResponseWriter, r *http.Request, zoneName 
 
 	// Analyze existing records (thread-safe, no explicit lock needed)
 	existingPTR := z.RecordsByType("PTR")
-	existingA := z.RecordsByType("A")
+	existingAByZone := map[string][]zone.Record{}
 
 	changes := make([]ReverseDNSChange, 0, numIPs)
 	add, addA, skip, override, overrideA := 0, 0, 0, 0, 0
@@ -578,6 +579,32 @@ func (s *Server) handleBulkPTR(w http.ResponseWriter, r *http.Request, zoneName 
 				"[B]", fmt.Sprintf("%d", b)),
 			"[C]", fmt.Sprintf("%d", c)),
 			"[D]", fmt.Sprintf("%d", d))
+		// Pattern names are host names, not names relative to the reverse
+		// zone: without the trailing dot "host-1.example.com" was stored as
+		// "host-1.example.com.2.0.192.in-addr.arpa.".
+		ptrName = strings.ToLower(ptrName)
+		if !strings.HasSuffix(ptrName, ".") {
+			ptrName += "."
+		}
+		if _, err := protocol.ParseName(ptrName); err != nil {
+			s.writeError(w, http.StatusBadRequest, fmt.Sprintf("Pattern produces an invalid host name %q", ptrName))
+			return
+		}
+
+		// A records belong in the forward zone that is authoritative for
+		// the host name.
+		var aZone string
+		if req.AddA {
+			fz, ok := s.closestZone(ptrName)
+			if !ok {
+				s.writeError(w, http.StatusBadRequest, fmt.Sprintf("No zone is authoritative for %s; create the forward zone before adding A records", ptrName))
+				return
+			}
+			aZone = fz.GetOrigin()
+			if _, seen := existingAByZone[aZone]; !seen {
+				existingAByZone[aZone] = fz.RecordsByType("A")
+			}
+		}
 
 		// Compute relative PTR record name within the zone
 		revRecord := reverseIPv4Relative(ip.String(), zoneOrigin, ones)
@@ -597,8 +624,8 @@ func (s *Server) handleBulkPTR(w http.ResponseWriter, r *http.Request, zoneName 
 		var oldA string
 		aExist := false
 		if req.AddA {
-			for _, rec := range existingA {
-				if bulkPTROwnerMatches(rec.Name, ptrName, zoneOrigin) {
+			for _, rec := range existingAByZone[aZone] {
+				if bulkPTROwnerMatches(rec.Name, ptrName, aZone) {
 					aExist = true
 					oldA = rec.RData
 					break
@@ -628,6 +655,7 @@ func (s *Server) handleBulkPTR(w http.ResponseWriter, r *http.Request, zoneName 
 
 		if req.AddA {
 			ch.AName = ptrName
+			ch.AZone = aZone
 			ch.AExist = aExist
 			if aExist && !req.Override {
 				ch.OldA = oldA
@@ -695,7 +723,7 @@ func (s *Server) handleBulkPTR(w http.ResponseWriter, r *http.Request, zoneName 
 					existsA++
 					continue
 				}
-				if err := s.zoneManager.DeleteRecord(zoneName, ch.AName, "A"); err != nil {
+				if err := s.zoneManager.DeleteRecord(ch.AZone, ch.AName, "A"); err != nil {
 					s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to delete existing A record: %v", err))
 					return
 				}
@@ -707,7 +735,7 @@ func (s *Server) handleBulkPTR(w http.ResponseWriter, r *http.Request, zoneName 
 				TTL:   3600,
 				RData: ch.IP,
 			}
-			err := s.zoneManager.AddRecord(zoneName, aRec)
+			err := s.zoneManager.AddRecord(ch.AZone, aRec)
 			if err == nil {
 				addedA++
 			} else {
@@ -727,6 +755,21 @@ func (s *Server) handleBulkPTR(w http.ResponseWriter, r *http.Request, zoneName 
 		ExistsA: existsA,
 		Skipped: skipped,
 	})
+}
+
+// closestZone returns the most specific loaded zone that contains name.
+func (s *Server) closestZone(name string) (*zone.Zone, bool) {
+	name = strings.ToLower(strings.TrimSuffix(name, "."))
+	for {
+		if z, ok := s.zoneManager.Get(name + "."); ok {
+			return z, true
+		}
+		i := strings.IndexByte(name, '.')
+		if i < 0 {
+			return nil, false
+		}
+		name = name[i+1:]
+	}
 }
 
 func bulkPTROwnerMatches(recordName, owner, zoneOrigin string) bool {

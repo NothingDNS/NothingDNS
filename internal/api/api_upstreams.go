@@ -45,7 +45,17 @@ func (s *Server) handleUpstreams(w http.ResponseWriter, r *http.Request) {
 				Failed:  failed,
 			})
 		}
-		s.writeJSON(w, http.StatusOK, &UpstreamsResponse{Upstreams: upstreams})
+		servers := []UpstreamServerStatus{}
+		if upstreamClient != nil {
+			for _, srv := range upstreamClient.Servers() {
+				servers = append(servers, UpstreamServerStatus{
+					Address:   srv.Address,
+					Healthy:   srv.IsHealthy(),
+					LatencyMs: float64(srv.Latency().Microseconds()) / 1000,
+				})
+			}
+		}
+		s.writeJSON(w, http.StatusOK, &UpstreamsResponse{Upstreams: upstreams, Servers: servers})
 	case http.MethodPut:
 		// Swapping the upstream lets an operator MITM every recursive query
 		// served by this resolver — admin-only (VULN-009).

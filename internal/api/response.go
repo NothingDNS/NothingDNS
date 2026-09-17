@@ -237,9 +237,17 @@ type UpstreamStatus struct {
 	Failovers uint64 `json:"failovers"`
 }
 
+// UpstreamServerStatus is the health of one configured upstream server.
+type UpstreamServerStatus struct {
+	Address   string  `json:"address"`
+	Healthy   bool    `json:"healthy"`
+	LatencyMs float64 `json:"latency_ms"`
+}
+
 // UpstreamsResponse is returned by GET /api/v1/upstreams.
 type UpstreamsResponse struct {
-	Upstreams []UpstreamStatus `json:"upstreams"`
+	Upstreams []UpstreamStatus       `json:"upstreams"`
+	Servers   []UpstreamServerStatus `json:"servers"`
 }
 
 // UpstreamUpdateRequest is used to add/remove upstream servers.
@@ -484,7 +492,8 @@ type ReverseDNSChange struct {
 	IP        string `json:"ip"`
 	PTRName   string `json:"ptrName"`
 	AName     string `json:"aName,omitempty"`
-	Action    string `json:"action"` // add, override, skip
+	AZone     string `json:"aZone,omitempty"` // forward zone that receives the A record
+	Action    string `json:"action"`          // add, override, skip
 	PTRExist  bool   `json:"ptrExist"`
 	AExist    bool   `json:"aExist,omitempty"`
 	OldPTR    string `json:"oldPtr,omitempty"`
