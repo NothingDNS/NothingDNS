@@ -73,8 +73,18 @@ sudo journalctl -u nothingdns --since "10 min ago" -p warning
 sudo tail -f /var/log/nothingdns/server.log      # setup.sh / deploy/nothingdns.service
 docker logs -f nothingdns                        # Docker
 ```
-Set `logging.level: debug` and reload (`sudo systemctl reload nothingdns`) for
-per-query detail.
+With `install.sh`, server logs go to the systemd journal, so
+`/var/log/nothingdns/` stays empty until you enable one of the file logs:
+```yaml
+logging:
+  output: /var/log/nothingdns/server.log   # server log to a file instead of the journal
+  query_log: true                          # one line per query
+  query_log_file: /var/log/nothingdns/query.log
+```
+Restart after changing `logging` (`sudo systemctl restart nothingdns`). Paths
+must be absolute and under `/var/log/nothingdns` (the unit only allows writes
+there). The logrotate rule rotates `*.log` there with `copytruncate`.
+Set `logging.level: debug` for more detail.
 
 ### Docker Port Binding Fails
 

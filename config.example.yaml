@@ -478,10 +478,12 @@ logging:
   # Log format: text, json
   format: json
 
-  # Log output: stdout, stderr, file
+  # Log output: stdout, stderr or an absolute file path. Under systemd,
+  # stdout goes to the journal: journalctl -u nothingdns
   output: stdout
 
-  # Query logging (for audit)
+  # Per-query log (client, name, type, rcode, latency, cache) written to
+  # query_log_file; off by default
   query_log: false
   query_log_file: /var/log/nothingdns/query.log
 

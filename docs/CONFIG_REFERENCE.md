@@ -98,9 +98,9 @@ LRU cache ayarları.
 |---|---|---|---|---|
 | `level` | string | `info` | evet | `debug`, `info`, `warn`, `error`, `fatal` |
 | `format` | string | `text` | evet | `text` veya `json` |
-| `output` | string | `stdout` | hayır | `stdout` veya `stderr` |
+| `output` | string | `stdout` | hayır | `stdout`, `stderr` veya mutlak dosya yolu (ekleme kipinde açılır; logrotate ile `copytruncate` kullanın) |
 | `query_log` | bool | `false` | evet | Sorgu audit log'unu etkinleştir |
-| `query_log_file` | string | "" | evet | Audit log dosyası (boş = output ile aynı) |
+| `query_log_file` | string | "" | evet | Sorgu log dosyası, mutlak yol (boş = stdout) |
 
 ## `metrics`
 
