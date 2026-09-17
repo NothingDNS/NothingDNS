@@ -44,13 +44,6 @@ func resolveDashboardBearer(httpCfg config.HTTPConfig) string {
 	return httpCfg.AuthToken
 }
 
-// validateAuthPersistenceConfig enforces SECURITY-REPORT.md L-4: an
-// on-disk session-token file requires a stable AuthSecret. Without
-// one the per-run random secret invalidates every persisted session
-// at restart and the daemon silently boots with an empty token map
-// — operators see only a "Failed to load persisted tokens" warning
-// in the log. Fail-fast at startup so the misconfiguration is
-// impossible to deploy.
 // authUsersFile returns where runtime-created users are persisted: the
 // explicit server.http.users_file, else <storage.data_dir>/users.json, else
 // "" (memory only).
@@ -64,6 +57,13 @@ func authUsersFile(cfg *config.Config) string {
 	return ""
 }
 
+// validateAuthPersistenceConfig enforces SECURITY-REPORT.md L-4: an
+// on-disk session-token file requires a stable AuthSecret. Without
+// one the per-run random secret invalidates every persisted session
+// at restart and the daemon silently boots with an empty token map
+// — operators see only a "Failed to load persisted tokens" warning
+// in the log. Fail-fast at startup so the misconfiguration is
+// impossible to deploy.
 func validateAuthPersistenceConfig(httpCfg config.HTTPConfig) error {
 	if httpCfg.TokenPersistencePath != "" && httpCfg.AuthSecret == "" {
 		return fmt.Errorf("token_persistence_path requires auth_secret to be set — without it, the per-run random secret invalidates every persisted session at restart (set auth_secret in config or remove token_persistence_path)")

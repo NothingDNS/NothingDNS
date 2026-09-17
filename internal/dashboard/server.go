@@ -28,6 +28,7 @@ type Server struct {
 	allowedOrigins []string // Allowed CORS origins for WebSocket
 	authStore      *auth.Store
 	authToken      string // Legacy token-only auth fallback
+	authTokenRole  string // Role bound to authToken (default viewer)
 	zoneManager    *zone.Manager
 }
 
@@ -47,6 +48,24 @@ type Client struct {
 	send      chan []byte
 	closeSend sync.Once
 	closed    chan struct{} // Used to signal write loop to exit
+	// redactIPs is true for non-admin viewers: streamed events carry a
+	// masked client IP, matching the query log API (LOW-010).
+	redactIPs bool
+}
+
+// RedactQueryEvents returns copies of events with client IPs masked. The
+// input events are shared with the stats ring buffer and are not modified.
+func RedactQueryEvents(events []*QueryEvent) []*QueryEvent {
+	out := make([]*QueryEvent, len(events))
+	for i, e := range events {
+		if e == nil {
+			continue
+		}
+		cp := *e
+		cp.ClientIP = util.RedactIP(cp.ClientIP)
+		out[i] = &cp
+	}
+	return out
 }
 
 // WebSocketConn interface for WebSocket connections
@@ -276,6 +295,14 @@ func (s *Server) SetAuthStore(store *auth.Store) {
 	s.mu.Unlock()
 }
 
+// SetAuthTokenRole sets the role bound to the legacy token (server.http.
+// auth_token_role); only "admin" sees unmasked client IPs.
+func (s *Server) SetAuthTokenRole(role string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.authTokenRole = role
+}
+
 // SetAuthToken sets the legacy token for token-only authentication fallback.
 func (s *Server) SetAuthToken(token string) {
 	s.mu.Lock()
@@ -287,14 +314,22 @@ func (s *Server) SetAuthToken(token string) {
 // Returns true if auth is not configured (permissive), or if a valid token
 // is present. Writes a 401 only when auth IS configured but token is missing/invalid.
 func (s *Server) authenticateRequest(w http.ResponseWriter, r *http.Request) bool {
+	ok, _ := s.authenticateRequestRole(w, r)
+	return ok
+}
+
+// authenticateRequestRole is authenticateRequest that also reports whether
+// the caller is an admin (and may see unmasked client IPs).
+func (s *Server) authenticateRequestRole(w http.ResponseWriter, r *http.Request) (ok, admin bool) {
 	s.mu.RLock()
 	authStore := s.authStore
 	authToken := s.authToken
+	authTokenRole := s.authTokenRole
 	s.mu.RUnlock()
 
 	// No auth configured — allow all requests (legacy permissive behavior)
 	if authToken == "" && authStore == nil {
-		return true
+		return true, true
 	}
 
 	token := r.Header.Get("Authorization")
@@ -307,23 +342,23 @@ func (s *Server) authenticateRequest(w http.ResponseWriter, r *http.Request) boo
 
 	if token == "" {
 		http.Error(w, "authentication required", http.StatusUnauthorized)
-		return false
+		return false, false
 	}
 
-	valid := false
 	if authToken != "" && secureCompare(token, authToken) {
-		valid = true
+		return true, isAdminRole(authTokenRole)
 	}
-	if !valid && authStore != nil {
-		if _, err := authStore.ValidateToken(token); err == nil {
-			valid = true
+	if authStore != nil {
+		if user, err := authStore.ValidateToken(token); err == nil {
+			return true, user.Role == auth.RoleAdmin
 		}
 	}
-	if !valid {
-		http.Error(w, "invalid token", http.StatusUnauthorized)
-		return false
-	}
-	return true
+	http.Error(w, "invalid token", http.StatusUnauthorized)
+	return false, false
+}
+
+func isAdminRole(role string) bool {
+	return strings.EqualFold(strings.TrimSpace(role), string(auth.RoleAdmin))
 }
 
 // ServeHTTP handles HTTP requests
@@ -342,8 +377,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !requireMethod(w, r, http.MethodGet) {
 			return
 		}
-		if s.authenticateRequest(w, r) {
-			s.handleQueryStream(w, r)
+		if ok, admin := s.authenticateRequestRole(w, r); ok {
+			s.handleQueryStream(w, r, admin)
 		}
 	case "/api/dashboard/zones":
 		if !requireMethod(w, r, http.MethodGet) {
@@ -409,11 +444,14 @@ func nonNegativeSecondsSince(start, now time.Time) float64 {
 }
 
 // handleQueryStream handles query stream requests
-func (s *Server) handleQueryStream(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleQueryStream(w http.ResponseWriter, r *http.Request, admin bool) {
 	s.stats.mu.RLock()
 	queries := make([]*QueryEvent, len(s.stats.RecentQueries))
 	copy(queries, s.stats.RecentQueries)
 	s.stats.mu.RUnlock()
+	if !admin {
+		queries = RedactQueryEvents(queries)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(queries); err != nil {
@@ -465,6 +503,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	authStore := s.authStore
 	authToken := s.authToken
+	authTokenRole := s.authTokenRole
 	s.mu.RUnlock()
 
 	if token == "" {
@@ -473,13 +512,13 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate token: check legacy token first, then JWT (matches auth middleware behavior)
-	valid := false
+	valid, admin := false, false
 	if authToken != "" && secureCompare(token, authToken) {
-		valid = true
+		valid, admin = true, isAdminRole(authTokenRole)
 	}
 	if !valid && authStore != nil {
-		if _, err := authStore.ValidateToken(token); err == nil {
-			valid = true
+		if user, err := authStore.ValidateToken(token); err == nil {
+			valid, admin = true, user.Role == auth.RoleAdmin
 		}
 	}
 	if !valid {
@@ -507,9 +546,10 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	conn.SetRateLimit(100, time.Second)
 
 	client := &Client{
-		conn:   conn,
-		send:   make(chan []byte, 256),
-		closed: make(chan struct{}),
+		conn:      conn,
+		send:      make(chan []byte, 256),
+		closed:    make(chan struct{}),
+		redactIPs: !admin,
 	}
 
 	s.AddClient(client)
@@ -618,11 +658,25 @@ func (s *Server) broadcastLoop() {
 		if err != nil {
 			continue
 		}
+		var redacted []byte // marshalled on first use
 
 		s.mu.RLock()
 		for client := range s.clients {
+			payload := data
+			if client.redactIPs {
+				if redacted == nil {
+					redacted, err = json.Marshal(&BroadcastMessage{
+						Type:  "query",
+						Event: RedactQueryEvents([]*QueryEvent{event})[0],
+					})
+					if err != nil {
+						break
+					}
+				}
+				payload = redacted
+			}
 			select {
-			case client.send <- data:
+			case client.send <- payload:
 			default:
 				// Client channel full, skip
 			}

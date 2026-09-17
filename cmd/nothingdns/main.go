@@ -856,6 +856,7 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 	dashboardServer.SetAllowedOrigins(cfg.Server.HTTP.AllowedOrigins)
 	dashboardServer.SetAuthStore(authStore)
 	dashboardServer.SetAuthToken(resolveDashboardBearer(cfg.Server.HTTP))
+	dashboardServer.SetAuthTokenRole(cfg.Server.HTTP.AuthTokenRole)
 	dashboardServer.SetZoneManager(zoneManagerInstance)
 	// Feed per-query events into the dashboard (Query Log page + live stream).
 	handler.dashboardServer = dashboardServer
