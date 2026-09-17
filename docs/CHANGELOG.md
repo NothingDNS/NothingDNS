@@ -5,9 +5,31 @@ All notable changes to NothingDNS are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.2.1] — 2026-09-17
+
+Fixes found by testing a real installation end to end: DNSSEC false SERVFAILs,
+local zones hidden by cached upstream answers, records lost on restart, host
+DNS broken by the installer, and a set of dashboard and API defects. No
+configuration changes are required to upgrade.
 
 ### Fixed
+
+- **Local zones hidden by cached upstream data**: the cache and the aggressive NSEC cache (RFC 8198) were consulted before the server's own zones, so an upstream NXDOMAIN or NSEC proof for a parent name — the root proving `.lan`, `.test` or `.internal` does not exist, or the public view of a split-horizon domain — made local zones answer NXDOMAIN to every client allowed recursion. Split-horizon views, authoritative zones and in-zone CNAMEs are now resolved before the caches.
+- **Records whose owner starts with `_` lost on restart**: zones stored in the persistent database skipped every owner name beginning with an underscore as metadata when loaded, so SRV (`_sip._tcp`), DMARC (`_dmarc`), DKIM (`_domainkey`) and ACME (`_acme-challenge`) records disappeared after a restart and were removed permanently by the next change to the zone.
+- **Negative answers had TTL 0 after a restart**: the SOA TTL was not restored for zones loaded from the persistent database (or received by zone transfer), so NXDOMAIN/NODATA answers, AXFR and zone exports carried TTL 0. The negative-answer SOA TTL now follows RFC 2308 (the lesser of the SOA TTL and MINIMUM).
+- **CAA values served with literal quotes**: `0 issue "letsencrypt.org"` was served as `"\"letsencrypt.org\""`. Quoted CAA values are now parsed as character-strings.
+- **Zone export dropped NS records and double-quoted TXT**: exports of zones created or loaded through the API had no NS records and wrote TXT values as `"\"v=spf1 ...\""`, so re-importing the file broke the zone.
+- **Bulk PTR wrote forward A records into the reverse zone**: with "Also add A records", names such as `host-192-0-2-1.example.com` became `host-192-0-2-1.example.com.2.0.192.in-addr.arpa.` in the reverse zone. Pattern names are now absolute host names, A records go to the loaded zone that contains each name, and a name outside every loaded zone is rejected before anything is written.
+- **RPZ could not be enabled from the dashboard or API**: without `rpz.enabled: true` in the config there was no RPZ engine, so Enable and Add Rule always failed with 503. Rules entered with a trailing dot (`bad.example.`) never matched.
+- **Response EDNS OPT record**: recursive answers passed the upstream's OPT record through (DO=1 and a 512-byte payload even when the client had not set DO) and could carry an OPT to non-EDNS clients. Responses now carry an OPT only for EDNS requests, with the request's DO bit (RFC 3225) and this server's payload size.
+- **Dashboard dialogs rendered inline**: the Create Zone, Add/Edit Record and Bulk PTR forms were always visible on the page instead of opening as dialogs.
+- **Dashboard records table**: long record names wrapped onto several lines, long values pushed the edit/delete buttons out of view, and rows appeared in a different order on every load. Names stay on one line, values wrap, and records are sorted (SOA and NS first, then by name hierarchy with numeric ordering).
+- **Viewer role in the dashboard**: viewers were offered pages whose API calls they are not allowed to make (every page showed "Operator role required"). They now see the Dashboard live stream and About only, and the live stream of a previous session (with unmasked client IPs) is cleared on logout.
+- **Query log**: `/api/v1/queries` and the Query Log page now list the newest queries first.
+- **Upstreams page**: showed a single aggregate entry named `direct-upstream`. `GET /api/v1/upstreams` now also returns each configured server with its health and last query latency, and the page lists them.
+- **Settings → Logging**: after changing the log level at runtime the page kept showing the config-file level and could not switch back to it; `GET /api/v1/config` now reports the level in effect.
+- **Unknown API paths**: any unknown path under `/api/` returned the dashboard HTML with status 200; it now returns `404 {"error":"Not found"}`.
+- **Misleading startup warning**: "No users configured. Default admin account created." was logged on every start even when users were loaded from the users file.
 
 - **DNSSEC: false SERVFAIL for names inside signed zones**: the chain of trust was built down to the query name, so every name that is not itself a zone cut (`www.isc.org`, `deb.debian.org`, `security.debian.org`, `gouv.fr`) failed with "DS empty … but no authenticated denial proof". The chain now ends at the zone that signed the answer (RRSIG signer, in bailiwick of the query name). Empty DS answers are classified from the parent's authenticated NSEC/NSEC3 or signed CNAME as not-a-zone-cut, name error or insecure delegation; anything else still fails closed as a downgrade attempt.
 - **DNSSEC: NXDOMAIN under NSEC3 zones and cross-zone CNAMEs**: nonexistent names in NSEC3-signed zones (`.tr`, `.nl`) and CNAME targets signed by another zone (`www.iana.org`, `www.gov.uk`, `www.sidn.nl`) now validate each RRset against its own signer's chain instead of returning SERVFAIL. A DS query the upstream answers with SERVFAIL is treated as a fetch failure (Indeterminate), and DS records for other owners are ignored.
