@@ -721,7 +721,8 @@ EOF
 
 # Setup log rotation
 setup_logrotate() {
-    if [ -d /etc/logrotate.d ] && [ ! -f /etc/logrotate.d/nothingdns ]; then
+    # Always rewrite: rules from older installers moved open log files away.
+    if [ -d /etc/logrotate.d ]; then
         info "Setting up log rotation..."
         local rotate_tmp
         rotate_tmp=$(mktemp)
@@ -733,11 +734,9 @@ setup_logrotate() {
     delaycompress
     missingok
     notifempty
-    create 0640 nothingdns nothingdns
-    sharedscripts
-    postrotate
-        systemctl reload nothingdns > /dev/null 2>&1 || true
-    endscript
+    # NothingDNS and systemd (StandardOutput=append:) keep their log files
+    # open; copy and truncate in place so writes continue in the new file.
+    copytruncate
 }
 EOF
         sudo install -m 0644 -o root -g root "${rotate_tmp}" /etc/logrotate.d/nothingdns

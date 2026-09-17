@@ -470,11 +470,9 @@ setup_logging() {
     delaycompress
     missingok
     notifempty
-    create 0640 nothingdns nothingdns
-    sharedscripts
-    postrotate
-        systemctl reload nothingdns > /dev/null 2>&1 || true
-    endscript
+    # NothingDNS and systemd (StandardOutput=append:) keep their log files
+    # open; copy and truncate in place so writes continue in the new file.
+    copytruncate
 }
 EOF
         sudo install -m 0644 "${rotate_tmp}" /etc/logrotate.d/nothingdns
