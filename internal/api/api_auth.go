@@ -173,7 +173,7 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		}
 		user, err = authStore.CreateUser(req.Username, req.Password, auth.RoleAdmin)
 		if err != nil {
-			s.writeError(w, http.StatusConflict, sanitizeError(err, "Operation failed"))
+			s.writeError(w, userWriteErrorStatus(err), sanitizeError(err, "Operation failed"))
 			return
 		}
 	} else if len(users) > 0 {
@@ -188,14 +188,14 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		}
 		user, err = authStore.UpdateUser(req.Username, req.Password, "")
 		if err != nil {
-			s.writeError(w, http.StatusConflict, sanitizeError(err, "Operation failed"))
+			s.writeError(w, userWriteErrorStatus(err), sanitizeError(err, "Operation failed"))
 			return
 		}
 	} else {
 		// No users - create the first admin user
 		user, err = authStore.CreateUser(req.Username, req.Password, auth.RoleAdmin)
 		if err != nil {
-			s.writeError(w, http.StatusConflict, sanitizeError(err, "Operation failed"))
+			s.writeError(w, userWriteErrorStatus(err), sanitizeError(err, "Operation failed"))
 			return
 		}
 	}
@@ -330,7 +330,7 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 
 		user, err := authStore.CreateUser(req.Username, req.Password, role)
 		if err != nil {
-			s.writeError(w, http.StatusConflict, sanitizeError(err, "Operation failed"))
+			s.writeError(w, userWriteErrorStatus(err), sanitizeError(err, "Operation failed"))
 			return
 		}
 
@@ -421,3 +421,20 @@ func (s *Server) handleRoles(w http.ResponseWriter, r *http.Request) {
 }
 
 // hasRole checks if the current user has at least the required role.
+
+// userWriteErrorStatus maps auth store errors from creating or updating a
+// user to an HTTP status: 409 for a taken username or a last-admin conflict,
+// 404 for an unknown user, 400 for input that fails validation (for example
+// a password shorter than 8 characters).
+func userWriteErrorStatus(err error) int {
+	switch {
+	case errors.Is(err, auth.ErrUserExists), errors.Is(err, auth.ErrLastAdmin):
+		return http.StatusConflict
+	case strings.Contains(err.Error(), "user not found"):
+		return http.StatusNotFound
+	case strings.HasPrefix(err.Error(), "hashing password"):
+		return http.StatusInternalServerError
+	default:
+		return http.StatusBadRequest
+	}
+}

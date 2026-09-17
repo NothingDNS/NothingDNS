@@ -35,6 +35,9 @@ const (
 
 var ErrLastAdmin = errors.New("cannot delete the last admin user")
 
+// ErrUserExists is returned by CreateUser when the username is taken.
+var ErrUserExists = errors.New("user already exists")
+
 const maxAuthPersistFileSize = 16 << 20
 
 // User represents a user account.
@@ -567,7 +570,7 @@ func (s *Store) CreateUser(username, password string, role Role) (*User, error) 
 	defer s.mu.Unlock()
 
 	if _, exists := s.users[username]; exists {
-		return nil, fmt.Errorf("user already exists")
+		return nil, ErrUserExists
 	}
 
 	hash, err := HashPasswordWithError(password, nil)
