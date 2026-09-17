@@ -41,6 +41,11 @@ type headerPolicyResponseWriter struct {
 	// recursionDenied is set when this client may not use recursion
 	// (allow_recursion). Its responses must not advertise RA either.
 	recursionDenied bool
+
+	// rcode is the RCODE of the last response written, for the query log;
+	// wrote reports whether a response was written at all.
+	rcode uint8
+	wrote bool
 }
 
 // RecursionAllowed reports whether the query this writer answers may use
@@ -96,6 +101,7 @@ func (hw *headerPolicyResponseWriter) Write(msg *protocol.Message) (int, error) 
 		if !hw.RecursionAllowed() {
 			msg.Header.Flags.RA = false
 		}
+		hw.rcode, hw.wrote = msg.Header.Flags.RCODE, true
 	}
 	return hw.inner.Write(msg)
 }

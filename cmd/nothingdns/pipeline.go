@@ -43,6 +43,10 @@ type query struct {
 	rcode    uint8 // written by stages that send a response
 	rcodeSet bool  // true once rcode has been set
 
+	// policyWriter is the outermost pipeline writer; it records the RCODE
+	// actually sent when no stage set rcode explicitly.
+	policyWriter *headerPolicyResponseWriter
+
 	// Tracing (setup by setupStage, ended in defer)
 	span *otel.Span
 
@@ -52,6 +56,19 @@ type query struct {
 
 	// currentWriter is the active response writer; stages may wrap it
 	currentWriter server.ResponseWriter
+}
+
+// responseRcode returns the RCODE this query was answered with: the one a
+// stage set explicitly (which may be an extended RCODE such as BADVERS),
+// otherwise the one in the response actually written.
+func (q *query) responseRcode() (uint8, bool) {
+	if q.rcodeSet {
+		return q.rcode, true
+	}
+	if q.policyWriter != nil && q.policyWriter.wrote {
+		return q.policyWriter.rcode, true
+	}
+	return 0, false
 }
 
 // Stage is a single processing step in the DNS pipeline.
@@ -133,12 +150,17 @@ func (p *Pipeline) ServeDNS(h *integratedHandler, w server.ResponseWriter, r *pr
 			if ci := q.currentWriter.ClientInfo(); ci != nil && ci.IP() != nil {
 				clientIP = ci.IP().String()
 			}
+			rcodeStr := "-"
+			if rcode, ok := q.responseRcode(); ok {
+				rcodeStr = rcodeToString(rcode)
+			}
 			h.auditLogger.LogQuery(audit.QueryAuditEntry{
 				RequestID: reqID,
 				Timestamp: start.UTC().Format(time.RFC3339),
 				ClientIP:  clientIP,
 				QueryName: q.qnameAudit,
 				QueryType: q.qtypeStr,
+				Rcode:     rcodeStr,
 				Latency:   latency,
 				CacheHit:  q.cacheHit,
 			})
@@ -154,10 +176,7 @@ func (p *Pipeline) ServeDNS(h *integratedHandler, w server.ResponseWriter, r *pr
 				}
 				proto = ci.Protocol
 			}
-			var rcode uint8
-			if q.rcodeSet {
-				rcode = q.rcode
-			}
+			rcode, _ := q.responseRcode()
 			domain := q.qnameAudit
 			if domain == "" {
 				domain = q.qname
@@ -182,9 +201,9 @@ func (p *Pipeline) ServeDNS(h *integratedHandler, w server.ResponseWriter, r *pr
 					otel.Attr{Key: "dns.qtype", Value: q.qtypeStr},
 					otel.Attr{Key: "dns.cache_hit", Value: q.cacheHit},
 				)
-				if q.rcodeSet {
+				if rcode, ok := q.responseRcode(); ok {
 					span.Attrs = append(span.Attrs,
-						otel.Attr{Key: "dns.rcode", Value: rcodeToString(q.rcode)},
+						otel.Attr{Key: "dns.rcode", Value: rcodeToString(rcode)},
 					)
 				}
 				if ci := w.ClientInfo(); ci != nil && ci.IP() != nil {
@@ -202,6 +221,7 @@ func (p *Pipeline) ServeDNS(h *integratedHandler, w server.ResponseWriter, r *pr
 	// admission stages below — carries the request's OPCODE/RD/CD back to the
 	// client (RFC 1035 §4.1.1, RFC 4035 §3.1.6) and an accurate RA bit.
 	q.currentWriter = newHeaderPolicyWriter(h, w, r)
+	q.policyWriter, _ = q.currentWriter.(*headerPolicyResponseWriter)
 
 	for _, stage := range p.stages {
 		handled, err := stage(q.ctx, q, q.currentWriter)
