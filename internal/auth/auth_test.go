@@ -2506,3 +2506,23 @@ func TestUsersFileConfigUsersWinAndAreNotWritten(t *testing.T) {
 		t.Fatalf("users file mode = %v, %v; want 0600", info.Mode().Perm(), err)
 	}
 }
+
+func TestUsesAutoCreatedAdmin(t *testing.T) {
+	s, err := NewStore(&Config{Secret: "test-secret-with-enough-length-0123456789"})
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	if !s.UsesAutoCreatedAdmin() {
+		t.Fatal("store without users must report the auto-created admin")
+	}
+	s2, err := NewStore(&Config{
+		Secret: "test-secret-with-enough-length-0123456789",
+		Users:  []User{{Username: "admin", Password: "a-strong-password-123", Role: RoleAdmin}},
+	})
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	if s2.UsesAutoCreatedAdmin() {
+		t.Fatal("configured admin must not be reported as auto-created")
+	}
+}

@@ -221,9 +221,9 @@ func NewStore(cfg *Config) (*Store, error) {
 		}
 		// SECURITY (LOW-012): The generated password is NEVER logged. It exists only
 		// in memory during this function. Operators must use the localhost-only
-		// bootstrap endpoint or config reload to set a known password.
-		// Warn that default admin was created — password must be set via first login or config
-		util.Warnf("No users configured. Default admin account created. Set password via dashboard or API before use.")
+		// bootstrap endpoint or config reload to set a known password. The
+		// caller warns via UsesAutoCreatedAdmin once runtime users are loaded:
+		// a users file usually replaces this placeholder.
 	}
 
 	return s, nil
@@ -758,6 +758,15 @@ func (s *Store) VerifyUserPassword(username, password string) bool {
 		return false
 	}
 	return VerifyPassword(password, user.Hash)
+}
+
+// UsesAutoCreatedAdmin reports whether the only way in is still the admin
+// placeholder with a random, unknown password created by NewStore.
+func (s *Store) UsesAutoCreatedAdmin() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	admin, ok := s.users["admin"]
+	return ok && admin.IsAutoCreated
 }
 
 // EnableUsersFile loads users created at runtime (bootstrap, dashboard, API)

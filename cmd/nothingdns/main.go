@@ -596,6 +596,9 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 	} else {
 		logger.Warnf("No server.http.users_file or storage.data_dir configured: users created from the dashboard or bootstrap endpoint are lost on restart")
 	}
+	if authStore.UsesAutoCreatedAdmin() {
+		logger.Warnf("No users configured. A placeholder admin account with a random password was created; set a password via the localhost bootstrap endpoint (POST /api/v1/auth/bootstrap) before use.")
+	}
 
 	// Restore persistent tokens from file if configured. Validation
 	// lives in cmd/nothingdns/helpers.validateAuthPersistenceConfig
