@@ -5,7 +5,11 @@ All notable changes to NothingDNS are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.2.0] — 2026-09-17
+
+Recursion allow list with dashboard management, a verified API reference and
+explorer, and fixes for ODoH, zone management, IP privacy and user errors.
+See **Upgrade notes** before upgrading.
 
 ### Added
 
@@ -41,6 +45,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - Personal editor/agent tooling and internal planning notes from version control (`.cursorrules`, `.windsurfrules`, `.wrongstack/`, `.project/`), the unused `.githooks/` copy, and the outdated `.github/CONTRIBUTING.md` (it claimed a zero-dependency policy and shadowed the root `CONTRIBUTING.md` on GitHub). `.gitignore` now covers common editor, AI-assistant and agent state directories.
+
+### Upgrade notes
+
+- **Recursion is limited by default.** Configs with neither `acl` nor `allow_recursion` now answer their own zones for everyone but recurse only for loopback and private networks. Add `allow_recursion` (or use the dashboard's ACL page) if public clients must recurse. Configs with `acl` rules and no `allow_recursion` behave as before.
+- **ODoH AEAD ids follow RFC 9180**: `1` = AES-128-GCM (default), `2` = AES-256-GCM; `3` is rejected. Previously `1` meant AES-256-GCM and `3` AES-128-GCM.
+- **Access policy file**: after the first ACL or recursion change on the dashboard, `<storage.data_dir>/access_policy.json` overrides `acl` and `allow_recursion` in the config file. Delete it to return to the config.
+- **Zone deletion keeps config-listed files**: remove the zone from `zones:` as well to delete it permanently.
+- **User creation errors**: validation failures now return `400` instead of `409`.
 
 ## [1.1.12] — 2026-09-16
 

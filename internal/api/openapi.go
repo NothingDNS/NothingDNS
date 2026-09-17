@@ -12,7 +12,7 @@ const OpenAPISpec = `{
   "info": {
     "title": "NothingDNS API",
     "description": "REST API for NothingDNS server management. See docs/API_REFERENCE.md for the full guide. Every operation carries x-required-role (viewer < operator < admin). DNS transports (DoH, DoWS, ODoH) and the /ws dashboard stream are described in the guide.",
-    "version": "1.1.12",
+    "version": "1.2.0",
     "contact": {
       "name": "ECOSTACK TECHNOLOGY OÜ"
     },

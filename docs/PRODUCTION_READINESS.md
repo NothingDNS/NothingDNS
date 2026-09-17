@@ -180,4 +180,4 @@ Do not commit literal secret values to any config file. The config validator rej
 - Container image is built from the verified tree and includes SBOM/provenance plus a clean vulnerability scan.
 - Deployment config validates with real secret values in the target environment; Helm monitor/XoT templates render and apply against installed CRDs.
 - DNS, DoH, metrics, health, readiness, liveness, cluster, and dashboard endpoints are smoke-tested after rollout with `scripts/production-smoke.sh`.
-- `nothingdns -version` reports the tagged release version (bare semver, e.g. `NothingDNS version 1.1.12`).
+- `nothingdns -version` reports the tagged release version (bare semver, e.g. `NothingDNS version 1.2.0`).
