@@ -361,6 +361,26 @@ EOF
 }
 
 # Setup systemd service
+# setup.sh never changes the host resolver. When another service holds port
+# 53 (typically the systemd-resolved stub), explain how to free it without
+# breaking host DNS; install.sh automates the same steps.
+warn_port_53_in_use() {
+    command -v ss &> /dev/null || return 0
+    local users
+    users=$(ss -tulpn 2>/dev/null | grep -E '[:.]53[[:space:]]' | grep -v nothingdns || true)
+    [ -n "$users" ] || return 0
+    warn "Port 53 is already in use; NothingDNS will fail to start until it is freed:"
+    echo "$users"
+    if echo "$users" | grep -q systemd-resolve; then
+        echo "  Disable only the systemd-resolved stub listener and keep host DNS working:"
+        echo "    sudo mkdir -p /etc/systemd/resolved.conf.d"
+        echo "    printf '[Resolve]\\nDNSStubListener=no\\n' | sudo tee /etc/systemd/resolved.conf.d/nothingdns.conf"
+        echo "    sudo systemctl restart systemd-resolved"
+        echo "    sudo ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf"
+        echo "  Do not just stop systemd-resolved: /etc/resolv.conf would still point at 127.0.0.53."
+    fi
+}
+
 setup_service() {
     section "Setting Up Systemd Service"
 
@@ -421,6 +441,8 @@ EOF
     else
         info "Service already exists"
     fi
+
+    warn_port_53_in_use
 
     if is_interactive; then
         read -p "Enable and start nothingdns now? (Y/n): " -n 1 -r; echo

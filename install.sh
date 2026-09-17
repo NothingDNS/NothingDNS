@@ -20,6 +20,7 @@ SKIP_DOWNLOAD=false
 BOOTSTRAP_USER="admin"
 BOOTSTRAP_PASS=""
 USE_PORT_5353=false
+TAKE_PORT_53=false
 # Release assets are verified against the published SHA256SUMS by default. This
 # is the integrity control that stops a hijacked/MITM'd release from achieving
 # root code execution (the binary is chmod +x'd and run as root). Override only
@@ -149,50 +150,93 @@ stop_existing_nothingdns() {
     info "Existing NothingDNS service stopped"
 }
 
-# Try to stop common DNS services
-stop_existing_dns() {
-    local stopped=false
+# Services stopped by release_port_53, restarted by restore_host_dns.
+STOPPED_DNS_SERVICES=()
+RESOLVED_DROPIN="/etc/systemd/resolved.conf.d/nothingdns.conf"
+RESOLV_CONF_BACKUP="/etc/resolv.conf.nothingdns-backup"
+RESOLVED_CHANGED=false
 
-    # systemd-resolved
+# Point /etc/resolv.conf at resolved's upstream list, or at public resolvers
+# when resolved knows none. Falls back to copying when /etc/resolv.conf cannot
+# be replaced (e.g. a bind mount in containers).
+point_resolv_conf_upstream() {
+    if [ -f /run/systemd/resolve/resolv.conf ] && grep -qE '^nameserver[[:space:]]' /run/systemd/resolve/resolv.conf; then
+        sudo ln -sfn /run/systemd/resolve/resolv.conf /etc/resolv.conf 2>/dev/null \
+            || sudo cat /run/systemd/resolve/resolv.conf | sudo tee /etc/resolv.conf > /dev/null
+    else
+        warn "systemd-resolved has no upstream DNS servers; writing public resolvers to /etc/resolv.conf"
+        sudo rm -f /etc/resolv.conf 2>/dev/null || true
+        printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' | sudo tee /etc/resolv.conf > /dev/null
+    fi
+}
+
+# Free port 53 without leaving the host unable to resolve names.
+#
+# systemd-resolved keeps running with only its 127.0.0.53 stub listener
+# disabled, and /etc/resolv.conf is pointed at the upstream servers it learned
+# (DHCP/netplan). Stopping resolved outright would leave /etc/resolv.conf
+# pointing at a dead 127.0.0.53 and break every lookup on the host.
+# Other resolvers (unbound, bind9, dnsmasq) are stopped and disabled; if the
+# host used them via 127.0.0.1, NothingDNS answers there once it starts.
+release_port_53() {
     if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
-        info "Stopping systemd-resolved..."
-        sudo systemctl stop systemd-resolved || true
-        sudo systemctl disable systemd-resolved 2>/dev/null || true
-        stopped=true
+        info "Disabling the systemd-resolved stub listener on 127.0.0.53:53..."
+        sudo mkdir -p "$(dirname "${RESOLVED_DROPIN}")"
+        printf '[Resolve]\nDNSStubListener=no\n' | sudo tee "${RESOLVED_DROPIN}" > /dev/null
+        if [ -L /etc/resolv.conf ] || [ -f /etc/resolv.conf ]; then
+            sudo cp -P /etc/resolv.conf "${RESOLV_CONF_BACKUP}"
+        fi
+        sudo systemctl restart systemd-resolved
+        point_resolv_conf_upstream
+        RESOLVED_CHANGED=true
     fi
 
-    # unbound
-    if systemctl is-active --quiet unbound 2>/dev/null; then
-        info "Stopping unbound..."
-        sudo systemctl stop unbound || true
-        sudo systemctl disable unbound 2>/dev/null || true
-        stopped=true
-    fi
+    local svc
+    for svc in unbound bind9 named dnsmasq; do
+        if systemctl is-active --quiet "${svc}" 2>/dev/null; then
+            info "Stopping ${svc}..."
+            sudo systemctl stop "${svc}" || true
+            sudo systemctl disable "${svc}" 2>/dev/null || true
+            STOPPED_DNS_SERVICES+=("${svc}")
+        fi
+    done
+}
 
-    # bind9 / named
-    if systemctl is-active --quiet bind9 2>/dev/null; then
-        info "Stopping bind9..."
-        sudo systemctl stop bind9 || true
-        sudo systemctl disable bind9 2>/dev/null || true
-        stopped=true
+# Earlier installers stopped systemd-resolved but left /etc/resolv.conf
+# pointing at its dead 127.0.0.53 stub, so the host could not resolve anything
+# (including the release download). Repair that state before downloading.
+repair_dead_resolved_stub() {
+    grep -qE '^nameserver[[:space:]]+127\.0\.0\.53' /etc/resolv.conf 2>/dev/null || return 0
+    systemctl is-active --quiet systemd-resolved 2>/dev/null && return 0
+    warn "/etc/resolv.conf points at 127.0.0.53 but systemd-resolved is not running; host DNS is broken."
+    if systemctl list-unit-files systemd-resolved.service 2>/dev/null | grep -q systemd-resolved; then
+        info "Re-enabling systemd-resolved without its port 53 stub listener..."
+        sudo mkdir -p "$(dirname "${RESOLVED_DROPIN}")"
+        printf '[Resolve]\nDNSStubListener=no\n' | sudo tee "${RESOLVED_DROPIN}" > /dev/null
+        sudo systemctl enable systemd-resolved 2>/dev/null || true
+        sudo systemctl start systemd-resolved || true
     fi
+    point_resolv_conf_upstream
+    info "Host DNS repaired"
+}
 
-    # dnsmasq
-    if systemctl is-active --quiet dnsmasq 2>/dev/null; then
-        info "Stopping dnsmasq..."
-        sudo systemctl stop dnsmasq || true
-        sudo systemctl disable dnsmasq 2>/dev/null || true
-        stopped=true
+# Undo release_port_53 when NothingDNS could not take over port 53.
+restore_host_dns() {
+    local svc
+    if [ "${RESOLVED_CHANGED}" = true ]; then
+        warn "Restoring systemd-resolved stub listener and /etc/resolv.conf..."
+        sudo rm -f "${RESOLVED_DROPIN}"
+        if [ -L "${RESOLV_CONF_BACKUP}" ] || [ -f "${RESOLV_CONF_BACKUP}" ]; then
+            sudo mv -f "${RESOLV_CONF_BACKUP}" /etc/resolv.conf 2>/dev/null \
+                || { sudo cat "${RESOLV_CONF_BACKUP}" | sudo tee /etc/resolv.conf > /dev/null && sudo rm -f "${RESOLV_CONF_BACKUP}"; }
+        fi
+        sudo systemctl restart systemd-resolved || true
     fi
-
-    # NetworkManager
-    if systemctl is-active --quiet NetworkManager 2>/dev/null; then
-        sudo systemctl restart NetworkManager 2>/dev/null || true
-    fi
-
-    if [ "$stopped" = true ]; then
-        info "Existing DNS services stopped"
-    fi
+    for svc in "${STOPPED_DNS_SERVICES[@]}"; do
+        warn "Re-enabling ${svc}..."
+        sudo systemctl enable "${svc}" 2>/dev/null || true
+        sudo systemctl start "${svc}" || true
+    done
 }
 
 # Detect OS and architecture
@@ -733,6 +777,7 @@ main() {
     fi
 
     command -v curl &> /dev/null || error "curl is required but not installed"
+    repair_dead_resolved_stub
 
     detect_os
     get_latest_version
@@ -748,7 +793,7 @@ main() {
             echo ""
             read -p "Select [1/2/3]: " -n 1 -r; echo
             case "$REPLY" in
-                1) stop_existing_dns ;;
+                1) TAKE_PORT_53=true ;;
                 2)
                     info "Using port 5353 instead of 53"
                     USE_PORT_5353=true
@@ -756,8 +801,8 @@ main() {
                 *) error "Installation cancelled" ;;
             esac
         elif [ "${STOP_HOST_DNS}" = "1" ]; then
-            info "NOTHINGDNS_STOP_HOST_DNS=1 — stopping existing DNS services to take over port 53..."
-            stop_existing_dns
+            info "NOTHINGDNS_STOP_HOST_DNS=1 — existing DNS services will release port 53 after the download is verified"
+            TAKE_PORT_53=true
         else
             # Non-interactive (e.g. curl | bash) without explicit consent: never
             # silently disable the host resolver. Use port 5353 instead.
@@ -768,10 +813,22 @@ main() {
         fi
     fi
 
-    stop_existing_nothingdns
+    # Download and verify everything before touching host DNS: the downloads
+    # themselves need working name resolution.
     fetch_checksums
     download_binary
     download_dnsctl
+    stop_existing_nothingdns
+
+    if [ "${TAKE_PORT_53}" = true ]; then
+        release_port_53
+        if ! check_port_53; then
+            warn "Port 53 is still in use; falling back to port 5353."
+            restore_host_dns
+            TAKE_PORT_53=false
+            USE_PORT_5353=true
+        fi
+    fi
 
     local port=53
     if [ "$USE_PORT_5353" = true ]; then
@@ -790,6 +847,9 @@ main() {
         if ! systemctl is-active --quiet nothingdns; then
             warn "NothingDNS failed to start. Recent log:"
             sudo journalctl -u nothingdns -n 30 --no-pager 2>/dev/null || true
+            if [ "${TAKE_PORT_53}" = true ]; then
+                restore_host_dns
+            fi
         fi
     else
         sudo "${INSTALL_DIR}/${BINARY_NAME}" -config "${CONFIG_FILE}" &

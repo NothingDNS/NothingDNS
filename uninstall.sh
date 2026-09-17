@@ -58,6 +58,24 @@ stop_service() {
     fi
 }
 
+# Undo install.sh's systemd-resolved change (stub listener disabled) so the
+# host keeps a local resolver on 127.0.0.53 once NothingDNS is gone.
+restore_host_resolver() {
+    local dropin=/etc/systemd/resolved.conf.d/nothingdns.conf
+    [ -f "${dropin}" ] || return 0
+    info "Re-enabling the systemd-resolved stub listener..."
+    sudo rm -f "${dropin}"
+    sudo systemctl restart systemd-resolved 2>/dev/null || true
+    if [ "$(readlink /etc/resolv.conf 2>/dev/null)" = "/run/systemd/resolve/resolv.conf" ] \
+        && [ -f /run/systemd/resolve/stub-resolv.conf ]; then
+        sudo ln -sfn /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+    fi
+    sudo rm -f /etc/resolv.conf.nothingdns-backup
+    if grep -qE '^nameserver[[:space:]]+127\.0\.0\.1' /etc/resolv.conf 2>/dev/null; then
+        warn "/etc/resolv.conf points at 127.0.0.1; re-enable the resolver that served it (unbound, bind9, dnsmasq)."
+    fi
+}
+
 # Remove binaries
 remove_binaries() {
     info "Removing binaries..."
@@ -175,6 +193,7 @@ main() {
 
     check_installed
     stop_service
+    restore_host_resolver
     remove_binaries
     remove_logrotate
     prompt_cleanup
