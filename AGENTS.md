@@ -67,8 +67,8 @@ with `_ =` / `_, _ =`.
 7. **requestPolicy / cookie** — EDNS/opcode policy, DNS Cookies (RFC 7873)
 8. **any / transfer** — ANY handling, AXFR/IXFR/NOTIFY/UPDATE
 9. **blocklist / rpzQname** — filtering before the cache
-10. **doBit / cache / nsecCache** — cache lookups (skipped for clients without recursion)
-11. **splitHorizon / authoritative / cname** — local zones and in-zone CNAME chasing
+10. **doBit / splitHorizon / authoritative / cname** — local zones and in-zone CNAME chasing, before the caches so cached upstream data (an NXDOMAIN or aggressive NSEC proof for a parent name) never shadows a local zone
+11. **cache / nsecCache** — cache lookups (skipped for clients without recursion)
 12. **authoritativeOnly** — REFUSED outside zones when `resolution.authoritative_only`
 13. **recursionRefused** — REFUSED (EDE 18) outside zones for clients without recursion
 14. **resolver / upstream / noUpstream** — iterative resolution or forwarding, DNSSEC validation, RPZ response checks, DNS64, caching, stale serving (RFC 8767)

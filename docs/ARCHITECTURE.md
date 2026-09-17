@@ -1009,10 +1009,10 @@ sequenceDiagram
     T->>P: Raw bytes
     P->>IH: *Message
     IH->>SEC: ACL/RPZ/RateLimit
-    IH->>CACHE: Cache lookup
-    CACHE-->>IH: Cache hit
     IH->>ZM: Zone lookup
     ZM-->>IH: Authoritative answer
+    IH->>CACHE: Cache lookup
+    CACHE-->>IH: Cache hit
     IH->>RES: Recursive resolution
     RES->>UP: Forward to upstream
     UP-->>RES: Response

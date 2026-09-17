@@ -260,11 +260,17 @@ func NewPipeline(h *integratedHandler) *Pipeline {
 	p.AppendStage(blocklistStage(h))
 	p.AppendStage(rpzQnameStage(h))
 	p.AppendStage(doBitStage(h))
-	p.AppendStage(cacheStage(h))
-	p.AppendStage(nsecCacheStage(h))
+	// Local zone data MUST run BEFORE the caches, which hold recursively
+	// resolved data: an upstream NXDOMAIN or an aggressive NSEC proof (RFC
+	// 8198) for a parent name — e.g. the root proving ".lan" or ".test" does
+	// not exist, or the public view of a split-horizon domain — otherwise
+	// shadows the server's own zones for every client allowed recursion.
+	// Authoritative answers are not cached, so nothing stale is served.
 	p.AppendStage(splitHorizonStage(h))
 	p.AppendStage(authoritativeStage(h))
 	p.AppendStage(cnameStage(h))
+	p.AppendStage(cacheStage(h))
+	p.AppendStage(nsecCacheStage(h))
 	p.AppendStage(authoritativeOnlyStage(h))
 	p.AppendStage(recursionRefusedStage(h))
 	p.AppendStage(resolverStage(h))
