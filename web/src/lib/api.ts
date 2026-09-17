@@ -266,8 +266,15 @@ export interface UpstreamServer {
 	failovers: number;
 }
 
+export interface UpstreamServerHealth {
+	address: string;
+	healthy: boolean;
+	latency_ms: number;
+}
+
 export interface UpstreamsResponse {
-	upstreams: UpstreamServer[];
+	upstreams: UpstreamServer[] | null;
+	servers?: UpstreamServerHealth[];
 }
 
 export interface UserInfo {

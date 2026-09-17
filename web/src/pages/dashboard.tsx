@@ -5,6 +5,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { api, type DashboardStats } from '@/lib/api';
 import { useQueryStream } from '@/stores/queryStream';
+import { useAuthStore } from '@/stores/authStore';
+import { hasMinRole } from '@/lib/roles';
 import { Activity, Database, Shield, Clock, RefreshCw, Globe, Zap, TrendingUp, AlertCircle, Users } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -24,6 +26,9 @@ export function DashboardPage() {
   // WebSocket (opened once in App.tsx), not a dashboard-local socket.
   const queries = useQueryStream((s) => s.events);
   const connected = useQueryStream((s) => s.connected);
+  // Server statistics require the operator role; viewers only get the live
+  // query stream (with masked client IPs).
+  const canViewStats = hasMinRole(useAuthStore((s) => s.role), 'operator');
 
   const loadStats = async () => {
     const gen = ++loadStatsGeneration.current;
@@ -42,10 +47,14 @@ export function DashboardPage() {
   };
 
   useEffect(() => {
+    if (!canViewStats) {
+      setLoading(false);
+      return;
+    }
     loadStats();
     const iv = setInterval(loadStats, 5000);
     return () => clearInterval(iv);
-  }, []);
+  }, [canViewStats]);
 
   const cards = [
     { t: 'Total Queries', v: (stats?.queriesTotal ?? 0).toLocaleString(), s: `${(stats?.queriesPerSec ?? 0).toFixed(1)} q/s`, i: Activity, c: 'text-primary', b: 'bg-primary/10' },
@@ -64,7 +73,7 @@ export function DashboardPage() {
         <div><h1 className="text-2xl font-bold tracking-tight">Dashboard</h1><p className="text-muted-foreground text-sm">Real-time DNS server monitoring</p></div>
         <div className="flex items-center gap-2">
           {lastUpdate && <span className="text-xs text-muted-foreground">Updated {lastUpdate.toLocaleTimeString()}</span>}
-          <Button variant="outline" size="sm" onClick={loadStats} aria-label="Refresh stats"><RefreshCw className="h-4 w-4" /></Button>
+          {canViewStats && <Button variant="outline" size="sm" onClick={loadStats} aria-label="Refresh stats"><RefreshCw className="h-4 w-4" /></Button>}
         </div>
       </div>
 
@@ -77,7 +86,7 @@ export function DashboardPage() {
         </Card>
       )}
 
-      <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
+      {canViewStats && <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
         {loading ? Array.from({ length: 8 }).map((_, i) => <Card key={i}><CardContent className="p-6"><Skeleton className="h-4 w-20 mb-3" /><Skeleton className="h-8 w-16 mb-1" /><Skeleton className="h-3 w-12" /></CardContent></Card>)
         : cards.map(({ t, v, s, i: I, c, b }) => (
           <Card key={t}><CardContent className="p-6">
@@ -85,7 +94,7 @@ export function DashboardPage() {
             <div className="text-2xl font-bold">{v}</div><p className="text-xs text-muted-foreground mt-0.5">{s}</p>
           </CardContent></Card>
         ))}
-      </div>
+      </div>}
       <Card>
         <CardHeader className="pb-3"><div className="flex items-center justify-between"><CardTitle className="text-base">Live Query Stream</CardTitle><Badge variant={connected ? 'success' : 'secondary'}>{connected ? 'Live' : 'Polling'}</Badge></div></CardHeader>
         <CardContent><div ref={streamRef} className="space-y-1 max-h-[400px] overflow-y-auto font-mono text-xs">

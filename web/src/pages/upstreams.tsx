@@ -6,6 +6,13 @@ import { api, type UpstreamsResponse } from '@/lib/api';
 import { ErrorState } from '@/components/states';
 import { Wifi, WifiOff, Activity, RefreshCw } from 'lucide-react';
 
+// The API reports totals under synthetic addresses; show them as labels.
+function upstreamLabel(address: string): string {
+  if (address === 'direct-upstream') return 'All upstream servers';
+  if (address === 'load-balancer') return 'Load balancer';
+  return address;
+}
+
 export function UpstreamsPage() {
   const [data, setData] = useState<UpstreamsResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -39,6 +46,7 @@ export function UpstreamsPage() {
   );
 
   const upstreams = data?.upstreams ?? [];
+  const servers = data?.servers ?? [];
 
   return (
     <div className="space-y-6">
@@ -62,7 +70,7 @@ export function UpstreamsPage() {
                       <div className="p-2 rounded-lg bg-destructive/10"><WifiOff className="h-5 w-5 text-destructive" /></div>
                     )}
                     <div>
-                      <p className="font-medium font-mono text-sm">{u.address}</p>
+                      <p className="font-medium font-mono text-sm">{upstreamLabel(u.address)}</p>
                       <div className="flex items-center gap-2 mt-1">
                         <Badge variant={u.healthy ? 'success' : 'destructive'}>{u.healthy ? 'Healthy' : 'Unhealthy'}</Badge>
                         {u.failovers > 0 && <Badge variant="warning"><RefreshCw className="h-3 w-3 mr-1" />{u.failovers} failovers</Badge>}
@@ -86,6 +94,31 @@ export function UpstreamsPage() {
         </div>
       )}
 
+      {servers.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Wifi className="h-4 w-4" /> Servers
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ul className="divide-y" aria-label="Upstream servers">
+              {servers.map((srv) => (
+                <li key={srv.address} className="flex items-center justify-between gap-4 py-2">
+                  <span className="font-mono text-sm">{srv.address}</span>
+                  <span className="flex items-center gap-3">
+                    <span className="text-xs text-muted-foreground">
+                      {srv.latency_ms > 0 ? `${srv.latency_ms.toFixed(1)} ms` : 'no queries yet'}
+                    </span>
+                    <Badge variant={srv.healthy ? 'success' : 'destructive'}>{srv.healthy ? 'Healthy' : 'Unhealthy'}</Badge>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
@@ -99,7 +132,7 @@ export function UpstreamsPage() {
               return (
                 <div key={u.address} className="space-y-1">
                   <div className="flex items-center justify-between text-xs">
-                    <span className="font-mono">{u.address}</span>
+                    <span className="font-mono">{upstreamLabel(u.address)}</span>
                     <span className={u.healthy ? 'text-success' : 'text-destructive'}>{u.healthy ? 'UP' : 'DOWN'}</span>
                   </div>
                   <div className="h-2 rounded-full bg-muted overflow-hidden">

@@ -296,3 +296,33 @@ export function recordDataParts(type: string, data: string): { label: string; va
       return [{ label: 'Data', value: data }];
   }
 }
+
+const labelCollator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
+
+// sortZoneRecords orders records the way zone files read: the apex SOA and NS
+// first, then owners in DNS hierarchy order (parent before children, labels
+// compared right to left with numeric awareness so 2 < 10 in reverse zones),
+// then by type and data. The API returns records in map order, which reshuffled
+// the table on every load.
+export function sortZoneRecords<T extends { name: string; type: string; data: string }>(records: T[], zoneName: string): T[] {
+	const apex = zoneName.toLowerCase().replace(/\.?$/, '.');
+	const rank = (r: T) => {
+		const atApex = r.name.toLowerCase().replace(/\.?$/, '.') === apex;
+		if (atApex && r.type === 'SOA') return 0;
+		if (atApex && r.type === 'NS') return 1;
+		return 2;
+	};
+	const labels = (name: string) => name.toLowerCase().replace(/\.$/, '').split('.').reverse();
+	return [...records].sort((a, b) => {
+		const byRank = rank(a) - rank(b);
+		if (byRank !== 0) return byRank;
+		const la = labels(a.name);
+		const lb = labels(b.name);
+		for (let i = 0; i < Math.min(la.length, lb.length); i++) {
+			const c = labelCollator.compare(la[i], lb[i]);
+			if (c !== 0) return c;
+		}
+		if (la.length !== lb.length) return la.length - lb.length;
+		return a.type.localeCompare(b.type) || labelCollator.compare(a.data, b.data);
+	});
+}

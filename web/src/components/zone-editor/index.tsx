@@ -13,6 +13,7 @@ import {
   recordTypePalette,
   recordTypeBadgeVariants,
   isReverseIPv4Zone,
+  sortZoneRecords,
 } from './record-utils';
 import { RecordDataDisplay } from './record-form';
 import { AddRecordDialog, EditRecordDialog, BulkPTRDialog } from './record-dialogs';
@@ -27,7 +28,7 @@ interface ZoneEditorProps {
 
 export function ZoneEditor({ zoneName, initialRecords, onRefresh }: ZoneEditorProps) {
   const [records, setRecords] = useState<EditableRecord[]>(
-    initialRecords.map(r => ({ ...r, selected: false }))
+    sortZoneRecords(initialRecords, zoneName).map(r => ({ ...r, selected: false }))
   );
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
@@ -44,9 +45,9 @@ export function ZoneEditor({ zoneName, initialRecords, onRefresh }: ZoneEditorPr
 
   // Keep local state in sync when the parent reloads records after a mutation.
   useEffect(() => {
-    setRecords(initialRecords.map(r => ({ ...r, selected: false })));
+    setRecords(sortZoneRecords(initialRecords, zoneName).map(r => ({ ...r, selected: false })));
     setSelectedRecords(new Set());
-  }, [initialRecords]);
+  }, [initialRecords, zoneName]);
 
   const updateRecord = useCallback((index: number, field: keyof DnsRecord, value: string | number) => {
     setRecords(prev => {
@@ -383,7 +384,7 @@ export function ZoneEditor({ zoneName, initialRecords, onRefresh }: ZoneEditorPr
                     aria-label="Select all visible records"
                   />
                 </th>
-                <th scope="col" className="text-left text-xs font-medium text-muted-foreground uppercase tracking-wider px-4 py-3">Name</th>
+                <th scope="col" className="text-left text-xs font-medium text-muted-foreground uppercase tracking-wider px-4 py-3 whitespace-nowrap">Name</th>
                 <th scope="col" className="text-left text-xs font-medium text-muted-foreground uppercase tracking-wider px-4 py-3 w-24">Type</th>
                 <th scope="col" className="text-left text-xs font-medium text-muted-foreground uppercase tracking-wider px-4 py-3 w-24">TTL</th>
                 <th scope="col" className="text-left text-xs font-medium text-muted-foreground uppercase tracking-wider px-4 py-3">Data</th>
@@ -411,8 +412,8 @@ export function ZoneEditor({ zoneName, initialRecords, onRefresh }: ZoneEditorPr
                       aria-label={`Select ${r.type} record ${r.name}`}
                     />
                   </td>
-                  <td className="px-4 py-3">
-                    <span className="font-mono text-sm break-all" title={r.name}>{r.name}</span>
+                  <td className="px-4 py-3 whitespace-nowrap">
+                    <span className="font-mono text-sm" title={r.name}>{r.name}</span>
                   </td>
                   <td className="px-4 py-3">
                     <Badge variant={recordTypeBadgeVariants[r.type] || 'outline'}>{r.type}</Badge>
@@ -436,7 +437,7 @@ export function ZoneEditor({ zoneName, initialRecords, onRefresh }: ZoneEditorPr
                       />
                     )}
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="w-full px-4 py-3">
                     <RecordDataDisplay type={r.type} data={r.data} />
                   </td>
                   <td className="px-4 py-3 text-right">

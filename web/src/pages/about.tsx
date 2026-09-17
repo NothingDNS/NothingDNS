@@ -42,7 +42,7 @@ export function AboutPage() {
       <div className="text-center py-8">
         <div className="inline-flex items-center justify-center h-20 w-20 rounded-2xl bg-primary/10 text-primary mb-6"><Globe className="h-10 w-10" /></div>
         <h1 className="text-4xl font-bold tracking-tight mb-3">NothingDNS</h1>
-        <p className="text-lg text-muted-foreground max-w-xl mx-auto leading-relaxed">A zero-dependency, production-grade authoritative DNS server written in pure Go.</p>
+        <p className="text-lg text-muted-foreground max-w-xl mx-auto leading-relaxed">A production-grade authoritative and recursive DNS server written in Go with minimal dependencies.</p>
         <div className="flex items-center justify-center gap-2 mt-4">
           <Badge variant="secondary">v{serverInfo?.version || '...'}</Badge>
           <Badge variant="outline">MIT License</Badge>

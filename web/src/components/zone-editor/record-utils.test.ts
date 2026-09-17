@@ -4,6 +4,7 @@ import {
 	buildRecordData,
 	fieldsFromRecordData,
 	quoteDNSString,
+	sortZoneRecords,
 	stripOuterQuotes,
 } from './record-utils';
 
@@ -60,5 +61,45 @@ describe('TXT record edit round-trip (fieldsFromRecordData → buildRecordData)'
 			const fields = fieldsFromRecordData(type, data);
 			expect(buildRecordData(type, fields)).toEqual({ data });
 		}
+	});
+});
+
+describe('sortZoneRecords', () => {
+	it('puts apex SOA and NS first and orders owners hierarchically and numerically', () => {
+		const rec = (name: string, type: string, data = '') => ({ name, type, data });
+		const sorted = sortZoneRecords([
+			rec('32.2.0.192.in-addr.arpa.', 'PTR'),
+			rec('2.0.192.in-addr.arpa.', 'NS', 'ns2.example.'),
+			rec('10.2.0.192.in-addr.arpa.', 'PTR'),
+			rec('2.2.0.192.in-addr.arpa.', 'PTR'),
+			rec('2.0.192.in-addr.arpa.', 'SOA'),
+			rec('2.0.192.in-addr.arpa.', 'NS', 'ns1.example.'),
+		], '2.0.192.in-addr.arpa.');
+		expect(sorted.map(r => `${r.name} ${r.type} ${r.data}`.trim())).toEqual([
+			'2.0.192.in-addr.arpa. SOA',
+			'2.0.192.in-addr.arpa. NS ns1.example.',
+			'2.0.192.in-addr.arpa. NS ns2.example.',
+			'2.2.0.192.in-addr.arpa. PTR',
+			'10.2.0.192.in-addr.arpa. PTR',
+			'32.2.0.192.in-addr.arpa. PTR',
+		]);
+	});
+
+	it('keeps a parent before its children in forward zones', () => {
+		const rec = (name: string, type: string) => ({ name, type, data: '' });
+		const sorted = sortZoneRecords([
+			rec('www.example.com.', 'CNAME'),
+			rec('_sip._tcp.example.com.', 'SRV'),
+			rec('example.com.', 'MX'),
+			rec('api.example.com.', 'A'),
+			rec('example.com.', 'A'),
+		], 'example.com.');
+		expect(sorted.map(r => `${r.name} ${r.type}`)).toEqual([
+			'example.com. A',
+			'example.com. MX',
+			'_sip._tcp.example.com. SRV',
+			'api.example.com. A',
+			'www.example.com. CNAME',
+		]);
 	});
 });

@@ -13,6 +13,7 @@ interface QueryStreamState {
   connected: boolean;
   pushEvent: (event: QueryEvent) => void;
   setConnected: (connected: boolean) => void;
+  clear: () => void;
 }
 
 export const useQueryStream = create<QueryStreamState>((set) => ({
@@ -21,4 +22,7 @@ export const useQueryStream = create<QueryStreamState>((set) => ({
   pushEvent: (event) =>
     set((state) => ({ events: [event, ...state.events].slice(0, MAX_EVENTS) })),
   setConnected: (connected) => set({ connected }),
+  // Called when the session ends: events received for one user (e.g. an
+  // admin, with unmasked client IPs) must not be shown to the next user.
+  clear: () => set({ events: [], connected: false }),
 }));

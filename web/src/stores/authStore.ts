@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { useQueryStream } from './queryStream';
 
 interface AuthState {
   token: string | null;
@@ -27,6 +28,7 @@ export const useAuthStore = create<AuthState>()(
         set({ token, username, role, isAuthenticated: true }),
       clearAuth: () => {
         set({ token: null, username: null, role: null, isAuthenticated: false });
+        useQueryStream.getState().clear();
       },
     }),
     {

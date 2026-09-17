@@ -84,6 +84,26 @@ describe('UpstreamsPage', () => {
     expect(screen.getByText('DOWN')).toBeInTheDocument();
   });
 
+  it('labels aggregate entries and lists each configured server', async () => {
+    mockFetch.mockResolvedValue(mockJsonResponse({
+      upstreams: [{ address: 'direct-upstream', healthy: true, queries: 30, failed: 0, failovers: 0 }],
+      servers: [
+        { address: '1.1.1.1:53', healthy: true, latency_ms: 21.44 },
+        { address: '8.8.4.4:53', healthy: false, latency_ms: 0 },
+      ],
+    }));
+    render(<UpstreamsPage />);
+
+    expect((await screen.findAllByText('All upstream servers')).length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText('direct-upstream')).not.toBeInTheDocument();
+    const list = screen.getByRole('list', { name: 'Upstream servers' });
+    expect(list).toHaveTextContent('1.1.1.1:53');
+    expect(list).toHaveTextContent('21.4 ms');
+    expect(list).toHaveTextContent('8.8.4.4:53');
+    expect(list).toHaveTextContent('no queries yet');
+    expect(list).toHaveTextContent('Unhealthy');
+  });
+
   it('retries loading after error', async () => {
     mockFetch
       .mockResolvedValueOnce(mockJsonResponse({ error: 'err' }, 500))

@@ -73,26 +73,26 @@ function RoutedContent() {
       <Suspense fallback={<PageFallback />}>
         <Routes>
           <Route path="/" element={<DashboardPage />} />
-          <Route path="/zones" element={<ZonesPage />} />
-          <Route path="/zones/:name" element={<ZoneDetailPage />} />
+          <Route path="/zones" element={<RequireRole minRole="operator"><ZonesPage /></RequireRole>} />
+          <Route path="/zones/:name" element={<RequireRole minRole="operator"><ZoneDetailPage /></RequireRole>} />
           {/* Management pages: API reads gate on requireOperator (mutations on
               requireAdmin), so viewers get an access-denied panel instead of a
               page of 403s. The sidebar hides these entries for viewers too. */}
           <Route path="/settings" element={<RequireRole minRole="operator"><SettingsPage /></RequireRole>} />
           <Route path="/about" element={<AboutPage />} />
-          <Route path="/query-log" element={<QueryLogPage />} />
-          <Route path="/top-domains" element={<TopDomainsPage />} />
+          <Route path="/query-log" element={<RequireRole minRole="operator"><QueryLogPage /></RequireRole>} />
+          <Route path="/top-domains" element={<RequireRole minRole="operator"><TopDomainsPage /></RequireRole>} />
           <Route path="/blocklist" element={<RequireRole minRole="operator"><BlocklistPage /></RequireRole>} />
           <Route path="/upstreams" element={<RequireRole minRole="operator"><UpstreamsPage /></RequireRole>} />
           <Route path="/users" element={<RequireRole minRole="operator"><UsersPage /></RequireRole>} />
-          <Route path="/charts" element={<HistoricalChartsPage />} />
+          <Route path="/charts" element={<RequireRole minRole="operator"><HistoricalChartsPage /></RequireRole>} />
           <Route path="/dnssec" element={<RequireRole minRole="operator"><DNSSECPage /></RequireRole>} />
           <Route path="/cluster" element={<RequireRole minRole="operator"><ClusterPage /></RequireRole>} />
           <Route path="/rpz" element={<RequireRole minRole="operator"><RPZPage /></RequireRole>} />
           <Route path="/acl" element={<RequireRole minRole="operator"><ACLPage /></RequireRole>} />
-          <Route path="/geoip" element={<GeoIPPage />} />
-          <Route path="/dns64-cookies" element={<DNS64CookiesPage />} />
-          <Route path="/zone-transfer" element={<ZoneTransferPage />} />
+          <Route path="/geoip" element={<RequireRole minRole="operator"><GeoIPPage /></RequireRole>} />
+          <Route path="/dns64-cookies" element={<RequireRole minRole="operator"><DNS64CookiesPage /></RequireRole>} />
+          <Route path="/zone-transfer" element={<RequireRole minRole="operator"><ZoneTransferPage /></RequireRole>} />
           <Route path="*" element={<NotFoundPage />} />
         </Routes>
       </Suspense>

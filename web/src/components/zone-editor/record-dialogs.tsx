@@ -2,7 +2,7 @@ import { useState, useEffect, useId } from 'react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Dialog, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { api } from '@/lib/api';
 import { Check, AlertTriangle } from 'lucide-react';
 import {
@@ -87,6 +87,7 @@ export function AddRecordDialog({ open, onClose, zoneName, initialType, onSaved 
 
   return (
     <Dialog open={open} onClose={onClose}>
+      <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
       <DialogTitle>Add Record</DialogTitle>
       <div className="space-y-4 mt-5">
         {error && (
@@ -161,6 +162,7 @@ export function AddRecordDialog({ open, onClose, zoneName, initialType, onSaved 
           </Button>
         </div>
       </div>
+      </DialogContent>
     </Dialog>
   );
 }
@@ -224,6 +226,7 @@ export function EditRecordDialog({ open, record, onClose, onSave }: {
 
   return (
     <Dialog open={open} onClose={onClose}>
+      <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
       <DialogTitle>Edit {record.type} Record</DialogTitle>
       <div className="space-y-4 mt-5">
         {error && (
@@ -263,6 +266,7 @@ export function EditRecordDialog({ open, record, onClose, onSave }: {
           </Button>
         </div>
       </div>
+      </DialogContent>
     </Dialog>
   );
 }
@@ -360,6 +364,7 @@ export function BulkPTRDialog({ open, onClose, zoneName, onSaved }: {
 
   return (
     <Dialog open={open} onClose={onClose}>
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
       <DialogTitle>Bulk PTR Records</DialogTitle>
       <div className="space-y-4 mt-5">
         {error && (
@@ -440,7 +445,7 @@ export function BulkPTRDialog({ open, onClose, zoneName, onSaved }: {
             onChange={e => { setAddA(e.target.checked); setPreview(null); }}
             className="h-4 w-4 rounded border-input"
           />
-          <label htmlFor="addA" className="text-sm">Also add A records (pattern name → IP)</label>
+          <label htmlFor="addA" className="text-sm">Also add A records (pattern name → IP) in the forward zone that owns the name</label>
         </div>
 
         <div className="flex items-center gap-2">
@@ -466,6 +471,7 @@ export function BulkPTRDialog({ open, onClose, zoneName, onSaved }: {
           </Button>
         </div>
       </div>
+      </DialogContent>
     </Dialog>
   );
 }

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { DashboardPage } from './dashboard';
+import { useAuthStore } from '@/stores/authStore';
 
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
@@ -33,6 +34,19 @@ beforeEach(() => {
 });
 
 describe('DashboardPage', () => {
+  it('shows viewers only the live stream without requesting operator stats', () => {
+    useAuthStore.setState({ role: 'viewer' });
+    try {
+      render(<DashboardPage />);
+      expect(screen.getByText('Live Query Stream')).toBeInTheDocument();
+      expect(screen.queryByLabelText('Refresh stats')).not.toBeInTheDocument();
+      expect(screen.queryByText('Total Queries')).not.toBeInTheDocument();
+      expect(mockFetch).not.toHaveBeenCalled();
+    } finally {
+      useAuthStore.setState({ role: null });
+    }
+  });
+
   it('renders loading skeleton initially', () => {
     mockFetch.mockReturnValue(new Promise(() => {}));
     render(<DashboardPage />);

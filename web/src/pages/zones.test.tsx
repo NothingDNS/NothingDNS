@@ -44,6 +44,17 @@ describe('ZonesPage', () => {
     expect(screen.getByPlaceholderText('Search zones...')).toBeInTheDocument();
   });
 
+  it('keeps the create zone form hidden until requested', async () => {
+    const user = userEvent.setup();
+    mockFetch.mockResolvedValue(mockJsonResponse(sampleZones));
+    render(<ZonesPage />);
+    await waitFor(() => expect(screen.getByText('example.com.')).toBeInTheDocument());
+    expect(screen.queryByText('Create New Zone')).not.toBeInTheDocument();
+
+    await user.click(screen.getAllByRole('button', { name: /create zone/i })[0]);
+    expect(await screen.findByRole('dialog')).toHaveTextContent('Create New Zone');
+  });
+
   it('renders zone list after loading', async () => {
     mockFetch.mockResolvedValue(mockJsonResponse(sampleZones));
     render(<ZonesPage />);

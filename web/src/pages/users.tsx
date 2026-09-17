@@ -117,8 +117,8 @@ export function UsersPage() {
             </Button>
           </div>
           <div className="mt-3 flex gap-4 text-xs text-muted-foreground">
-            <span><Badge variant="secondary" className="mr-1">Viewer</Badge>Read-only access</span>
-            <span><Badge variant="warning" className="mr-1">Operator</Badge>Zone and cache management</span>
+            <span><Badge variant="secondary" className="mr-1">Viewer</Badge>Live query stream and server status only</span>
+            <span><Badge variant="warning" className="mr-1">Operator</Badge>All read access and zone/record changes</span>
             <span><Badge variant="destructive" className="mr-1">Admin</Badge>Full access</span>
           </div>
         </CardContent>

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { AddRecordDialog, EditRecordDialog } from './record-dialogs';
+import { AddRecordDialog, BulkPTRDialog, EditRecordDialog } from './record-dialogs';
 
 // TTL 0 is a legitimate DNS value (no caching). Both dialogs parsed the TTL
 // with `parseInt(ttl) || 3600`, whose falsy-zero branch silently rewrote an
@@ -78,3 +78,24 @@ function lastFetchBody(): string {
   const call = mockFetch.mock.calls.at(-1);
   return typeof call?.[1]?.body === 'string' ? call[1].body : '';
 }
+
+// The dialogs rendered their bodies straight into the Radix Root without
+// DialogContent, so the forms showed inline on the page even while closed.
+describe('record dialogs render only while open', () => {
+  it('hides every form while closed and shows it as a modal when open', () => {
+    const record = { name: 'www', type: 'A', ttl: 300, data: '192.0.2.1' };
+    const { rerender } = render(
+      <>
+        <AddRecordDialog open={false} onClose={() => {}} zoneName="example.com." initialType="A" onSaved={() => {}} />
+        <EditRecordDialog open={false} record={record} onClose={() => {}} onSave={async () => {}} />
+        <BulkPTRDialog open={false} onClose={() => {}} zoneName="2.0.192.in-addr.arpa." onSaved={() => {}} />
+      </>,
+    );
+    expect(screen.queryByText('Add Record')).not.toBeInTheDocument();
+    expect(screen.queryByText('Edit A Record')).not.toBeInTheDocument();
+    expect(screen.queryByText('Bulk PTR Records')).not.toBeInTheDocument();
+
+    rerender(<AddRecordDialog open onClose={() => {}} zoneName="example.com." initialType="A" onSaved={() => {}} />);
+    expect(screen.getByRole('dialog')).toHaveTextContent('Add Record');
+  });
+});
