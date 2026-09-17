@@ -519,7 +519,7 @@ func (sm *SlaveManager) applyFullZone(slaveZone *SlaveZone, records []*protocol.
 		if rr.Type == protocol.TypeSOA {
 			if soaData, ok := rr.Data.(*protocol.RDataSOA); ok && !haveSOA {
 				soaSerial = soaData.Serial
-				newZone.SOA = soaFromRData(soaData)
+				newZone.SOA = soaFromRData(soaData, rr.TTL)
 				haveSOA = true
 			}
 			continue
@@ -596,7 +596,7 @@ func (sm *SlaveManager) applyIncrementalIXFR(slaveZone *SlaveZone, base *zone.Zo
 
 	// The trailing SOA carries the target serial.
 	if newZone.SOA == nil {
-		newZone.SOA = soaFromRData(targetSOA)
+		newZone.SOA = soaFromRData(targetSOA, records[0].TTL)
 	} else {
 		newZone.SOA.Serial = targetSOA.Serial
 	}
@@ -617,9 +617,11 @@ func recordFromRR(rr *protocol.ResourceRecord) zone.Record {
 	}
 }
 
-// soaFromRData builds a zone.SOARecord from wire SOA rdata.
-func soaFromRData(soa *protocol.RDataSOA) *zone.SOARecord {
+// soaFromRData builds a zone.SOARecord from wire SOA rdata and the SOA
+// record's TTL.
+func soaFromRData(soa *protocol.RDataSOA, ttl uint32) *zone.SOARecord {
 	return &zone.SOARecord{
+		TTL:     ttl,
 		MName:   soa.MName.String(),
 		RName:   soa.RName.String(),
 		Serial:  soa.Serial,

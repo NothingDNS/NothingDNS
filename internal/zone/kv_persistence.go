@@ -223,6 +223,13 @@ func (k *KVPersistence) storedRecordsToZone(meta storage.ZoneMeta, records map[s
 		}
 	}
 
+	// Rebuild the apex NS set, which Validate and the zone writer rely on.
+	for _, rr := range z.Records[z.Origin] {
+		if strings.ToUpper(rr.Type) == "NS" {
+			z.NS = append(z.NS, NSRecord{Name: rr.Name, TTL: rr.TTL, NSDName: rr.RData})
+		}
+	}
+
 	// Find SOA record — scan every name until it is found: the Records map
 	// iterates in randomized order, so the apex (which holds the SOA) is not
 	// guaranteed to be visited first.
@@ -232,6 +239,11 @@ func (k *KVPersistence) storedRecordsToZone(meta storage.ZoneMeta, records map[s
 				continue
 			}
 			if soa := parseSOAFromRData(rr.RData); soa != nil {
+				// The TTL lives on the record, not in the RDATA; without it
+				// every reloaded zone served its SOA (and negative answers)
+				// with TTL 0.
+				soa.Name = rr.Name
+				soa.TTL = rr.TTL
 				z.SOA = soa
 			}
 			break

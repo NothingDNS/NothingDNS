@@ -290,10 +290,16 @@ func (h *integratedHandler) buildNODATAResponse(query *protocol.Message, z *zone
 }
 
 // addSOAAuthority appends the zone's SOA record to the authority section
-// of a response. This is required for negative caching (RFC 2308).
+// of a response. This is required for negative caching (RFC 2308). Its TTL is
+// the lesser of the SOA TTL and MINIMUM (RFC 2308 §3), which is how long
+// resolvers cache the negative answer.
 func (h *integratedHandler) addSOAAuthority(resp *protocol.Message, z *zone.Zone) {
 	if z.SOA == nil {
 		return
+	}
+	ttl := z.SOA.TTL
+	if z.SOA.Minimum < ttl {
+		ttl = z.SOA.Minimum
 	}
 	mname, err := protocol.ParseName(z.SOA.MName)
 	if err != nil {
@@ -311,7 +317,7 @@ func (h *integratedHandler) addSOAAuthority(resp *protocol.Message, z *zone.Zone
 		Name:  soaName,
 		Type:  protocol.TypeSOA,
 		Class: protocol.ClassIN,
-		TTL:   z.SOA.TTL,
+		TTL:   ttl,
 		Data: &protocol.RDataSOA{
 			MName:   mname,
 			RName:   rname,

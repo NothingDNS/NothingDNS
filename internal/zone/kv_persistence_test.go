@@ -21,6 +21,7 @@ func TestStoredRecordsToZoneFindsSOARegardlessOfMapOrder(t *testing.T) {
 	records := map[string][]storage.StoredRecord{
 		"example.com.": {
 			{Name: "example.com.", TTL: 300, Class: "IN", Type: "SOA", RData: "ns1.example.com. hostmaster.example.com. 2024010101 3600 900 604800 86400"},
+			{Name: "example.com.", TTL: 300, Class: "IN", Type: "NS", RData: "ns1.example.com."},
 		},
 		"www.example.com.": {
 			{Name: "www.example.com.", TTL: 300, Class: "IN", Type: "A", RData: "192.0.2.1"},
@@ -37,6 +38,14 @@ func TestStoredRecordsToZoneFindsSOARegardlessOfMapOrder(t *testing.T) {
 		}
 		if z.SOA.Serial != 2024010101 {
 			t.Fatalf("FAIL: iteration %d — z.SOA.Serial = %d, want 2024010101", i, z.SOA.Serial)
+		}
+		// The SOA TTL is on the record, not in the RDATA; losing it served
+		// SOA and negative answers with TTL 0 after every restart.
+		if z.SOA.TTL != 300 {
+			t.Fatalf("FAIL: iteration %d — z.SOA.TTL = %d, want 300", i, z.SOA.TTL)
+		}
+		if len(z.NS) != 1 || z.NS[0].NSDName != "ns1.example.com." {
+			t.Fatalf("FAIL: iteration %d — z.NS = %+v, want the apex NS rebuilt from records", i, z.NS)
 		}
 	}
 }

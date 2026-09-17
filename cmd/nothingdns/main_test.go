@@ -4130,6 +4130,16 @@ func TestAddSOAAuthority(t *testing.T) {
 	if resp.Authorities[0].Type != protocol.TypeSOA {
 		t.Errorf("expected SOA, got %d", resp.Authorities[0].Type)
 	}
+	// RFC 2308 §3: the negative-caching TTL is min(SOA TTL, MINIMUM).
+	if got := resp.Authorities[0].TTL; got != 300 {
+		t.Errorf("SOA TTL = %d, want 300 (SOA TTL below MINIMUM)", got)
+	}
+	z.SOA.TTL, z.SOA.Minimum = 3600, 60
+	resp.Authorities = nil
+	h.addSOAAuthority(resp, z)
+	if got := resp.Authorities[0].TTL; got != 60 {
+		t.Errorf("SOA TTL = %d, want 60 (MINIMUM below SOA TTL)", got)
+	}
 }
 
 func TestAddSOAAuthority_NoSOA(t *testing.T) {
