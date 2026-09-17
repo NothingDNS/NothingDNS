@@ -180,8 +180,16 @@ func (v *Validator) ValidateResponse(ctx context.Context, msg *protocol.Message,
 		}
 	}
 
+	// Build the chain down to the zone that signed the answer (RRSIG signer
+	// name), not necessarily the query name: names such as www.example.org
+	// are not zone cuts, and walking every label with DS queries both wastes
+	// round trips and trips over upstreams that mishandle DS queries for
+	// non-delegation names. Only a signer that is an ancestor of the query
+	// name is honoured, and its keys must still verify the signatures.
+	chainTarget := signingZone(msg, queryName)
+
 	// Find closest trust anchor
-	anchor, remaining := v.trustAnchors.FindClosestAnchor(queryName)
+	anchor, remaining := v.trustAnchors.FindClosestAnchor(chainTarget)
 	if anchor == nil {
 		if v.config.RequireDNSSEC {
 			return ValidationBogus, fmt.Errorf("no trust anchor found for %s", queryName)
@@ -226,6 +234,67 @@ func (v *Validator) ValidateResponse(ctx context.Context, msg *protocol.Message,
 	// outcome — see comment above.
 	result := v.validateMessage(ctx, msg, queryName, chain)
 	return result, nil
+}
+
+// signingZone returns the zone whose signatures authenticate msg for
+// queryName: the RRSIG signer of the query name's own answer RRset or, for a
+// negative answer, of the Authority records. It falls back to queryName when
+// no usable signer is present (an unsigned answer must be proven insecure by
+// walking the delegations down to the name).
+func signingZone(msg *protocol.Message, queryName string) string {
+	pick := func(rrs []*protocol.ResourceRecord, ownerMustMatch bool) string {
+		for _, rr := range rrs {
+			if rr == nil || rr.Name == nil || rr.Type != protocol.TypeRRSIG {
+				continue
+			}
+			if ownerMustMatch && !sameDNSName(rr.Name.String(), queryName) {
+				continue
+			}
+			sig, ok := rr.Data.(*protocol.RDataRRSIG)
+			if !ok || sig.SignerName == nil {
+				continue
+			}
+			signer := sig.SignerNameString()
+			if inBailiwick(queryName, signer) {
+				return canonicalZone(signer)
+			}
+		}
+		return ""
+	}
+	if zone := pick(msg.Answers, true); zone != "" {
+		return zone
+	}
+	if len(msg.Answers) == 0 {
+		if zone := pick(msg.Authorities, false); zone != "" {
+			return zone
+		}
+	}
+	return queryName
+}
+
+// chainResult caches a chain built for a signer zone while validating one
+// message.
+type chainResult struct {
+	chain    []*chainLink
+	insecure bool
+	err      error
+}
+
+// chainFor builds (once per message) the validation chain for name.
+func (v *Validator) chainFor(ctx context.Context, name string, memo map[string]chainResult) chainResult {
+	key := canonicalZone(name)
+	if r, ok := memo[key]; ok {
+		return r
+	}
+	var r chainResult
+	anchor, remaining := v.trustAnchors.FindClosestAnchor(key)
+	if anchor == nil {
+		r.insecure = true
+	} else {
+		r.chain, r.insecure, r.err = v.buildChain(ctx, anchor, remaining)
+	}
+	memo[key] = r
+	return r
 }
 
 // chainFetchError marks a chain-build failure caused by the FETCH of
@@ -302,6 +371,7 @@ func (v *Validator) buildChain(ctx context.Context, anchor *TrustAnchor, remaini
 	// order, and validateMessage — which authenticates the answer with the
 	// LAST link's keys — would check example.com.'s signatures against
 	// com.'s DNSKEYs and mark every correctly-signed answer Bogus.
+labels:
 	for i := len(remaining) - 1; i >= 0; i-- {
 		childZone := joinLabels(remaining[i:])
 		parentLink := chain[len(chain)-1]
@@ -323,23 +393,32 @@ func (v *Validator) buildChain(ctx context.Context, anchor *TrustAnchor, remaini
 		defer dsMsg.Release()
 
 		if len(dsRecords) == 0 {
-			// An empty DS answer might mean (a) the parent zone
-			// authoritatively says the child is unsigned — chain
-			// genuinely ends in an Insecure delegation — or (b) an
-			// on-path attacker stripped the DS RRset to downgrade
-			// validation. The two are indistinguishable without an
-			// authenticated denial proof. RFC 4035 §5.2 / RFC 5155
-			// §8.6 require NSEC/NSEC3 proof of DS non-existence,
-			// signed by the parent's ZSK, before treating the
-			// subtree as Insecure.
-			if !v.verifyDSDenial(dsMsg, childZone, chain) {
+			// An empty DS answer must be backed by an authenticated denial,
+			// signed by the parent's keys (RFC 4035 §5.2, RFC 5155 §8.6);
+			// otherwise an on-path attacker could strip the DS RRset to
+			// downgrade validation. What the proof shows decides how the
+			// chain continues:
+			switch v.classifyDSDenial(dsMsg, childZone, chain) {
+			case dsDenialInsecureDelegation:
+				// Unsigned delegation - chain ends here. The query name is
+				// in an Insecure subtree; signal it so the caller returns
+				// Insecure rather than requiring non-existent signatures.
+				insecure = true
+				break labels
+			case dsDenialNotZoneCut:
+				// The label is not a delegation (a name, empty
+				// non-terminal or CNAME inside the parent zone, e.g.
+				// www.example.org): stay in the parent zone and keep
+				// walking toward the query name.
+				continue labels
+			case dsDenialNameError:
+				// The name does not exist in the parent zone, so neither
+				// does anything below it. Stop here; the (negative) answer
+				// is validated with the parent zone's keys.
+				break labels
+			default:
 				return nil, false, fmt.Errorf("DS empty for %s but no authenticated denial proof (downgrade-attack guard)", childZone)
 			}
-			// Unsigned delegation - chain ends here. The query name is in an
-			// Insecure subtree; signal it so the caller returns Insecure rather
-			// than requiring (non-existent) signatures.
-			insecure = true
-			break
 		}
 
 		// The DS RRset itself lives in (and is signed by) the PARENT zone.
@@ -596,6 +675,7 @@ func (v *Validator) validateMessage(ctx context.Context, msg *protocol.Message, 
 	// WHOLE message is authenticated, so we downgrade Secure→Insecure at the end
 	// (AD=0) rather than falsely stamping AD=1 (RFC 4035 §5.3.4).
 	hasUnvalidated := false
+	chains := map[string]chainResult{canonicalZone(zoneLink.zone): {chain: chain}}
 	for _, rrSet := range answerGroups {
 		if len(rrSet) == 0 {
 			continue
@@ -612,6 +692,54 @@ func (v *Validator) validateMessage(ctx context.Context, msg *protocol.Message, 
 
 		// Find matching RRSIG
 		rrsig := v.findRRSIG(msg.Answers, owner, rrSet[0].Type)
+
+		// RRsets reached through a CNAME/DNAME chain may belong to other zones.
+		// Validate each with the chain of its own zone: the RRSIG signer when
+		// signed, otherwise a chain walked down to the owner, which proves
+		// whether an unsigned RRset is legitimately insecure or stripped.
+		if !sameDNSName(owner, queryName) {
+			target := owner
+			if rrsig != nil {
+				target = rrsig.SignerNameString()
+				if !inBailiwick(owner, target) {
+					return ValidationBogus
+				}
+			}
+			if !sameDNSName(target, zoneLink.zone) {
+				other := v.chainFor(ctx, target, chains)
+				var fetchErr *chainFetchError
+				switch {
+				case other.err != nil && rrsig == nil && errors.As(other.err, &fetchErr) && !inBailiwick(owner, zoneLink.zone):
+					// Could not fetch the delegation data of an out-of-bailiwick
+					// owner: the unsigned RRset stays unauthenticated (no AD), as
+					// before. In-bailiwick owners fall through to Bogus so a
+					// transient failure cannot mask a stripped signature.
+					hasUnvalidated = true
+					continue
+				case other.err != nil:
+					return ValidationBogus
+				case other.insecure:
+					// Proven unsigned zone: the RRset cannot be authenticated,
+					// so the message as a whole is not Secure.
+					hasUnvalidated = true
+					continue
+				case rrsig == nil:
+					// The owner's zone is signed, yet the RRset carries no
+					// signature: stripped-RRSIG downgrade.
+					return ValidationBogus
+				}
+				otherLink := other.chain[len(other.chain)-1]
+				if !v.validateRRSIG(rrSet, rrsig, otherLink.dnsKeys) {
+					return ValidationBogus
+				}
+				if int(rrsig.Labels) < len(rrSet[0].Name.LabelsSlice()) &&
+					!v.wildcardExpansionProven(msg, owner, rrsig.Labels, rrSet[0].Type, other.chain) {
+					return ValidationBogus
+				}
+				continue
+			}
+		}
+
 		if rrsig == nil {
 			// No signature for this RRset. We only reach validateMessage when
 			// the chain proved the query name's zone is SIGNED (Insecure
@@ -1607,10 +1735,16 @@ func (v *Validator) fetchDS(ctx context.Context, zone string) ([]*protocol.Resou
 	if err != nil {
 		return nil, nil, err
 	}
+	if msg != nil && msg.Header.Flags.RCODE == protocol.RcodeServerFailure {
+		msg.Release()
+		return nil, nil, fmt.Errorf("DS query for %s failed upstream (SERVFAIL)", zone)
+	}
 
+	// Only DS records owned by zone count: an upstream that follows a CNAME
+	// at zone returns the target's DS RRset, which says nothing about zone.
 	var dsRecords []*protocol.ResourceRecord
 	for _, rr := range msg.Answers {
-		if rr.Type == protocol.TypeDS {
+		if rr.Type == protocol.TypeDS && rr.Name != nil && sameDNSName(rr.Name.String(), zone) {
 			dsRecords = append(dsRecords, rr)
 		}
 	}
@@ -1674,63 +1808,159 @@ func nsec3ProvesNoDS(nsec3Owner, zone string, nsec3 *protocol.RDataNSEC3) bool {
 	return false
 }
 
-func (v *Validator) verifyDSDenial(msg *protocol.Message, zone string, chain []*chainLink) bool {
-	if msg == nil || len(chain) == 0 {
-		return false
+// dsDenial classifies an authenticated negative answer to "<zone> IN DS".
+type dsDenial int
+
+const (
+	// dsDenialNone: no authenticated proof; the empty DS answer is untrusted.
+	dsDenialNone dsDenial = iota
+	// dsDenialInsecureDelegation: zone is a delegation without DS (NS set,
+	// DS clear), or lies in an NSEC3 opt-out span.
+	dsDenialInsecureDelegation
+	// dsDenialNotZoneCut: the name exists in the parent zone (or is an empty
+	// non-terminal, or a CNAME) but is not a delegation.
+	dsDenialNotZoneCut
+	// dsDenialNameError: the name does not exist in the parent zone.
+	dsDenialNameError
+)
+
+// classifyDSDenial inspects the parent-signed NSEC/NSEC3 records (and a
+// parent-signed CNAME) in a DS response and reports what they prove about
+// zone. Only records whose signatures validate under the current chain's keys
+// are considered, so a forged proof cannot shorten the chain.
+func (v *Validator) classifyDSDenial(msg *protocol.Message, zone string, chain []*chainLink) dsDenial {
+	if msg == nil || len(chain) == 0 || len(chain[len(chain)-1].dnsKeys) == 0 {
+		return dsDenialNone
 	}
-	parentKeys := chain[len(chain)-1].dnsKeys
-	if len(parentKeys) == 0 {
-		return false
+	keys := chain[len(chain)-1].dnsKeys
+
+	// A validating upstream may answer the DS query for a CNAME owner with
+	// the CNAME itself. A CNAME cannot coexist with NS, so the name is not a
+	// zone cut.
+	var cnames []*protocol.ResourceRecord
+	for _, rr := range msg.Answers {
+		if rr != nil && rr.Name != nil && rr.Type == protocol.TypeCNAME && sameDNSName(rr.Name.String(), zone) {
+			cnames = append(cnames, rr)
+		}
+	}
+	if len(cnames) > 0 {
+		if sig := v.findRRSIG(msg.Answers, cnames[0].Name.String(), protocol.TypeCNAME); sig != nil && v.validateRRSIG(cnames, sig, keys) {
+			return dsDenialNotZoneCut
+		}
 	}
 
-	// Group Authority NSEC/NSEC3 records into RRsets by (name, type).
-	type rrsetKey struct {
-		name   string
-		rrtype uint16
-	}
-	sets := make(map[rrsetKey][]*protocol.ResourceRecord)
-	for _, rr := range msg.Authorities {
-		if rr == nil || rr.Name == nil {
-			continue
-		}
-		if rr.Type != protocol.TypeNSEC && rr.Type != protocol.TypeNSEC3 {
-			continue
-		}
-		k := rrsetKey{strings.ToLower(rr.Name.String()), rr.Type}
-		sets[k] = append(sets[k], rr)
-	}
-
-	for k, rrSet := range sets {
-		rrsig := v.findRRSIG(msg.Authorities, k.name, k.rrtype)
-		if rrsig == nil {
-			continue
-		}
-		if !v.validateRRSIG(rrSet, rrsig, parentKeys) {
-			continue
-		}
-		// Signature good. Does this RRset prove NoData(DS) at zone?
-		for _, rr := range rrSet {
-			switch rr.Type {
-			case protocol.TypeNSEC:
-				nsec, ok := rr.Data.(*protocol.RDataNSEC)
-				if !ok {
-					continue
-				}
-				if nsecProvesNoDS(rr.Name.String(), zone, nsec) {
-					return true
-				}
-			case protocol.TypeNSEC3:
-				nsec3, ok := rr.Data.(*protocol.RDataNSEC3)
-				if !ok {
-					continue
-				}
-				if nsec3ProvesNoDS(rr.Name.String(), zone, nsec3) {
-					return true
-				}
+	denial := v.authenticatedDenialRRs(msg, chain)
+	var nsec3s []*protocol.ResourceRecord
+	result := dsDenialNone
+	for _, rr := range denial {
+		switch data := rr.Data.(type) {
+		case *protocol.RDataNSEC:
+			if kind := nsecDSDenial(rr.Name.String(), zone, data); kind > result {
+				result = kind
 			}
+		case *protocol.RDataNSEC3:
+			nsec3s = append(nsec3s, rr)
 		}
 	}
-	return false
+	if result == dsDenialInsecureDelegation || result == dsDenialNotZoneCut {
+		return result
+	}
+	if len(nsec3s) > 0 {
+		if kind := v.nsec3DSDenial(zone, nsec3s); kind != dsDenialNone {
+			return kind
+		}
+	}
+	return result
+}
+
+// nsecDSDenial classifies what a single authenticated NSEC proves about zone.
+func nsecDSDenial(owner, zone string, nsec *protocol.RDataNSEC) dsDenial {
+	if sameDNSName(owner, zone) {
+		switch {
+		case nsec.HasType(protocol.TypeSOA):
+			// The child apex answered for itself; not a proof from the parent.
+			return dsDenialNone
+		case nsec.HasType(protocol.TypeNS) && !nsec.HasType(protocol.TypeDS):
+			return dsDenialInsecureDelegation
+		case !nsec.HasType(protocol.TypeNS):
+			return dsDenialNotZoneCut
+		}
+		return dsDenialNone
+	}
+	if nsec.NextDomain == nil || !nameInRange(zone, owner, nsec.NextDomain.String()) {
+		return dsDenialNone
+	}
+	// zone sorts between owner and next. If next is below zone, zone is an
+	// empty non-terminal; otherwise it does not exist.
+	if next := nsec.NextDomain.String(); !sameDNSName(next, zone) && inBailiwick(next, zone) {
+		return dsDenialNotZoneCut
+	}
+	return dsDenialNameError
+}
+
+// nsec3DSDenial classifies what an authenticated NSEC3 set proves about zone.
+func (v *Validator) nsec3DSDenial(zone string, rrs []*protocol.ResourceRecord) dsDenial {
+	params, ok := nsec3SharedParams(rrs)
+	if !ok {
+		return dsDenialNone
+	}
+	h, err := NSEC3Hash(zone, params.algo, params.iter, params.salt)
+	if err != nil {
+		return dsDenialNone
+	}
+	target := strings.ToUpper(protocol.Base32Encode(h))
+
+	// Exact match: the name exists in the parent zone.
+	for _, rr := range rrs {
+		n := rr.Data.(*protocol.RDataNSEC3)
+		if strings.ToUpper(extractNSEC3Hash(rr.Name.String())) != target {
+			continue
+		}
+		switch {
+		case n.HasType(protocol.TypeSOA):
+			return dsDenialNone
+		case n.HasType(protocol.TypeNS) && !n.HasType(protocol.TypeDS):
+			return dsDenialInsecureDelegation
+		case !n.HasType(protocol.TypeNS):
+			// Includes empty non-terminals (empty bitmap).
+			return dsDenialNotZoneCut
+		}
+		return dsDenialNone
+	}
+
+	// No match: closest encloser proof (RFC 5155 §8.4 steps 1-2). An Opt-Out
+	// NSEC3 covering the next closer name may hide an unsigned delegation
+	// (§8.6); otherwise the name does not exist.
+	closestEncloser, params, ok := v.nsec3ClosestEncloserAndNextCloser(zone, rrs)
+	if !ok {
+		return dsDenialNone
+	}
+	labels := splitLabels(zone)
+	ceLabels := splitLabels(closestEncloser)
+	if closestEncloser == "." {
+		ceLabels = nil
+	}
+	nextCloser := strings.Join(labels[len(labels)-len(ceLabels)-1:], ".")
+	nh, err := NSEC3Hash(nextCloser, params.algo, params.iter, params.salt)
+	if err != nil {
+		return dsDenialNone
+	}
+	nextTarget := strings.ToUpper(protocol.Base32Encode(nh))
+	for _, rr := range rrs {
+		n := rr.Data.(*protocol.RDataNSEC3)
+		owner := strings.ToUpper(extractNSEC3Hash(rr.Name.String()))
+		next := strings.ToUpper(protocol.Base32Encode(n.NextHashed))
+		if nsec3HashInRange(nextTarget, owner, next) && n.Flags&protocol.NSEC3FlagOptOut != 0 {
+			return dsDenialInsecureDelegation
+		}
+	}
+	return dsDenialNameError
+}
+
+// verifyDSDenial reports whether msg authenticates an insecure delegation at
+// zone. See classifyDSDenial for the full classification.
+func (v *Validator) verifyDSDenial(msg *protocol.Message, zone string, chain []*chainLink) bool {
+	return v.classifyDSDenial(msg, zone, chain) == dsDenialInsecureDelegation
 }
 
 // authenticatedDenialRRs returns the subset of msg.Authorities that
