@@ -142,8 +142,8 @@ curl -s -X POST http://127.0.0.1:8080/api/v1/zones \
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | **Yes** | Zone origin. Lowercased and a trailing dot is added. The root and reserved names are rejected. |
-| `nameservers` | string[] | **Yes** | At least one. The first one becomes the SOA MNAME; each becomes an NS record at the apex. |
-| `admin_email` | string | Recommended | SOA RNAME in DNS form (`hostmaster.example.org.`). There is no default: when omitted the SOA RNAME is empty, which produces an invalid SOA. |
+| `nameservers` | string[] | **Yes** | At least one. The first one becomes the SOA MNAME; each becomes an NS record at the apex. Dotted names are taken as fully qualified (`ns1.example.org` → `ns1.example.org.`), single labels are relative to the zone (`ns1` → `ns1.example.org.`). |
+| `admin_email` | string | No | Administrator address, as `user@domain` or in DNS form (`hostmaster.example.org.`). Converted to the SOA RNAME; defaults to `hostmaster.<zone>`. A user part containing dots (`first.last@…`) is rejected with `400`. |
 | `ttl` | uint32 | No | Default TTL, also used for the SOA and NS records. `0` or omitted means 3600. |
 
 The SOA gets serial `1`, refresh `3600`, retry `600`, expire `604800` and
@@ -167,6 +167,7 @@ minimum `86400`. These cannot be set through the API.
 |--------|-------|-------|
 | `400` | `Zone name is required` | Missing `name` |
 | `400` | `At least one nameserver is required` | Missing or empty `nameservers` |
+| `400` | `invalid admin email "first.last@example.org": ...` | `admin_email` cannot be expressed as an SOA RNAME |
 | `400` | `Invalid request body` | Malformed JSON or body over 64 KiB |
 | `409` | `zone example.org. already exists` | Duplicate |
 | `409` | `invalid zone origin` / `zone origin "..." is reserved and cannot be created` | Bad name |
@@ -226,9 +227,11 @@ curl -s http://127.0.0.1:8080/api/v1/zones/example.com. -H "Authorization: Beare
 
 Delete a zone with all its records.
 
-> **Warning:** if the zone was loaded from a file (listed under `zones:` in the
-> config or found in `zone_dir`) or written to `zone_dir`, **that file is
-> deleted from disk**. The zone is also removed from the embedded database.
+The zone is removed from memory and from the embedded database. Its zone file is
+deleted only when it lives inside `zone_dir` (where API-created zones are
+written). A zone loaded from a file listed under `zones:` in the config keeps
+its file and comes back on the next restart — remove it from the config as well
+to delete it permanently.
 
 ### Request
 
@@ -249,7 +252,7 @@ curl -s -X DELETE http://127.0.0.1:8080/api/v1/zones/example.org. -H "Authorizat
 
 | Status | Error | Cause |
 |--------|-------|-------|
-| `404` | `zone example.org. not found` | Unknown zone, or the zone file could not be deleted |
+| `404` | `zone example.org. not found` | Unknown zone, or the zone file in `zone_dir` could not be deleted |
 | `421` | `not the Raft leader; ...` | Raft follower |
 
 ---
@@ -391,7 +394,7 @@ curl -s -X PUT http://127.0.0.1:8080/api/v1/zones/example.com./records \
 | `type` | string | **Yes** | Record type |
 | `old_data` | string | **Yes** | Current RDATA of the record to replace |
 | `data` | string | **Yes** | New RDATA |
-| `ttl` | uint32 | Effectively yes | New TTL. **When omitted or 0 the record is stored with TTL 0**; it does not keep the old TTL or fall back to the zone default. |
+| `ttl` | uint32 | No | New TTL. When omitted the record keeps its current TTL; an explicit `0` stores TTL 0. |
 
 ### Response
 
@@ -407,6 +410,7 @@ curl -s -X PUT http://127.0.0.1:8080/api/v1/zones/example.com./records \
 | Status | Error | Cause |
 |--------|-------|-------|
 | `400` | `name, type, old_data, and data are required` | Missing field |
+| `404` | `record not found: ...` | No record matches `name`, `type` and `old_data` |
 | `404` | `zone example.com. not found` | Unknown zone |
 | `404` | `no records found for www.example.com.` | No records at that name |
 | `404` | `record not found: www.example.com. A 192.0.2.99` | No record matches `old_data` |

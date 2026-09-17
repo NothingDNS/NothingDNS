@@ -8,7 +8,7 @@ quirks.
 
 - Zone and record endpoints have their own detailed page: [API_ZONES.md](API_ZONES.md).
 - The server also publishes a machine-readable OpenAPI 3.0 document at
-  `GET /api/openapi.json` (see [OpenAPI and Swagger](#18-openapi-and-swagger)).
+  `GET /api/openapi.json` (see [OpenAPI and API explorer](#18-openapi-and-api-explorer)).
 
 All examples use `http://127.0.0.1:8080` and a token in `$TOKEN`. If you run
 the API over TLS, replace the scheme with `https`.
@@ -32,10 +32,9 @@ the API over TLS, replace the scheme with `https`.
 15. [Cluster](#15-cluster)
 16. [Zone transfers](#16-zone-transfers)
 17. [Dashboard data, query log, metrics and WebSocket](#17-dashboard-data-query-log-metrics-and-websocket)
-18. [OpenAPI and Swagger](#18-openapi-and-swagger)
+18. [OpenAPI and API explorer](#18-openapi-and-api-explorer)
 19. [DNS privacy transports (DoH, DoWS, ODoH)](#19-dns-privacy-transports-doh-dows-odoh)
 20. [Errors, limits and cross-cutting behaviour](#20-errors-limits-and-cross-cutting-behaviour)
-21. [Known issues](#21-known-issues)
 
 ---
 
@@ -127,7 +126,8 @@ including `viewer`.
 | GET | `/api/v1/metrics/history` | operator | |
 | GET | `/ws` | any | WebSocket query stream |
 | GET | `/api/openapi.json` | any | |
-| GET | `/api/docs` | any | Swagger UI page |
+| GET | `/api/docs` | any | API explorer page |
+| GET | `/api/docs/app.js` | any | API explorer script |
 | POST | `/api/v1/csp-report` | public | Browser CSP reports |
 | GET, POST | `server.http.doh_path` (default `/dns-query`) | public | When `doh_enabled` |
 | GET (upgrade) | `server.http.dows_path` (default `/dns-ws`) | public | When `dows_enabled` |
@@ -288,7 +288,8 @@ Response `200`, plus `Set-Cookie: ndns_token=...`:
 | 400 | `Username and password required`, `Username must be 2-64 characters`, `Password must be at least 8 characters`, `Password must be at most 128 bytes`, `Old password required` | Validation |
 | 401 | `Invalid old password` | Reset with a wrong `old_password` |
 | 403 | `Bootstrap is only allowed from localhost...` | Not a loopback client |
-| 409 | underlying error | User could not be created or updated |
+| 400 | validation error from the user store | Invalid username or password |
+| 409 | `user already exists` | Username taken |
 
 Created accounts are written to the users file (see [Persistence of users](#persistence-of-users)).
 
@@ -370,7 +371,7 @@ Response `201`:
 |---|---|---|
 | 400 | `Username and password required` / `Invalid role` | Validation |
 | 409 | `user already exists` | Duplicate |
-| 409 | `password must be at least 8 characters` (or the 128-byte limit) | Weak or oversized password (reported as 409) |
+| 400 | `password must be at least 8 characters` (or the 128-byte limit) | Weak or oversized password |
 
 There is no endpoint to change a user's role or password other than the
 localhost bootstrap reset. `PUT /api/v1/auth/users` returns 405.
@@ -525,7 +526,7 @@ Full request/response details, examples and error tables are in
 | GET | `/api/v1/zones` | operator | List zones (`name`, `serial`, `records`; max 5000) |
 | POST | `/api/v1/zones` | operator | Create a zone: `{"name","nameservers":[...],"admin_email","ttl"}` |
 | GET | `/api/v1/zones/{zone}` | operator | Zone detail with SOA and nameservers |
-| DELETE | `/api/v1/zones/{zone}` | operator | Delete a zone **and its zone file on disk** |
+| DELETE | `/api/v1/zones/{zone}` | operator | Delete a zone (its file is removed only when it lives in `zone_dir`) |
 | GET | `/api/v1/zones/{zone}/records?name=` | operator | List records (exact owner filter; max 5000) |
 | POST | `/api/v1/zones/{zone}/records` | operator | Add `{"name","type","ttl","data"}` |
 | PUT | `/api/v1/zones/{zone}/records` | operator | Replace `{"name","type","old_data","data","ttl"}` |
@@ -1305,8 +1306,9 @@ number of distinct DNS clients seen recently, `upstreamLatency` milliseconds.
 
 ### GET /api/dashboard/queries
 
-Role: operator. The last 100 query events, oldest first. Client IPs are **not**
-masked here.
+Role: operator. The last 100 query events, oldest first. For non-admins the
+last octet (IPv4) or group (IPv6) of `clientIp` is masked, as in
+`/api/v1/queries`.
 
 ```json
 [
@@ -1382,7 +1384,8 @@ Right after start the arrays are empty and `count` is 0.
 ### WebSocket /ws
 
 Role: any authenticated user (including `viewer`). Streams every DNS query
-event as it happens. Authenticate with `Authorization: Bearer` or the
+event as it happens. Non-admins receive `clientIp` with the last octet or group
+masked (`192.0.2.xxx`). Authenticate with `Authorization: Bearer` or the
 `ndns_token` cookie (browsers send the cookie automatically); query-string
 tokens are not accepted. The `Origin` header, when present, must be the same
 origin as the request or be listed in `server.http.allowed_origins`.
@@ -1406,12 +1409,12 @@ websocat -H "Authorization: Bearer $TOKEN" ws://127.0.0.1:8080/ws
 
 ---
 
-## 18. OpenAPI and Swagger
+## 18. OpenAPI and API explorer
 
 | Path | Role | Content |
 |---|---|---|
 | `GET /api/openapi.json` | any | OpenAPI 3.0.3 document. Each operation has an `x-required-role` extension. |
-| `GET /api/docs` | any | Swagger UI page that loads `/api/openapi.json` |
+| `GET /api/docs` | any | API explorer page that renders `/api/openapi.json` (script: `/api/docs/app.js`) |
 
 Both require a token (the dashboard cookie is enough in a browser, as these are
 `GET` requests).
@@ -1420,10 +1423,12 @@ Both require a token (the dashboard cookie is enough in a browser, as these are
 curl -s http://127.0.0.1:8080/api/openapi.json -H "Authorization: Bearer $TOKEN" | jq '.paths | keys'
 ```
 
-The Swagger UI page loads its JavaScript and CSS from `unpkg.com`, which the
-server's own `Content-Security-Policy` (`script-src 'self'`) blocks in
-browsers. Load `/api/openapi.json` into a local Swagger UI or another OpenAPI
-tool instead.
+`/api/docs` is a self-contained API explorer served from the server itself
+(`/api/docs/app.js`, no CDN), so it works under the server's
+`Content-Security-Policy` (`script-src 'self'`). Open it in a browser after
+signing in to the dashboard: operations are grouped by tag, filterable, and
+show the required role, parameters and request/response schemas. For "try it
+out" requests, load `/api/openapi.json` into another OpenAPI tool.
 
 ---
 
@@ -1577,24 +1582,3 @@ including for malformed bodies. Only `POST` is accepted.
 Set `server.http.tls_cert_file` and `server.http.tls_key_file` to serve the
 API over HTTPS. Without TLS the server logs a warning, because tokens and the
 session cookie then travel in clear text.
-
----
-
-## 21. Known issues
-
-These behaviours were observed in the current code and are documented so
-integrators are not surprised. They are defects rather than intended
-behaviour and may change in a later release.
-
-- **Swagger UI is blocked by the CSP** (see [section 18](#18-openapi-and-swagger)).
-- **Record update without `ttl` stores TTL 0.** Always send `ttl` with
-  `PUT /api/v1/zones/{zone}/records`.
-- **Zone creation without `admin_email`** produces an SOA with an empty RNAME;
-  after a restart the zone can come back without its SOA (serial 0). Always
-  send `admin_email`.
-- **Deleting a zone deletes its zone file**, including files listed under
-  `zones:` in the config.
-- **Client IPs are not masked** in `/api/dashboard/queries` and the `/ws`
-  stream (which viewers can open), while `/api/v1/queries` masks them for
-  non-admins.
-- **Weak passwords on user creation** return `409` rather than `400`.
