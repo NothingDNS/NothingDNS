@@ -5,6 +5,15 @@ All notable changes to NothingDNS are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **DNSSEC: false SERVFAIL for names inside signed zones**: the chain of trust was built down to the query name, so every name that is not itself a zone cut (`www.isc.org`, `deb.debian.org`, `security.debian.org`, `gouv.fr`) failed with "DS empty … but no authenticated denial proof". The chain now ends at the zone that signed the answer (RRSIG signer, in bailiwick of the query name). Empty DS answers are classified from the parent's authenticated NSEC/NSEC3 or signed CNAME as not-a-zone-cut, name error or insecure delegation; anything else still fails closed as a downgrade attempt.
+- **DNSSEC: NXDOMAIN under NSEC3 zones and cross-zone CNAMEs**: nonexistent names in NSEC3-signed zones (`.tr`, `.nl`) and CNAME targets signed by another zone (`www.iana.org`, `www.gov.uk`, `www.sidn.nl`) now validate each RRset against its own signer's chain instead of returning SERVFAIL. A DS query the upstream answers with SERVFAIL is treated as a fetch failure (Indeterminate), and DS records for other owners are ignored.
+- **install.sh left the host without DNS**: taking over port 53 stopped `systemd-resolved` before downloading the release (so the download itself failed) and left `/etc/resolv.conf` pointing at the dead `127.0.0.53` stub. The installer now downloads and verifies first, keeps `systemd-resolved` running with only `DNSStubListener=no`, points `/etc/resolv.conf` at resolved's upstream servers, repairs hosts already broken this way, and restores the previous resolver setup if NothingDNS fails to start. `uninstall.sh` re-enables the stub; `setup.sh` warns when port 53 is taken and prints the safe steps.
+- **ACL rules accept single IPs; redirect targets validated**: ACL `networks` accept bare IPs (as `/32`/`/128`) like `allow_recursion`, and a `redirect` rule must name a domain (IP addresses and empty targets are rejected by config validation and the API).
+
 ## [1.2.0] — 2026-09-17
 
 Recursion allow list with dashboard management, a verified API reference and

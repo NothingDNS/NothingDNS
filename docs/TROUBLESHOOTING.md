@@ -30,6 +30,52 @@ sudo ./nothingdns
 # Alternative: Use port 5354 for testing
 ```
 
+### Port 53 Held by systemd-resolved / Host Cannot Resolve Names
+
+**Problem**: `bind: address already in use` on port 53, or — after stopping
+`systemd-resolved` by hand or with an installer older than 1.2.1 — the server
+itself cannot resolve anything (`apt update`, `curl`, `getent hosts` fail)
+while other clients can use NothingDNS.
+
+**Cause**: `/etc/resolv.conf` still points at the resolved stub
+`127.0.0.53`, which is no longer running.
+
+**Diagnosis**:
+```bash
+ss -tulpn | grep ':53 '                 # who holds port 53
+ls -l /etc/resolv.conf; grep nameserver /etc/resolv.conf
+systemctl is-active systemd-resolved nothingdns
+getent hosts github.com                 # host lookups
+dig @127.0.0.1 github.com               # NothingDNS itself
+```
+
+**Solution**: keep systemd-resolved, disable only its stub listener, and point
+`/etc/resolv.conf` at the upstream servers it knows (`install.sh` does this
+automatically since 1.2.1 and `uninstall.sh` reverts it):
+```bash
+sudo mkdir -p /etc/systemd/resolved.conf.d
+printf '[Resolve]\nDNSStubListener=no\n' | sudo tee /etc/systemd/resolved.conf.d/nothingdns.conf
+sudo systemctl enable --now systemd-resolved
+sudo systemctl restart systemd-resolved
+sudo ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf
+sudo systemctl restart nothingdns
+```
+To make the host resolve through NothingDNS instead, write
+`nameserver 127.0.0.1` to `/etc/resolv.conf` (NothingDNS must be running and
+`127.0.0.1` must be allowed by `acl` and `allow_recursion`).
+
+### Viewing Logs
+
+```bash
+sudo journalctl -u nothingdns -f                 # follow (install.sh / systemd unit)
+sudo journalctl -u nothingdns -n 200 --no-pager  # last 200 lines
+sudo journalctl -u nothingdns --since "10 min ago" -p warning
+sudo tail -f /var/log/nothingdns/server.log      # setup.sh / deploy/nothingdns.service
+docker logs -f nothingdns                        # Docker
+```
+Set `logging.level: debug` and reload (`sudo systemctl reload nothingdns`) for
+per-query detail.
+
 ### Docker Port Binding Fails
 
 **Problem**: Docker container cannot bind to port 53.
@@ -239,7 +285,18 @@ curl http://localhost:8080/api/v1/dnssec/status
    sudo timedatectl set-ntp true
    ```
 
-3. **Invalid signature**:
+3. **SERVFAIL only for some signed domains (1.2.0 and earlier)**: the
+   validator built the chain of trust down to the query name instead of the
+   zone that signed the answer, so names inside a signed zone
+   (`www.isc.org`, `deb.debian.org`), NSEC3 "does not exist" answers and CNAMEs
+   into other signed zones were wrongly treated as Bogus. Upgrade to 1.2.1. As a
+   temporary workaround set `dnssec.enabled: false` and reload.
+   ```bash
+   dig @127.0.0.1 deb.debian.org          # SERVFAIL here, NOERROR at 1.1.1.1
+   sudo journalctl -u nothingdns | grep "DNSSEC validation error"
+   ```
+
+4. **Invalid signature**:
    ```bash
    # Check for BOGUS status
    dig @localhost example.com DS +dnssec
