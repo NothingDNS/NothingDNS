@@ -659,15 +659,23 @@ func (c *Config) validateACL() []string {
 			errors = append(errors, fmt.Sprintf("%s: invalid action '%s' (must be allow, deny, or redirect)", prefix, rule.Action))
 		}
 
-		// Validate redirect for redirect action
-		if rule.Action == "redirect" && rule.Redirect == "" {
-			errors = append(errors, fmt.Sprintf("%s: redirect target is required when action is 'redirect'", prefix))
+		// Validate redirect for redirect action. The server answers with a
+		// CNAME to the target, so it must be a domain name.
+		if rule.Action == "redirect" {
+			target := strings.TrimSpace(rule.Redirect)
+			switch {
+			case target == "":
+				errors = append(errors, fmt.Sprintf("%s: redirect target is required when action is 'redirect'", prefix))
+			case net.ParseIP(strings.TrimSuffix(target, ".")) != nil:
+				errors = append(errors, fmt.Sprintf("%s: redirect target '%s' must be a domain name, not an IP address", prefix, target))
+			}
 		}
 
-		// Validate networks
+		// Validate networks (CIDR or single IP)
 		for _, network := range rule.Networks {
-			if !isValidCIDR(network) {
-				errors = append(errors, fmt.Sprintf("%s: invalid network '%s' (must be valid CIDR)", prefix, network))
+			n := strings.TrimSpace(network)
+			if net.ParseIP(n) == nil && !isValidCIDR(n) {
+				errors = append(errors, fmt.Sprintf("%s: invalid network '%s' (must be a CIDR or IP address)", prefix, network))
 			}
 		}
 

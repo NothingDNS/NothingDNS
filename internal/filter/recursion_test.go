@@ -131,3 +131,34 @@ func TestAccessPolicyFileRoundTrip(t *testing.T) {
 		t.Error("saving without a path must fail")
 	}
 }
+
+func TestACLRulesAcceptSingleIPsAndValidateRedirect(t *testing.T) {
+	a := NewEmptyACLChecker()
+	if err := a.UpdateRules([]config.ACLRule{
+		{Name: "one-host", Action: "deny", Networks: []string{"203.0.113.9", "2001:db8::9"}},
+		{Name: "portal", Action: "redirect", Networks: []string{"198.51.100.0/24"}, Redirect: "blocked.example.net."},
+		{Name: "rest", Action: "allow", Networks: []string{"0.0.0.0/0", "::/0"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rules := a.GetRules()
+	if got := rules[0].Networks; !reflect.DeepEqual(got, []string{"203.0.113.9/32", "2001:db8::9/128"}) {
+		t.Errorf("single IPs stored as %v", got)
+	}
+	if ok, _ := a.IsAllowed(net.ParseIP("203.0.113.9"), 1); ok {
+		t.Error("single-IP deny rule did not match")
+	}
+	if ok, target := a.IsAllowed(net.ParseIP("198.51.100.7"), 1); ok || target != "blocked.example.net." {
+		t.Errorf("redirect rule = (%v, %q)", ok, target)
+	}
+
+	for _, bad := range []string{"192.0.2.1", "not a name!"} {
+		err := a.UpdateRules([]config.ACLRule{{Name: "r", Action: "redirect", Networks: []string{"0.0.0.0/0"}, Redirect: bad}})
+		if err == nil {
+			t.Errorf("redirect target %q accepted", bad)
+		}
+	}
+	if len(a.GetRules()) != 3 {
+		t.Error("a rejected update must leave the previous rules in place")
+	}
+}

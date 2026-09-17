@@ -61,18 +61,7 @@ func ParseRecursionNetworks(entries []string) ([]string, []*net.IPNet, error) {
 		if entry == "" {
 			continue
 		}
-		if !strings.Contains(entry, "/") {
-			ip := net.ParseIP(entry)
-			if ip == nil {
-				return nil, nil, fmt.Errorf("allow_recursion: invalid IP or CIDR %q", raw)
-			}
-			if ip.To4() != nil {
-				entry += "/32"
-			} else {
-				entry += "/128"
-			}
-		}
-		_, ipNet, err := net.ParseCIDR(entry)
+		ipNet, err := ParseNetwork(entry)
 		if err != nil {
 			return nil, nil, fmt.Errorf("allow_recursion: invalid IP or CIDR %q", raw)
 		}

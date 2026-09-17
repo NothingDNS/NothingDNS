@@ -70,10 +70,11 @@ type ACLRule struct {
 	// Action: "allow", "deny", or "redirect"
 	Action string `yaml:"action"`
 
-	// Redirect target IP (required when action is "redirect")
+	// Redirect target domain name (required when action is "redirect"); the
+	// client gets a CNAME to it.
 	Redirect string `yaml:"redirect"`
 
-	// Networks (CIDR notation)
+	// Networks: CIDRs or single IP addresses
 	Networks []string `yaml:"networks"`
 
 	// Query types this rule applies to (empty = all types)

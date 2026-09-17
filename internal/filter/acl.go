@@ -26,6 +26,14 @@ func validateACLAction(ruleName, action, redirect string) error {
 		if redirect == "" {
 			return fmt.Errorf("ACL rule %q: action %q requires a non-empty redirect target", ruleName, action)
 		}
+		// The redirect answers with a CNAME to this target, so it must be a
+		// domain name; an IP address would become a bogus CNAME.
+		if net.ParseIP(strings.TrimSuffix(redirect, ".")) != nil {
+			return fmt.Errorf("ACL rule %q: redirect target %q must be a domain name, not an IP address", ruleName, redirect)
+		}
+		if _, err := protocol.ParseName(redirect); err != nil {
+			return fmt.Errorf("ACL rule %q: redirect target %q is not a valid domain name", ruleName, redirect)
+		}
 		return nil
 	case "":
 		return fmt.Errorf("ACL rule %q: missing action (expected allow, deny, or redirect)", ruleName)
@@ -73,33 +81,42 @@ func NewACLChecker(rules []config.ACLRule, denyByDefault bool) (*ACLChecker, err
 		return nil, nil
 	}
 
+	compiled, err := compileACLRules(rules)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ACLChecker{rules: compiled, denyByDefault: denyByDefault}, nil
+}
+
+// compileACLRules validates rules and pre-parses their networks and types.
+// Networks may be CIDRs or single IP addresses (stored as /32 or /128).
+func compileACLRules(rules []config.ACLRule) ([]compiledRule, error) {
 	compiled := make([]compiledRule, 0, len(rules))
 	for _, r := range rules {
 		cr := compiledRule{
 			Name:     r.Name,
-			Action:   strings.ToLower(r.Action),
-			Redirect: r.Redirect,
+			Action:   strings.ToLower(strings.TrimSpace(r.Action)),
+			Redirect: strings.TrimSpace(r.Redirect),
 		}
 
-		// Parse networks
-		for _, cidr := range r.Networks {
-			_, ipNet, err := net.ParseCIDR(cidr)
+		for _, entry := range r.Networks {
+			ipNet, err := ParseNetwork(entry)
 			if err != nil {
-				return nil, fmt.Errorf("ACL rule %q: invalid CIDR %q: %w", r.Name, cidr, err)
+				return nil, fmt.Errorf("ACL rule %q: invalid network %q: %w", r.Name, entry, err)
 			}
 			cr.Networks = append(cr.Networks, ipNet)
 		}
 
-		// Parse types
 		if len(r.Types) > 0 {
 			cr.Types = make(map[uint16]bool, len(r.Types))
 			for _, t := range r.Types {
-				upper := strings.ToUpper(t)
-				if qtype, ok := protocol.StringToType[upper]; ok {
-					cr.Types[qtype] = true
-				} else {
+				upper := strings.ToUpper(strings.TrimSpace(t))
+				qtype, ok := protocol.StringToType[upper]
+				if !ok {
 					return nil, fmt.Errorf("ACL rule %q: unknown query type %q", r.Name, t)
 				}
+				cr.Types[qtype] = true
 			}
 		}
 
@@ -108,8 +125,27 @@ func NewACLChecker(rules []config.ACLRule, denyByDefault bool) (*ACLChecker, err
 		}
 		compiled = append(compiled, cr)
 	}
+	return compiled, nil
+}
 
-	return &ACLChecker{rules: compiled, denyByDefault: denyByDefault}, nil
+// ParseNetwork parses a CIDR or a single IP address (as a /32 or /128).
+func ParseNetwork(entry string) (*net.IPNet, error) {
+	entry = strings.TrimSpace(entry)
+	if !strings.Contains(entry, "/") {
+		ip := net.ParseIP(entry)
+		if ip == nil {
+			return nil, fmt.Errorf("not an IP address or CIDR")
+		}
+		if v4 := ip.To4(); v4 != nil {
+			return &net.IPNet{IP: v4, Mask: net.CIDRMask(32, 32)}, nil
+		}
+		return &net.IPNet{IP: ip, Mask: net.CIDRMask(128, 128)}, nil
+	}
+	_, ipNet, err := net.ParseCIDR(entry)
+	if err != nil {
+		return nil, fmt.Errorf("not an IP address or CIDR")
+	}
+	return ipNet, nil
 }
 
 // IsAllowed checks if a client IP is allowed to make a query of the given type.
@@ -162,40 +198,9 @@ func (a *ACLChecker) UpdateRules(rules []config.ACLRule) error {
 	if a == nil {
 		return fmt.Errorf("ACLChecker is nil")
 	}
-	compiled := make([]compiledRule, 0, len(rules))
-	for _, r := range rules {
-		cr := compiledRule{
-			Name:     r.Name,
-			Action:   strings.ToLower(r.Action),
-			Redirect: r.Redirect,
-		}
-
-		// Parse networks
-		for _, cidr := range r.Networks {
-			_, ipNet, err := net.ParseCIDR(cidr)
-			if err != nil {
-				return fmt.Errorf("ACL rule %q: invalid CIDR %q: %w", r.Name, cidr, err)
-			}
-			cr.Networks = append(cr.Networks, ipNet)
-		}
-
-		// Parse types
-		if len(r.Types) > 0 {
-			cr.Types = make(map[uint16]bool, len(r.Types))
-			for _, t := range r.Types {
-				upper := strings.ToUpper(t)
-				if qtype, ok := protocol.StringToType[upper]; ok {
-					cr.Types[qtype] = true
-				} else {
-					return fmt.Errorf("ACL rule %q: unknown query type %q", r.Name, t)
-				}
-			}
-		}
-
-		if err := validateACLAction(cr.Name, cr.Action, cr.Redirect); err != nil {
-			return err
-		}
-		compiled = append(compiled, cr)
+	compiled, err := compileACLRules(rules)
+	if err != nil {
+		return err
 	}
 
 	a.mu.Lock()

@@ -1449,3 +1449,19 @@ func TestUnmarshalAllowRecursion(t *testing.T) {
 		t.Error("invalid allow_recursion entry must be reported")
 	}
 }
+
+func TestValidateACLNetworksAndRedirect(t *testing.T) {
+	c := &Config{ACL: []ACLRule{
+		{Name: "host", Action: "deny", Networks: []string{"203.0.113.9", "10.0.0.0/8"}},
+		{Name: "portal", Action: "redirect", Networks: []string{"0.0.0.0/0"}, Redirect: "blocked.example.net."},
+	}}
+	if errs := c.validateACL(); len(errs) != 0 {
+		t.Fatalf("valid ACL reported errors: %v", errs)
+	}
+	c.ACL[1].Redirect = "192.0.2.1"
+	c.ACL[0].Networks = []string{"not-a-network"}
+	errs := c.validateACL()
+	if len(errs) != 2 {
+		t.Fatalf("errors = %v, want the invalid network and the IP redirect target", errs)
+	}
+}
