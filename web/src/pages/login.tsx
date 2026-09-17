@@ -51,12 +51,12 @@ export function LoginPage() {
         // SECURITY: Do NOT write the token to document.cookie — that overwrites
         // the backend's HttpOnly+Secure+SameSite=Strict cookie with a weaker
         // JS-readable one that any XSS can exfiltrate. The backend cookie is
-        // used by the browser automatically for safe-method requests; the
-        // in-memory Bearer token below is used for mutations.
+        // used by the browser automatically for safe-method requests and for
+        // GET /api/v1/auth/session after a hard refresh; the in-memory Bearer
+        // token below is used for mutations.
         // setAuth flips isAuthenticated → AppContent re-renders to the
         // dashboard reactively. Do NOT hard-reload (window.location): a full
-        // page reload drops the in-memory token (intentionally not persisted),
-        // which would bounce the user straight back to this login screen.
+        // page reload drops the in-memory token until /auth/session restores it.
         setAuth(token, username, role);
       } else if (r.status === 401) {
         setError('password', { message: 'Invalid credentials. Please check your username and password.' });

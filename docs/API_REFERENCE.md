@@ -73,6 +73,7 @@ including `viewer`.
 | GET | `/readyz` | public | 503 when no upstream is healthy |
 | GET | `/livez` | public | Always 200 |
 | POST | `/api/v1/auth/login` | public | Returns token, sets cookie |
+| GET | `/api/v1/auth/session` | any | Restore SPA bearer from cookie after reload |
 | POST | `/api/v1/auth/bootstrap` | public, localhost only | First admin / password reset |
 | POST | `/api/v1/auth/logout` | any | Revokes current token |
 | GET | `/api/v1/auth/roles` | operator | |
@@ -183,6 +184,9 @@ and static dashboard assets.
 - Lifetime is **24 hours**. The cookie is `HttpOnly`, `SameSite=Strict`,
   `Path=/`, `Max-Age=86400`, and `Secure` when the request came over TLS or
   through a trusted proxy that sent `X-Forwarded-Proto: https`.
+- The dashboard keeps the bearer only in memory. After a hard refresh it calls
+  `GET /api/v1/auth/session` with the cookie to rebuild the bearer for
+  mutations; it does not store the token in `localStorage`.
 - **A new login revokes every earlier token of that user.** Logging in from the
   dashboard therefore invalidates a token a script obtained for the same user.
   Use a separate account for automation.
@@ -253,6 +257,22 @@ TOKEN=$(curl -s -X POST http://127.0.0.1:8080/api/v1/auth/login \
 Login throttling in practice: **after one wrong password, every login from
 that client IP is refused for 30 seconds**, whatever the username. A
 successful login clears the counters for that IP and username.
+
+### GET /api/v1/auth/session
+
+Role: any authenticated user (Bearer **or** the HttpOnly `ndns_token` cookie
+on this safe GET). Used by the dashboard after a hard refresh to rebuild the
+in-memory bearer without storing it in `localStorage`. Same response shape as
+login. The legacy shared `auth_token` is rejected.
+
+```bash
+curl -s http://127.0.0.1:8080/api/v1/auth/session -b 'ndns_token=…'
+```
+
+| Status | Body | When |
+|---|---|---|
+| 401 | `Not authenticated` | Missing/invalid cookie or bearer, or legacy shared token |
+| 405 | `Method not allowed` | Not GET |
 
 ### POST /api/v1/auth/bootstrap
 

@@ -230,6 +230,53 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleSession restores the in-memory SPA bearer after a page reload.
+// The dashboard keeps the bearer only in memory (not localStorage) so XSS
+// cannot read a long-lived token; the HttpOnly ndns_token cookie survives
+// reloads and authenticates this safe-method GET. Returning the same token
+// in JSON lets the SPA resume mutating requests that require Authorization.
+// SameSite=Strict prevents cross-site callers from obtaining the cookie.
+func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
+	if s.requireMethod(w, r, http.MethodGet) {
+		return
+	}
+
+	user := GetUser(r.Context())
+	if user == nil || user.Username == "" || user.Username == legacyTokenUsername {
+		// Legacy shared auth_token has no per-user session to restore into
+		// the SPA store; require a real login cookie / bearer.
+		s.writeError(w, http.StatusUnauthorized, "Not authenticated")
+		return
+	}
+
+	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if token == "" {
+		if c, err := r.Cookie("ndns_token"); err == nil {
+			token = c.Value
+		}
+	}
+	if token == "" {
+		s.writeError(w, http.StatusUnauthorized, "Not authenticated")
+		return
+	}
+
+	authStore := s.currentAuthStore()
+	if authStore == nil {
+		s.writeError(w, http.StatusUnauthorized, "Not authenticated")
+		return
+	}
+	if u, err := authStore.ValidateToken(token); err != nil || u == nil || u.Username != user.Username {
+		s.writeError(w, http.StatusUnauthorized, "Not authenticated")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, &LoginResponse{
+		Token:    token,
+		Username: user.Username,
+		Role:     string(user.Role),
+	})
+}
+
 // handleLogout invalidates the current token.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if s.requireMethod(w, r, http.MethodPost) {

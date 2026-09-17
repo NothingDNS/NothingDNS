@@ -1885,6 +1885,58 @@ const OpenAPISpec = `{
         }
       }
     },
+    "/api/v1/auth/session": {
+      "get": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Restore dashboard session after reload",
+        "x-required-role": "any",
+        "description": "Requires any authenticated user (Bearer or the HttpOnly ndns_token cookie on this safe GET). Returns the same token/username/role shape as login so the SPA can rebuild its in-memory bearer after a hard refresh without persisting the token in localStorage. Rejects the legacy shared auth_token.",
+        "responses": {
+          "200": {
+            "description": "Active session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Method not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "API rate limit exceeded (100 requests per minute per client IP)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/auth/logout": {
       "post": {
         "tags": [

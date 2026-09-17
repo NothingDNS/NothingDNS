@@ -14,7 +14,7 @@ import { EmptyState } from '@/components/states';
 import { Button } from '@/components/ui/button';
 import { FileQuestion } from 'lucide-react';
 import { LoginPage } from '@/pages/login';
-import { lazy, Suspense, useEffect } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 
 const DashboardPage = lazy(() => import('@/pages/dashboard').then(({ DashboardPage }) => ({ default: DashboardPage })));
 const ZonesPage = lazy(() => import('@/pages/zones').then(({ ZonesPage }) => ({ default: ZonesPage })));
@@ -104,11 +104,40 @@ function AppContent() {
   const { isAuthenticated, token } = useAuthStore();
   const pushEvent = useQueryStream((s) => s.pushEvent);
   const setStreamConnected = useQueryStream((s) => s.setConnected);
+  // Skip the cookie session probe when a bearer is already in memory
+  // (SPA navigation). Hard refresh clears the bearer → probe once.
+  const [sessionChecked, setSessionChecked] = useState(() => Boolean(useAuthStore.getState().token));
   // The app's single shared WebSocket. Pages subscribe to events via the
   // queryStream store rather than opening their own socket.
   const { connected, error: streamError } = useWebSocket('/ws', { enabled: isAuthenticated, onQuery: pushEvent });
 
   useEffect(() => { setStreamConnected(connected); }, [connected, setStreamConnected]);
+
+  useEffect(() => {
+    if (token) {
+      setSessionChecked(true);
+      return;
+    }
+    let cancelled = false;
+    // Rebuild the in-memory bearer from the HttpOnly ndns_token cookie.
+    // Without this, Ctrl+F5 always lands on the login screen even though
+    // the server session is still valid.
+    fetch('/api/v1/auth/session', { credentials: 'same-origin' })
+      .then(async (r) => {
+        if (cancelled || !r.ok) return;
+        const res = (await r.json()) as { token?: string; username?: string; role?: string };
+        if (res.token && res.username && res.role) {
+          useAuthStore.getState().setAuth(res.token, res.username, res.role);
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setSessionChecked(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
 
   useEffect(() => {
     // Validate token on mount if authenticated. Clear the session ONLY on an
@@ -121,6 +150,14 @@ function AppContent() {
         .catch(() => {});
     }
   }, [isAuthenticated, token]);
+
+  if (!sessionChecked) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background" aria-label="Restoring session">
+        <div className="h-8 w-8 rounded-full border-2 border-muted border-t-primary animate-spin" />
+      </div>
+    );
+  }
 
   if (!isAuthenticated) return <LoginPage />;
 

@@ -773,6 +773,7 @@ func (s *Server) Start() error {
 	if runtimeSnapshot.authStore != nil {
 		mux.HandleFunc("/api/v1/auth/login", s.handleLogin)
 		mux.HandleFunc("/api/v1/auth/bootstrap", s.handleBootstrap)
+		mux.HandleFunc("/api/v1/auth/session", s.handleSession)
 		mux.HandleFunc("/api/v1/auth/users", s.handleUsers)
 		mux.HandleFunc("/api/v1/auth/users/", s.handleUsers)
 		mux.HandleFunc("/api/v1/auth/roles", s.handleRoles)

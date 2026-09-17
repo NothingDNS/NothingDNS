@@ -180,6 +180,79 @@ func TestHandleLogin_SetsCookie(t *testing.T) {
 	}
 }
 
+// --- handleSession tests ---
+
+func TestHandleSession_FromCookie(t *testing.T) {
+	store := newAuthStoreWithUser(t, "admin", "testpass123", auth.RoleAdmin)
+	s := newServerWithAuth(store)
+	tok, err := store.GenerateToken("admin", 24*time.Hour)
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
+	user, err := store.GetUser("admin")
+	if err != nil {
+		t.Fatalf("GetUser: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/session", nil)
+	req.AddCookie(&http.Cookie{Name: "ndns_token", Value: tok.Token})
+	req = req.WithContext(WithUser(req.Context(), user))
+	rec := httptest.NewRecorder()
+
+	s.handleSession(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp LoginResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Token != tok.Token || resp.Username != "admin" || resp.Role != "admin" {
+		t.Errorf("unexpected session: %+v", resp)
+	}
+}
+
+func TestHandleSession_Unauthenticated(t *testing.T) {
+	store := newAuthStoreWithUser(t, "admin", "testpass123", auth.RoleAdmin)
+	s := newServerWithAuth(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/session", nil)
+	rec := httptest.NewRecorder()
+	s.handleSession(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+}
+
+func TestHandleSession_RejectsLegacyTokenUser(t *testing.T) {
+	store := newAuthStoreWithUser(t, "admin", "testpass123", auth.RoleAdmin)
+	s := newServerWithAuth(store)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/session", nil)
+	req = req.WithContext(WithUser(req.Context(), legacyTokenUser(string(auth.RoleAdmin))))
+	rec := httptest.NewRecorder()
+	s.handleSession(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for legacy auth_token, got %d", rec.Code)
+	}
+}
+
+func TestHandleSession_MethodNotAllowed(t *testing.T) {
+	store := newAuthStoreWithUser(t, "admin", "testpass123", auth.RoleAdmin)
+	s := newServerWithAuth(store)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/session", nil)
+	rec := httptest.NewRecorder()
+	s.handleSession(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d", rec.Code)
+	}
+}
+
 // --- handleLogout tests ---
 
 func TestHandleLogout_Success(t *testing.T) {

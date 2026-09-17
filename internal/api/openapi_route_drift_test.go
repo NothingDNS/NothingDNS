@@ -18,6 +18,7 @@ var registeredRoutes = []string{
 	"/api/v1/auth/login",
 	"/api/v1/auth/logout",
 	"/api/v1/auth/roles",
+	"/api/v1/auth/session",
 	"/api/v1/auth/users",
 	"/api/v1/blocklists",
 	"/api/v1/config",
