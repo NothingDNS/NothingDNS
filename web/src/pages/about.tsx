@@ -65,6 +65,7 @@ export function AboutPage() {
         <div className="flex items-center justify-center gap-1.5 text-sm text-muted-foreground">Made with <Heart className="h-3.5 w-3.5 text-destructive fill-destructive" /></div>
         <div className="mt-3 flex items-center justify-center gap-4">
           <a href="https://github.com/nothingdns/nothingdns" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline"><ExternalLink className="h-3.5 w-3.5" /> GitHub</a>
+          <a href="/api/docs" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline"><ExternalLink className="h-3.5 w-3.5" /> API reference</a>
         </div>
       </div>
     </div>

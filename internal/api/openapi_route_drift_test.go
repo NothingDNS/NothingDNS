@@ -54,6 +54,7 @@ var registeredRoutes = []string{
 	"/api/dashboard/zones",
 	"/api/openapi.json",
 	"/api/docs",
+	"/api/docs/app.js",
 }
 
 // prefixSubRoutes are fixed action paths served by a registered prefix

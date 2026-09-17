@@ -769,6 +769,7 @@ func (s *Server) Start() error {
 	// OpenAPI / Swagger
 	mux.HandleFunc("/api/openapi.json", s.handleOpenAPISpec)
 	mux.HandleFunc("/api/docs", s.handleSwaggerUI)
+	mux.HandleFunc("/api/docs/app.js", s.handleAPIExplorerScript)
 
 	// CSP violation reporting
 	mux.HandleFunc("/api/v1/csp-report", s.handleCSPReport)

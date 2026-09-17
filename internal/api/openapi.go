@@ -5929,14 +5929,46 @@ const OpenAPISpec = `{
         }
       }
     },
+    "/api/docs/app.js": {
+      "get": {
+        "tags": [
+          "Docs"
+        ],
+        "summary": "API explorer script",
+        "x-required-role": "any",
+        "description": "Requires any authenticated user.",
+        "responses": {
+          "200": {
+            "description": "JavaScript",
+            "content": {
+              "text/javascript": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/docs": {
       "get": {
         "tags": [
           "Docs"
         ],
-        "summary": "Swagger UI page",
+        "summary": "API explorer page",
         "x-required-role": "any",
-        "description": "Requires any authenticated user.",
+        "description": "Requires any authenticated user. Self-contained page (no CDN) that renders this specification; its script is /api/docs/app.js.",
         "responses": {
           "200": {
             "description": "HTML page",
@@ -6055,9 +6087,18 @@ func (s *Server) handleOpenAPISpec(w http.ResponseWriter, r *http.Request) {
 	writeRawResponse(w, "application/json", []byte(OpenAPISpec))
 }
 
-// handleSwaggerUI serves a minimal Swagger UI page that loads the spec from /api/openapi.json.
+// handleSwaggerUI serves the API explorer page. It renders
+// /api/openapi.json with a small same-origin script instead of loading
+// Swagger UI from a CDN: the server's Content-Security-Policy
+// (script-src 'self') blocks third-party scripts, and loading them into the
+// authenticated dashboard origin would be a supply-chain risk (VULN-012).
 func (s *Server) handleSwaggerUI(w http.ResponseWriter, r *http.Request) {
-	writeRawResponse(w, "text/html; charset=utf-8", []byte(swaggerUIHTML))
+	writeRawResponse(w, "text/html; charset=utf-8", []byte(apiExplorerHTML))
+}
+
+// handleAPIExplorerScript serves the explorer's script.
+func (s *Server) handleAPIExplorerScript(w http.ResponseWriter, r *http.Request) {
+	writeRawResponse(w, "text/javascript; charset=utf-8", []byte(apiExplorerJS))
 }
 
 func writeRawResponse(w http.ResponseWriter, contentType string, body []byte) {
@@ -6067,40 +6108,183 @@ func writeRawResponse(w http.ResponseWriter, contentType string, body []byte) {
 	}
 }
 
-// swaggerUIHTML pins swagger-ui-dist to an exact version and adds
-// Subresource Integrity hashes so a compromised unpkg (or a malicious
-// @5.x range resolution) cannot inject JS into the authenticated
-// dashboard origin (VULN-012). When upgrading the pin, regenerate both
-// sha384 hashes with:
-//
-//	curl -sL https://unpkg.com/swagger-ui-dist@<ver>/swagger-ui.css | openssl dgst -sha384 -binary | openssl base64 -A
-//	curl -sL https://unpkg.com/swagger-ui-dist@<ver>/swagger-ui-bundle.js | openssl dgst -sha384 -binary | openssl base64 -A
-const swaggerUIHTML = `<!DOCTYPE html>
+const apiExplorerHTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>NothingDNS API Documentation</title>
-  <link rel="stylesheet"
-        href="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui.css"
-        integrity="sha384-wxLW6kwyHktdDGr6Pv1zgm/VGJh99lfUbzSn6HNHBENZlCN7W602k9VkGdxuFvPn"
-        crossorigin="anonymous">
-  <style>
-    body { margin: 0; padding: 0; }
-    #swagger-ui { max-width: 1200px; margin: 0 auto; }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NothingDNS API</title>
+<style>
+:root { color-scheme: light dark; --fg:#1f2328; --muted:#59636e; --bg:#fff; --panel:#f6f8fa; --border:#d1d9e0;
+  --get:#0969da; --post:#1a7f37; --put:#9a6700; --delete:#cf222e; --patch:#8250df; }
+@media (prefers-color-scheme: dark) { :root { --fg:#e6edf3; --muted:#9198a1; --bg:#0d1117; --panel:#151b23; --border:#3d444d;
+  --get:#4493f8; --post:#3fb950; --put:#d29922; --delete:#f85149; --patch:#ab7df8; } }
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--fg); background: var(--bg); }
+header { padding: 20px 24px 12px; border-bottom: 1px solid var(--border); }
+h1 { margin: 0 0 4px; font-size: 22px; }
+.sub { color: var(--muted); margin: 0; }
+main { max-width: 1100px; margin: 0 auto; padding: 16px 24px 48px; }
+input[type=search] { width: 100%; padding: 8px 10px; font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; }
+h2 { font-size: 16px; margin: 28px 0 8px; }
+details.op { border: 1px solid var(--border); border-radius: 6px; margin: 6px 0; background: var(--panel); }
+details.op > summary { cursor: pointer; padding: 8px 12px; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; list-style: none; }
+.method { font: 600 12px ui-monospace, monospace; min-width: 56px; text-align: center; padding: 2px 6px; border-radius: 4px; color: #fff; }
+.path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
+.summary { color: var(--muted); }
+.role { margin-left: auto; font-size: 12px; border: 1px solid var(--border); border-radius: 999px; padding: 0 8px; }
+.body { padding: 4px 12px 12px; border-top: 1px solid var(--border); }
+table { border-collapse: collapse; width: 100%; margin: 6px 0; }
+th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px; overflow: auto; font-size: 12px; }
+.msg { padding: 16px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); }
+a { color: var(--get); }
+</style>
 </head>
 <body>
-  <div id="swagger-ui"></div>
-  <script src="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui-bundle.js"
-          integrity="sha384-wmyclcVGX/WhUkdkATwhaK1X1JtiNrr2EoYJ+diV3vj4v6OC5yCeSu+yW13SYJep"
-          crossorigin="anonymous"></script>
-  <script>
-    SwaggerUIBundle({
-      url: '/api/openapi.json',
-      dom_id: '#swagger-ui',
-      presets: [SwaggerUIBundle.presets.apis],
-      layout: "BaseLayout"
-    });
-  </script>
+<header>
+  <h1 id="title">NothingDNS API</h1>
+  <p class="sub" id="subtitle">Loading <a href="/api/openapi.json">/api/openapi.json</a>…</p>
+</header>
+<main>
+  <input type="search" id="filter" placeholder="Filter by path, summary or tag" aria-label="Filter operations">
+  <div id="content"></div>
+</main>
+<script src="/api/docs/app.js"></script>
 </body>
 </html>`
+
+const apiExplorerJS = `(function () {
+  'use strict';
+  var colors = { get: 'var(--get)', post: 'var(--post)', put: 'var(--put)', delete: 'var(--delete)', patch: 'var(--patch)' };
+  var content = document.getElementById('content');
+  var spec = null;
+
+  function el(tag, attrs, children) {
+    var node = document.createElement(tag);
+    Object.keys(attrs || {}).forEach(function (k) {
+      if (k === 'text') node.textContent = attrs[k]; else node.setAttribute(k, attrs[k]);
+    });
+    (children || []).forEach(function (c) { if (c) node.appendChild(c); });
+    return node;
+  }
+
+  function resolve(schema, depth) {
+    if (!schema || depth > 6) return schema;
+    if (schema.$ref) {
+      var name = schema.$ref.split('/').pop();
+      var target = (spec.components && spec.components.schemas || {})[name];
+      return target ? resolve(target, depth + 1) : schema;
+    }
+    var out = {};
+    Object.keys(schema).forEach(function (k) {
+      var v = schema[k];
+      if (k === 'properties' && v) {
+        out.properties = {};
+        Object.keys(v).forEach(function (p) { out.properties[p] = resolve(v[p], depth + 1); });
+      } else if (k === 'items') {
+        out.items = resolve(v, depth + 1);
+      } else {
+        out[k] = v;
+      }
+    });
+    return out;
+  }
+
+  function schemaBlock(label, media) {
+    var json = media && media['application/json'];
+    if (!json || !json.schema) return null;
+    return el('div', {}, [
+      el('strong', { text: label }),
+      el('pre', { text: JSON.stringify(resolve(json.schema, 0), null, 2) })
+    ]);
+  }
+
+  function operation(path, method, op) {
+    var summary = el('summary', {}, [
+      el('span', { 'class': 'method', style: 'background:' + (colors[method] || 'var(--muted)'), text: method.toUpperCase() }),
+      el('span', { 'class': 'path', text: path }),
+      el('span', { 'class': 'summary', text: op.summary || '' }),
+      op['x-required-role'] ? el('span', { 'class': 'role', text: 'role: ' + op['x-required-role'] }) : null
+    ]);
+    var body = el('div', { 'class': 'body' });
+    if (op.description) body.appendChild(el('p', { text: op.description }));
+    if (op.parameters && op.parameters.length) {
+      var rows = op.parameters.map(function (p) {
+        return el('tr', {}, [
+          el('td', {}, [el('code', { text: p.name })]),
+          el('td', { text: p['in'] || '' }),
+          el('td', { text: p.required ? 'yes' : 'no' }),
+          el('td', { text: p.description || '' })
+        ]);
+      });
+      body.appendChild(el('table', {}, [
+        el('thead', {}, [el('tr', {}, ['Parameter', 'In', 'Required', 'Description'].map(function (h) { return el('th', { text: h }); }))]),
+        el('tbody', {}, rows)
+      ]));
+    }
+    if (op.requestBody) body.appendChild(schemaBlock('Request body', op.requestBody.content));
+    Object.keys(op.responses || {}).forEach(function (code) {
+      var r = op.responses[code];
+      body.appendChild(el('p', {}, [el('strong', { text: code + ' ' }), document.createTextNode(r.description || '')]));
+      var block = schemaBlock('Schema', r.content);
+      if (block) body.appendChild(block);
+    });
+    var details = el('details', { 'class': 'op' }, [summary, body]);
+    details.dataset.search = (method + ' ' + path + ' ' + (op.summary || '') + ' ' + (op.tags || []).join(' ')).toLowerCase();
+    return details;
+  }
+
+  function render() {
+    content.textContent = '';
+    var groups = {};
+    Object.keys(spec.paths || {}).sort().forEach(function (path) {
+      Object.keys(spec.paths[path]).forEach(function (method) {
+        var op = spec.paths[path][method];
+        if (!op || typeof op !== 'object' || !op.responses && !op.summary) return;
+        var tag = (op.tags && op.tags[0]) || 'Other';
+        (groups[tag] = groups[tag] || []).push(operation(path, method, op));
+      });
+    });
+    Object.keys(groups).sort().forEach(function (tag) {
+      var section = el('section', {}, [el('h2', { text: tag })]);
+      groups[tag].forEach(function (d) { section.appendChild(d); });
+      content.appendChild(section);
+    });
+    applyFilter();
+  }
+
+  function applyFilter() {
+    var q = document.getElementById('filter').value.trim().toLowerCase();
+    Array.prototype.forEach.call(content.querySelectorAll('section'), function (section) {
+      var visible = 0;
+      Array.prototype.forEach.call(section.querySelectorAll('details.op'), function (d) {
+        var show = !q || d.dataset.search.indexOf(q) !== -1;
+        d.style.display = show ? '' : 'none';
+        if (show) visible++;
+      });
+      section.style.display = visible ? '' : 'none';
+    });
+  }
+
+  document.getElementById('filter').addEventListener('input', applyFilter);
+
+  fetch('/api/openapi.json', { credentials: 'same-origin' })
+    .then(function (res) {
+      if (res.status === 401) throw new Error('Sign in to the dashboard first, then reload this page.');
+      if (!res.ok) throw new Error('Could not load /api/openapi.json (HTTP ' + res.status + ').');
+      return res.json();
+    })
+    .then(function (data) {
+      spec = data;
+      document.getElementById('title').textContent = (spec.info && spec.info.title) || 'API';
+      document.getElementById('subtitle').textContent =
+        'Version ' + ((spec.info && spec.info.version) || '?') + ' · Send "Authorization: Bearer <token>" for scripted access · raw spec: /api/openapi.json';
+      render();
+    })
+    .catch(function (err) {
+      document.getElementById('subtitle').textContent = '';
+      content.appendChild(el('div', { 'class': 'msg', role: 'alert', text: err.message }));
+    });
+})();
+`
