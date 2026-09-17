@@ -504,31 +504,50 @@ curl -X POST http://localhost:8080/api/v1/auth/login \
 curl -H "Authorization: Bearer <token>" http://localhost:8080/api/v1/zones
 ```
 
-### ACL Blocking Queries
+### ACL or Recursion Policy Refusing Queries
 
 **Problem**: DNS queries returning `REFUSED`.
 
+Two independent lists can refuse a client:
+
+- **Recursion allow list** (`allow_recursion`): the client gets answers for
+  this server's own zones but `REFUSED` for every other name, with Extended DNS
+  Error 18 (Prohibited) and RA=0. By default only loopback and private networks
+  may recurse.
+- **General ACL** (`acl`): the client is refused for everything, including the
+  server's own zones. Once any rule exists, clients matching no rule are refused.
+
 **Diagnosis**:
 ```bash
-# Check ACL config
-curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:8080/api/v1/acl | jq
+# Which case? An own-zone name answers only when the ACL admits the client.
+dig @SERVER www.your-zone.example A     # NOERROR → ACL is fine
+dig @SERVER example.org A               # REFUSED + "EDE: 18 (Prohibited)" → recursion policy
+
+# Current lists (and whether dashboard changes are persisted)
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/acl | jq
+
+# Server log
+sudo journalctl -u nothingdns | grep -E "ACL denied|Recursion allowed"
 ```
 
-**Solution**:
-```yaml
-acl:
-  - name: allow-private-networks
-    action: allow
-    networks:
-      - "10.0.0.0/8"
-      - "172.16.0.0/12"
-      - "192.168.0.0/16"
-    # Do NOT add `types: [ANY]` here. `types` narrows the rule to specific
-    # QTYPEs, and "ANY" is QTYPE 255 — not a wildcard. A rule carrying it
-    # matches no ordinary A/AAAA query, so every client stays refused and this
-    # "solution" appears not to work. Omit `types` to match all query types.
+**Solution** — allow the client to recurse (dashboard: ACL → Allow Recursion, or):
+```bash
+curl -X PUT -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  http://localhost:8080/api/v1/acl/recursion \
+  -d '{"networks":["127.0.0.0/8","::1/128","192.168.1.0/24","203.0.113.10"]}'
 ```
+
+or in the config (ignored once `<storage.data_dir>/access_policy.json` exists):
+```yaml
+allow_recursion:
+  - 127.0.0.0/8
+  - "::1/128"
+  - 192.168.1.0/24
+```
+
+If the general ACL is refusing the client, add an allow rule that covers it.
+Do NOT add `types: [ANY]`: `types` narrows a rule to specific QTYPEs, and
+"ANY" is QTYPE 255, not a wildcard, so such a rule matches no ordinary query.
 
 ### Rate Limiting Triggered
 

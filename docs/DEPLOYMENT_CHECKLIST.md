@@ -158,18 +158,39 @@ server:
     doh_path: /dns-query
 ```
 
-### 3. Configure ACL
+### 3. Configure Recursion and ACL
+
+Limit recursion to your own clients so the server is not an open resolver.
+Everyone else still gets answers from this server's zones:
+
+```yaml
+allow_recursion:
+  - 127.0.0.0/8
+  - "::1/128"
+  - 10.0.0.0/8
+  - 172.16.0.0/12
+  - 192.168.0.0/16
+```
+
+Use the general `acl` only to block clients entirely (including from your
+zones). Once any rule exists, clients matching no rule are refused:
 
 ```yaml
 acl:
-  - name: allow-private-networks
+  - name: block-abusive-range
+    action: deny
+    networks:
+      - 198.51.100.0/24
+  - name: everyone-else
     action: allow
     networks:
-      - 10.0.0.0/8
-      - 172.16.0.0/12
-      - 192.168.0.0/16
-    # Omit types to allow all DNS query types. "ANY" only matches QTYPE 255.
+      - 0.0.0.0/0
+      - "::/0"
+    # Omit types to match all DNS query types. "ANY" only matches QTYPE 255.
 ```
+
+Both lists can also be managed on the dashboard's ACL page; changes are saved
+to `<storage.data_dir>/access_policy.json`, which then overrides the config.
 
 ### 4. Tune Runtime RRL
 
