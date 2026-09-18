@@ -157,3 +157,6 @@ web/coverage/
 # TypeScript incremental build info
 web/.tsbuild/
 *.tsbuildinfo
+!/.wrongstack/
+/.wrongstack/*
+!/.wrongstack/project.json
