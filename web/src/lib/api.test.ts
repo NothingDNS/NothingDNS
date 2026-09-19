@@ -40,13 +40,16 @@ describe('api()', () => {
   it('sends GET request with correct headers', async () => {
     mockFetch.mockResolvedValue(mockJsonResponse({ status: 'ok' }));
     await api('GET', '/api/v1/health');
-    expect(mockFetch).toHaveBeenCalledWith('/api/v1/health', {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Requested-With': 'XMLHttpRequest',
-      },
-    });
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/api/v1/health',
+      expect.objectContaining({
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest',
+        },
+      }),
+    );
   });
 
   it('includes Bearer token when authenticated', async () => {
@@ -68,11 +71,14 @@ describe('api()', () => {
     mockFetch.mockResolvedValue(mockJsonResponse({ id: 'z_1' }));
     const body = { name: 'example.com' };
     await api('POST', '/api/v1/zones', body);
-    expect(mockFetch).toHaveBeenCalledWith('/api/v1/zones', {
-      method: 'POST',
-      headers: expect.objectContaining({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify(body),
-    });
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/api/v1/zones',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body),
+      }),
+    );
   });
 
   it('parses successful JSON response', async () => {
@@ -159,6 +165,45 @@ describe('api()', () => {
     );
     const r = await api('GET', '/api/v1/health');
     expect(r).toEqual({});
+  });
+
+  it('aborts requests that hang longer than the 10s timeout', async () => {
+    // A stalled upstream must not leave the request pending forever: with
+    // the 10s polling pattern every tick would otherwise pile up another
+    // permanently in-flight connection. The mock observes the AbortSignal
+    // the way real fetch does (reject with AbortError on abort).
+    vi.useFakeTimers();
+    try {
+      mockFetch.mockImplementation(
+        (_path: string, init?: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => {
+              reject(new DOMException('The operation was aborted.', 'AbortError'));
+            });
+          }),
+      );
+
+      let settled: 'pending' | 'resolved' | 'aborted' = 'pending';
+      const result = api('GET', '/api/v1/zones');
+      result.then(
+        () => {
+          settled = 'resolved';
+        },
+        () => {
+          settled = 'aborted';
+        },
+      );
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(settled).toBe('aborted');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('resolves normally when the response arrives before the timeout', async () => {
+    mockFetch.mockResolvedValueOnce(mockJsonResponse({ ok: true }));
+    await expect(api('GET', '/api/v1/zones')).resolves.toEqual({ ok: true });
   });
 });
 

@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/nothingdns/nothingdns/internal/config"
+	"github.com/nothingdns/nothingdns/internal/upstream"
 	"github.com/nothingdns/nothingdns/internal/util"
 )
 
@@ -45,7 +47,17 @@ func (s *Server) handleUpstreams(w http.ResponseWriter, r *http.Request) {
 				Failed:  failed,
 			})
 		}
-		s.writeJSON(w, http.StatusOK, &UpstreamsResponse{Upstreams: upstreams})
+		servers := []UpstreamServerStatus{}
+		if upstreamClient != nil {
+			for _, srv := range upstreamClient.Servers() {
+				servers = append(servers, UpstreamServerStatus{
+					Address:   srv.Address,
+					Healthy:   srv.IsHealthy(),
+					LatencyMs: float64(srv.Latency().Microseconds()) / 1000,
+				})
+			}
+		}
+		s.writeJSON(w, http.StatusOK, &UpstreamsResponse{Upstreams: upstreams, Servers: servers})
 	case http.MethodPut:
 		// Swapping the upstream lets an operator MITM every recursive query
 		// served by this resolver — admin-only (VULN-009).
@@ -82,6 +94,15 @@ func (s *Server) handleUpstreams(w http.ResponseWriter, r *http.Request) {
 				s.writeError(w, http.StatusConflict, sanitizeError(err, "Operation failed"))
 				return
 			}
+			if err := s.persistUpstreamServers(upstreamClient); err != nil {
+				// Roll the pool back so the running server and the persisted
+				// list cannot disagree (same contract as an ACL update).
+				if rbErr := upstreamClient.RemoveServer(pinnedAddr); rbErr != nil {
+					util.Warnf("api: failed to roll back upstream %s after a persist failure: %v", pinnedAddr, rbErr)
+				}
+				s.writeError(w, http.StatusInternalServerError, sanitizeError(err, "Failed to save runtime overrides"))
+				return
+			}
 			s.writeJSON(w, http.StatusOK, &MessageResponse{Message: "Server added: " + pinnedAddr + " (resolved from " + req.Server + ")"})
 
 		case "remove":
@@ -100,12 +121,35 @@ func (s *Server) handleUpstreams(w http.ResponseWriter, r *http.Request) {
 				s.writeError(w, http.StatusNotFound, sanitizeError(err, "Not found"))
 				return
 			}
+			if err := s.persistUpstreamServers(upstreamClient); err != nil {
+				if rbErr := upstreamClient.AddServer(req.Server); rbErr != nil {
+					util.Warnf("api: failed to restore upstream %s after a persist failure: %v", req.Server, rbErr)
+				}
+				s.writeError(w, http.StatusInternalServerError, sanitizeError(err, "Failed to save runtime overrides"))
+				return
+			}
 			s.writeJSON(w, http.StatusOK, &MessageResponse{Message: "Server removed: " + req.Server})
 
 		default:
 			s.writeError(w, http.StatusBadRequest, "Invalid action: must be 'add' or 'remove'")
 		}
 	}
+}
+
+// persistUpstreamServers records the pool's current server list as a runtime
+// override, so an add/remove made from the dashboard survives a restart
+// instead of reverting to upstream.servers from the config file. The full list
+// is stored rather than a delta: the pool is the source of truth.
+func (s *Server) persistUpstreamServers(client *upstream.Client) error {
+	if client == nil {
+		return nil
+	}
+	servers := client.Servers()
+	addresses := make([]string, 0, len(servers))
+	for _, srv := range servers {
+		addresses = append(addresses, srv.Address)
+	}
+	return s.persistAndApplyOverrides(&config.RuntimeOverrides{UpstreamServers: &addresses})
 }
 
 // validateAndPinUpstream validates that an upstream server address does not

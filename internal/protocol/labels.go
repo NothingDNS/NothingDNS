@@ -114,11 +114,22 @@ func (n *Name) Release() {
 		return
 	}
 	if n.wire != nil {
-		releaseWireNameBuffer(n.wire)
+		// Release a LOCAL header, not &n.wire: pooling an interior pointer
+		// into this Name struct lets a later acquireWireNameBuffer() alias
+		// this struct's backing array after n is recycled from namePool and
+		// given fresh content — the next Release of n then zeroes the other
+		// name's bytes (order-dependent corruption under pool churn).
+		buf := n.wire
 		n.wire = nil
+		releaseWireNameBuffer(&buf)
 	}
 	n.stringCache.Store(nil)
-	namePool.Put(n)
+	// NOTE: the struct is deliberately NOT returned to namePool. Records
+	// routinely share one *Name (same owner across RRsets), and Release runs
+	// once per record — a shared Name was multi-Put, so subsequent
+	// acquireName calls returned the same struct to independent callers and
+	// the last write clobbered every other name's content. Wire buffers are
+	// still recycled above; the small Name header is re-allocated instead.
 }
 
 // ParseName parses a domain name string into a Name struct.
@@ -496,23 +507,23 @@ func UnpackName(buf []byte, offset int) (*Name, int, error) {
 
 	for {
 		if offset >= len(buf) {
-			releaseWireNameBuffer(wire)
+			releaseWireNameBuffer(&wire)
 			return nil, 0, ErrBufferTooSmall
 		}
 
 		if buf[offset]&PointerMask == PointerMask {
 			if offset+2 > len(buf) {
-				releaseWireNameBuffer(wire)
+				releaseWireNameBuffer(&wire)
 				return nil, 0, ErrBufferTooSmall
 			}
 
 			pointer := int(Uint16(buf[offset:]) & PointerOffsetMask)
 			if pointer >= len(buf) || pointer >= offset {
-				releaseWireNameBuffer(wire)
+				releaseWireNameBuffer(&wire)
 				return nil, 0, ErrInvalidPointer
 			}
 			if ptrDepth >= MaxPointerDepth {
-				releaseWireNameBuffer(wire)
+				releaseWireNameBuffer(&wire)
 				return nil, 0, ErrPointerTooDeep
 			}
 			if ptrOffset == -1 {
@@ -537,17 +548,17 @@ func UnpackName(buf []byte, offset int) (*Name, int, error) {
 		}
 
 		if labelLen > MaxLabelLength {
-			releaseWireNameBuffer(wire)
+			releaseWireNameBuffer(&wire)
 			return nil, 0, ErrLabelTooLong
 		}
 		if offset+1+labelLen > len(buf) {
-			releaseWireNameBuffer(wire)
+			releaseWireNameBuffer(&wire)
 			return nil, 0, ErrBufferTooSmall
 		}
 
 		nameLen += 1 + labelLen
 		if nameLen > MaxNameLength || len(wire)+1+labelLen+1 > MaxNameLength {
-			releaseWireNameBuffer(wire)
+			releaseWireNameBuffer(&wire)
 			return nil, 0, ErrNameTooLong
 		}
 

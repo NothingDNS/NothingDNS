@@ -1,57 +1,99 @@
 # NothingDNS Zone Management API Reference
 
-> Complete reference for zone management endpoints
-> Base URL: `http://localhost:8080/api/v1`
-> Authentication: Bearer token required (see [Authentication](#authentication))
+> Reference for the zone and record endpoints.
+> Base URL: `http://127.0.0.1:8080/api/v1`
+> Authentication, roles, rate limits and the general error format are described
+> in [API_REFERENCE.md](API_REFERENCE.md).
 
 ---
 
-## Authentication
+## Authentication and roles
 
-All zone management endpoints require authentication via Bearer token.
+Send a token with every request:
 
-**Header:**
 ```
 Authorization: Bearer <token>
 ```
 
-**Roles:**
-| Role | Permissions |
-|------|-------------|
-| `admin` | Full access to all zone operations |
-| `operator` | Can create/modify/delete zones and records |
-| `viewer` | Read-only access |
+The `ndns_token` session cookie is accepted for `GET` requests only; `POST`,
+`PUT` and `DELETE` must use the `Authorization` header.
+
+| Role | Zone endpoints |
+|------|----------------|
+| `admin` | Everything, including `POST /zones/reload` |
+| `operator` | Everything except `POST /zones/reload` |
+| `viewer` | **No access** (every zone endpoint returns `403 Operator role required`) |
+
+There is no per-zone access control: an operator can change every zone.
 
 ---
 
-## Endpoints Overview
+## Endpoints overview
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/zones` | List all zones |
-| `POST` | `/zones` | Create a new zone |
-| `GET` | `/zones/{name}` | Get zone details |
-| `DELETE` | `/zones/{name}` | Delete a zone |
-| `GET` | `/zones/{name}/records` | List zone records |
-| `POST` | `/zones/{name}/records` | Add a record |
-| `PUT` | `/zones/{name}/records` | Update a record |
-| `DELETE` | `/zones/{name}/records` | Delete a record |
-| `GET` | `/zones/{name}/export` | Export zone (BIND format) |
-| `POST` | `/zones/{name}/ptr-bulk` | Bulk PTR record generation |
-| `GET` | `/zones/{name}/ptr6-lookup` | IPv6 reverse lookup |
-| `POST` | `/zones/reload` | Reload a zone |
+| Method | Endpoint | Role | Description |
+|--------|----------|------|-------------|
+| `GET` | `/zones` | operator | List all zones |
+| `POST` | `/zones` | operator | Create a zone |
+| `GET` | `/zones/{zone}` | operator | Zone details |
+| `DELETE` | `/zones/{zone}` | operator | Delete a zone |
+| `GET` | `/zones/{zone}/records` | operator | List records |
+| `POST` | `/zones/{zone}/records` | operator | Add a record |
+| `PUT` | `/zones/{zone}/records` | operator | Replace a record |
+| `DELETE` | `/zones/{zone}/records` | operator | Delete records |
+| `GET` | `/zones/{zone}/export` | operator | Export as a BIND zone file |
+| `POST` | `/zones/{zone}/ptr-bulk` | operator | Bulk PTR generation for an IPv4 range |
+| `GET` | `/zones/{zone}/ptr6-lookup` | operator | IPv6 PTR lookup |
+| `POST` | `/zones/reload` | admin | Reload one zone from its file |
+| `GET` | `/zones/transfers` | operator | Secondary zone status (see [API_REFERENCE.md](API_REFERENCE.md#16-zone-transfers)) |
+
+Any other sub-path under `/zones/{zone}/` returns `404 {"error":"Not found"}`.
+
+---
+
+## Zone names, persistence and clustering
+
+**Zone names in paths.** Zones are stored lowercase with a trailing dot
+(`example.com.`). Use that exact form in paths.
+
+- `GET /zones/{zone}`, `POST /zones/{zone}/ptr-bulk`,
+  `GET /zones/{zone}/ptr6-lookup` and `POST /zones/reload?zone=` look the
+  name up **exactly**: `example.com` (no dot) or `Example.com.` returns 404.
+- `DELETE /zones/{zone}`, the `/records` endpoints and `/export` normalise the
+  name (lowercase, trailing dot added), so `example.com` also works there.
+- A zone name that is itself `reload` or `transfers` cannot be addressed with
+  `GET /zones/{zone}` because those paths are separate routes.
+
+**Owner names.** Record `name` fields may be relative to the zone (`www`) or
+absolute (`www.example.com.`). They are lowercased and stored as absolute
+names; responses always show absolute names.
+
+**Persistence.** Every successful zone or record change is:
+
+1. applied in memory and served immediately;
+2. saved to the embedded database under `storage.data_dir` (when configured)
+   and reloaded from there at start;
+3. written to a zone file when `zone_dir` is configured: new zones as
+   `<zone_dir>/<zone>.zone`, record changes to the zone's file.
+
+File and database write failures are logged but do not fail the request.
+The SOA serial is bumped (`YYYYMMDDnn`) on every record change.
+
+**Raft clusters.** When the cluster runs in Raft mode, create zone, delete
+zone and the four record operations are proposed through Raft and applied on
+every node before the API answers. A node that is not the leader answers
+`421 {"error":"not the Raft leader; retry against <leader>"}`; other replication
+failures return `503`. `ptr-bulk` is applied locally and is not replicated.
 
 ---
 
 ## GET /zones
 
-List all configured zones.
+List all loaded zones (at most 5000).
 
 ### Request
 
-```http
-GET /api/v1/zones
-Authorization: Bearer <token>
+```bash
+curl -s http://127.0.0.1:8080/api/v1/zones -H "Authorization: Bearer $TOKEN"
 ```
 
 ### Response
@@ -60,101 +102,89 @@ Authorization: Bearer <token>
 ```json
 {
   "zones": [
-    {
-      "name": "example.com.",
-      "serial": 2026050401,
-      "records": 47
-    },
-    {
-      "name": "example.net.",
-      "serial": 2026050301,
-      "records": 23
-    }
+    {"name": "example.com.", "serial": 2024010101, "records": 12},
+    {"name": "apidoc.test.", "serial": 2026091605, "records": 4}
   ],
-  "total": 2,
-  "truncated": false
+  "total": 2
 }
 ```
 
-### Response Fields
-
 | Field | Type | Description |
 |-------|------|-------------|
-| `zones` | array | Zone entries returned by the request, capped at 5000 |
-| `zones[].name` | string | Zone origin (FQDN with trailing dot) |
-| `zones[].serial` | uint32 | Current SOA serial number |
-| `zones[].records` | int | Total number of records in zone |
-| `total` | int | Unfiltered zone count |
-| `truncated` | bool | Present/true when the response was capped |
+| `zones` | array | Zone summaries, in no particular order |
+| `zones[].name` | string | Zone origin (lowercase, trailing dot) |
+| `zones[].serial` | uint32 | SOA serial (0 when the zone has no SOA) |
+| `zones[].records` | int | Number of records, including SOA and NS |
+| `total` | int | Number of zones before capping |
+| `truncated` | bool | Present and `true` only when more than 5000 zones exist |
 
 ---
 
 ## POST /zones
 
-Create a new authoritative zone.
+Create an authoritative zone with an SOA and NS records.
 
 ### Request
 
-```http
-POST /api/v1/zones
-Authorization: Bearer <token>
-Content-Type: application/json
-
-{
-  "name": "example.com.",
-  "ttl": 3600,
-  "admin_email": "admin@example.com",
-  "nameservers": ["ns1.example.com.", "ns2.example.com."]
-}
+```bash
+curl -s -X POST http://127.0.0.1:8080/api/v1/zones \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{
+    "name": "example.org.",
+    "ttl": 3600,
+    "admin_email": "hostmaster.example.org.",
+    "nameservers": ["ns1.example.org.", "ns2.example.org."]
+  }'
 ```
 
-### Request Fields
+### Request fields
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | string | **Yes** | Zone origin (FQDN, should end with `.`) |
-| `ttl` | uint32 | No | Default TTL for records (default: 3600) |
-| `admin_email` | string | No | RNAME field (default: `admin.@`) |
-| `nameservers` | array | **Yes** | List of nameservers (at least 1 required) |
+| `name` | string | **Yes** | Zone origin. Lowercased and a trailing dot is added. The root and reserved names are rejected. |
+| `nameservers` | string[] | **Yes** | At least one. The first one becomes the SOA MNAME; each becomes an NS record at the apex. Dotted names are taken as fully qualified (`ns1.example.org` → `ns1.example.org.`), single labels are relative to the zone (`ns1` → `ns1.example.org.`). |
+| `admin_email` | string | No | Administrator address, as `user@domain` or in DNS form (`hostmaster.example.org.`). Converted to the SOA RNAME; defaults to `hostmaster.<zone>`. A user part containing dots (`first.last@…`) is rejected with `400`. |
+| `ttl` | uint32 | No | Default TTL, also used for the SOA and NS records. `0` or omitted means 3600. |
+
+The SOA gets serial `1`, refresh `3600`, retry `600`, expire `604800` and
+minimum `86400`. These cannot be set through the API.
 
 ### Response
 
 **201 Created**
 ```json
 {
-  "message": "Zone example.com. created",
-  "name": "example.com."
+  "message": "Zone example.org. created",
+  "name": "example.org."
 }
 ```
 
-### Error Responses
+`message` and `name` echo the name exactly as sent (without normalisation).
 
-| Status | Error | Description |
-|--------|-------|-------------|
-| `400` | `Zone name is required` | Missing zone name |
-| `400` | `At least one nameserver is required` | No nameservers provided |
-| `401` | `Unauthorized` | Missing or invalid token |
-| `403` | `Forbidden` | Insufficient role permissions |
-| `409` | `Failed to create zone` | Zone already exists or other error |
+### Error responses
+
+| Status | Error | Cause |
+|--------|-------|-------|
+| `400` | `Zone name is required` | Missing `name` |
+| `400` | `At least one nameserver is required` | Missing or empty `nameservers` |
+| `400` | `invalid admin email "first.last@example.org": ...` | `admin_email` cannot be expressed as an SOA RNAME |
+| `400` | `Invalid request body` | Malformed JSON or body over 64 KiB |
+| `409` | `zone example.org. already exists` | Duplicate |
+| `409` | `invalid zone origin` / `zone origin "..." is reserved and cannot be created` | Bad name |
+| `421` | `not the Raft leader; ...` | Raft follower |
+| `503` | `Zone manager not available` / replication error | Subsystem unavailable |
 
 ---
 
-## GET /zones/{name}
+## GET /zones/{zone}
 
-Get detailed information about a specific zone.
+Zone details. The name must match exactly (lowercase, trailing dot).
 
 ### Request
 
-```http
-GET /api/v1/zones/example.com.
-Authorization: Bearer <token>
+```bash
+curl -s http://127.0.0.1:8080/api/v1/zones/example.com. -H "Authorization: Bearer $TOKEN"
 ```
-
-### Path Parameters
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `name` | string | Zone name (URL-encoded) |
 
 ### Response
 
@@ -162,102 +192,89 @@ Authorization: Bearer <token>
 ```json
 {
   "name": "example.com.",
-  "serial": 2026050401,
-  "records": 47,
+  "serial": 2024010101,
+  "records": 12,
   "soa": {
     "mname": "ns1.example.com.",
     "rname": "admin.example.com.",
-    "serial": 2026050401,
+    "serial": 2024010101,
     "refresh": 3600,
-    "retry": 600,
-    "expire": 604800,
-    "minimum": 86400
+    "retry": 900,
+    "expire": 86400,
+    "minimum": 300
   },
   "nameservers": ["ns1.example.com.", "ns2.example.com."]
 }
 ```
 
-### Response Fields
-
 | Field | Type | Description |
 |-------|------|-------------|
 | `name` | string | Zone origin |
-| `serial` | uint32 | Current SOA serial |
+| `serial` | uint32 | SOA serial (omitted when 0) |
 | `records` | int | Total record count |
-| `soa` | object | SOA record details (if present) |
-| `soa.mname` | string | Primary nameserver |
-| `soa.rname` | email | Responsible person (RFC 1035) |
-| `soa.refresh` | uint32 | Refresh interval (seconds) |
-| `soa.retry` | uint32 | Retry interval (seconds) |
-| `soa.expire` | uint32 | Expire interval (seconds) |
-| `soa.minimum` | uint32 | Minimum TTL (seconds) |
-| `nameservers` | array | Delegated nameservers |
+| `soa` | object | SOA fields; omitted when the zone has no SOA |
+| `nameservers` | string[] | Apex NS targets; `null` when none |
 
-### Error Responses
+### Error responses
 
-| Status | Error | Description |
-|--------|-------|-------------|
-| `404` | `Zone example.com. not found` | Zone does not exist |
+| Status | Error | Cause |
+|--------|-------|-------|
+| `404` | `Zone example.com not found` | Unknown zone, or the name was not given in exact form |
 
 ---
 
-## DELETE /zones/{name}
+## DELETE /zones/{zone}
 
-Delete a zone and all its records.
+Delete a zone with all its records.
+
+The zone is removed from memory and from the embedded database. Its zone file is
+deleted only when it lives inside `zone_dir` (where API-created zones are
+written). A zone loaded from a file listed under `zones:` in the config keeps
+its file and comes back on the next restart — remove it from the config as well
+to delete it permanently.
 
 ### Request
 
-```http
-DELETE /api/v1/zones/example.com.
-Authorization: Bearer <token>
+```bash
+curl -s -X DELETE http://127.0.0.1:8080/api/v1/zones/example.org. -H "Authorization: Bearer $TOKEN"
 ```
-
-### Path Parameters
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `name` | string | Zone name (URL-encoded) |
 
 ### Response
 
 **200 OK**
 ```json
 {
-  "message": "Zone example.com. deleted"
+  "message": "Zone example.org. deleted"
 }
 ```
 
-### Error Responses
+### Error responses
 
-| Status | Error | Description |
-|--------|-------|-------------|
-| `404` | `Failed to delete zone` | Zone does not exist |
-| `403` | `Forbidden` | Operator role required |
+| Status | Error | Cause |
+|--------|-------|-------|
+| `404` | `zone example.org. not found` | Unknown zone, or the zone file in `zone_dir` could not be deleted |
+| `421` | `not the Raft leader; ...` | Raft follower |
 
 ---
 
-## GET /zones/{name}/records
+## GET /zones/{zone}/records
 
-List all records in a zone, optionally filtered by name.
+List the records of a zone (at most 5000).
 
 ### Request
 
-```http
-GET /api/v1/zones/example.com./records?name=www
-Authorization: Bearer <token>
+```bash
+curl -s "http://127.0.0.1:8080/api/v1/zones/example.com./records?name=www" \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
-### Path Parameters
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `name` | string | Zone name (URL-encoded) |
-
-### Query Parameters
+### Query parameters
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `name` | string | No | Filter records by name prefix |
+| `name` | string | No | Owner name, relative (`www`) or absolute (`www.example.com.`). **Exact match**, not a prefix search. |
+
+There is no `type` filter; filter on the client.
 
 ### Response
 
@@ -265,92 +282,74 @@ Authorization: Bearer <token>
 ```json
 {
   "records": [
-    {
-      "name": "www.example.com.",
-      "type": "A",
-      "ttl": 3600,
-      "class": "IN",
-      "data": "192.0.2.1"
-    },
-    {
-      "name": "www.example.com.",
-      "type": "AAAA",
-      "ttl": 3600,
-      "class": "IN",
-      "data": "2001:db8::1"
-    }
-  ]
+    {"name": "www.example.com.", "type": "A", "ttl": 3600, "class": "IN", "data": "192.0.2.10"},
+    {"name": "www.example.com.", "type": "AAAA", "ttl": 3600, "class": "IN", "data": "2001:db8::10"}
+  ],
+  "total": 2
 }
 ```
-
-### Response Fields
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `records` | array | List of DNS records |
-| `records[].name` | string | Record name (FQDN) |
-| `records[].type` | string | Record type (A, AAAA, CNAME, etc.) |
-| `records[].ttl` | uint32 | Time-to-live in seconds |
-| `records[].class` | string | DNS class (IN, CH, HS) |
-| `records[].data` | string | Record data (RDATA) |
+| `records` | array | Records, in no particular order; `[]` when nothing matches |
+| `records[].name` | string | Absolute owner name |
+| `records[].type` | string | Record type |
+| `records[].ttl` | uint32 | TTL in seconds |
+| `records[].class` | string | Class (normally `IN`) |
+| `records[].data` | string | RDATA in presentation form (the SOA record is included, as `mname rname serial refresh retry expire minimum`) |
+| `total` | int | Number of matching records before capping |
+| `truncated` | bool | Present and `true` only when more than 5000 records match |
 
-### Error Responses
+### Error responses
 
-| Status | Error | Description |
-|--------|-------|-------------|
-| `404` | `Zone not found` | Zone does not exist |
+| Status | Error | Cause |
+|--------|-------|-------|
+| `404` | `zone example.com. not found` | Unknown zone |
 
 ---
 
-## POST /zones/{name}/records
+## POST /zones/{zone}/records
 
-Add a new DNS record to a zone.
+Add one record.
 
 ### Request
 
-```http
-POST /api/v1/zones/example.com./records
-Authorization: Bearer <token>
-Content-Type: application/json
-
-{
-  "name": "www.example.com.",
-  "type": "A",
-  "ttl": 3600,
-  "data": "192.0.2.1"
-}
+```bash
+curl -s -X POST http://127.0.0.1:8080/api/v1/zones/example.com./records \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name": "www", "type": "A", "ttl": 3600, "data": "192.0.2.10"}'
 ```
 
-### Path Parameters
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `name` | string | Zone name (URL-encoded) |
-
-### Request Fields
+### Request fields
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | string | **Yes** | Record name (FQDN) |
-| `type` | string | **Yes** | Record type (A, AAAA, CNAME, MX, TXT, etc.) |
-| `ttl` | uint32 | No | TTL in seconds (default: zone's default TTL or 3600) |
-| `data` | string | **Yes** | Record data (RDATA) |
+| `name` | string | **Yes** | Owner name, relative or absolute. Must not contain `;`, space, tab, `"`, `(`, `)` or control characters. |
+| `type` | string | **Yes** | Record type |
+| `data` | string | **Yes** | RDATA in presentation form. Must not contain newlines or NUL. |
+| `ttl` | uint32 | No | `0` or omitted: the zone's default TTL, or 3600 |
 
-### Supported Record Types
+The class is always `IN`. Adding a record does not replace existing records
+with the same name and type; it appends another one.
 
-| Type | Data Format | Example |
-|------|-------------|---------|
-| `A` | IPv4 address | `192.0.2.1` |
-| `AAAA` | IPv6 address | `2001:db8::1` |
-| `CNAME` | FQDN | `www.example.com.` |
-| `MX` | Priority + FQDN | `10 mail.example.com.` |
-| `TXT` | Quoted string | `"v=spf1 include:_spf.example.com -all"` |
-| `NS` | FQDN | `ns1.example.com.` |
-| `PTR` | FQDN | `www.example.com.` |
-| `SOA` | See zone creation | (auto-created) |
-| `SRV` | Priority Weight Port Target | `10 5 5269 xmpp.example.com.` |
-| `CAA` | Flags Tag Value | `0 issue "letsencrypt.org"` |
-| `DNAME` | FQDN | `alias.example.com.` |
+> RDATA is **not** validated against the record type. `{"type":"A","data":"not-an-ip"}`
+> is accepted and written to the zone file. Validate input on the client side.
+
+### Common data formats
+
+| Type | `data` example |
+|------|----------------|
+| `A` | `192.0.2.1` |
+| `AAAA` | `2001:db8::1` |
+| `CNAME` | `www.example.com.` |
+| `MX` | `10 mail.example.com.` |
+| `TXT` | `v=spf1 include:_spf.example.com -all` (no surrounding quotes; the zone-file writer adds and escapes them) |
+| `NS` | `ns1.example.com.` |
+| `PTR` | `host.example.com.` |
+| `SRV` | `10 5 5269 xmpp.example.com.` |
+| `CAA` | `0 issue "letsencrypt.org"` |
+
+Use absolute names with a trailing dot inside RDATA.
 
 ### Response
 
@@ -361,52 +360,41 @@ Content-Type: application/json
 }
 ```
 
-### Error Responses
+### Error responses
 
-| Status | Error | Description |
-|--------|-------|-------------|
-| `400` | `name, type, and data are required` | Missing required fields |
-| `400` | `Invalid JSON` | Malformed request body |
-| `403` | `Forbidden` | Operator role required |
-| `404` | `Not found` | Zone not found |
+| Status | Error | Cause |
+|--------|-------|-------|
+| `400` | `name, type, and data are required` | Missing field |
+| `400` | `Invalid request body` | Malformed JSON |
+| `404` | `zone example.com. not found` | Unknown zone |
+| `404` | `Not found` / name validation message | Forbidden characters in `name` or `data` (reported as 404) |
+| `421` | `not the Raft leader; ...` | Raft follower |
 
 ---
 
-## PUT /zones/{name}/records
+## PUT /zones/{zone}/records
 
-Update an existing DNS record.
+Replace one existing record. The first record whose owner name and type match
+and whose RDATA equals `old_data` (case-insensitive) is replaced by the new
+record.
 
 ### Request
 
-```http
-PUT /api/v1/zones/example.com./records
-Authorization: Bearer <token>
-Content-Type: application/json
-
-{
-  "name": "www.example.com.",
-  "type": "A",
-  "old_data": "192.0.2.1",
-  "ttl": 7200,
-  "data": "192.0.2.2"
-}
+```bash
+curl -s -X PUT http://127.0.0.1:8080/api/v1/zones/example.com./records \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name": "www", "type": "A", "old_data": "192.0.2.10", "data": "192.0.2.11", "ttl": 3600}'
 ```
 
-### Path Parameters
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `name` | string | Zone name (URL-encoded) |
-
-### Request Fields
+### Request fields
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | string | **Yes** | Record name (FQDN) |
+| `name` | string | **Yes** | Owner name, relative or absolute |
 | `type` | string | **Yes** | Record type |
-| `old_data` | string | **Yes** | Current RDATA value (for matching) |
-| `ttl` | uint32 | No | New TTL (0 = unchanged) |
-| `data` | string | **Yes** | New RDATA value |
+| `old_data` | string | **Yes** | Current RDATA of the record to replace |
+| `data` | string | **Yes** | New RDATA |
+| `ttl` | uint32 | No | New TTL. When omitted the record keeps its current TTL; an explicit `0` stores TTL 0. |
 
 ### Response
 
@@ -417,45 +405,39 @@ Content-Type: application/json
 }
 ```
 
-### Error Responses
+### Error responses
 
-| Status | Error | Description |
-|--------|-------|-------------|
-| `400` | `name and type are required` | Missing required fields |
-| `403` | `Forbidden` | Operator role required |
-| `404` | `Not found` | Zone or record not found |
+| Status | Error | Cause |
+|--------|-------|-------|
+| `400` | `name, type, old_data, and data are required` | Missing field |
+| `404` | `record not found: ...` | No record matches `name`, `type` and `old_data` |
+| `404` | `zone example.com. not found` | Unknown zone |
+| `404` | `no records found for www.example.com.` | No records at that name |
+| `404` | `record not found: www.example.com. A 192.0.2.99` | No record matches `old_data` |
+| `421` | `not the Raft leader; ...` | Raft follower |
 
 ---
 
-## DELETE /zones/{name}/records
+## DELETE /zones/{zone}/records
 
-Delete all records matching name and type.
+Delete **all** records of one type at one owner name. To remove a single value
+from a set (for example one of several A records), delete the set and add back
+the values to keep, or use `PUT` to change a value.
 
 ### Request
 
-```http
-DELETE /api/v1/zones/example.com./records
-Authorization: Bearer <token>
-Content-Type: application/json
-
-{
-  "name": "www.example.com.",
-  "type": "A"
-}
+```bash
+curl -s -X DELETE http://127.0.0.1:8080/api/v1/zones/example.com./records \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name": "www", "type": "A"}'
 ```
 
-### Path Parameters
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `name` | string | Zone name (URL-encoded) |
-
-### Request Fields
+### Request fields
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | string | **Yes** | Record name (FQDN) |
-| `type` | string | **Yes** | Record type |
+| `name` | string | **Yes** | Owner name, relative or absolute |
+| `type` | string | **Yes** | Record type (case-insensitive) |
 
 ### Response
 
@@ -466,275 +448,260 @@ Content-Type: application/json
 }
 ```
 
-### Error Responses
+### Error responses
 
-| Status | Error | Description |
-|--------|-------|-------------|
-| `400` | `name and type are required` | Missing required fields |
-| `403` | `Forbidden` | Operator role required |
-| `404` | `Not found` | Zone or record not found |
+| Status | Error | Cause |
+|--------|-------|-------|
+| `400` | `name and type are required` | Missing field |
+| `404` | `zone example.com. not found` | Unknown zone |
+| `404` | `no records found for www.example.com.` | No records at that name |
+| `404` | `no A record found for www.example.com.` | No record of that type |
+| `421` | `not the Raft leader; ...` | Raft follower |
 
 ---
 
-## GET /zones/{name}/export
+## GET /zones/{zone}/export
 
-Export a zone in BIND (standard zone file) format.
+Export a zone in BIND format.
 
 ### Request
 
-```http
-GET /api/v1/zones/example.com./export
-Authorization: Bearer <token>
+```bash
+curl -s http://127.0.0.1:8080/api/v1/zones/example.com./export \
+  -H "Authorization: Bearer $TOKEN" -o example.com.zone
 ```
-
-### Path Parameters
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `name` | string | Zone name (URL-encoded) |
 
 ### Response
 
 **200 OK**
-```http
-Content-Type: text/plain; charset=utf-8
-Content-Disposition: attachment; filename="example.com.zone"
 
-$ORIGIN example.com.
+Headers: `Content-Type: text/plain; charset=utf-8` and
+`Content-Disposition: attachment; filename="example.com.zone"` (characters
+other than `a-z`, `0-9`, `-` and `.` in the file name are replaced by `_`).
+
+```
+$ORIGIN apidoc.test.
 $TTL 3600
 
-@       IN      SOA     ns1.example.com. admin.example.com. (
-                        2026050401 ; serial
-                        3600       ; refresh
-                        600        ; retry
-                        604800     ; expire
-                        86400      ; minimum
-                        )
+@	3600	IN	SOA	ns1.apidoc.test. hostmaster.apidoc.test. (
+		2026091604	; serial
+		3600	; refresh
+		600	; retry
+		604800	; expire
+		86400	; minimum
+	)
 
-@       IN      NS      ns1.example.com.
-@       IN      NS      ns2.example.com.
-@       IN      A       192.0.2.1
-www     IN      A       192.0.2.1
-www     IN      AAAA    2001:db8::1
-mail    IN      A       192.0.2.2
-@       IN      MX      10 mail.example.com.
+@	3600	IN	NS	ns1.apidoc.test.
+
+mail	600	IN	MX	10 mx.apidoc.test.
+www	3600	IN	A	192.0.2.45
 ```
 
-### Error Responses
+### Error responses
 
-| Status | Error | Description |
-|--------|-------|-------------|
-| `404` | `Not found` | Zone not found |
+| Status | Error | Cause |
+|--------|-------|-------|
+| `404` | `zone example.com. not found` | Unknown zone |
 
 ---
 
-## POST /zones/{name}/ptr-bulk
+## POST /zones/{zone}/ptr-bulk
 
-Generate PTR (and optionally A) records for an IPv4 CIDR range using a pattern.
+Generate PTR records (and optionally forward A records) for every address in
+an IPv4 range.
 
-### Request (Preview Mode)
+### Request (preview)
 
-```http
-POST /api/v1/zones/2.0.192.in-addr.arpa./ptr-bulk
-Authorization: Bearer <token>
-Content-Type: application/json
-
-{
-  "cidr": "192.0.2.0/24",
-  "pattern": "host-[D].[C].[B].[A].static.example.com",
-  "addA": true,
-  "preview": true
-}
+```bash
+curl -s -X POST http://127.0.0.1:8080/api/v1/zones/2.0.192.in-addr.arpa./ptr-bulk \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{
+    "cidr": "192.0.2.0/30",
+    "pattern": "host-[A]-[B]-[C]-[D].example.com.",
+    "addA": true,
+    "preview": true
+  }'
 ```
 
-### Request (Apply Mode)
+### Request (apply)
 
-```http
-POST /api/v1/zones/2.0.192.in-addr.arpa./ptr-bulk
-Authorization: Bearer <token>
-Content-Type: application/json
+Send the same body with `"preview": false` (or without `preview`).
 
-{
-  "cidr": "192.0.2.0/24",
-  "pattern": "host-[D].[C].[B].[A].static.example.com",
-  "addA": true,
-  "override": false
-}
-```
+### Path parameter
 
-### Path Parameters
+`{zone}` must be the exact name of an existing `in-addr.arpa.` zone, such as
+`2.0.192.in-addr.arpa.` for a /24.
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `name` | string | Reverse zone name (e.g., `2.0.192.in-addr.arpa.`) |
-
-### Request Fields
+### Request fields
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `cidr` | string | **Yes** | IPv4 CIDR range (max /16) |
-| `pattern` | string | **Yes** | PTR name pattern with `[A]`, `[B]`, `[C]`, `[D]` placeholders |
-| `addA` | bool | No | Also create forward A records (default: false) |
-| `override` | bool | No | Overwrite existing records (default: false) |
-| `preview` | bool | No | Return changes without applying (default: false) |
+| `cidr` | string | **Yes** | IPv4 CIDR, at most 65536 addresses (/16). The network must lie inside the reverse zone (for a /24 zone the prefix must be /24 or longer and match the zone's octets). Every address in the range is processed, including network and broadcast addresses. |
+| `pattern` | string | **Yes** | Up to 255 characters; must contain `[A]`, `[B]`, `[C]` and `[D]`. The result is a host name, always treated as absolute (a missing trailing dot is added), used as PTR target and, with `addA`, as the A record owner. A result that is not a valid DNS name is rejected with 400. |
+| `addA` | bool | No | Also create forward A records named by the pattern. Each A record is added to the most specific loaded zone that contains the name (e.g. `example.com.` for `host-1.example.com.`). If no loaded zone contains a generated name, the request (preview included) fails with 400 and nothing is written. |
+| `override` | bool | No | Replace existing PTR (and A) records instead of skipping them |
+| `preview` | bool | No | Only report what would change |
 
-### Pattern Placeholders
+For `192.0.2.1`, `[A]` = `192`, `[B]` = `0`, `[C]` = `2`, `[D]` = `1`.
+Created records have TTL 3600.
 
-| Placeholder | Description | Example |
-|-------------|-------------|---------|
-| `[A]` | First octet | `192` from `192.0.2.1` |
-| `[B]` | Second octet | `0` from `192.0.2.1` |
-| `[C]` | Third octet | `2` from `192.0.2.1` |
-| `[D]` | Fourth octet | `1` from `192.0.2.1` |
-
-### Preview Response
+### Preview response
 
 **200 OK**
 ```json
 {
   "preview": true,
-  "total": 256,
-  "willAdd": 256,
-  "willAddA": 256,
+  "total": 4,
+  "willAdd": 4,
+  "willAddA": 4,
   "willSkip": 0,
   "willOverride": 0,
   "changes": [
     {
       "ip": "192.0.2.1",
-      "ptrName": "host-1.2.0.192.static.example.com",
-      "aName": "host-1.2.0.192.static.example.com",
+      "ptrName": "host-192-0-2-1.example.com.",
+      "aName": "host-192-0-2-1.example.com.",
+      "aZone": "example.com.",
       "action": "add",
       "ptrExist": false,
-      "aExist": false,
-      "revRecord": "1.2.0.192.in-addr.arpa."
+      "revRecord": "1"
     }
   ]
 }
 ```
 
-### Apply Response
+| Field | Description |
+|-------|-------------|
+| `changes[].action` | `add`, `override` (existing PTR and `override: true`) or `skip` (existing PTR, no override) |
+| `changes[].ptrName` | Generated name (PTR target) |
+| `changes[].revRecord` | PTR owner name relative to the zone (`1` for `1.2.0.192.in-addr.arpa.`) |
+| `changes[].oldPtr`, `oldA` | Existing values, when present |
+| `changes[].aName`, `aZone`, `aExist` | Present only with `addA`; `aZone` is the forward zone that receives the A record |
+| `willOverride` | Counts both PTR and A overrides |
+
+### Apply response
 
 **200 OK**
 ```json
 {
-  "added": 256,
-  "addedA": 256,
+  "added": 4,
+  "addedA": 4,
   "exists": 0,
   "existsA": 0,
   "skipped": 0
 }
 ```
 
-### Response Fields (Apply)
-
 | Field | Type | Description |
 |-------|------|-------------|
 | `added` | int | PTR records created |
 | `addedA` | int | A records created |
-| `exists` | int | PTR records already existed |
-| `existsA` | int | A records already existed |
-| `skipped` | int | Records skipped (existing, no override) |
+| `exists` | int | PTR records that could not be added |
+| `existsA` | int | A records that already existed (and were kept) or could not be added |
+| `skipped` | int | Addresses skipped because a PTR existed and `override` was false (no PTR and no A written for them) |
 
-### Error Responses
+### Error responses
 
-| Status | Error | Description |
-|--------|-------|-------------|
-| `400` | `cidr and pattern are required` | Missing fields |
-| `400` | `Only IPv4 CIDR is supported` | IPv6 not supported |
-| `400` | `CIDR too large (max /16)` | Exceeds 65536 IPs |
-| `400` | `Pattern must contain [A], [B], [C], [D]` | Invalid pattern |
-| `403` | `Forbidden` | Operator role required |
-| `404` | `Zone not found` | Zone does not exist |
+| Status | Error | Cause |
+|--------|-------|-------|
+| `400` | `cidr and pattern are required` | Missing field |
+| `400` | `pattern too long` | Pattern over 255 characters |
+| `400` | `Invalid CIDR: ...` | Unparseable CIDR |
+| `400` | `Only IPv4 CIDR is supported` | IPv6 range |
+| `400` | `CIDR too large (max /16)` | More than 65536 addresses |
+| `400` | `Pattern must contain [A], [B], [C], [D] placeholders` | Placeholder missing |
+| `400` | `Pattern produces an invalid host name "..."` | Generated name is not a valid DNS name |
+| `400` | `No zone is authoritative for ...; create the forward zone before adding A records` | `addA` with a name outside every loaded zone |
+| `400` | `zone ... is not a reverse DNS zone (.in-addr.arpa)` | Not a reverse zone |
+| `400` | `CIDR network 198.51.100.0 does not belong to reverse zone 2.0.192.in-addr.arpa.` | Range outside the zone |
+| `400` | `CIDR prefix /16 is too small for zone ... (minimum /24)` | Range wider than the zone |
+| `404` | `Zone 2.0.192.in-addr.arpa. not found` | Unknown zone (exact name required) |
+| `500` | `Failed to delete existing PTR record: ...` | Override failed part-way; earlier changes stay applied |
 
 ---
 
-## GET /zones/{name}/ptr6-lookup
+## GET /zones/{zone}/ptr6-lookup
 
-Perform IPv6 reverse DNS lookup query (does not create records).
+Find the PTR record of an IPv6 address in an `ip6.arpa.` zone. Read-only.
 
 ### Request
 
-```http
-GET /api/v1/zones/1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa./ptr6-lookup?ip=2001:db8::1
-Authorization: Bearer <token>
+```bash
+curl -s "http://127.0.0.1:8080/api/v1/zones/8.b.d.0.1.0.0.2.ip6.arpa./ptr6-lookup?ip=2001:db8::1" \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
-### Path Parameters
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `name` | string | IPv6 reverse zone (must end with `ip6.arpa.`) |
-
-### Query Parameters
+### Query parameters
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `ip` | string | **Yes** | IPv6 address to lookup |
+| `ip` | string | **Yes** | IPv6 address (IPv4 and IPv4-mapped addresses are rejected) |
 
-### Response (Found)
+### Response (found)
 
 **200 OK**
 ```json
 {
   "ip": "2001:db8::1",
-  "ptr": "1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa.",
-  "ptrFQDN": "1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa.",
+  "ptr": "1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa",
+  "ptrFQDN": "1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa.",
   "target": "www.example.com.",
   "ttl": 3600,
   "found": true
 }
 ```
 
-### Response (Not Found)
+### Response (not found)
 
 **200 OK**
 ```json
 {
-  "ip": "2001:db8::1",
-  "ptr": "1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa.",
-  "ptrFQDN": "1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa.",
+  "ip": "2001:db8::2",
+  "ptr": "2.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa",
+  "ptrFQDN": "2.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa.",
   "found": false
 }
 ```
 
-### Response Fields
-
 | Field | Type | Description |
 |-------|------|-------------|
-| `ip` | string | Input IPv6 address |
-| `ptr` | string | Computed PTR record name |
-| `ptrFQDN` | string | Fully-qualified PTR name |
-| `target` | string | PTR target (if found) |
-| `ttl` | uint32 | Record TTL (if found) |
-| `found` | bool | Whether PTR record exists |
+| `ip` | string | The address as sent |
+| `ptr` | string | Nibble-reversed name without trailing dot |
+| `ptrFQDN` | string | Same name with trailing dot |
+| `target` | string | PTR target (only when found) |
+| `ttl` | uint32 | TTL (only when found) |
+| `found` | bool | Whether a PTR record exists |
 
-### Error Responses
+### Error responses
 
-| Status | Error | Description |
-|--------|-------|-------------|
-| `400` | `IP parameter is required` | Missing IP parameter |
-| `400` | `Invalid IPv6 address` | Not a valid IPv6 |
-| `400` | `Zone is not an IPv6 reverse zone` | Zone name doesn't end with `ip6.arpa.` |
-| `404` | `Zone not found` | Zone does not exist |
+| Status | Error | Cause |
+|--------|-------|-------|
+| `400` | `IP parameter is required` | Missing `ip` |
+| `400` | `Invalid IPv6 address` | Not an IPv6 address |
+| `400` | `Zone is not an IPv6 reverse zone (must end with ip6.arpa.)` | Wrong zone type |
+| `404` | `Zone ... not found` | Unknown zone (exact name required) |
 
 ---
 
 ## POST /zones/reload
 
-Hot-reload a zone file from disk without restarting the server.
+Re-read one zone from the file it was loaded from, without restarting.
+**Admin only.** Zones created through the API without `zone_dir` have no file
+and cannot be reloaded. To reload every zone and the rest of the configuration,
+use `POST /api/v1/config/reload`.
 
 ### Request
 
-```http
-POST /api/v1/zones/reload?zone=example.com.
-Authorization: Bearer <token>
+```bash
+curl -s -X POST "http://127.0.0.1:8080/api/v1/zones/reload?zone=example.com." \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
-### Query Parameters
+### Query parameters
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `zone` | string | **Yes** | Zone name to reload |
+| `zone` | string | **Yes** | Exact zone name (lowercase, trailing dot) |
 
 ### Response
 
@@ -745,19 +712,21 @@ Authorization: Bearer <token>
 }
 ```
 
-### Error Responses
+### Error responses
 
-| Status | Error | Description |
-|--------|-------|-------------|
-| `400` | `Missing zone parameter` | No zone specified |
-| `403` | `Forbidden` | Admin role required |
-| `404` | `Failed to reload zone` | Zone not found or reload failed |
+| Status | Error | Cause |
+|--------|-------|-------|
+| `400` | `Missing zone parameter` | No `zone` |
+| `403` | `Admin role required` | Caller is not an admin |
+| `500` | `zone example.com. not found` | Unknown zone, name not in exact form, or zone without a file |
+| `500` | parse/validation error, or `Failed to reload zone` | Zone file invalid or unreadable |
+| `503` | `Zone manager not available` | Subsystem unavailable |
 
 ---
 
-## Common Error Response Format
+## Common error format
 
-All endpoints return errors in this format:
+All errors are JSON:
 
 ```json
 {
@@ -765,112 +734,109 @@ All endpoints return errors in this format:
 }
 ```
 
-### HTTP Status Codes
-
 | Status | Meaning |
 |--------|---------|
 | `200` | Success |
 | `201` | Created |
-| `400` | Bad Request (invalid input) |
-| `401` | Unauthorized (missing token) |
-| `403` | Forbidden (insufficient permissions) |
-| `404` | Not Found |
-| `405` | Method Not Allowed |
-| `409` | Conflict (e.g., zone already exists) |
-| `413` | Payload Too Large (body exceeds 1MB limit) |
-| `500` | Internal Server Error |
-| `503` | Service Unavailable (zone manager not ready) |
+| `400` | Bad request (validation error, malformed JSON, body over 64 KiB) |
+| `401` | Missing or invalid token, or cookie-only authentication on a write |
+| `403` | Role too low |
+| `404` | Zone, record or sub-path not found |
+| `405` | Method not allowed |
+| `409` | Conflict (zone already exists, invalid zone name) |
+| `421` | Write sent to a Raft follower |
+| `429` | API rate limit (100 requests per minute per client IP) |
+| `500` | Internal error (reload failure, partial bulk PTR failure) |
+| `503` | Zone manager or Raft replication unavailable |
+
+Error texts that contain `/` are replaced by a generic message such as
+`Not found`.
 
 ---
 
-## Security Notes
+## Security notes
 
-- **Global RBAC**: All operators have access to all zones. There is no per-zone isolation.
-- **Input Validation**: Zone names are URL-decoded and sanitized before use.
-- **Path Traversal**: Zone export filenames are sanitized (non-alphanumeric chars replaced with `_`).
-- **Body Limits**: Request bodies are limited to 1MB via `MaxBytesReader`.
-- **Audit Logging**: All zone operations are logged with client IP and request ID.
+- **Global RBAC.** Operators can change every zone; there is no per-zone
+  isolation.
+- **Input hygiene.** Owner names containing zone-file syntax characters and
+  RDATA containing newlines or NUL are rejected, so a request cannot inject
+  lines into a zone file. RDATA is otherwise not validated.
+- **Export file names** are sanitised.
+- **Body limit.** Request bodies are limited to 64 KiB.
+- **Logging.** The API logs one line per request (method, path, status,
+  latency). Bulk PTR runs also log a summary. There is no separate audit log of
+  zone changes.
 
 ---
 
-## Example: Complete Zone Workflow
+## Example: complete zone workflow
 
 ### 1. Create a zone
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/zones \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
+curl -s -X POST http://127.0.0.1:8080/api/v1/zones \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{
-    "name": "example.com.",
+    "name": "example.org.",
     "ttl": 3600,
-    "admin_email": "dns@example.com",
-    "nameservers": ["ns1.example.com.", "ns2.example.com."]
+    "admin_email": "hostmaster.example.org.",
+    "nameservers": ["ns1.example.org.", "ns2.example.org."]
   }'
 ```
 
 ### 2. Add records
 
 ```bash
-# Add A record
-curl -X POST http://localhost:8080/api/v1/zones/example.com./records \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "www.example.com.", "type": "A", "ttl": 3600, "data": "192.0.2.1"}'
+# A record (relative owner name)
+curl -s -X POST http://127.0.0.1:8080/api/v1/zones/example.org./records \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name": "www", "type": "A", "ttl": 3600, "data": "192.0.2.1"}'
 
-# Add MX record
-curl -X POST http://localhost:8080/api/v1/zones/example.com./records \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "example.com.", "type": "MX", "ttl": 3600, "data": "10 mail.example.com."}'
+# MX record at the apex
+curl -s -X POST http://127.0.0.1:8080/api/v1/zones/example.org./records \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name": "example.org.", "type": "MX", "ttl": 3600, "data": "10 mail.example.org."}'
 
-# Add TXT record
-curl -X POST http://localhost:8080/api/v1/zones/example.com./records \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "example.com.", "type": "TXT", "ttl": 3600, "data": "\"v=spf1 include:_spf.example.com -all\""}'
+# TXT record (no surrounding quotes)
+curl -s -X POST http://127.0.0.1:8080/api/v1/zones/example.org./records \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name": "example.org.", "type": "TXT", "ttl": 3600, "data": "v=spf1 include:_spf.example.org -all"}'
 ```
 
 ### 3. List zones and records
 
 ```bash
-# List all zones
-curl http://localhost:8080/api/v1/zones \
-  -H "Authorization: Bearer $TOKEN"
-
-# Get zone details
-curl http://localhost:8080/api/v1/zones/example.com. \
-  -H "Authorization: Bearer $TOKEN"
-
-# List all records in zone
-curl http://localhost:8080/api/v1/zones/example.com./records \
-  -H "Authorization: Bearer $TOKEN"
-
-# Filter records by name
-curl "http://localhost:8080/api/v1/zones/example.com./records?name=www" \
-  -H "Authorization: Bearer $TOKEN"
+curl -s http://127.0.0.1:8080/api/v1/zones -H "Authorization: Bearer $TOKEN"
+curl -s http://127.0.0.1:8080/api/v1/zones/example.org. -H "Authorization: Bearer $TOKEN"
+curl -s http://127.0.0.1:8080/api/v1/zones/example.org./records -H "Authorization: Bearer $TOKEN"
+curl -s "http://127.0.0.1:8080/api/v1/zones/example.org./records?name=www" -H "Authorization: Bearer $TOKEN"
 ```
 
-### 4. Export zone
+### 4. Change a record (always send `ttl`)
 
 ```bash
-curl http://localhost:8080/api/v1/zones/example.com./export \
-  -H "Authorization: Bearer $TOKEN" \
-  -o example.com.zone
+curl -s -X PUT http://127.0.0.1:8080/api/v1/zones/example.org./records \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name": "www", "type": "A", "old_data": "192.0.2.1", "data": "192.0.2.2", "ttl": 3600}'
 ```
 
-### 5. Delete a record
+### 5. Export the zone
 
 ```bash
-curl -X DELETE http://localhost:8080/api/v1/zones/example.com./records \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "www.example.com.", "type": "A"}'
+curl -s http://127.0.0.1:8080/api/v1/zones/example.org./export \
+  -H "Authorization: Bearer $TOKEN" -o example.org.zone
 ```
 
-### 6. Delete zone
+### 6. Delete records
 
 ```bash
-curl -X DELETE http://localhost:8080/api/v1/zones/example.com. \
-  -H "Authorization: Bearer $TOKEN"
+curl -s -X DELETE http://127.0.0.1:8080/api/v1/zones/example.org./records \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name": "www", "type": "A"}'
+```
+
+### 7. Delete the zone
+
+```bash
+curl -s -X DELETE http://127.0.0.1:8080/api/v1/zones/example.org. -H "Authorization: Bearer $TOKEN"
 ```

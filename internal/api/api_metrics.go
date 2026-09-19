@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/auth"
+	"github.com/nothingdns/nothingdns/internal/dashboard"
+	"github.com/nothingdns/nothingdns/internal/util"
 )
 
 func (s *Server) handleDashboardStats(w http.ResponseWriter, r *http.Request) {
@@ -88,6 +90,10 @@ func (s *Server) handleDashboardQueries(w http.ResponseWriter, r *http.Request) 
 
 	stats := dashboardServer.GetStats()
 	queries, _ := stats.GetRecentQueries(0, 100)
+	// Redact client IPs for non-admins, like /api/v1/queries (LOW-010).
+	if !hasRole(r.Context(), nil, auth.RoleAdmin) {
+		queries = dashboard.RedactQueryEvents(queries)
+	}
 	s.writeJSON(w, http.StatusOK, queries)
 }
 
@@ -154,7 +160,7 @@ func (s *Server) handleQueryLog(w http.ResponseWriter, r *http.Request) {
 	}
 
 	stats := dashboardServer.GetStats()
-	queries, total := stats.GetRecentQueriesFiltered(offset, limit, filter)
+	queries, total := stats.GetRecentQueriesNewestFirst(offset, limit, filter)
 
 	// Redact client IPs for non-admin operators (LOW-010)
 	isAdmin := hasRole(r.Context(), nil, auth.RoleAdmin)
@@ -174,6 +180,7 @@ func (s *Server) handleQueryLog(w http.ResponseWriter, r *http.Request) {
 			Domain:       q.Domain,
 			QueryType:    q.QueryType,
 			ResponseCode: q.ResponseCode,
+			Answers:      q.Answers,
 			Duration:     q.Duration,
 			Cached:       q.Cached,
 			Blocked:      q.Blocked,
@@ -191,13 +198,7 @@ func (s *Server) handleQueryLog(w http.ResponseWriter, r *http.Request) {
 
 // redactIP masks the last octet/group of an IP address to reduce PII exposure.
 func redactIP(ip string) string {
-	if idx := strings.LastIndex(ip, "."); idx != -1 {
-		return ip[:idx+1] + "xxx"
-	}
-	if idx := strings.LastIndex(ip, ":"); idx != -1 {
-		return ip[:idx+1] + "xxxx"
-	}
-	return "xxx.xxx.xxx.xxx"
+	return util.RedactIP(ip)
 }
 
 // handleTopDomains returns the top N most-queried domains.

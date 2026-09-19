@@ -54,18 +54,25 @@ var (
 	errBodyTooLarge     = errors.New("odoh body too large")
 )
 
-// HPKE AEAD algorithms supported by ODoH.
+// HPKE AEAD identifiers (RFC 9180 §7.3), as used in odoh.aead and
+// server.http.odoh_aead. ChaCha20-Poly1305 is listed for completeness but
+// not implemented.
 const (
-	HPKEAEADAES256GCM        = 1
-	HPKEAEADChaCha20Poly1305 = 2
+	HPKEAEADAES128GCM        = 0x0001
+	HPKEAEADAES256GCM        = 0x0002
+	HPKEAEADChaCha20Poly1305 = 0x0003
 )
 
-// HPKE DH key agreement algorithms.
+// HPKE KEM identifiers (RFC 9180 §7.1). These are the values operators put
+// in odoh.kem / server.http.odoh_kem; the config validator accepts 0x0020.
+// They previously used private ordinals (X25519 = 4), so a config holding
+// the RFC value 32 — the only one the validator allows — was rejected at
+// startup and ODoH could never be enabled.
 const (
-	HPKEDHP256   = 1 // ECDH P-256
-	HPKEDHP384   = 2 // ECDH P-384
-	HPKEDHP521   = 3 // ECDH P-521
-	HPKEDHX25519 = 4 // X25519
+	HPKEDHP256   = 0x0010 // DHKEM(P-256, HKDF-SHA256)
+	HPKEDHP384   = 0x0011 // DHKEM(P-384, HKDF-SHA384)
+	HPKEDHP521   = 0x0012 // DHKEM(P-521, HKDF-SHA512)
+	HPKEDHX25519 = 0x0020 // DHKEM(X25519, HKDF-SHA256)
 )
 
 // HPKE KDF algorithms.
@@ -122,15 +129,24 @@ type ObliviousTarget struct {
 	keyPair *odohKeyPair
 }
 
-// odohResponseWriter captures a DNS response message from the handler.
+// odohResponseWriter captures the DNS response wire from the handler.
 // It implements server.ResponseWriter.
 type odohResponseWriter struct {
-	response *protocol.Message
+	// packed holds the response wire, snapshotted at Write time. The inner
+	// handler owns its response message's lifecycle — the pipeline Releases
+	// pooled responses at stage exit — so the target must not read or
+	// Release the message after ServeDNS returns.
+	packed []byte
 }
 
 func (rw *odohResponseWriter) Write(msg *protocol.Message) (int, error) {
-	rw.response = msg
-	return 0, nil
+	buf := make([]byte, msg.WireLength())
+	n, err := msg.Pack(buf)
+	if err != nil {
+		return 0, err
+	}
+	rw.packed = append([]byte(nil), buf[:n]...)
+	return n, nil
 }
 
 func (rw *odohResponseWriter) ClientInfo() *server.ClientInfo {
@@ -494,10 +510,6 @@ func validateODoHSuite(cfg *ODoHConfig) error {
 	return nil
 }
 
-// HPKEAEADAES128GCM is exposed for callers selecting the AES-128-GCM
-// AEAD variant in ODoHConfig.
-const HPKEAEADAES128GCM = 3
-
 // ServeHTTP implements the HTTP handler for an ODoH target, conformant
 // to RFC 9230 / RFC 9180 (HPKE).
 //
@@ -553,20 +565,16 @@ func (t *ObliviousTarget) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	rw := &odohResponseWriter{}
 	(&server.ServeDNSWithRecovery{Handler: t.handler}).ServeDNS(rw, query)
-	defer func() { rw.response.Release() }()
-	if rw.response == nil {
+	// The writer snapshotted the response wire at Write time; the inner
+	// handler/pipeline owns the response message's lifecycle (the pipeline
+	// Releases pooled responses at stage exit — releasing it here would be
+	// a double-Release of a pooled message).
+	if len(rw.packed) == 0 {
 		http.Error(w, "Failed to process query", http.StatusInternalServerError)
 		return
 	}
 
-	respLen := rw.response.WireLength()
-	buf := make([]byte, respLen)
-	if _, err := rw.response.Pack(buf); err != nil {
-		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
-		return
-	}
-
-	encryptedResponse, err := respCtx.encryptResponse(buf)
+	encryptedResponse, err := respCtx.encryptResponse(rw.packed)
 	if err != nil {
 		http.Error(w, "Encryption error", http.StatusInternalServerError)
 		return

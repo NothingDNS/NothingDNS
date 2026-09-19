@@ -34,11 +34,22 @@ func TestEngine_AddQNAMERule(t *testing.T) {
 	if len(rules) != 1 {
 		t.Fatalf("expected 1 rule, got %d", len(rules))
 	}
-	if rules[0].Pattern != "evil.example.com." {
+	// Stored without the root dot, the form QNAMEPolicy looks up.
+	if rules[0].Pattern != "evil.example.com" {
 		t.Errorf("Pattern = %q", rules[0].Pattern)
 	}
 	if rules[0].Action != ActionNXDOMAIN {
 		t.Errorf("Action = %d, want ActionNXDOMAIN", rules[0].Action)
+	}
+	e.SetEnabled(true)
+	for _, q := range []string{"evil.example.com.", "evil.example.com", "EVIL.example.com."} {
+		if e.QNAMEPolicy(q) == nil {
+			t.Errorf("rule added as FQDN must match query %q", q)
+		}
+	}
+	e.RemoveQNAMERule("evil.example.com.")
+	if len(e.ListQNAMERules()) != 0 {
+		t.Error("RemoveQNAMERule with the FQDN form must delete the rule")
 	}
 }
 
@@ -67,7 +78,7 @@ func TestEngine_AddQNAMERule_CaseInsensitive(t *testing.T) {
 	if len(rules) != 1 {
 		t.Fatalf("expected 1 rule, got %d", len(rules))
 	}
-	if rules[0].Pattern != "evil.example.com." {
+	if rules[0].Pattern != "evil.example.com" {
 		t.Errorf("Pattern should be lowercased, got %q", rules[0].Pattern)
 	}
 }

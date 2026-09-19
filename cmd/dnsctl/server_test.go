@@ -1,6 +1,10 @@
 package main
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -56,4 +60,59 @@ func TestLookupConfigPath(t *testing.T) {
 	if ok {
 		t.Error("expected false for nil root")
 	}
+}
+
+func TestServerBootstrapReadsPasswordFromStdin(t *testing.T) {
+	var got BootstrapRequestForTest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/auth/bootstrap" || r.Method != http.MethodPost {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Errorf("decode: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"token":"t","username":"admin","role":"admin"}`))
+	}))
+	defer srv.Close()
+
+	prev := globalFlags.Server
+	globalFlags.Server = srv.URL
+	defer func() { globalFlags.Server = prev }()
+	t.Setenv("NOTHINGDNS_ADMIN_PASSWORD", "")
+
+	if err := cmdServerBootstrap([]string{"--username", "ops"}, strings.NewReader("S3cret-Passw0rd\n")); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	if got.Username != "ops" || got.Password != "S3cret-Passw0rd" || got.OldPassword != "" {
+		t.Fatalf("request = %+v", got)
+	}
+}
+
+func TestServerBootstrapOldPasswordFromEnv(t *testing.T) {
+	var got BootstrapRequestForTest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	prev := globalFlags.Server
+	globalFlags.Server = srv.URL
+	defer func() { globalFlags.Server = prev }()
+	t.Setenv("NOTHINGDNS_ADMIN_PASSWORD", "New-Passw0rd!")
+	t.Setenv("NOTHINGDNS_ADMIN_OLD_PASSWORD", "Old-Passw0rd!")
+
+	if err := cmdServerBootstrap([]string{"--old-password"}, strings.NewReader("")); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	if got.Username != "admin" || got.Password != "New-Passw0rd!" || got.OldPassword != "Old-Passw0rd!" {
+		t.Fatalf("request = %+v", got)
+	}
+}
+
+type BootstrapRequestForTest struct {
+	Username    string `json:"username"`
+	Password    string `json:"password"`
+	OldPassword string `json:"old_password"`
 }

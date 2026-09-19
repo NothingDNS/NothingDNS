@@ -32,7 +32,14 @@ async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
 	const token = getToken();
 	if (token) headers.Authorization = `Bearer ${token}`;
 
-	const resp = await fetch(path, { ...options, headers });
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), 10_000);
+	let resp: Response;
+	try {
+		resp = await fetch(path, { ...options, headers, signal: controller.signal });
+	} finally {
+		clearTimeout(timeout);
+	}
 
 	// Global 401 handling — see api.ts. Expired token bounces to login.
 	if (resp.status === 401) {
@@ -100,6 +107,7 @@ interface RRLConfigRequest {
 	enabled: boolean;
 	rate: number;
 	burst: number;
+	max_buckets?: number;
 }
 
 export function useUpdateRRLConfig() {
@@ -137,6 +145,76 @@ export function useUpdateCacheConfig() {
 	return useMutation({
 		mutationFn: (data: CacheConfigRequest) =>
 			fetchApi<{ message: string }>("/api/v1/config/cache", {
+				method: "PUT",
+				body: JSON.stringify(data),
+			}),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: ["server-config"] });
+		},
+	});
+}
+
+export interface ResolutionConfigRequest {
+	recursive?: boolean;
+	authoritative_only?: boolean;
+	max_depth?: number;
+	timeout?: string;
+	edns0_buffer_size?: number;
+	qname_minimization?: boolean;
+	use_0x20?: boolean;
+}
+
+export function useUpdateResolutionConfig() {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: (data: ResolutionConfigRequest) =>
+			fetchApi<{ message: string }>("/api/v1/config/resolution", {
+				method: "PUT",
+				body: JSON.stringify(data),
+			}),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: ["server-config"] });
+		},
+	});
+}
+
+export function useUpdateDNS64Config() {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: (data: { enabled: boolean }) =>
+			fetchApi<{ message: string }>("/api/v1/config/dns64", {
+				method: "PUT",
+				body: JSON.stringify(data),
+			}),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: ["server-config"] });
+		},
+	});
+}
+
+export function useUpdateCookieConfig() {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: (data: { enabled: boolean }) =>
+			fetchApi<{ message: string }>("/api/v1/config/cookie", {
+				method: "PUT",
+				body: JSON.stringify(data),
+			}),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: ["server-config"] });
+		},
+	});
+}
+
+export function useUpdateUpstreamServer() {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: (data: { action: "add" | "remove"; server: string }) =>
+			fetchApi<{ message: string }>("/api/v1/upstreams", {
 				method: "PUT",
 				body: JSON.stringify(data),
 			}),

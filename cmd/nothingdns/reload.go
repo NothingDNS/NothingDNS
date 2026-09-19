@@ -32,6 +32,9 @@ type reloadableState struct {
 	cfg   **config.Config
 	cfgMu *sync.RWMutex
 
+	// Serializes concurrent reloads (SIGHUP + API reload can fire simultaneously)
+	reloadMu sync.Mutex
+
 	// Security components (replaced on reload)
 	securityManager **SecurityManager
 	bl              **blocklist.Blocklist
@@ -73,6 +76,12 @@ type reloadableState struct {
 // reloadedZones is the number of zone files successfully loaded (may be >0
 // even when err != nil if some zones loaded before a later step failed).
 func reloadConfig(configPath string, s *reloadableState) (reloadedZones int, err error) {
+	// Serialize whole reloads (SIGHUP + API reload can fire simultaneously).
+	// Locking only the final pointer swap let two reloads both snapshot the
+	// same "current" managers, stop them twice and leak one new set.
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+
 	// 1. Load and validate the new config.
 	newCfg, err := loadReloadConfig(configPath)
 	if err != nil {
@@ -115,7 +124,8 @@ func reloadConfig(configPath string, s *reloadableState) (reloadedZones int, err
 	// 7. Commit the new config.
 	commitLoadedConfig(newCfg, s.cfgMu, s.cfg, s.handler)
 
-	// 8. Update mutable state pointers.
+	// 8. Update mutable state pointers. reloadSecurityComponents already
+	// stopped the previous security manager.
 	*s.securityManager = nextSecMgr
 	*s.bl = secResult.Blocklist
 	*s.rpzEngine = secResult.RPZEngine

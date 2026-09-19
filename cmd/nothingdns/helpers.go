@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -41,6 +42,19 @@ func decodeHex32(s string) ([]byte, error) {
 // See SECURITY-REPORT.md H-1.
 func resolveDashboardBearer(httpCfg config.HTTPConfig) string {
 	return httpCfg.AuthToken
+}
+
+// authUsersFile returns where runtime-created users are persisted: the
+// explicit server.http.users_file, else <storage.data_dir>/users.json, else
+// "" (memory only).
+func authUsersFile(cfg *config.Config) string {
+	if f := strings.TrimSpace(cfg.Server.HTTP.UsersFile); f != "" {
+		return f
+	}
+	if dir := strings.TrimSpace(cfg.Storage.DataDir); dir != "" {
+		return filepath.Join(dir, "users.json")
+	}
+	return ""
 }
 
 // validateAuthPersistenceConfig enforces SECURITY-REPORT.md L-4: an

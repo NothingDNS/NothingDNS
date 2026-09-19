@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/nothingdns/nothingdns/internal/protocol"
 	"github.com/nothingdns/nothingdns/internal/util"
 	"github.com/nothingdns/nothingdns/internal/zone"
 )
@@ -190,6 +191,11 @@ func (s *Server) handleCreateZone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if _, err := zone.SOAMailbox(req.AdminEmail, req.Name); err != nil {
+		s.writeError(w, http.StatusBadRequest, sanitizeError(err, "Invalid admin email"))
+		return
+	}
+
 	ttl := req.TTL
 	if ttl == 0 {
 		ttl = 3600
@@ -364,8 +370,10 @@ func (s *Server) handleUpdateRecord(w http.ResponseWriter, r *http.Request, zone
 		Name    string `json:"name"`
 		Type    string `json:"type"`
 		OldData string `json:"old_data"`
-		TTL     uint32 `json:"ttl"`
-		Data    string `json:"data"`
+		// TTL is optional: omitted keeps the record's current TTL, while an
+		// explicit 0 (no caching) is honoured.
+		TTL  *uint32 `json:"ttl"`
+		Data string  `json:"data"`
 	}
 	if !s.decode(w, r, &req) {
 		return
@@ -376,10 +384,20 @@ func (s *Server) handleUpdateRecord(w http.ResponseWriter, r *http.Request, zone
 		return
 	}
 
+	var ttl uint32
+	if req.TTL != nil {
+		ttl = *req.TTL
+	} else if current, ok := s.currentRecordTTL(zoneName, req.Name, req.Type, req.OldData); ok {
+		ttl = current
+	} else {
+		s.writeError(w, http.StatusNotFound, fmt.Sprintf("record not found: %s %s %s", req.Name, req.Type, req.OldData))
+		return
+	}
+
 	newRecord := zone.Record{
 		Name:  req.Name,
 		Type:  req.Type,
-		TTL:   req.TTL,
+		TTL:   ttl,
 		Class: "IN",
 		RData: req.Data,
 	}
@@ -398,6 +416,24 @@ func (s *Server) handleUpdateRecord(w http.ResponseWriter, r *http.Request, zone
 	s.writeJSON(w, http.StatusOK, &MessageResponse{
 		Message: "Record updated",
 	})
+}
+
+// currentRecordTTL returns the TTL of the record an update targets, so an
+// update that omits ttl keeps it instead of resetting it to 0.
+func (s *Server) currentRecordTTL(zoneName, name, rtype, oldData string) (uint32, bool) {
+	if s.zoneManager == nil {
+		return 0, false
+	}
+	records, err := s.zoneManager.GetRecords(zoneName, name)
+	if err != nil {
+		return 0, false
+	}
+	for _, rec := range records {
+		if strings.EqualFold(rec.Type, rtype) && strings.EqualFold(rec.RData, oldData) {
+			return rec.TTL, true
+		}
+	}
+	return 0, false
 }
 
 // handleDeleteRecord deletes a record from a zone.
@@ -525,7 +561,7 @@ func (s *Server) handleBulkPTR(w http.ResponseWriter, r *http.Request, zoneName 
 
 	// Analyze existing records (thread-safe, no explicit lock needed)
 	existingPTR := z.RecordsByType("PTR")
-	existingA := z.RecordsByType("A")
+	existingAByZone := map[string][]zone.Record{}
 
 	changes := make([]ReverseDNSChange, 0, numIPs)
 	add, addA, skip, override, overrideA := 0, 0, 0, 0, 0
@@ -543,6 +579,32 @@ func (s *Server) handleBulkPTR(w http.ResponseWriter, r *http.Request, zoneName 
 				"[B]", fmt.Sprintf("%d", b)),
 			"[C]", fmt.Sprintf("%d", c)),
 			"[D]", fmt.Sprintf("%d", d))
+		// Pattern names are host names, not names relative to the reverse
+		// zone: without the trailing dot "host-1.example.com" was stored as
+		// "host-1.example.com.2.0.192.in-addr.arpa.".
+		ptrName = strings.ToLower(ptrName)
+		if !strings.HasSuffix(ptrName, ".") {
+			ptrName += "."
+		}
+		if _, err := protocol.ParseName(ptrName); err != nil {
+			s.writeError(w, http.StatusBadRequest, fmt.Sprintf("Pattern produces an invalid host name %q", ptrName))
+			return
+		}
+
+		// A records belong in the forward zone that is authoritative for
+		// the host name.
+		var aZone string
+		if req.AddA {
+			fz, ok := s.closestZone(ptrName)
+			if !ok {
+				s.writeError(w, http.StatusBadRequest, fmt.Sprintf("No zone is authoritative for %s; create the forward zone before adding A records", ptrName))
+				return
+			}
+			aZone = fz.GetOrigin()
+			if _, seen := existingAByZone[aZone]; !seen {
+				existingAByZone[aZone] = fz.RecordsByType("A")
+			}
+		}
 
 		// Compute relative PTR record name within the zone
 		revRecord := reverseIPv4Relative(ip.String(), zoneOrigin, ones)
@@ -562,8 +624,8 @@ func (s *Server) handleBulkPTR(w http.ResponseWriter, r *http.Request, zoneName 
 		var oldA string
 		aExist := false
 		if req.AddA {
-			for _, rec := range existingA {
-				if bulkPTROwnerMatches(rec.Name, ptrName, zoneOrigin) {
+			for _, rec := range existingAByZone[aZone] {
+				if bulkPTROwnerMatches(rec.Name, ptrName, aZone) {
 					aExist = true
 					oldA = rec.RData
 					break
@@ -593,6 +655,7 @@ func (s *Server) handleBulkPTR(w http.ResponseWriter, r *http.Request, zoneName 
 
 		if req.AddA {
 			ch.AName = ptrName
+			ch.AZone = aZone
 			ch.AExist = aExist
 			if aExist && !req.Override {
 				ch.OldA = oldA
@@ -660,7 +723,7 @@ func (s *Server) handleBulkPTR(w http.ResponseWriter, r *http.Request, zoneName 
 					existsA++
 					continue
 				}
-				if err := s.zoneManager.DeleteRecord(zoneName, ch.AName, "A"); err != nil {
+				if err := s.zoneManager.DeleteRecord(ch.AZone, ch.AName, "A"); err != nil {
 					s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to delete existing A record: %v", err))
 					return
 				}
@@ -672,7 +735,7 @@ func (s *Server) handleBulkPTR(w http.ResponseWriter, r *http.Request, zoneName 
 				TTL:   3600,
 				RData: ch.IP,
 			}
-			err := s.zoneManager.AddRecord(zoneName, aRec)
+			err := s.zoneManager.AddRecord(ch.AZone, aRec)
 			if err == nil {
 				addedA++
 			} else {
@@ -692,6 +755,21 @@ func (s *Server) handleBulkPTR(w http.ResponseWriter, r *http.Request, zoneName 
 		ExistsA: existsA,
 		Skipped: skipped,
 	})
+}
+
+// closestZone returns the most specific loaded zone that contains name.
+func (s *Server) closestZone(name string) (*zone.Zone, bool) {
+	name = strings.ToLower(strings.TrimSuffix(name, "."))
+	for {
+		if z, ok := s.zoneManager.Get(name + "."); ok {
+			return z, true
+		}
+		i := strings.IndexByte(name, '.')
+		if i < 0 {
+			return nil, false
+		}
+		name = name[i+1:]
+	}
 }
 
 func bulkPTROwnerMatches(recordName, owner, zoneOrigin string) bool {

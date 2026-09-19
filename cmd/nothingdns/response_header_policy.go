@@ -17,6 +17,8 @@
 package main
 
 import (
+	"fmt"
+
 	"github.com/nothingdns/nothingdns/internal/protocol"
 	"github.com/nothingdns/nothingdns/internal/server"
 )
@@ -37,6 +39,109 @@ type headerPolicyResponseWriter struct {
 	// advertises RA=1 tells clients to keep bringing it recursive work it
 	// refuses by design.
 	recursionAvailable bool
+
+	// recursionDenied is set when this client may not use recursion
+	// (allow_recursion). Its responses must not advertise RA either.
+	recursionDenied bool
+
+	// EDNS state of the request. Responses carry an OPT record only when the
+	// request did (RFC 6891 §7), with the request's DO bit (RFC 3225 §3) and
+	// this server's UDP payload size — not the upstream's, which recursive
+	// answers used to pass through verbatim.
+	reqOPT bool
+	reqDO  bool
+
+	// rcode is the RCODE of the last response written, for the query log;
+	// wrote reports whether a response was written at all.
+	rcode uint8
+	wrote bool
+
+	// answers is a compact RDATA summary of the last response's answer
+	// section, for the live query stream / query log.
+	answers []string
+}
+
+// maxLoggedAnswers caps how many answer RRs are kept per query event so the
+// in-memory ring buffer stays bounded under large responses (ANY, CNAME chains).
+const maxLoggedAnswers = 8
+
+// maxLoggedAnswerLen caps each answer string; long TXT/RRSIG values otherwise
+// dominate the live-stream payload.
+const maxLoggedAnswerLen = 160
+
+// summarizeAnswers builds compact "TYPE rdata" lines from msg's answer section.
+func summarizeAnswers(msg *protocol.Message) []string {
+	if msg == nil || len(msg.Answers) == 0 {
+		return nil
+	}
+	out := make([]string, 0, min(len(msg.Answers), maxLoggedAnswers+1))
+	for i, rr := range msg.Answers {
+		if i >= maxLoggedAnswers {
+			out = append(out, fmt.Sprintf("+%d more", len(msg.Answers)-maxLoggedAnswers))
+			break
+		}
+		if rr == nil {
+			continue
+		}
+		typeStr := protocol.TypeString(rr.Type)
+		dataStr := ""
+		if rr.Data != nil {
+			dataStr = rr.Data.String()
+			if len(dataStr) > maxLoggedAnswerLen {
+				dataStr = dataStr[:maxLoggedAnswerLen] + "…"
+			}
+		}
+		if dataStr == "" {
+			out = append(out, typeStr)
+			continue
+		}
+		out = append(out, typeStr+" "+dataStr)
+	}
+	return out
+}
+
+// RecursionAllowed reports whether the query this writer answers may use
+// recursion: the server recurses at all, and this client is permitted to.
+func (hw *headerPolicyResponseWriter) RecursionAllowed() bool {
+	return hw.recursionAvailable && !hw.recursionDenied
+}
+
+// Unwrap returns the wrapped writer.
+func (hw *headerPolicyResponseWriter) Unwrap() server.ResponseWriter {
+	return hw.inner
+}
+
+// recursionAllowedFor reports whether a response written through w may use
+// recursion. It walks writer wrappers to the header policy writer; writers
+// outside the pipeline (tests, internal callers) are allowed.
+func recursionAllowedFor(w server.ResponseWriter) bool {
+	for w != nil {
+		if hw, ok := w.(*headerPolicyResponseWriter); ok {
+			return hw.RecursionAllowed()
+		}
+		u, ok := w.(interface{ Unwrap() server.ResponseWriter })
+		if !ok {
+			return true
+		}
+		w = u.Unwrap()
+	}
+	return true
+}
+
+// denyRecursion marks the header policy writer behind w so that the rest of
+// the pipeline skips recursion and responses carry RA=0.
+func denyRecursion(w server.ResponseWriter) {
+	for w != nil {
+		if hw, ok := w.(*headerPolicyResponseWriter); ok {
+			hw.recursionDenied = true
+			return
+		}
+		u, ok := w.(interface{ Unwrap() server.ResponseWriter })
+		if !ok {
+			return
+		}
+		w = u.Unwrap()
+	}
 }
 
 // Write applies the header policy and forwards the message.
@@ -45,11 +150,56 @@ func (hw *headerPolicyResponseWriter) Write(msg *protocol.Message) (int, error) 
 		msg.Header.Flags.Opcode = hw.opcode
 		msg.Header.Flags.RD = hw.rd
 		msg.Header.Flags.CD = hw.cd
-		if !hw.recursionAvailable {
+		if !hw.RecursionAllowed() {
 			msg.Header.Flags.RA = false
 		}
+		hw.normalizeOPT(msg)
+		hw.rcode, hw.wrote = msg.Header.Flags.RCODE, true
+		hw.answers = summarizeAnswers(msg)
 	}
 	return hw.inner.Write(msg)
+}
+
+// normalizeOPT applies the request's EDNS state to msg's OPT record. The OPT
+// record is replaced, never modified in place: responses may share records
+// with the cache.
+func (hw *headerPolicyResponseWriter) normalizeOPT(msg *protocol.Message) {
+	idx := -1
+	for i, rr := range msg.Additionals {
+		if rr != nil && rr.Type == protocol.TypeOPT {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		if hw.reqOPT {
+			additionals := make([]*protocol.ResourceRecord, 0, len(msg.Additionals)+1)
+			additionals = append(additionals, msg.Additionals...)
+			msg.Additionals = append(additionals, &protocol.ResourceRecord{
+				Name:  protocol.NewName([]string{}, true),
+				Type:  protocol.TypeOPT,
+				Class: ednsResponsePayloadSize,
+				TTL:   protocol.BuildEDNSTTL(0, 0, hw.reqDO, 0),
+				Data:  &protocol.RDataOPT{},
+			})
+		}
+		return
+	}
+	opt := msg.Additionals[idx]
+	additionals := make([]*protocol.ResourceRecord, 0, len(msg.Additionals))
+	additionals = append(additionals, msg.Additionals[:idx]...)
+	if hw.reqOPT {
+		ttl := opt.TTL &^ 0x8000
+		if hw.reqDO {
+			ttl |= 0x8000
+		}
+		normalized := *opt
+		normalized.TTL = ttl
+		normalized.Class = ednsResponsePayloadSize
+		additionals = append(additionals, &normalized)
+	}
+	additionals = append(additionals, msg.Additionals[idx+1:]...)
+	msg.Additionals = additionals
 }
 
 // ClientInfo delegates to the inner writer.
@@ -76,6 +226,8 @@ func newHeaderPolicyWriter(h *integratedHandler, w server.ResponseWriter, req *p
 		hw.opcode = req.Header.Flags.Opcode
 		hw.rd = req.Header.Flags.RD
 		hw.cd = req.Header.Flags.CD
+		hw.reqOPT = req.GetOPT() != nil
+		hw.reqDO = hasDOBit(req)
 	}
 	return hw
 }

@@ -174,6 +174,7 @@ func (r *RDataRP) Unpack(buf []byte, offset int, rdlength uint16) (int, error) {
 	r.Txt = txt
 	offset += n
 	if offset != endOffset {
+		txt.Release()
 		return 0, fmt.Errorf("RP RDATA length mismatch: consumed %d bytes, rdlength %d", offset-startOffset, rdlength)
 	}
 
@@ -278,6 +279,7 @@ func (r *RDataAFSDB) Unpack(buf []byte, offset int, rdlength uint16) (int, error
 	r.Hostname = hostname
 	offset += n
 	if offset != endOffset {
+		hostname.Release()
 		return 0, fmt.Errorf("AFSDB RDATA length mismatch: consumed %d bytes, rdlength %d", offset-startOffset, rdlength)
 	}
 
@@ -374,6 +376,7 @@ func (r *RDataKX) Unpack(buf []byte, offset int, rdlength uint16) (int, error) {
 	r.Exchanger = exchanger
 	offset += n
 	if offset != endOffset {
+		exchanger.Release()
 		return 0, fmt.Errorf("KX RDATA length mismatch: consumed %d bytes, rdlength %d", offset-startOffset, rdlength)
 	}
 
@@ -672,6 +675,7 @@ func (r *RDataNAPTR) Unpack(buf []byte, offset int, rdlength uint16) (int, error
 	r.Replacement = replacement
 	offset += n
 	if offset != endOffset {
+		replacement.Release()
 		return 0, fmt.Errorf("NAPTR RDATA length mismatch: consumed %d bytes, rdlength %d", offset-startOffset, rdlength)
 	}
 

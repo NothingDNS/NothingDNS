@@ -158,18 +158,39 @@ server:
     doh_path: /dns-query
 ```
 
-### 3. Configure ACL
+### 3. Configure Recursion and ACL
+
+Limit recursion to your own clients so the server is not an open resolver.
+Everyone else still gets answers from this server's zones:
+
+```yaml
+allow_recursion:
+  - 127.0.0.0/8
+  - "::1/128"
+  - 10.0.0.0/8
+  - 172.16.0.0/12
+  - 192.168.0.0/16
+```
+
+Use the general `acl` only to block clients entirely (including from your
+zones). Once any rule exists, clients matching no rule are refused:
 
 ```yaml
 acl:
-  - name: allow-private-networks
+  - name: block-abusive-range
+    action: deny
+    networks:
+      - 198.51.100.0/24
+  - name: everyone-else
     action: allow
     networks:
-      - 10.0.0.0/8
-      - 172.16.0.0/12
-      - 192.168.0.0/16
-    # Omit types to allow all DNS query types. "ANY" only matches QTYPE 255.
+      - 0.0.0.0/0
+      - "::/0"
+    # Omit types to match all DNS query types. "ANY" only matches QTYPE 255.
 ```
+
+Both lists can also be managed on the dashboard's ACL page; changes are saved
+to `<storage.data_dir>/access_policy.json`, which then overrides the config.
 
 ### 4. Tune Runtime RRL
 
@@ -228,9 +249,9 @@ curl http://localhost:8080/readyz
 # StandardOutput/StandardError directives so this glob catches real app logs
 # and not just the query log.
 #
-# Note: deploy/nothingdns.service writes the log file with `nobody:nogroup`
-# ownership (matching the user/group the systemd unit runs under); the rule
-# below recreates rotated files with that same ownership.
+# Note: deploy/nothingdns.service runs as the dedicated `nothingdns` system
+# user created by install.sh / setup.sh; the rule below recreates rotated files
+# with that ownership.
 /var/log/nothingdns/*.log {
     daily
     rotate 7
@@ -238,7 +259,7 @@ curl http://localhost:8080/readyz
     delaycompress
     notifempty
     missingok
-    create 0644 nobody nogroup
+    create 0640 nothingdns nothingdns
     sharedscripts
     postrotate
         systemctl reload nothingdns > /dev/null 2>&1 || true

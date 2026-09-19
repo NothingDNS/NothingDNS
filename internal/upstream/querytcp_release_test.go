@@ -9,6 +9,7 @@ import (
 // TestQueryTCP_VerifyRelease confirms that LoadBalancer.queryTCP has
 // defer resp.Release() immediately after protocol.UnpackMessage, preventing
 // a pool leak on any non-TXID-mismatch exit path.
+//
 //go:embed loadbalancer.go
 var source string
 

@@ -49,7 +49,7 @@ export function ReadOnlyNotice({ title }: { title: string }) {
           <div className="mt-0.5 p-1.5 rounded-md bg-background text-muted-foreground"><Lock className="h-4 w-4" /></div>
           <div className="min-w-0">
             <CardTitle className="text-base">{title}</CardTitle>
-            <CardDescription className="text-xs">File-backed settings can be reloaded from disk; runtime editing is available for cache, RRL, and log level.</CardDescription>
+            <CardDescription className="text-xs">Live edits persist to runtime_overrides.json (when storage.data_dir is set) and survive reload. Bind addresses, TLS, cluster crypto and similar still require a YAML edit and restart.</CardDescription>
           </div>
         </div>
       </CardHeader>

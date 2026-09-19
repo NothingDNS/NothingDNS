@@ -142,10 +142,6 @@ func nsecRecord(data zone.NSECRecordData, ttl uint32) *protocol.ResourceRecord {
 	if err != nil {
 		return nil
 	}
-	if ttl == 0 {
-		ttl = 3600
-	}
-
 	types := make([]uint16, 0, len(data.Types))
 	for _, t := range data.Types {
 		if qtype := stringToType(t); qtype != 0 {

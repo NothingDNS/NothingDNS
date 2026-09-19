@@ -59,6 +59,16 @@ func newServerWithReverseZoneOrigin(t *testing.T, origin string) (*Server, *auth
 	return s, user
 }
 
+// addForwardZone creates example.com. so bulk PTR addA has a forward zone to
+// write A records into.
+func addForwardZone(t *testing.T, s *Server) {
+	t.Helper()
+	soa := &zone.SOARecord{TTL: 3600, MName: "ns1.example.com.", RName: "admin.example.com.", Serial: 1, Refresh: 3600, Retry: 600, Expire: 604800, Minimum: 86400}
+	if err := s.zoneManager.CreateZone("example.com.", 3600, soa, []zone.NSRecord{{TTL: 3600, NSDName: "ns1.example.com."}}); err != nil {
+		t.Fatalf("CreateZone example.com.: %v", err)
+	}
+}
+
 func TestHandleBulkPTR_Preview(t *testing.T) {
 	s, user := newServerWithReverseZone(t)
 
@@ -221,8 +231,11 @@ func TestHandleBulkPTR_OverrideReplacesExistingPTRByOwner(t *testing.T) {
 
 func TestHandleBulkPTR_WithAddA(t *testing.T) {
 	s, user := newServerWithReverseZone(t)
+	addForwardZone(t, s)
 
-	body := `{"cidr":"192.168.1.0/30","pattern":"host-[A]-[B]-[C]-[D].example.com.","addA":true}`
+	// No trailing dot: pattern names are host names, not names relative to
+	// the reverse zone.
+	body := `{"cidr":"192.168.1.0/30","pattern":"host-[A]-[B]-[C]-[D].example.com","addA":true}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/zones/1.168.192.in-addr.arpa./ptr-bulk", bytes.NewReader([]byte(body)))
 	req = req.WithContext(WithUser(req.Context(), user))
 	rec := httptest.NewRecorder()
@@ -232,12 +245,48 @@ func TestHandleBulkPTR_WithAddA(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
+
+	rev, _ := s.zoneManager.Get("1.168.192.in-addr.arpa.")
+	fwd, _ := s.zoneManager.Get("example.com.")
+	misplaced := len(rev.RecordsByType("A"))
+	rev.RLock()
+	ptr := append([]zone.Record(nil), rev.Records["1.1.168.192.in-addr.arpa."]...)
+	rev.RUnlock()
+	fwd.RLock()
+	a := append([]zone.Record(nil), fwd.Records["host-192-168-1-1.example.com."]...)
+	fwd.RUnlock()
+
+	if len(ptr) != 1 || ptr[0].RData != "host-192-168-1-1.example.com." {
+		t.Fatalf("PTR = %+v, want absolute host-192-168-1-1.example.com.", ptr)
+	}
+	if len(a) != 1 || a[0].Type != "A" || a[0].RData != "192.168.1.1" {
+		t.Fatalf("forward A = %+v, want 192.168.1.1 in example.com.", a)
+	}
+	if misplaced != 0 {
+		t.Fatalf("reverse zone holds %d A records, want none", misplaced)
+	}
+}
+
+func TestHandleBulkPTR_AddAWithoutForwardZone(t *testing.T) {
+	s, user := newServerWithReverseZone(t)
+
+	body := `{"cidr":"192.168.1.0/30","pattern":"host-[A]-[B]-[C]-[D].example.com.","addA":true,"preview":true}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/zones/1.168.192.in-addr.arpa./ptr-bulk", bytes.NewReader([]byte(body)))
+	req = req.WithContext(WithUser(req.Context(), user))
+	rec := httptest.NewRecorder()
+
+	s.handleBulkPTR(rec, req, "1.168.192.in-addr.arpa.")
+
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "forward zone") {
+		t.Fatalf("expected 400 naming the missing forward zone, got %d: %s", rec.Code, rec.Body.String())
+	}
 }
 
 func TestHandleBulkPTR_AddAExistingADoesNotSkipPTR(t *testing.T) {
 	s, user := newServerWithReverseZone(t)
+	addForwardZone(t, s)
 	existingName := "host-192-168-1-0.example.com."
-	if err := s.zoneManager.AddRecord("1.168.192.in-addr.arpa.", zone.Record{
+	if err := s.zoneManager.AddRecord("example.com.", zone.Record{
 		Name:  existingName,
 		Type:  "A",
 		Class: "IN",
@@ -269,10 +318,13 @@ func TestHandleBulkPTR_AddAExistingADoesNotSkipPTR(t *testing.T) {
 	if !ok {
 		t.Fatal("expected reverse zone")
 	}
+	fwd, _ := s.zoneManager.Get("example.com.")
 	z.RLock()
 	ptrRecords := append([]zone.Record(nil), z.Records["0.1.168.192.in-addr.arpa."]...)
-	aRecords := append([]zone.Record(nil), z.Records[existingName]...)
 	z.RUnlock()
+	fwd.RLock()
+	aRecords := append([]zone.Record(nil), fwd.Records[existingName]...)
+	fwd.RUnlock()
 
 	if len(ptrRecords) != 1 || ptrRecords[0].Type != "PTR" {
 		t.Fatalf("PTR records = %+v, want one PTR", ptrRecords)
@@ -287,6 +339,7 @@ func TestHandleBulkPTR_AddAExistingADoesNotSkipPTR(t *testing.T) {
 // forward A record may be created even when addA=true and the A is missing.
 func TestHandleBulkPTR_AddASkipEntryDoesNotCreateA(t *testing.T) {
 	s, user := newServerWithReverseZone(t)
+	addForwardZone(t, s)
 	if err := s.zoneManager.AddRecord("1.168.192.in-addr.arpa.", zone.Record{
 		Name:  "0",
 		Type:  "PTR",
@@ -315,9 +368,9 @@ func TestHandleBulkPTR_AddASkipEntryDoesNotCreateA(t *testing.T) {
 		t.Fatalf("bulk result = %+v, want skipped PTR and no A added", resp)
 	}
 
-	z, ok := s.zoneManager.Get("1.168.192.in-addr.arpa.")
+	z, ok := s.zoneManager.Get("example.com.")
 	if !ok {
-		t.Fatal("expected reverse zone")
+		t.Fatal("expected forward zone")
 	}
 	z.RLock()
 	aRecords := append([]zone.Record(nil), z.Records["host-192-168-1-0.example.com."]...)
@@ -331,6 +384,7 @@ func TestHandleBulkPTR_AddASkipEntryDoesNotCreateA(t *testing.T) {
 // Preview must agree with apply: a skip entry must not be counted in willAddA.
 func TestHandleBulkPTR_PreviewSkipEntryNotCountedInWillAddA(t *testing.T) {
 	s, user := newServerWithReverseZone(t)
+	addForwardZone(t, s)
 	if err := s.zoneManager.AddRecord("1.168.192.in-addr.arpa.", zone.Record{
 		Name:  "0",
 		Type:  "PTR",
@@ -823,6 +877,15 @@ func TestHandleSPA_Delegates(t *testing.T) {
 
 	if !called {
 		t.Error("SPA handler should delegate to the provided handler")
+	}
+
+	for _, path := range []string{"/api/v1/users", "/api", "/api/unknown"} {
+		called = false
+		rec := httptest.NewRecorder()
+		handler(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if called || rec.Code != http.StatusNotFound {
+			t.Errorf("%s: code=%d spa=%v, want a JSON 404 without the SPA", path, rec.Code, called)
+		}
 	}
 }
 

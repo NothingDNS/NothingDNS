@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/nothingdns/nothingdns/internal/rpz"
 	"io"
 	"os"
 	"path/filepath"
@@ -74,6 +75,23 @@ func TestNewSecurityManager_HappyPath(t *testing.T) {
 	}
 	if mgr == nil {
 		t.Fatal("expected non-nil SecurityManager")
+	}
+	// RPZ must exist while disabled so the dashboard can enable it and add
+	// rules at runtime; a disabled engine matches nothing.
+	engine := mgr.result.RPZEngine
+	if engine == nil {
+		t.Fatal("RPZ engine must exist even when rpz.enabled is false")
+	}
+	if engine.IsEnabled() || engine.QNAMEPolicy("blocked.example.") != nil {
+		t.Fatal("RPZ engine must start disabled and match nothing")
+	}
+	engine.AddQNAMERule("blocked.example.", rpz.ActionNXDOMAIN, "")
+	if engine.QNAMEPolicy("blocked.example.") != nil {
+		t.Fatal("rules must not apply until RPZ is enabled")
+	}
+	engine.Toggle()
+	if engine.QNAMEPolicy("blocked.example.") == nil {
+		t.Fatal("rule added at runtime must apply once RPZ is enabled")
 	}
 }
 

@@ -73,6 +73,12 @@ jobs:
       - name: Verify backup and restore round trip
         run: ./scripts/backup-restore-smoke.sh
 
+      - name: Validate shipped and installer-generated configs
+        run: ./scripts/validate-shipped-configs.sh
+
+      - name: Lint install scripts
+        run: shellcheck -S warning install.sh setup.sh update.sh config.sh uninstall.sh scripts/validate-shipped-configs.sh
+
   binaries:
     runs-on: ubuntu-latest
     needs: go
@@ -266,7 +272,7 @@ jobs:
         # scope, so a compromised upstream tag of any tool would inherit those
         # permissions. Bump these tags via Renovate / Dependabot.
         run: |
-          go install honnef.co/go/tools/cmd/staticcheck@2025.1.1
+          go install honnef.co/go/tools/cmd/staticcheck@2026.2.1
           go install github.com/kisielk/errcheck@v1.20.0
           go install github.com/polyfloyd/go-errorlint@v1.8.0
           staticcheck ./...

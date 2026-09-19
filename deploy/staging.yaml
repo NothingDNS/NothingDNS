@@ -85,13 +85,13 @@ transfer:
 
 # Relaxed ACL for testing
 acl:
+  # No `types`: the rule applies to every query type. Listing ANY would match
+  # only literal QTYPE 255 queries and leave every A/AAAA query refused.
   - name: "allow-all-staging"
     action: allow
     networks:
       - 0.0.0.0/0
       - "::/0"
-    types:
-      - ANY
 
 # Memory limit for staging
 memory_limit_mb: 512

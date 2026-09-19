@@ -252,18 +252,11 @@ type Cache struct {
 	shards [numShards]cacheShard
 	clock  cacheClock
 
-	// Configuration. Reads are lock-free (simple value types, mirroring the
-	// pre-sharding design); UpdateConfig serialises writes via cfgMu.
-	cfgMu             sync.Mutex
-	capacity          int
-	minTTL            time.Duration
-	maxTTL            time.Duration
-	defaultTTL        time.Duration
-	negativeTTL       time.Duration
-	prefetchEnabled   bool
-	prefetchThreshold time.Duration
-	serveStale        bool
-	staleGrace        time.Duration
+	// Configuration snapshot. Reads are lock-free via the atomic pointer;
+	// UpdateConfig swaps in a fresh immutable copy (serialised via cfgMu), so
+	// hot-reload never races with in-flight Get/Set calls.
+	cfgMu sync.Mutex
+	cfg   atomic.Pointer[Config]
 
 	// Callbacks
 	callbackMu     sync.Mutex
@@ -317,18 +310,9 @@ func DefaultConfig() Config {
 
 // New creates a new sharded DNS cache with the given configuration.
 func New(config Config) *Cache {
-	c := &Cache{
-		clock:             realCacheClock{},
-		capacity:          config.Capacity,
-		minTTL:            config.MinTTL,
-		maxTTL:            config.MaxTTL,
-		defaultTTL:        config.DefaultTTL,
-		negativeTTL:       config.NegativeTTL,
-		prefetchEnabled:   config.PrefetchEnabled,
-		prefetchThreshold: config.PrefetchThreshold,
-		serveStale:        config.ServeStale,
-		staleGrace:        config.StaleGrace,
-	}
+	c := &Cache{clock: realCacheClock{}}
+	cfg := config
+	c.cfg.Store(&cfg)
 
 	perShard := perShardCapacity(config.Capacity)
 	for i := range c.shards {
@@ -452,8 +436,8 @@ func (c *Cache) Get(key string) *Entry {
 		// retained for stale serving used to bump it on EVERY Get during
 		// the grace window, inflating the metric per-lookup.
 		if e, ok := s.entries[key]; ok && e == entry {
-			if c.serveStale {
-				if staleDeadlineReached(now, entry, c.staleGrace) {
+			if c.config().ServeStale {
+				if staleDeadlineReached(now, entry, c.config().StaleGrace) {
 					s.removeEntry(entry)
 					atomic.AddUint64(&s.expirations, 1)
 				}
@@ -529,7 +513,7 @@ func (c *Cache) Get(key string) *Entry {
 // unavailable. Returns nil if no stale entry exists or serve-stale is disabled.
 // The returned entry has IsStale=true and TTL set to 30s (RFC 8767 §4).
 func (c *Cache) GetStale(key string) *Entry {
-	if !c.serveStale {
+	if !c.config().ServeStale {
 		return nil
 	}
 
@@ -550,7 +534,7 @@ func (c *Cache) GetStale(key string) *Entry {
 	}
 
 	// Check if within stale grace period
-	if staleDeadlineReached(now, entry, c.staleGrace) {
+	if staleDeadlineReached(now, entry, c.config().StaleGrace) {
 		// Past stale grace — remove it
 		s.removeEntry(entry)
 		s.mu.Unlock()
@@ -621,11 +605,11 @@ func (c *Cache) ApplyTTLPolicy(msg *protocol.Message, ttl uint32) uint32 {
 // been configured, since a zero ceiling would expire entries immediately.
 func (c *Cache) boundedTTL(ttl uint32) time.Duration {
 	duration := time.Duration(ttl) * time.Second
-	if duration < c.minTTL {
-		duration = c.minTTL
+	if duration < c.config().MinTTL {
+		duration = c.config().MinTTL
 	}
-	if c.maxTTL > 0 && duration > c.maxTTL {
-		duration = c.maxTTL
+	if c.config().MaxTTL > 0 && duration > c.config().MaxTTL {
+		duration = c.config().MaxTTL
 	}
 	return duration
 }
@@ -651,13 +635,13 @@ func (c *Cache) Set(key string, msg *protocol.Message, ttl uint32) {
 // invisible to InvalidatePattern. Callers that know the query name should
 // use SetNegativeNamed instead.
 func (c *Cache) SetNegative(key string, rcode uint8) {
-	c.setNegative(key, "", rcode, c.negativeTTL)
+	c.setNegative(key, "", rcode, c.config().NegativeTTL)
 }
 
 // SetNegativeNamed is SetNegative with the query name retained on the entry
 // so that InvalidatePattern can match it regardless of key encoding.
 func (c *Cache) SetNegativeNamed(key, name string, rcode uint8) {
-	c.setNegative(key, name, rcode, c.negativeTTL)
+	c.setNegative(key, name, rcode, c.config().NegativeTTL)
 }
 
 // SetNegativeWithTTL adds a negative cache entry with an RFC 2308 TTL in
@@ -680,8 +664,8 @@ func (c *Cache) SetNegativeWithTTLNamed(key, name string, rcode uint8, ttl uint3
 // on an RFC 2308 SOA-derived TTL in seconds.
 func (c *Cache) clampNegativeTTL(ttl uint32) time.Duration {
 	d := time.Duration(ttl) * time.Second
-	if c.negativeTTL > 0 && d > c.negativeTTL {
-		d = c.negativeTTL
+	if c.config().NegativeTTL > 0 && d > c.config().NegativeTTL {
+		d = c.config().NegativeTTL
 	}
 	return d
 }
@@ -701,10 +685,10 @@ func (c *Cache) setNegative(key, name string, rcode uint8, ttl time.Duration) {
 func (c *Cache) SetNegativeMessage(key string, rcode uint8, msg *protocol.Message, ttl uint32) {
 	d := time.Duration(ttl) * time.Second
 	if d <= 0 {
-		d = c.negativeTTL
+		d = c.config().NegativeTTL
 	}
-	if c.negativeTTL > 0 && d > c.negativeTTL {
-		d = c.negativeTTL
+	if c.config().NegativeTTL > 0 && d > c.config().NegativeTTL {
+		d = c.config().NegativeTTL
 	}
 	c.setNegativeEntry(key, "", rcode, msg.Copy(), d)
 }
@@ -713,11 +697,11 @@ func (c *Cache) setNegativeEntry(key, name string, rcode uint8, msg *protocol.Me
 	// Apply min/max TTL constraints to negative TTL.
 	// maxTTL == 0 means "no upper bound" — only clamp when a positive ceiling
 	// has been configured (otherwise zero-clamp expires the entry immediately).
-	if ttl < c.minTTL {
-		ttl = c.minTTL
+	if ttl < c.config().MinTTL {
+		ttl = c.config().MinTTL
 	}
-	if c.maxTTL > 0 && ttl > c.maxTTL {
-		ttl = c.maxTTL
+	if c.config().MaxTTL > 0 && ttl > c.config().MaxTTL {
+		ttl = c.config().MaxTTL
 	}
 
 	now := c.now()
@@ -767,9 +751,9 @@ func (c *Cache) setInternal(s *cacheShard, key string, msg *protocol.Message, tt
 
 	// Calculate prefetch time if enabled
 	var prefetchDue time.Time
-	canPrefetch := c.prefetchEnabled && !isPrefetch
+	canPrefetch := c.config().PrefetchEnabled && !isPrefetch
 	if canPrefetch {
-		prefetchOffset := c.prefetchThreshold
+		prefetchOffset := c.config().PrefetchThreshold
 		if duration > prefetchOffset {
 			prefetchDue = expireTime.Add(-prefetchOffset)
 		} else {
@@ -1081,7 +1065,7 @@ func (c *Cache) Stats() Stats {
 		Expirations: expirations,
 		StaleServed: staleServed,
 		Size:        size,
-		Capacity:    c.capacity,
+		Capacity:    c.config().Capacity,
 	}
 }
 
@@ -1122,44 +1106,21 @@ func (c *Cache) SetPrefetchFunc(fn func(key string, qtype uint16)) {
 	c.callbackMu.Unlock()
 }
 
-// UpdateConfig updates the runtime cache configuration.
-// This allows changing cache behavior without restarting the server.
 // GetConfig returns a snapshot of the cache's current runtime
 // configuration. Used by callers that want to honor "patch
 // semantics" — read current, modify, UpdateConfig — without
-// reset-to-zero pitfalls on omitted fields. Locking matches the
-// surrounding "reads are lock-free" pattern: take cfgMu just long
-// enough to read each field, accepting that an in-flight
-// UpdateConfig may interleave (the worst case is a snapshot
-// mixing two configs, which is no worse than the existing
-// lock-free read paths that already see the same possibility).
+// reset-to-zero pitfalls on omitted fields. The snapshot is always
+// internally consistent (never a mix of two configs).
 func (c *Cache) GetConfig() Config {
-	c.cfgMu.Lock()
-	defer c.cfgMu.Unlock()
-	return Config{
-		Capacity:          c.capacity,
-		MinTTL:            c.minTTL,
-		MaxTTL:            c.maxTTL,
-		DefaultTTL:        c.defaultTTL,
-		NegativeTTL:       c.negativeTTL,
-		PrefetchEnabled:   c.prefetchEnabled,
-		PrefetchThreshold: c.prefetchThreshold,
-		ServeStale:        c.serveStale,
-		StaleGrace:        c.staleGrace,
-	}
+	return *c.config()
 }
 
+// UpdateConfig updates the runtime cache configuration.
+// This allows changing cache behavior without restarting the server.
 func (c *Cache) UpdateConfig(cfg Config) {
 	c.cfgMu.Lock()
-	c.capacity = cfg.Capacity
-	c.minTTL = cfg.MinTTL
-	c.maxTTL = cfg.MaxTTL
-	c.defaultTTL = cfg.DefaultTTL
-	c.negativeTTL = cfg.NegativeTTL
-	c.prefetchEnabled = cfg.PrefetchEnabled
-	c.prefetchThreshold = cfg.PrefetchThreshold
-	c.serveStale = cfg.ServeStale
-	c.staleGrace = cfg.StaleGrace
+	next := cfg
+	c.cfg.Store(&next)
 	c.cfgMu.Unlock()
 
 	perShard := perShardCapacity(cfg.Capacity)
@@ -1168,6 +1129,11 @@ func (c *Cache) UpdateConfig(cfg Config) {
 		c.shards[i].capacity = perShard
 		c.shards[i].mu.Unlock()
 	}
+}
+
+// config returns the current immutable configuration snapshot.
+func (c *Cache) config() *Config {
+	return c.cfg.Load()
 }
 
 // OnPrefetchComplete marks a prefetch as complete and resets the prefetch flag.

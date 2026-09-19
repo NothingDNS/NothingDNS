@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Globe, Shield, Zap, Server, Lock, Network, Database, Heart, ExternalLink, Layers } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Globe, Shield, Zap, Server, Lock, Network, Database, Heart, ExternalLink, Layers, BookOpen } from 'lucide-react';
 import { api } from '@/lib/api';
 
 interface ServerInfo {
@@ -42,13 +43,47 @@ export function AboutPage() {
       <div className="text-center py-8">
         <div className="inline-flex items-center justify-center h-20 w-20 rounded-2xl bg-primary/10 text-primary mb-6"><Globe className="h-10 w-10" /></div>
         <h1 className="text-4xl font-bold tracking-tight mb-3">NothingDNS</h1>
-        <p className="text-lg text-muted-foreground max-w-xl mx-auto leading-relaxed">A zero-dependency, production-grade authoritative DNS server written in pure Go.</p>
+        <p className="text-lg text-muted-foreground max-w-xl mx-auto leading-relaxed">A production-grade authoritative and recursive DNS server written in Go with minimal dependencies.</p>
         <div className="flex items-center justify-center gap-2 mt-4">
           <Badge variant="secondary">v{serverInfo?.version || '...'}</Badge>
           <Badge variant="outline">MIT License</Badge>
           <Badge variant="success">Production Ready</Badge>
         </div>
+        <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+          <Button asChild>
+            <a href="/api/docs" target="_blank" rel="noopener noreferrer">
+              <BookOpen className="h-4 w-4" /> API Docs
+            </a>
+          </Button>
+          <Button variant="outline" asChild>
+            <a href="/api/openapi.json" target="_blank" rel="noopener noreferrer">
+              <ExternalLink className="h-4 w-4" /> OpenAPI JSON
+            </a>
+          </Button>
+        </div>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <BookOpen className="h-4 w-4" /> REST API
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm text-muted-foreground">
+          <p>
+            Interactive endpoint reference for management, auth, zones, ACL, metrics and more.
+            Requires a logged-in session (same cookie/token as this dashboard).
+          </p>
+          <div className="flex flex-wrap gap-3">
+            <a href="/api/docs" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-primary hover:underline font-medium">
+              <ExternalLink className="h-3.5 w-3.5" /> Open /api/docs
+            </a>
+            <a href="/api/openapi.json" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-primary hover:underline font-medium">
+              <ExternalLink className="h-3.5 w-3.5" /> Open /api/openapi.json
+            </a>
+          </div>
+        </CardContent>
+      </Card>
 
       <div><h2 className="text-xl font-semibold mb-4">Features</h2><div className="grid gap-4 sm:grid-cols-2">
         {features.map(({ icon, title, desc }) => <Card key={title} className="hover:shadow-md transition-shadow"><CardContent className="flex gap-4 p-5"><div className="p-2.5 rounded-lg bg-primary/10 text-primary shrink-0">{icon}</div><div><h3 className="font-semibold text-sm mb-1">{title}</h3><p className="text-xs text-muted-foreground leading-relaxed">{desc}</p></div></CardContent></Card>)}
@@ -65,6 +100,7 @@ export function AboutPage() {
         <div className="flex items-center justify-center gap-1.5 text-sm text-muted-foreground">Made with <Heart className="h-3.5 w-3.5 text-destructive fill-destructive" /></div>
         <div className="mt-3 flex items-center justify-center gap-4">
           <a href="https://github.com/nothingdns/nothingdns" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline"><ExternalLink className="h-3.5 w-3.5" /> GitHub</a>
+          <a href="/api/docs" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline"><ExternalLink className="h-3.5 w-3.5" /> API reference</a>
         </div>
       </div>
     </div>

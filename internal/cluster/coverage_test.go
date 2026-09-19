@@ -1252,7 +1252,6 @@ func TestNodeList_ConcurrentAccess(t *testing.T) {
 // 24. CacheSyncEvent fields
 // ---------------------------------------------------------------------------
 
-
 // ---------------------------------------------------------------------------
 // 25. New with encryption key in cluster config (hex decode path)
 // ---------------------------------------------------------------------------
@@ -1799,7 +1798,6 @@ func TestGetLocalIP_FallbackUnreachable(t *testing.T) {
 // case with a working gossip connection and alive remote nodes
 // ---------------------------------------------------------------------------
 
-
 // ---------------------------------------------------------------------------
 // Additional coverage: cluster.go - Stop with CacheSync and gossip having
 // a nil connection (simulates the gossip connection already closed scenario)
@@ -2207,7 +2205,6 @@ func TestGetLocalIP_FallbackPath_EnvironmentDependent(t *testing.T) {
 // to ensure the loop processes events correctly under load
 // ---------------------------------------------------------------------------
 
-
 // ---------------------------------------------------------------------------
 // Integration: two clusters with CacheSync exchanging invalidations
 // ---------------------------------------------------------------------------
@@ -2287,7 +2284,6 @@ func TestCluster_TwoClusterCacheInvalidation(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Integration: cluster with cacheSync disabled - no cacheSyncLoop started
 // ---------------------------------------------------------------------------
-
 
 // ---------------------------------------------------------------------------
 // GossipProtocol: Join with valid address and gossip not started
@@ -3756,7 +3752,10 @@ func TestCluster_LeadershipUsesRaftWhenGossipNil(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
+	// The election timeout starts at 1s and is randomized, so a single node
+	// can take about 2s to elect itself; leave ample headroom for loaded CI
+	// runners (the loop exits as soon as the node is leader).
+	deadline := time.Now().Add(10 * time.Second)
 	for !ci.IsLeader() && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -5993,7 +5992,6 @@ func TestCluster_Stop_GossipAlreadyStopped(t *testing.T) {
 // ---------------------------------------------------------------------------
 // cluster.go: cacheSyncLoop - unknown event type (falls through switch)
 // ---------------------------------------------------------------------------
-
 
 // ---------------------------------------------------------------------------
 // gossip.go: Start() - ResolveUDPAddr error (lines 163-165)

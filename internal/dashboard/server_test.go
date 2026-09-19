@@ -1541,3 +1541,26 @@ func TestGetTopDomains_InvalidLimit(t *testing.T) {
 		}
 	}
 }
+
+func TestGetRecentQueriesNewestFirst(t *testing.T) {
+	ds := &DashboardStats{}
+	for _, d := range []string{"a.example.", "b.example.", "c.test.", "d.example."} {
+		ds.RecentQueries = append(ds.RecentQueries, &QueryEvent{Domain: d})
+	}
+	got, total := ds.GetRecentQueriesNewestFirst(0, 2, "")
+	if total != 4 || len(got) != 2 || got[0].Domain != "d.example." || got[1].Domain != "c.test." {
+		t.Fatalf("page 1 = %v (total %d), want d.example., c.test. of 4", domains(got), total)
+	}
+	got, total = ds.GetRecentQueriesNewestFirst(1, 5, "example")
+	if total != 3 || len(got) != 2 || got[0].Domain != "b.example." || got[1].Domain != "a.example." {
+		t.Fatalf("filtered page = %v (total %d), want b.example., a.example. of 3", domains(got), total)
+	}
+}
+
+func domains(events []*QueryEvent) []string {
+	out := make([]string, 0, len(events))
+	for _, e := range events {
+		out = append(out, e.Domain)
+	}
+	return out
+}

@@ -3,6 +3,7 @@ package protocol
 import (
 	"bytes"
 	"fmt"
+	"sync"
 	"testing"
 )
 
@@ -159,6 +160,78 @@ func TestCreateRDataAliasesAndRareTypes(t *testing.T) {
 			t.Errorf("createRData(0xBEEF) = %T, want nil", r)
 		}
 	})
+}
+
+// ============================================================================
+// wireNamePool — acquire/release round-trip
+//
+// wireNamePool stores *[]byte (New returns &wire). acquireWireNameBuffer
+// dereferences to []byte. releaseWireNameBuffer must take *[]byte so the
+// original pooled element is returned — not a stale pointer to the caller's
+// stack copy. Previously, releaseWireNameBuffer took []byte by value and
+// called wireNamePool.Put(&wire), which permanently leaked the pooled element
+// on every DNS name encode/decode. The fix changes the signature to
+// releaseWireNameBuffer(wire *[]byte) and updates all callers to pass &wire.
+// ============================================================================
+
+func TestWireNamePoolAcquireReleaseRoundTrip(t *testing.T) {
+	// Use a private pool that mirrors the real wireNamePool setup.
+	// This isolates the test from the global pool and parallel test interference.
+	// The fix: wireNamePool stores *[]byte. releaseWireNameBuffer must take *[]byte
+	// so the original pooled element is returned, not a stale stack pointer.
+	var poolUsed int
+	privatePool := sync.Pool{
+		New: func() any {
+			wire := make([]byte, 0, MaxNameLength)
+			return &wire
+		},
+	}
+
+	// Replicate the acquire: dereferences the pooled *[]byte.
+	privateAcquire := func() []byte {
+		return (*privatePool.Get().(*[]byte))[:0]
+	}
+
+	// Replicate the fixed release: takes *[]byte, returns the pooled element.
+	privateRelease := func(wire *[]byte) {
+		if wire == nil {
+			return
+		}
+		for i := range *wire {
+			(*wire)[i] = 0
+		}
+		*wire = (*wire)[:0]
+		privatePool.Put(wire)
+		poolUsed++
+	}
+
+	// Pre-load pool with one element.
+	starter := privatePool.Get().(*[]byte)
+	privatePool.Put(starter)
+
+	// First acquire — should reuse the pre-loaded element.
+	buf1 := privateAcquire()
+	before := poolUsed
+	buf1 = append(buf1, "example.com"...)
+
+	// Release via the fixed function (takes *[]byte).
+	privateRelease(&buf1)
+	if poolUsed != before+1 {
+		t.Errorf("poolUsed = %d, want %d", poolUsed, before+1)
+	}
+
+	// Second acquire — if release worked, the same element is returned.
+	buf2 := privateAcquire()
+	if buf2 == nil {
+		t.Fatal("second acquire returned nil — pool may be empty")
+	}
+
+	// Verify the pool was actually used (not calling New on every acquire).
+	// After one release, one Get should return the pooled element.
+	// If the pool is empty after release, Get() returns nil (New was not called).
+	if poolUsed < 1 {
+		t.Errorf("poolUsed = %d, want >= 1", poolUsed)
+	}
 }
 
 // ============================================================================

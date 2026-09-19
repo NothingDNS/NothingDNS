@@ -118,7 +118,8 @@ func (q *Question) Pack(buf []byte, offset int, compression map[string]int) (int
 	return offset - (offset - n - 4), nil
 }
 
-// Release returns the Question and any pooled children to internal pools.
+// Release returns the Question's pooled children (the Name wire buffer) to
+// their pools.
 func (q *Question) Release() {
 	if q == nil {
 		return
@@ -129,7 +130,11 @@ func (q *Question) Release() {
 	}
 	q.QType = 0
 	q.QClass = 0
-	questionPool.Put(q)
+	// Struct recycling removed: Release can run twice on one shared
+	// *Question (reply()-style Questions-slice sharing between a response
+	// and its query, both Released), and the double Put aliased the struct
+	// across unrelated acquisitions. The struct is left to the GC; the
+	// Name wire buffer is still recycled by Name.Release.
 }
 
 // Unpack deserializes a question from wire format.

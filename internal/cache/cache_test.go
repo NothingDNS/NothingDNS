@@ -1021,16 +1021,16 @@ func TestUpdateConfig(t *testing.T) {
 	if stats.Capacity != 500 {
 		t.Errorf("Expected capacity 500, got %d", stats.Capacity)
 	}
-	if cache.minTTL != 120 {
-		t.Errorf("Expected minTTL 120, got %d", cache.minTTL)
+	if cache.config().MinTTL != 120 {
+		t.Errorf("Expected minTTL 120, got %d", cache.config().MinTTL)
 	}
-	if cache.maxTTL != 7200 {
-		t.Errorf("Expected maxTTL 7200, got %d", cache.maxTTL)
+	if cache.config().MaxTTL != 7200 {
+		t.Errorf("Expected maxTTL 7200, got %d", cache.config().MaxTTL)
 	}
-	if !cache.prefetchEnabled {
+	if !cache.config().PrefetchEnabled {
 		t.Error("prefetchEnabled should be true")
 	}
-	if !cache.serveStale {
+	if !cache.config().ServeStale {
 		t.Error("serveStale should be true")
 	}
 }

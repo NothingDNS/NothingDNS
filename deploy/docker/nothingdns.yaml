@@ -1,0 +1,74 @@
+# NothingDNS default configuration for the container image.
+#
+# Baked into the image at /etc/nothingdns/nothingdns.yaml so that
+# `docker compose up` works without mounting a config. To customise, mount
+# your own file over that path (see docker-compose.yml).
+#
+# Persistent state (zone database, IXFR journals, dashboard users) lives in
+# /data, which docker-compose.yml backs with a named volume.
+
+server:
+  port: 53
+  bind:
+    - 0.0.0.0
+    - "::"
+
+  # Dashboard and REST API. Create the first admin from the Docker host:
+  #   curl -X POST http://127.0.0.1:8080/api/v1/auth/bootstrap \
+  #     -H 'Content-Type: application/json' \
+  #     -d '{"username":"admin","password":"<strong-password>"}'
+  # (published ports reach the container from the bridge gateway, which the
+  # server does not treat as localhost, so run this with
+  # `docker exec` if the host call is rejected — see QUICK_START.md).
+  http:
+    enabled: true
+    bind: "0.0.0.0:8080"
+
+upstream:
+  strategy: round_robin
+  servers:
+    - 1.1.1.1:53
+    - 8.8.8.8:53
+    - 8.8.4.4:53
+  health_check: 30s
+  failover_timeout: 5s
+
+cache:
+  enabled: true
+  size: 10000
+
+dnssec:
+  enabled: true
+
+rrl:
+  enabled: true
+  rate: 100
+  burst: 200
+
+logging:
+  level: info
+  format: json
+  output: stdout
+
+# Disabled: an unauthenticated metrics endpoint may only bind to loopback,
+# which is unreachable from outside the container. Set auth_token and enable
+# to scrape it.
+metrics:
+  enabled: false
+  bind: ":9153"
+  path: /metrics
+
+storage:
+  data_dir: /data
+
+# Recursion only for loopback and private networks (Docker bridge clients
+# included), so the container is not an open resolver. Every client still gets
+# answers from the server's own zones. Change it here or on the dashboard's
+# ACL page (saved to /data/access_policy.json).
+allow_recursion:
+  - 127.0.0.0/8
+  - ::1/128
+  - 10.0.0.0/8
+  - 172.16.0.0/12
+  - 192.168.0.0/16
+  - fc00::/7

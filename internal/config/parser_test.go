@@ -1359,3 +1359,124 @@ func TestParserRejectsTag(t *testing.T) {
 		t.Fatal("expected error for YAML tag (!), got nil")
 	}
 }
+
+// A plain scalar may begin with a colon when no whitespace follows it, as in
+// the IPv6 loopback network "::1/128" in an ACL list (YAML 1.2 §7.3.3).
+func TestParser_PlainScalarStartingWithColon(t *testing.T) {
+	input := "acl:\n  - name: loopback\n    action: allow\n    networks:\n      - 127.0.0.0/8\n      - ::1/128\n"
+	cfg, err := UnmarshalYAML(input)
+	if err != nil {
+		t.Fatalf("UnmarshalYAML: %v", err)
+	}
+	if len(cfg.ACL) != 1 || len(cfg.ACL[0].Networks) != 2 || cfg.ACL[0].Networks[1] != "::1/128" {
+		t.Fatalf("acl = %+v, want networks [127.0.0.0/8 ::1/128]", cfg.ACL)
+	}
+}
+
+// A leading UTF-8 BOM must not hide the first top-level section.
+func TestUnmarshalYAML_StripsUTF8BOM(t *testing.T) {
+	cfg, err := UnmarshalYAML("\xef\xbb\xbfserver:\n  port: 5360\n")
+	if err != nil {
+		t.Fatalf("UnmarshalYAML: %v", err)
+	}
+	if cfg.Server.Port != 5360 {
+		t.Fatalf("server.port = %d, want 5360 (BOM hid the server section)", cfg.Server.Port)
+	}
+}
+
+// -validate-config must reject what metrics.Start refuses at runtime:
+// an unauthenticated metrics endpoint on a non-loopback address.
+func TestValidateMetrics_RequiresTokenOffLoopback(t *testing.T) {
+	cases := []struct {
+		bind, token string
+		wantErr     bool
+	}{
+		{":9153", "", true},
+		{"0.0.0.0:9153", "", true},
+		{"127.0.0.1:9153", "", false},
+		{"[::1]:9153", "", false},
+		{"localhost:9153", "", false},
+		{":9153", "a-long-enough-token-value", false},
+	}
+	for _, tc := range cases {
+		c := &Config{}
+		c.Metrics.Enabled = true
+		c.Metrics.Bind = tc.bind
+		c.Metrics.Path = "/metrics"
+		c.Metrics.AuthToken = tc.token
+		gotErr := false
+		for _, e := range c.validateMetrics() {
+			if strings.Contains(e, "auth_token") {
+				gotErr = true
+			}
+		}
+		if gotErr != tc.wantErr {
+			t.Errorf("bind=%q token=%q: auth_token error = %v, want %v", tc.bind, tc.token, gotErr, tc.wantErr)
+		}
+	}
+}
+
+func TestUnmarshalAllowRecursion(t *testing.T) {
+	cfg, err := UnmarshalYAML("server:\n  port: 53\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AllowRecursionSet {
+		t.Error("allow_recursion absent: AllowRecursionSet must be false")
+	}
+
+	cfg, err = UnmarshalYAML("allow_recursion:\n  - 192.168.1.0/24\n  - 203.0.113.5\n  - \"2001:db8::/32\"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.AllowRecursionSet || len(cfg.AllowRecursion) != 3 || cfg.AllowRecursion[2] != "2001:db8::/32" {
+		t.Fatalf("allow_recursion = %v (set=%v)", cfg.AllowRecursion, cfg.AllowRecursionSet)
+	}
+	if errs := cfg.validateACL(); len(errs) != 0 {
+		t.Errorf("valid allow_recursion reported errors: %v", errs)
+	}
+
+	cfg, err = UnmarshalYAML("allow_recursion: []\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.AllowRecursionSet || len(cfg.AllowRecursion) != 0 {
+		t.Fatalf("empty allow_recursion = %v (set=%v), want [] and set", cfg.AllowRecursion, cfg.AllowRecursionSet)
+	}
+
+	cfg, _ = UnmarshalYAML("allow_recursion:\n  - not-a-network\n")
+	if errs := cfg.validateACL(); len(errs) == 0 {
+		t.Error("invalid allow_recursion entry must be reported")
+	}
+}
+
+func TestValidateACLNetworksAndRedirect(t *testing.T) {
+	c := &Config{ACL: []ACLRule{
+		{Name: "host", Action: "deny", Networks: []string{"203.0.113.9", "10.0.0.0/8"}},
+		{Name: "portal", Action: "redirect", Networks: []string{"0.0.0.0/0"}, Redirect: "blocked.example.net."},
+	}}
+	if errs := c.validateACL(); len(errs) != 0 {
+		t.Fatalf("valid ACL reported errors: %v", errs)
+	}
+	c.ACL[1].Redirect = "192.0.2.1"
+	c.ACL[0].Networks = []string{"not-a-network"}
+	errs := c.validateACL()
+	if len(errs) != 2 {
+		t.Fatalf("errors = %v, want the invalid network and the IP redirect target", errs)
+	}
+}
+
+func TestValidateLoggingOutputPaths(t *testing.T) {
+	c := &Config{Logging: LoggingConfig{Level: "info", Format: "json"}}
+	for _, out := range []string{"", "stdout", "stderr", "/var/log/nothingdns/server.log"} {
+		c.Logging.Output = out
+		if errs := c.validateLogging(); len(errs) != 0 {
+			t.Errorf("output %q: unexpected errors %v", out, errs)
+		}
+	}
+	c.Logging.Output = "server.log"
+	c.Logging.QueryLogFile = "logs/query.log"
+	if errs := c.validateLogging(); len(errs) != 2 {
+		t.Errorf("relative paths: errors = %v, want output and query_log_file rejected", errs)
+	}
+}

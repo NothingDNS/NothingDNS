@@ -3364,7 +3364,7 @@ func TestUnmarshalDNSSEC_Full(t *testing.T) {
 				{Type: NodeScalar, Value: "enabled"},
 				{Type: NodeScalar, Value: "true"},
 				{Type: NodeScalar, Value: "signature_validity"},
-				{Type: NodeScalar, Value: "30d"},
+				{Type: NodeScalar, Value: "720h"},
 				{Type: NodeScalar, Value: "keys"},
 				{Type: NodeSequence, Children: []*Node{
 					{Type: NodeMapping, Children: []*Node{
@@ -3405,7 +3405,7 @@ func TestUnmarshalDNSSEC_Full(t *testing.T) {
 	if !cfg.Signing.Enabled {
 		t.Error("expected Signing.Enabled=true")
 	}
-	if cfg.Signing.SignatureValidity != "30d" {
+	if cfg.Signing.SignatureValidity != "720h" {
 		t.Errorf("SignatureValidity = %q", cfg.Signing.SignatureValidity)
 	}
 	if len(cfg.Signing.Keys) != 1 {

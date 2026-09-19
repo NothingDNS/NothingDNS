@@ -54,6 +54,9 @@ type SecurityComponents struct {
 	RateLimiter *filter.RateLimiter
 	RRL         *filter.RRL
 	DNS64Synth  *dns64.Synthesizer
+	// RecursionPolicy limits recursion and cached answers to allowed
+	// clients; nil allows everyone.
+	RecursionPolicy *filter.RecursionPolicy
 }
 
 // DNSSEC components for signature validation and zone signing.

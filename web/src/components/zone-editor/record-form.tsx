@@ -24,11 +24,11 @@ export function FormField({ label, children }: { label: string; children: ReactN
 export function RecordDataDisplay({ type, data }: { type: string; data: string }) {
   const parts = recordDataParts(type, data);
   return (
-    <div className="flex min-w-[280px] flex-wrap gap-1.5">
+    <div className="flex min-w-[220px] flex-wrap gap-1.5">
       {parts.map((part) => (
-        <span key={part.label} className="inline-flex max-w-full items-center gap-1 rounded-md border bg-muted/40 px-2 py-1 text-xs">
-          <span className="text-muted-foreground">{part.label}</span>
-          <span className="font-mono truncate">{part.value || '-'}</span>
+        <span key={part.label} className="inline-flex max-w-full items-baseline gap-1 rounded-md border bg-muted/40 px-2 py-1 text-xs">
+          <span className="shrink-0 text-muted-foreground">{part.label}</span>
+          <span className="min-w-0 font-mono [overflow-wrap:anywhere]">{part.value || '-'}</span>
         </span>
       ))}
     </div>

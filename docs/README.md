@@ -56,8 +56,6 @@ This directory contains NothingDNS design, usage, and operations documentation.
 | Document | Contents |
 |---|---|
 | [CHANGELOG.md](CHANGELOG.md) | Semantic version changelog: Added/Fixed/Changed |
-| [.project/SPEC_DEVIATIONS.md](../.project/SPEC_DEVIATIONS.md) | Intentional deviations from SPEC.md with rationale |
-| [.project/AUTH_KDF.md](../.project/AUTH_KDF.md) | Custom PBKDF2 implementation design document |
 
 ## Quick Links
 

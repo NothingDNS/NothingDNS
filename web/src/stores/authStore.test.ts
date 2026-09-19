@@ -52,3 +52,13 @@ describe('authStore', () => {
     expect(parsed.state.token).toBeUndefined();
   });
 });
+
+describe('clearAuth', () => {
+  it('drops live query events received during the session', async () => {
+    const { useQueryStream } = await import('./queryStream');
+    useQueryStream.getState().pushEvent({ timestamp: '2026-09-17T00:00:00Z', clientIp: '192.0.2.1', domain: 'example.com.', queryType: 'A', responseCode: 'NOERROR', duration: 0, cached: false, blocked: false } as never);
+    useAuthStore.getState().setAuth('tok', 'admin', 'admin');
+    useAuthStore.getState().clearAuth();
+    expect(useQueryStream.getState().events).toHaveLength(0);
+  });
+});

@@ -256,6 +256,10 @@ func parseSRVRData(rdata string) RData {
 }
 
 // parseCAARData parses CAA RData: "flags tag value"
+// parseCAARData parses CAA RData: `flags tag value`. The value is normally a
+// quoted character-string (RFC 8659 §4.1.1, e.g. `0 issue "ca.example; a=1"`);
+// the quotes are presentation syntax and must not reach the wire. An unquoted
+// value is taken verbatim.
 func parseCAARData(rdata string) RData {
 	fields := strings.Fields(rdata)
 	if len(fields) < 3 {
@@ -265,10 +269,18 @@ func parseCAARData(rdata string) RData {
 	if !ok {
 		return nil
 	}
+	value := strings.Join(fields[2:], " ")
+	if strings.Contains(value, "\"") {
+		quoted, ok := parseQuotedRDataFields(value)
+		if !ok || len(quoted) != 1 {
+			return nil
+		}
+		value = quoted[0]
+	}
 	return &RDataCAA{
 		Flags: uint8(flags),
 		Tag:   fields[1],
-		Value: strings.Join(fields[2:], " "),
+		Value: value,
 	}
 }
 

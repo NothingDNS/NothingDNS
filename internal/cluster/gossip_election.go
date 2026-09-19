@@ -290,7 +290,19 @@ func (gp *GossipProtocol) muLeaderSendHeartbeat() {
 		if node.ID == self.ID || node.State != NodeStateAlive {
 			continue
 		}
-		addr := &net.UDPAddr{IP: net.ParseIP(node.Addr), Port: node.Port}
+		// BindPort fallback: legacy peers whose advertised port is 0
+		// (no port in their Join announcement) still receive heartbeats
+		// at the cluster's configured bind port. The previous code sent
+		// to Port: 0 → invalid UDP address → sendMessage error →
+		// peer never received heartbeats → after 15s the leader-failure
+		// detector would start a spurious election. Same fix shape as
+		// commit 8ecc141 (BroadcastCacheInvalidation, periodic gossip,
+		// sendPing) — muLeaderSendHeartbeat was missed.
+		port := node.Port
+		if port == 0 {
+			port = gp.config.BindPort
+		}
+		addr := &net.UDPAddr{IP: net.ParseIP(node.Addr), Port: port}
 		if err := gp.sendMessage(MessageTypeHeartbeat, payloadBytes, addr); err != nil {
 			util.Warnf("gossip: failed to send heartbeat to %s: %v", addr, err)
 		}

@@ -43,15 +43,32 @@ func WriteZone(z *Zone) (string, error) {
 		b.WriteString("\t)\n\n")
 	}
 
-	// NS records at apex
-	for _, ns := range z.NS {
-		ttl := ns.TTL
+	// NS records at apex. Records is the source of truth: records added or
+	// removed through the API never touch z.NS, and zones loaded from the KV
+	// store have no z.NS at all, so exporting from z.NS dropped every NS.
+	apexNS := 0
+	for _, r := range z.Records[z.Origin] {
+		if strings.ToUpper(r.Type) != "NS" {
+			continue
+		}
+		ttl := r.TTL
 		if ttl == 0 {
 			ttl = z.DefaultTTL
 		}
-		b.WriteString(fmt.Sprintf("@\t%d\tIN\tNS\t%s\n", ttl, ns.NSDName))
+		b.WriteString(fmt.Sprintf("@\t%d\tIN\tNS\t%s\n", ttl, stripZoneControlChars(r.RData)))
+		apexNS++
 	}
-	if len(z.NS) > 0 {
+	if apexNS == 0 {
+		for _, ns := range z.NS {
+			ttl := ns.TTL
+			if ttl == 0 {
+				ttl = z.DefaultTTL
+			}
+			b.WriteString(fmt.Sprintf("@\t%d\tIN\tNS\t%s\n", ttl, ns.NSDName))
+			apexNS++
+		}
+	}
+	if apexNS > 0 {
 		b.WriteString("\n")
 	}
 
@@ -90,8 +107,14 @@ func WriteZone(z *Zone) (string, error) {
 // file (see formatRDataForZone) would inject additional, attacker-controlled
 // zone-file lines. Enforced at every untrusted write path (API, DDNS).
 func ValidateRecordData(name, rdata string) error {
-	if i := strings.IndexAny(name, "\n\r\x00"); i >= 0 {
-		return fmt.Errorf("record name contains a control character (\\n/\\r/NUL)")
+	// Zone-file-hostile characters in the name: the owner is written into
+	// the zone file unquoted, so a semicolon, whitespace, quote, or
+	// parenthesis corrupts the written file — the reload truncates at the
+	// semicolon or mis-tokenizes at whitespace. DNS names cannot legally
+	// contain them anyway (RFC 1035 §2.3.1).
+	const nameHostile = "; \t\"()"
+	if i := strings.IndexAny(name, nameHostile+"\n\r\x00"); i >= 0 {
+		return fmt.Errorf("record name contains a character that breaks the zone-file format (semicolon, space, quote, or parenthesis)")
 	}
 	if i := strings.IndexAny(rdata, "\n\r\x00"); i >= 0 {
 		return fmt.Errorf("record data contains a control character (\\n/\\r/NUL) that could inject a zone-file line")
@@ -112,10 +135,51 @@ func stripZoneControlChars(s string) string {
 func formatRDataForZone(r Record) string {
 	switch strings.ToUpper(r.Type) {
 	case "TXT", "SPF", "DKIM":
-		return quoteZoneCharacterString(stripZoneControlChars(r.RData))
+		data := stripZoneControlChars(r.RData)
+		// Records added through the API are already in presentation form
+		// ("v=spf1 mx -all"); quoting them again wrote literal quotes into
+		// the value. The zone-file parser stores raw text, which is quoted.
+		if isQuotedCharacterStrings(data) {
+			return data
+		}
+		return quoteZoneCharacterString(data)
 	default:
 		return stripZoneControlChars(r.RData)
 	}
+}
+
+// isQuotedCharacterStrings reports whether s is one or more complete quoted
+// character-strings separated by whitespace, e.g. `"a" "b\"c"`.
+func isQuotedCharacterStrings(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	for s != "" {
+		if s[0] != '"' {
+			return false
+		}
+		i := 1
+		for ; i < len(s); i++ {
+			if s[i] == '\\' {
+				i++
+				continue
+			}
+			if s[i] == '"' {
+				break
+			}
+		}
+		if i >= len(s) {
+			return false // unterminated
+		}
+		s = s[i+1:]
+		trimmed := strings.TrimLeft(s, " \t")
+		if trimmed != "" && len(trimmed) == len(s) {
+			return false // no separator between strings
+		}
+		s = trimmed
+	}
+	return true
 }
 
 func quoteZoneCharacterString(s string) string {

@@ -1,14 +1,31 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { DashboardPage } from './dashboard';
+import { useAuthStore } from '@/stores/authStore';
 
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 
 vi.mock('@/stores/queryStream', () => ({
   useQueryStream: (selector: (s: { events: unknown[]; connected: boolean }) => unknown) => {
-    const state = { events: [], connected: false };
+    const state = {
+      events: [
+        {
+          timestamp: '2026-09-17T12:00:00Z',
+          clientIp: '192.0.2.1',
+          domain: 'example.com.',
+          queryType: 'A',
+          responseCode: 'NOERROR',
+          answers: ['A 93.184.216.34'],
+          duration: 12,
+          cached: true,
+          blocked: false,
+          protocol: 'udp',
+        },
+      ],
+      connected: true,
+    };
     return selector ? selector(state) : state;
   },
 }));
@@ -33,6 +50,19 @@ beforeEach(() => {
 });
 
 describe('DashboardPage', () => {
+  it('shows viewers only the live stream without requesting operator stats', () => {
+    useAuthStore.setState({ role: 'viewer' });
+    try {
+      render(<DashboardPage />);
+      expect(screen.getByText('Live Query Stream')).toBeInTheDocument();
+      expect(screen.queryByLabelText('Refresh stats')).not.toBeInTheDocument();
+      expect(screen.queryByText('Total Queries')).not.toBeInTheDocument();
+      expect(mockFetch).not.toHaveBeenCalled();
+    } finally {
+      useAuthStore.setState({ role: null });
+    }
+  });
+
   it('renders loading skeleton initially', () => {
     mockFetch.mockReturnValue(new Promise(() => {}));
     render(<DashboardPage />);
@@ -63,7 +93,8 @@ describe('DashboardPage', () => {
     render(<DashboardPage />);
 
     expect(await screen.findByText('Live Query Stream')).toBeInTheDocument();
-    expect(screen.getByText('Waiting for DNS queries...')).toBeInTheDocument();
+    expect(screen.getByText('example.com.')).toBeInTheDocument();
+    expect(screen.getByText('A 93.184.216.34')).toBeInTheDocument();
   });
 
   it('shows last update timestamp', async () => {
@@ -97,5 +128,80 @@ describe('DashboardPage', () => {
 
     expect(await screen.findByText('0m')).toBeInTheDocument();
     expect(screen.getByText('0.0%')).toBeInTheDocument();
+  });
+
+  it('ignores stale stats that resolve after a newer load', async () => {
+    // loadStats has two overlapping triggers: the 5s polling interval and
+    // the Refresh button. An older response landing after a newer one must
+    // NOT overwrite fresher state — a stalled request aborts at the 10s
+    // api() timeout, two ticks later, so the overlap is reachable on every
+    // stall.
+    vi.useFakeTimers();
+    try {
+      // load1: the stats request hangs (will resolve STALE later).
+      let resolveStaleStats!: (value: unknown) => void;
+      mockFetch.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveStaleStats = resolve;
+          }),
+      );
+      render(<DashboardPage />);
+
+      // 5s tick: the interval fires load2, whose stats are fresh.
+      mockFetch.mockResolvedValue(
+        mockJsonResponse({ ...sampleStats, queriesTotal: 2000000 }),
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000);
+      });
+      expect(screen.getByText('2,000,000')).toBeInTheDocument();
+
+      // The stale load1 response finally lands. It must be ignored.
+      resolveStaleStats(mockJsonResponse(sampleStats));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.queryByText('1,500,000')).not.toBeInTheDocument();
+      expect(screen.getByText('2,000,000')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ignores late rejections from superseded loads', async () => {
+    // The secondary branch: a stalled load aborts at the 10s api() timeout
+    // and its rejection lands after fresher ticks — it must not flip a
+    // good render into the error banner.
+    vi.useFakeTimers();
+    try {
+      let rejectStaleStats!: (reason?: unknown) => void;
+      mockFetch.mockImplementation(
+        () =>
+          new Promise((_, reject) => {
+            rejectStaleStats = reject;
+          }),
+      );
+      render(<DashboardPage />);
+
+      mockFetch.mockResolvedValue(
+        mockJsonResponse({ ...sampleStats, queriesTotal: 2000000 }),
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000);
+      });
+      expect(screen.getByText('2,000,000')).toBeInTheDocument();
+
+      rejectStaleStats(new DOMException('The operation was aborted.', 'AbortError'));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      // DOMException is not an Error subclass here, so loadStats renders the
+      // fallback message — the banner itself is the bug being guarded against.
+      expect(screen.queryByText('Failed to load stats')).not.toBeInTheDocument();
+      expect(screen.getByText('2,000,000')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

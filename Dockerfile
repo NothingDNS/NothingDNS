@@ -45,6 +45,12 @@ RUN VERS="${VERSION:-$(cat ./VERSION)}" && CGO_ENABLED=0 GOOS=linux GOARCH=${TAR
     -ldflags "-s -w -extldflags '-static' -X github.com/nothingdns/nothingdns/internal/util.Version=${VERS}" \
     -o dnsctl ./cmd/dnsctl
 
+# The scratch image has no shell or mkdir, so prepare the writable data
+# directory here. It must belong to the runtime user (UID 1000): a named
+# volume mounted on /data inherits this ownership, and the server writes its
+# zone database, IXFR journals and users.json there.
+RUN mkdir -p /rootfs/data /rootfs/etc/nothingdns
+
 # Final stage - minimal scratch image
 FROM scratch
 
@@ -61,6 +67,12 @@ COPY --from=builder /build/dnsctl /usr/local/bin/dnsctl
 # Copy CA certificates for TLS/DoH
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
+# Writable data directory owned by the runtime user, and a default config so
+# the image runs without a mounted one (mount your own over it to customise).
+COPY --from=builder --chown=1000:1000 /rootfs/data /data
+COPY --from=builder /rootfs/etc/nothingdns /etc/nothingdns
+COPY --from=builder /build/deploy/docker/nothingdns.yaml /etc/nothingdns/nothingdns.yaml
+
 # Create non-root user (using numeric ID for scratch compatibility)
 USER 1000
 
@@ -71,7 +83,7 @@ USER 1000
 # 8853/tcp - DNS Zone Transfer over TLS (XoT; separate listener from DoT)
 # 443/tcp - DNS over HTTPS (DoH)
 # 8080/tcp - REST API and Web Dashboard
-# 9153/tcp - Prometheus metrics
+# 9153/tcp - Prometheus metrics (disabled in the default config)
 EXPOSE 53/udp 53/tcp 853/tcp 8853/tcp 443/tcp 8080/tcp 9153/tcp
 
 # Set working directory

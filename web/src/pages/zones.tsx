@@ -4,7 +4,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { Dialog, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { Skeleton } from '@/components/ui/skeleton';
 import { api, type Zone } from '@/lib/api';
 import { ErrorState, EmptyState } from '@/components/states';
@@ -108,13 +108,16 @@ function CreateZoneDialog({ open, onClose, onCreated }: { open: boolean; onClose
   const handle = async () => {
     setError(''); if (!name.trim()) { setError('Zone name is required'); return; } const nameservers = ns.split('\n').map((s) => s.trim()).filter(Boolean); if (!nameservers.length) { setError('At least one nameserver is required'); return; }
     const zoneName = normalizeZoneName(name);
-    setSaving(true); try { await api('POST', '/api/v1/zones', { name: zoneName, ttl: parseInt(ttl) || 3600, admin_email: email.trim(), nameservers }); setName(''); setTTL('3600'); setEmail(defaultAdminEmailFor('')); setNs(defaultNameserverFor('')); setEmailTouched(false); setNsTouched(false); toast.success(`Zone ${zoneName} created`); onCreated(); onClose(); } catch (e) { setError(e instanceof Error ? e.message : 'Failed'); } finally { setSaving(false); }
+    // parseInt('0') is 0 — falsy — so `|| 3600` silently rewrote an explicit
+    // default TTL of 0 (no caching) to an hour. Only NaN falls back.
+    const parsedTtl = Number.parseInt(ttl, 10);
+    setSaving(true); try { await api('POST', '/api/v1/zones', { name: zoneName, ttl: Number.isNaN(parsedTtl) ? 3600 : parsedTtl, admin_email: email.trim(), nameservers }); setName(''); setTTL('3600'); setEmail(defaultAdminEmailFor('')); setNs(defaultNameserverFor('')); setEmailTouched(false); setNsTouched(false); toast.success(`Zone ${zoneName} created`); onCreated(); onClose(); } catch (e) { setError(e instanceof Error ? e.message : 'Failed'); } finally { setSaving(false); }
   };
-  return (<Dialog open={open} onClose={onClose}><DialogTitle>Create New Zone</DialogTitle><div className="space-y-4 mt-5">
+  return (<Dialog open={open} onClose={onClose}><DialogContent className="max-h-[90vh] overflow-y-auto"><DialogTitle>Create New Zone</DialogTitle><div className="space-y-4 mt-5">
     {error && <div className="text-sm text-destructive bg-destructive/10 px-3 py-2 rounded-lg">{error}</div>}
     <div><label htmlFor={nameId} className="text-sm font-medium mb-1.5 block">Zone Name</label><Input id={nameId} placeholder="example.com." value={name} onChange={(e) => setName(e.target.value)} autoFocus /></div>
     <div className="grid grid-cols-2 gap-4"><div><label htmlFor={ttlId} className="text-sm font-medium mb-1.5 block">Default TTL</label><Input id={ttlId} type="number" value={ttl} onChange={(e) => setTTL(e.target.value)} /></div><div><label htmlFor={emailId} className="text-sm font-medium mb-1.5 block">Admin Email</label><Input id={emailId} placeholder="admin.example.com." value={email} onChange={(e) => { setEmailTouched(true); setEmail(e.target.value); }} /></div></div>
     <div><label htmlFor={nsId} className="text-sm font-medium mb-1.5 block">Nameservers (one per line)</label><Textarea id={nsId} rows={3} placeholder={"ns1.example.com.\nns2.example.com."} value={ns} onChange={(e) => { setNsTouched(true); setNs(e.target.value); }} /></div>
     <div className="flex justify-end gap-2 pt-2"><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={handle} disabled={saving}>{saving ? 'Creating...' : 'Create Zone'}</Button></div>
-  </div></Dialog>);
+  </div></DialogContent></Dialog>);
 }

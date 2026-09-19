@@ -81,9 +81,9 @@ func DefaultConfig() *Config {
 		ODoH: ODoHConfig{
 			Enabled: false,
 			Bind:    ":8080",
-			KEM:     4, // X25519
-			KDF:     1, // HKDF-SHA256
-			AEAD:    1, // AES-256-GCM
+			KEM:     32, // X25519 (0x0020) — the KEM the odoh runtime implements
+			KDF:     1,  // HKDF-SHA256
+			AEAD:    1,  // AES-128-GCM
 		},
 		MDNS: mDNSConfig{
 			Enabled:     false,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -185,7 +186,7 @@ func (r *Runner) sendQuery(conn net.Conn) {
 	if err != nil {
 		// Only count actual deadline-exceeded as timeouts; protocol and transport
 		// errors (broken pipe, TCP RST, io.ErrShortWrite, DNS FORMERR) count as errors.
-		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+		if netErr := net.Error(nil); errors.As(err, &netErr) && netErr.Timeout() {
 			atomic.AddInt64(&r.timeouts, 1)
 		} else {
 			atomic.AddInt64(&r.errors, 1)

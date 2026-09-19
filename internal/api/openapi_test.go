@@ -94,11 +94,37 @@ func TestHandleSwaggerUI(t *testing.T) {
 	if ct := w.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
 		t.Errorf("Content-Type = %q, want text/html", ct)
 	}
-	if !strings.Contains(w.Body.String(), "swagger-ui") {
-		t.Error("response should contain swagger-ui reference")
+	body := w.Body.String()
+	if !strings.Contains(body, `<script src="/api/docs/app.js">`) {
+		t.Error("page should load the same-origin explorer script")
 	}
-	if !strings.Contains(w.Body.String(), "/api/openapi.json") {
+	if !strings.Contains(body, "/api/openapi.json") {
 		t.Error("response should reference /api/openapi.json")
+	}
+	// The CSP is script-src 'self': third-party or inline scripts would be
+	// blocked in browsers (the old unpkg Swagger UI never rendered).
+	if strings.Contains(body, "https://") || strings.Contains(body, "<script>") {
+		t.Error("page must not load third-party resources or use inline scripts")
+	}
+}
+
+func TestHandleAPIExplorerScript(t *testing.T) {
+	s := &Server{}
+	w := httptest.NewRecorder()
+	s.handleAPIExplorerScript(w, httptest.NewRequest(http.MethodGet, "/api/docs/app.js", nil))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.Contains(ct, "javascript") {
+		t.Errorf("Content-Type = %q, want javascript", ct)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "/api/openapi.json") || strings.Contains(body, "https://") {
+		t.Error("script must fetch the local spec and nothing external")
+	}
+	if strings.Contains(body, "innerHTML") {
+		t.Error("script must build DOM nodes rather than inject HTML from the spec")
 	}
 }
 

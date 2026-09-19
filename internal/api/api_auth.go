@@ -173,7 +173,7 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		}
 		user, err = authStore.CreateUser(req.Username, req.Password, auth.RoleAdmin)
 		if err != nil {
-			s.writeError(w, http.StatusConflict, sanitizeError(err, "Operation failed"))
+			s.writeError(w, userWriteErrorStatus(err), sanitizeError(err, "Operation failed"))
 			return
 		}
 	} else if len(users) > 0 {
@@ -188,14 +188,14 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		}
 		user, err = authStore.UpdateUser(req.Username, req.Password, "")
 		if err != nil {
-			s.writeError(w, http.StatusConflict, sanitizeError(err, "Operation failed"))
+			s.writeError(w, userWriteErrorStatus(err), sanitizeError(err, "Operation failed"))
 			return
 		}
 	} else {
 		// No users - create the first admin user
 		user, err = authStore.CreateUser(req.Username, req.Password, auth.RoleAdmin)
 		if err != nil {
-			s.writeError(w, http.StatusConflict, sanitizeError(err, "Operation failed"))
+			s.writeError(w, userWriteErrorStatus(err), sanitizeError(err, "Operation failed"))
 			return
 		}
 	}
@@ -225,6 +225,53 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 
 	s.writeJSON(w, http.StatusOK, &BootstrapResponse{
 		Token:    token.Token,
+		Username: user.Username,
+		Role:     string(user.Role),
+	})
+}
+
+// handleSession restores the in-memory SPA bearer after a page reload.
+// The dashboard keeps the bearer only in memory (not localStorage) so XSS
+// cannot read a long-lived token; the HttpOnly ndns_token cookie survives
+// reloads and authenticates this safe-method GET. Returning the same token
+// in JSON lets the SPA resume mutating requests that require Authorization.
+// SameSite=Strict prevents cross-site callers from obtaining the cookie.
+func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
+	if s.requireMethod(w, r, http.MethodGet) {
+		return
+	}
+
+	user := GetUser(r.Context())
+	if user == nil || user.Username == "" || user.Username == legacyTokenUsername {
+		// Legacy shared auth_token has no per-user session to restore into
+		// the SPA store; require a real login cookie / bearer.
+		s.writeError(w, http.StatusUnauthorized, "Not authenticated")
+		return
+	}
+
+	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if token == "" {
+		if c, err := r.Cookie("ndns_token"); err == nil {
+			token = c.Value
+		}
+	}
+	if token == "" {
+		s.writeError(w, http.StatusUnauthorized, "Not authenticated")
+		return
+	}
+
+	authStore := s.currentAuthStore()
+	if authStore == nil {
+		s.writeError(w, http.StatusUnauthorized, "Not authenticated")
+		return
+	}
+	if u, err := authStore.ValidateToken(token); err != nil || u == nil || u.Username != user.Username {
+		s.writeError(w, http.StatusUnauthorized, "Not authenticated")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, &LoginResponse{
+		Token:    token,
 		Username: user.Username,
 		Role:     string(user.Role),
 	})
@@ -330,7 +377,7 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 
 		user, err := authStore.CreateUser(req.Username, req.Password, role)
 		if err != nil {
-			s.writeError(w, http.StatusConflict, sanitizeError(err, "Operation failed"))
+			s.writeError(w, userWriteErrorStatus(err), sanitizeError(err, "Operation failed"))
 			return
 		}
 
@@ -421,3 +468,20 @@ func (s *Server) handleRoles(w http.ResponseWriter, r *http.Request) {
 }
 
 // hasRole checks if the current user has at least the required role.
+
+// userWriteErrorStatus maps auth store errors from creating or updating a
+// user to an HTTP status: 409 for a taken username or a last-admin conflict,
+// 404 for an unknown user, 400 for input that fails validation (for example
+// a password shorter than 8 characters).
+func userWriteErrorStatus(err error) int {
+	switch {
+	case errors.Is(err, auth.ErrUserExists), errors.Is(err, auth.ErrLastAdmin):
+		return http.StatusConflict
+	case strings.Contains(err.Error(), "user not found"):
+		return http.StatusNotFound
+	case strings.HasPrefix(err.Error(), "hashing password"):
+		return http.StatusInternalServerError
+	default:
+		return http.StatusBadRequest
+	}
+}

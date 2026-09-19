@@ -80,6 +80,12 @@ func (t *Tokenizer) Next() Token {
 	// Handle structural characters
 	switch ch {
 	case ':':
+		// A colon is the mapping indicator only when followed by whitespace,
+		// end of line, or a flow indicator; otherwise it starts a plain
+		// scalar such as the IPv6 address "::1/128" (YAML 1.2 §7.3.3).
+		if next := t.peekNext(); !strings.ContainsRune(" \t\n\r,[]{}", rune(next)) && next != 0 {
+			return t.readScalar()
+		}
 		return t.emitChar(TokenColon)
 	case '-':
 		// Check if it's a number (negative) or dash
@@ -291,6 +297,14 @@ func (t *Tokenizer) readQuotedString() Token {
 		}
 
 		if ch == quote {
+			if quote == '\'' && t.peekNext() == '\'' {
+				// YAML 1.2 §7.3.1: '' inside a single-quoted string is an
+				// escaped literal quote — consume both, emit one.
+				t.next()
+				t.next()
+				value.WriteByte('\'')
+				continue
+			}
 			t.next()
 			break
 		}

@@ -155,6 +155,7 @@ func (r *RDataRRSIG) Unpack(buf []byte, offset int, rdlength uint16) (int, error
 
 	// Signature (remaining bytes)
 	if offset > endOffset {
+		signerName.Release()
 		return 0, ErrBufferTooSmall
 	}
 	sigLen := endOffset - offset

@@ -1809,3 +1809,30 @@ func TestResourceRecordNilReceiver(t *testing.T) {
 		t.Error("nil RR RemainingTTL should return 0")
 	}
 }
+
+// The CAA value's quotes are presentation syntax: `0 issue "letsencrypt.org"`
+// must put letsencrypt.org on the wire, not "letsencrypt.org" with quotes.
+func TestParseCAARData_QuotedValue(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{`0 issue "letsencrypt.org"`, "letsencrypt.org"},
+		{`0 issue letsencrypt.org`, "letsencrypt.org"},
+		{`0 issue "ca.example.net; account=230123"`, "ca.example.net; account=230123"},
+		{`0 iodef "mailto:security@example.com"`, "mailto:security@example.com"},
+		{`0 issue ";"`, ";"},
+	}
+	for _, tt := range tests {
+		rd, ok := parseCAARData(tt.in).(*RDataCAA)
+		if !ok {
+			t.Fatalf("parseCAARData(%q) = nil", tt.in)
+		}
+		if rd.Value != tt.want {
+			t.Errorf("parseCAARData(%q).Value = %q, want %q", tt.in, rd.Value, tt.want)
+		}
+		if got := rd.String(); got != `0 `+rd.Tag+` "`+tt.want+`"` {
+			t.Errorf("String() = %q", got)
+		}
+	}
+	if parseCAARData(`0 issue "unterminated`) != nil {
+		t.Error("unbalanced quotes must be rejected")
+	}
+}

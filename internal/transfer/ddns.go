@@ -478,6 +478,21 @@ func ApplyUpdate(z *zone.Zone, update *UpdateRequest) error {
 		}
 	}
 
+	// RFC 2136 §3.4.2 requires the update to be atomic: all operations
+	// apply or none do. Validate every add up front so a mid-sequence
+	// failure (malformed RDATA) cannot leave prior operations applied
+	// while the serial bump is skipped — the zone would hold an
+	// unjournaled in-memory-only change that vanishes on restart and
+	// stays invisible to secondaries. Delete operations cannot fail
+	// here, so adds are the only pre-pass needed.
+	for _, op := range update.Updates {
+		if op.Operation == UpdateOpAdd {
+			if err := zone.ValidateRecordData(normalizeZoneOwner(op.Name, z.Origin), op.RData); err != nil {
+				return err
+			}
+		}
+	}
+
 	// Apply each update operation
 	for _, op := range update.Updates {
 		if err := applyOperationToZone(z, op); err != nil {

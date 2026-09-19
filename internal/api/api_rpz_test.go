@@ -178,8 +178,8 @@ func TestHandleRPZRules_GetRulesWithData(t *testing.T) {
 	if len(resp.Rules) != 1 {
 		t.Fatalf("expected 1 rule, got %d", len(resp.Rules))
 	}
-	if resp.Rules[0].Pattern != "blocked.example.com." {
-		t.Errorf("expected pattern 'blocked.example.com.', got %q", resp.Rules[0].Pattern)
+	if resp.Rules[0].Pattern != "blocked.example.com" {
+		t.Errorf("expected pattern 'blocked.example.com', got %q", resp.Rules[0].Pattern)
 	}
 	if resp.Rules[0].Action != "NXDOMAIN" {
 		t.Errorf("expected action 'NXDOMAIN', got %q", resp.Rules[0].Action)
@@ -216,8 +216,8 @@ func TestHandleRPZRules_AddRule(t *testing.T) {
 	if len(rules) != 1 {
 		t.Fatalf("expected 1 rule in engine, got %d", len(rules))
 	}
-	if rules[0].Pattern != "malware.example.com." {
-		t.Errorf("expected pattern 'malware.example.com.', got %q", rules[0].Pattern)
+	if rules[0].Pattern != "malware.example.com" {
+		t.Errorf("expected pattern 'malware.example.com', got %q", rules[0].Pattern)
 	}
 }
 

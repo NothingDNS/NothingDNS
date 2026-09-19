@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ClusterPage } from './cluster';
 
@@ -55,6 +55,58 @@ describe('ClusterPage', () => {
     expect(screen.getByText('1')).toBeInTheDocument();
     expect(screen.getByText('Yes')).toBeInTheDocument();
     expect(screen.getByText('Quorum OK')).toBeInTheDocument();
+  });
+
+  it('ignores stale responses that resolve after a newer load', async () => {
+    // load() has two overlapping triggers: the 10s polling interval and the
+    // Refresh button. When an older load's response lands after a newer
+    // load's, the stale data must NOT overwrite the fresh state — a cluster
+    // page showing stale quorum/node data is operationally misleading.
+    vi.useFakeTimers();
+    try {
+      // load1: the nodes request hangs (will resolve STALE later); status OK.
+      let resolveStaleNodes!: (value: unknown) => void;
+      mockFetch
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              resolveStaleNodes = resolve;
+            }),
+        )
+        .mockImplementationOnce(() => mockJsonResponse(sampleStatus));
+      render(<ClusterPage />);
+
+      // 10s tick: the interval fires load2, whose responses are fresh.
+      const freshNodes = {
+        nodes: [
+          aliveNode('node-1', '10.0.0.1'),
+          aliveNode('node-2', '10.0.0.2'),
+          aliveNode('node-3', '10.0.0.3', 'dead'),
+          aliveNode('node-4', '10.0.0.4'),
+          aliveNode('node-5', '10.0.0.5'),
+        ],
+      };
+      mockFetch
+        .mockImplementationOnce(() => mockJsonResponse(freshNodes))
+        .mockImplementationOnce(() => mockJsonResponse(sampleStatus));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10000);
+      });
+      // Fresh alive-count '4' is unique to the fresh render (stale has 2
+      // alive; raft "Term 5" makes '5' ambiguous, so never assert on '5').
+      expect(screen.getByText('4')).toBeInTheDocument();
+
+      // The stale load1 response finally lands. It must be ignored.
+      resolveStaleNodes(mockJsonResponse(sampleNodes));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      // Stale alive-count '2' must never appear; fresh '4' must survive.
+      expect(screen.queryByText('2')).not.toBeInTheDocument();
+      expect(screen.getByText('4')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('renders no quorum when not enough alive nodes', async () => {

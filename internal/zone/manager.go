@@ -127,6 +127,16 @@ func (m *Manager) SetMutationHook(hook func(zoneName string, deleted bool)) {
 	m.mutationHook = hook
 }
 
+// MutationHook returns the currently registered mutation hook, or nil if
+// none is set. Used to compose hooks (e.g. layering the query-routing
+// rebuild on top of the KV-persistence hook) without losing the earlier
+// registration.
+func (m *Manager) MutationHook() func(zoneName string, deleted bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.mutationHook
+}
+
 // NotifyMutated fires the mutation hook for a zone that was mutated OUTSIDE
 // the manager's mutation methods — e.g. DDNS (transfer.ApplyUpdate) mutates
 // the *Zone object directly. Such paths must call this once after applying
@@ -319,6 +329,26 @@ func (m *Manager) CreateZone(origin string, defaultTTL uint32, soa *SOARecord, n
 	if len(nsRecords) == 0 {
 		return fmt.Errorf("at least one NS record is required")
 	}
+	// Normalize the SOA and NS names before they are rendered into RDATA. An
+	// empty RNAME left the SOA with six fields, which the persistence layer
+	// could not parse back, so the zone came back without its SOA after a
+	// restart; names without a trailing dot were re-qualified with the origin
+	// when the written zone file was loaded again.
+	soa.MName = absoluteDomainName(soa.MName, origin)
+	rname, err := SOAMailbox(soa.RName, origin)
+	if err != nil {
+		return err
+	}
+	soa.RName = rname
+	if soa.MName == "" {
+		return fmt.Errorf("SOA primary nameserver is required")
+	}
+	for i := range nsRecords {
+		nsRecords[i].NSDName = absoluteDomainName(nsRecords[i].NSDName, origin)
+		if nsRecords[i].NSDName == "" {
+			return fmt.Errorf("NS record %d has an empty nameserver", i)
+		}
+	}
 
 	m.mu.Lock()
 
@@ -378,6 +408,67 @@ func (m *Manager) CreateZone(origin string, defaultTTL uint32, soa *SOARecord, n
 	return nil
 }
 
+// pathWithinDir reports whether path lies inside dir (dir must be non-empty).
+func pathWithinDir(path, dir string) bool {
+	if strings.TrimSpace(dir) == "" {
+		return false
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(absDir, absPath)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != "."
+}
+
+// absoluteDomainName returns name as an absolute domain name. Names with a
+// trailing dot are kept; dotted names (ns1.example.com) are taken as fully
+// qualified; single labels (ns1) are relative to origin.
+func absoluteDomainName(name, origin string) string {
+	name = strings.TrimSpace(name)
+	switch {
+	case name == "":
+		return ""
+	case name == "@":
+		return origin
+	case strings.HasSuffix(name, "."):
+		return name
+	case strings.Contains(name, "."):
+		return name + "."
+	default:
+		return name + "." + origin
+	}
+}
+
+// SOAMailbox converts an administrator address to the SOA RNAME form
+// (RFC 1035 §3.3.13): "hostmaster@example.com" becomes
+// "hostmaster.example.com.", and an address already in that form is made
+// absolute. An empty address defaults to hostmaster.<origin>. A local part
+// containing dots would need a "\." escape, which the DNS name codec does
+// not support, so such addresses are rejected.
+func SOAMailbox(email, origin string) (string, error) {
+	origin = normalizeZoneName(origin)
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return "hostmaster." + origin, nil
+	}
+	if at := strings.LastIndex(email, "@"); at >= 0 {
+		local, domain := email[:at], strings.TrimSuffix(email[at+1:], ".")
+		if local == "" || domain == "" || strings.ContainsAny(local, ". @") {
+			return "", fmt.Errorf("invalid admin email %q: use user@domain with no dots in the user part", email)
+		}
+		return local + "." + domain + ".", nil
+	}
+	if strings.ContainsAny(email, " @") {
+		return "", fmt.Errorf("invalid admin email %q", email)
+	}
+	return absoluteDomainName(email, origin), nil
+}
+
 // DeleteZone removes a zone entirely.
 func (m *Manager) DeleteZone(name string) error {
 	name = normalizeZoneName(name)
@@ -389,12 +480,20 @@ func (m *Manager) DeleteZone(name string) error {
 		return fmt.Errorf("zone %s not found", name)
 	}
 
+	// Only remove zone files this manager owns — those inside zone_dir,
+	// where API-created zones are written. Files listed under `zones:` in the
+	// config belong to the operator: deleting one through the API used to
+	// destroy it on disk. Such a zone is removed from memory and the
+	// persistent store, and comes back from its file on the next restart
+	// unless it is also removed from the config.
 	path := m.files[name]
-	if path != "" {
+	if path != "" && pathWithinDir(path, m.zoneDir) {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			m.mu.Unlock()
 			return fmt.Errorf("delete zone file %s: %w", path, err)
 		}
+	} else if path != "" {
+		m.warnf("zone: %s deleted; its file %s is outside zone_dir and was kept (remove it from the config to keep the zone deleted)", name, path)
 	}
 
 	delete(m.zones, name)
@@ -512,6 +611,12 @@ func (m *Manager) DeleteRecord(zoneName, name, rtype string) error {
 func (m *Manager) UpdateRecord(zoneName string, name, rtype, oldData string, newRecord Record) error {
 	zoneName = normalizeZoneName(zoneName)
 	rtype = strings.ToUpper(rtype)
+	// Parity with AddRecord: reject injection-shaped RDATA (embedded newlines,
+	// NULs) before it reaches the zone file writer — otherwise an update could
+	// inject a live record into the authoritative zone on the next persist.
+	if err := ValidateRecordData(newRecord.Name, newRecord.RData); err != nil {
+		return err
+	}
 	if newRecord.Class == "" {
 		newRecord.Class = "IN"
 	}

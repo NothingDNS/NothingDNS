@@ -211,12 +211,17 @@ type jsonResponseWriter struct {
 	response   *protocol.Message
 }
 
-// Write captures the DNS message for later JSON encoding.
+// Write snapshots the DNS message as a detached copy for later JSON encoding.
 func (rw *jsonResponseWriter) Write(msg *protocol.Message) (int, error) {
 	if rw.response != nil {
 		return 0, fmt.Errorf("response already written")
 	}
-	rw.response = msg
+	// Single ownership: the DNS pipeline Releases pooled response messages
+	// at stage exit (upstreamStage's defer resp.Release()), while the JSON
+	// encoding and this handler's own Release run after ServeDNS returns.
+	// Field-faithful deep copy — a wire round-trip would mask extended
+	// RCODEs (Header.Flags.RCODE & 0x0F) and lose in-memory-only state.
+	rw.response = msg.Copy()
 	return 0, nil
 }
 
@@ -341,10 +346,9 @@ func (rw *dohResponseWriter) Write(msg *protocol.Message) (int, error) {
 		msg.Questions = rw.query.Questions
 	}
 
-	// msg is from the server.Handler's upstream/resolver pool. Release it after
-	// wire-packing completes so ServeDNS can still mutate it and we keep the
-	// wire bytes.
-	defer msg.Release()
+	// The caller (the DNS pipeline) owns msg and releases it after Write
+	// returns; releasing it here too would double-Put it into the message
+	// pool and hand the same *Message to two concurrent requests.
 
 	// Pack the message to wire format
 	buf := make([]byte, msg.WireLength())

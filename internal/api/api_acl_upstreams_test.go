@@ -353,6 +353,9 @@ func TestHandleUpstreams_GetWithUpstreamClient(t *testing.T) {
 	if !found {
 		t.Error("expected 'direct-upstream' entry in response")
 	}
+	if len(resp.Servers) != 1 || resp.Servers[0].Address != "8.8.8.8:53" {
+		t.Errorf("servers = %+v, want the configured 8.8.8.8:53", resp.Servers)
+	}
 }
 
 // TestHandleUpstreams_PutAddServer verifies that PUT with action "add"

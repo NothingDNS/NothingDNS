@@ -356,3 +356,40 @@ func TestEncodeDecodeZoneMetaRoundTrip(t *testing.T) {
 		t.Errorf("decoded = %+v, want %+v", decoded, original)
 	}
 }
+
+// Owner names starting with "_" (SRV, DMARC, DKIM, ACME challenges) were
+// skipped as metadata keys on load, so they vanished after every restart.
+func TestZoneStoreLoadKeepsUnderscoreOwnerNames(t *testing.T) {
+	zs, cleanup := newTestZoneStore(t)
+	defer cleanup()
+
+	records := map[string][]StoredRecord{
+		"_sip._tcp.example.com.": {
+			{Name: "_sip._tcp.example.com.", TTL: 300, Class: "IN", Type: "SRV", RData: "10 5 5060 sip.example.com."},
+		},
+		"_dmarc.example.com.": {
+			{Name: "_dmarc.example.com.", TTL: 300, Class: "IN", Type: "TXT", RData: `"v=DMARC1; p=reject"`},
+		},
+		"_acme-challenge.example.com.": {
+			{Name: "_acme-challenge.example.com.", TTL: 60, Class: "IN", Type: "TXT", RData: `"token"`},
+		},
+	}
+	if err := zs.SaveZone("example.com.", ZoneMeta{Origin: "example.com.", DefaultTTL: 3600}, records); err != nil {
+		t.Fatalf("SaveZone: %v", err)
+	}
+	meta, loaded, err := zs.LoadZone("example.com.")
+	if err != nil {
+		t.Fatalf("LoadZone: %v", err)
+	}
+	if meta.Origin != "example.com." {
+		t.Errorf("meta origin = %q", meta.Origin)
+	}
+	for name := range records {
+		if len(loaded[name]) != 1 {
+			t.Errorf("%s: loaded %d records, want 1", name, len(loaded[name]))
+		}
+	}
+	if _, ok := loaded["_meta"]; ok {
+		t.Error("metadata key must not be returned as a record set")
+	}
+}

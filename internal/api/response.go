@@ -237,9 +237,17 @@ type UpstreamStatus struct {
 	Failovers uint64 `json:"failovers"`
 }
 
+// UpstreamServerStatus is the health of one configured upstream server.
+type UpstreamServerStatus struct {
+	Address   string  `json:"address"`
+	Healthy   bool    `json:"healthy"`
+	LatencyMs float64 `json:"latency_ms"`
+}
+
 // UpstreamsResponse is returned by GET /api/v1/upstreams.
 type UpstreamsResponse struct {
-	Upstreams []UpstreamStatus `json:"upstreams"`
+	Upstreams []UpstreamStatus       `json:"upstreams"`
+	Servers   []UpstreamServerStatus `json:"servers"`
 }
 
 // UpstreamUpdateRequest is used to add/remove upstream servers.
@@ -254,11 +262,33 @@ type ACLRuleResponse struct {
 	Networks []string `json:"networks"`
 	Action   string   `json:"action"`
 	Types    []string `json:"types,omitempty"`
+	Redirect string   `json:"redirect,omitempty"`
 }
 
 // ACLResponse is returned by GET /api/v1/acl.
 type ACLResponse struct {
 	Rules []ACLRuleResponse `json:"rules"`
+	// AllowRecursion is the recursion allow list.
+	AllowRecursion RecursionPolicyResponse `json:"allow_recursion"`
+	// Persistent reports whether changes are saved (to PolicyFile) and
+	// survive restarts; false means storage.data_dir is not configured.
+	Persistent bool   `json:"persistent"`
+	PolicyFile string `json:"policy_file,omitempty"`
+}
+
+// RecursionPolicyResponse is returned by GET /api/v1/acl/recursion and
+// embedded in ACLResponse.
+type RecursionPolicyResponse struct {
+	// AllowAll is true when every client admitted by the ACL may recurse
+	// (acl_allow_unrestricted_recursion, or ACL rules without an
+	// allow_recursion list). Networks is empty in that case.
+	AllowAll bool     `json:"allow_all"`
+	Networks []string `json:"networks"`
+}
+
+// RecursionPolicyRequest is the body of PUT /api/v1/acl/recursion.
+type RecursionPolicyRequest struct {
+	Networks []string `json:"networks"`
 }
 
 // LoginRequest is the request body for POST /api/v1/auth/login.
@@ -317,15 +347,16 @@ type RolesResponse struct {
 
 // QueryLogEntry represents a single query in the log.
 type QueryLogEntry struct {
-	Timestamp    string `json:"timestamp"`
-	ClientIP     string `json:"client_ip"`
-	Domain       string `json:"domain"`
-	QueryType    string `json:"query_type"`
-	ResponseCode string `json:"response_code"`
-	Duration     int64  `json:"duration_ms"`
-	Cached       bool   `json:"cached"`
-	Blocked      bool   `json:"blocked"`
-	Protocol     string `json:"protocol"`
+	Timestamp    string   `json:"timestamp"`
+	ClientIP     string   `json:"client_ip"`
+	Domain       string   `json:"domain"`
+	QueryType    string   `json:"query_type"`
+	ResponseCode string   `json:"response_code"`
+	Answers      []string `json:"answers,omitempty"`
+	Duration     int64    `json:"duration_ms"`
+	Cached       bool     `json:"cached"`
+	Blocked      bool     `json:"blocked"`
+	Protocol     string   `json:"protocol"`
 }
 
 // QueryLogResponse is returned by GET /api/v1/queries.
@@ -462,7 +493,8 @@ type ReverseDNSChange struct {
 	IP        string `json:"ip"`
 	PTRName   string `json:"ptrName"`
 	AName     string `json:"aName,omitempty"`
-	Action    string `json:"action"` // add, override, skip
+	AZone     string `json:"aZone,omitempty"` // forward zone that receives the A record
+	Action    string `json:"action"`          // add, override, skip
 	PTRExist  bool   `json:"ptrExist"`
 	AExist    bool   `json:"aExist,omitempty"`
 	OldPTR    string `json:"oldPtr,omitempty"`

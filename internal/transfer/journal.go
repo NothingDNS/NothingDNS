@@ -53,7 +53,7 @@ func EncodeJournalEntry(entry *IXFRJournalEntry) ([]byte, error) {
 	offset += 8
 
 	offset = encodeRecordChanges(buf, offset, entry.Added)
-	offset = encodeRecordChanges(buf, offset, entry.Deleted)
+	encodeRecordChanges(buf, offset, entry.Deleted)
 
 	return buf, nil
 }

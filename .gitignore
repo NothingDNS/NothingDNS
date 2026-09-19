@@ -75,8 +75,6 @@ coverage.out
 *.zone
 /zones-db/
 
-# AI assistant config (personal)
-.claude/
 
 # Test run configs (local)
 configs/test-run.yaml
@@ -97,8 +95,6 @@ __debug_bin
 # Security scan artifacts
 /security-report/
 
-# Playwright MCP artifacts
-.playwright-mcp/
 
 # Runtime cache files
 cache.json
@@ -124,16 +120,43 @@ Thumbs.db
 /web/pnpm-lock.yaml
 /web/yarn.lock
 
-.dfmt/
-# Track only .wrongstack/project.json; ignore all other session/agent data
-/.wrongstack/*
-!/.wrongstack/project.json
 
-# Local temp files (per CLAUDE.md / repo convention)
+# Local temp files (per AGENTS.md / repo convention)
 .temp_files/
 
 # Frontend coverage output directory
 web/coverage/
 
+# Personal editor, AI assistant and agent tooling state. Never commit these:
+# they hold local session data, machine-specific settings or private notes.
+.claude/
+.cursor/
+.cursorrules
+.windsurf/
+.windsurfrules
+.aider*
+.continue/
+.codex/
+.gemini/
+.kiro/
+.dfmt/
 .wrongstack/
+.playwright-mcp/
+.serena/
+.zed/
+.fleet/
+.history/
+
+# Internal planning/analysis notes kept outside the published docs
+.project/
+
+# Stale local hook copies (hooks are installed into .git/hooks by
+# scripts/install-hooks.sh from scripts/pre-commit)
+.githooks/
+
+# TypeScript incremental build info
+web/.tsbuild/
+*.tsbuildinfo
 !/.wrongstack/
+/.wrongstack/*
+!/.wrongstack/project.json

@@ -102,14 +102,21 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		defer query.Release() // runs even if ServeDNS panics
-		rw := &wsResponseWriter{
-			conn:    conn,
-			httpReq: r,
-			query:   query,
-		}
-		h.dnsHandler.ServeDNS(rw, query) // guarded by ServeDNSWithRecovery; Release is nil-safe
+		h.serveQuery(conn, r, query)
 	}
+}
+
+// serveQuery answers one DoWS query and releases it before the next frame is
+// read. A defer inside the read loop would hold every query on a long-lived
+// connection until it closes.
+func (h *WSHandler) serveQuery(conn *websocket.Conn, r *http.Request, query *protocol.Message) {
+	defer query.Release() // runs even if ServeDNS panics
+	rw := &wsResponseWriter{
+		conn:    conn,
+		httpReq: r,
+		query:   query,
+	}
+	h.dnsHandler.ServeDNS(rw, query) // guarded by ServeDNSWithRecovery
 }
 
 type doWSCloser interface {
@@ -140,10 +147,9 @@ func (rw *wsResponseWriter) Write(msg *protocol.Message) (int, error) {
 		msg.Questions = rw.query.Questions
 	}
 
-	// msg is from the server.Handler's upstream/resolver pool. Release it after
-	// wire-packing completes so ServeDNS can still mutate it and we keep the
-	// wire bytes.
-	defer msg.Release()
+	// The caller (the DNS pipeline) owns msg and releases it after Write
+	// returns; releasing it here too would double-Put it into the message
+	// pool and hand the same *Message to two concurrent requests.
 
 	buf := make([]byte, msg.WireLength())
 	n, err := msg.Pack(buf)

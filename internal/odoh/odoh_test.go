@@ -44,25 +44,28 @@ func TestNewODoHConfig(t *testing.T) {
 
 func TestConstants(t *testing.T) {
 	// HPKE AEAD constants
-	if HPKEAEADAES256GCM != 1 {
-		t.Errorf("HPKEAEADAES256GCM = %d, want 1", HPKEAEADAES256GCM)
+	if HPKEAEADAES128GCM != 0x0001 {
+		t.Errorf("HPKEAEADAES128GCM = %#x, want 0x0001", HPKEAEADAES128GCM)
 	}
-	if HPKEAEADChaCha20Poly1305 != 2 {
-		t.Errorf("HPKEAEADChaCha20Poly1305 = %d, want 2", HPKEAEADChaCha20Poly1305)
+	if HPKEAEADAES256GCM != 0x0002 {
+		t.Errorf("HPKEAEADAES256GCM = %#x, want 0x0002", HPKEAEADAES256GCM)
+	}
+	if HPKEAEADChaCha20Poly1305 != 0x0003 {
+		t.Errorf("HPKEAEADChaCha20Poly1305 = %#x, want 0x0003", HPKEAEADChaCha20Poly1305)
 	}
 
 	// HPKE DH constants
-	if HPKEDHP256 != 1 {
-		t.Errorf("HPKEDHP256 = %d, want 1", HPKEDHP256)
+	if HPKEDHP256 != 0x0010 {
+		t.Errorf("HPKEDHP256 = %#x, want 0x0010", HPKEDHP256)
 	}
-	if HPKEDHP384 != 2 {
-		t.Errorf("HPKEDHP384 = %d, want 2", HPKEDHP384)
+	if HPKEDHP384 != 0x0011 {
+		t.Errorf("HPKEDHP384 = %#x, want 0x0011", HPKEDHP384)
 	}
-	if HPKEDHP521 != 3 {
-		t.Errorf("HPKEDHP521 = %d, want 3", HPKEDHP521)
+	if HPKEDHP521 != 0x0012 {
+		t.Errorf("HPKEDHP521 = %#x, want 0x0012", HPKEDHP521)
 	}
-	if HPKEDHX25519 != 4 {
-		t.Errorf("HPKEDHX25519 = %d, want 4", HPKEDHX25519)
+	if HPKEDHX25519 != 0x0020 {
+		t.Errorf("HPKEDHX25519 = %#x, want 0x0020", HPKEDHX25519)
 	}
 }
 

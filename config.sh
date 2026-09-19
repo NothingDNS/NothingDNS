@@ -34,59 +34,40 @@ is_interactive() {
 
 # Check if config exists
 check_config() {
-    if [ ! -f "${CONFIG_FILE}" ]; then
+    if ! sudo test -f "${CONFIG_FILE}"; then
         error "Config not found at ${CONFIG_FILE}"
         info "Run setup.sh first to create config"
         return 1
     fi
 }
 
-# Validate YAML syntax
-validate_yaml() {
-    section "Validating Configuration"
-
-    if ! command -v python3 &> /dev/null && ! command -v ruby &> /dev/null; then
-        warn "python3 or ruby not found, skipping YAML validation"
-        return 0
-    fi
-
-    if command -v python3 &> /dev/null; then
-        if python3 -c "import yaml; yaml.safe_load(open('${CONFIG_FILE}'))" 2>/dev/null; then
-            info "YAML syntax is valid"
-            return 0
-        else
-            error "YAML syntax error in config file"
-            return 1
-        fi
-    elif command -v ruby &> /dev/null; then
-        if ruby -ryaml -e "YAML.load_file('${CONFIG_FILE}')" 2>/dev/null; then
-            info "YAML syntax is valid"
-            return 0
-        else
-            error "YAML syntax error in config file"
-            return 1
-        fi
+# Locate the nothingdns binary.
+find_binary() {
+    if command -v "${BINARY_NAME}" &> /dev/null; then
+        command -v "${BINARY_NAME}"
+    elif [ -x "/usr/local/bin/${BINARY_NAME}" ]; then
+        echo "/usr/local/bin/${BINARY_NAME}"
     fi
 }
 
-# Validate config with nothingdns
+# Validate the config with the server's own parser and validator. A generic
+# YAML parser is not a substitute: NothingDNS has its own YAML dialect and
+# semantic checks (ports, metrics auth, ACLs, ...).
 validate_config() {
-    section "Validating with NothingDNS"
+    check_config || return 1
+    section "Validating Configuration"
 
-    local binary="${BINARY_NAME}"
-    if ! command -v "${binary}" &> /dev/null; then
-        if [ ! -f "/usr/local/bin/${BINARY_NAME}" ]; then
-            warn "nothingdns not found, skipping binary validation"
-            return 0
-        fi
-        binary="/usr/local/bin/${BINARY_NAME}"
+    local binary
+    binary=$(find_binary)
+    if [ -z "${binary}" ]; then
+        error "nothingdns binary not found; cannot validate"
+        return 1
     fi
 
-    if ${binary} --config "${CONFIG_FILE}" --validate 2>/dev/null; then
+    if sudo "${binary}" -config "${CONFIG_FILE}" -validate-config; then
         info "Config is valid"
-        return 0
     else
-        warn "Config validation failed - check syntax and restart"
+        error "Config validation failed"
         return 1
     fi
 }
@@ -98,11 +79,12 @@ edit_config() {
     section "Editing Configuration"
 
     if [ ! -w "${CONFIG_FILE}" ]; then
-        info "Using sudo to edit config..."
-        sudo "${EDITOR}" "${CONFIG_FILE}"
+        info "Using sudoedit to edit config..."
+        SUDO_EDITOR="${EDITOR}" sudoedit "${CONFIG_FILE}"
     else
         "${EDITOR}" "${CONFIG_FILE}"
     fi
+    validate_config || warn "Fix the errors above before reloading"
 }
 
 # Show config
@@ -112,11 +94,7 @@ show_config() {
     section "Current Configuration"
 
     echo ""
-    if command -v bat &> /dev/null; then
-        bat "${CONFIG_FILE}" --language yaml 2>/dev/null || cat "${CONFIG_FILE}"
-    else
-        cat "${CONFIG_FILE}"
-    fi
+    sudo cat "${CONFIG_FILE}"
     echo ""
 }
 
@@ -126,8 +104,10 @@ backup_config() {
 
     section "Backing Up Configuration"
 
-    local backup="${CONFIG_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
-    cp "${CONFIG_FILE}" "${backup}"
+    local backup
+    backup="${CONFIG_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
+    # -p keeps the restrictive owner/mode: the config holds auth_secret.
+    sudo cp -p "${CONFIG_FILE}" "${backup}"
     info "Backed up to ${backup}"
 }
 
@@ -135,7 +115,8 @@ backup_config() {
 restore_config() {
     section "Restoring Configuration"
 
-    local backups=($(ls -t "${CONFIG_FILE}.backup."* 2>/dev/null | head -5))
+    local backups=()
+    mapfile -t backups < <(sudo sh -c "ls -t '${CONFIG_FILE}'.backup.* 2>/dev/null" | head -5)
 
     if [ ${#backups[@]} -eq 0 ]; then
         error "No backups found"
@@ -149,8 +130,9 @@ restore_config() {
             return 0
         fi
         if [ -n "$backup" ]; then
-            cp "${backup}" "${CONFIG_FILE}"
+            sudo cp -p "${backup}" "${CONFIG_FILE}"
             info "Restored from ${backup}"
+            validate_config || warn "The restored config does not validate"
             break
         fi
     done
@@ -162,7 +144,8 @@ diff_config() {
 
     section "Comparing Config Versions"
 
-    local backups=($(ls -t "${CONFIG_FILE}.backup."* 2>/dev/null | head -2))
+    local backups=()
+    mapfile -t backups < <(sudo sh -c "ls -t '${CONFIG_FILE}'.backup.* 2>/dev/null" | head -2)
 
     if [ ${#backups[@]} -lt 2 ]; then
         error "Need at least 2 backups to compare"
@@ -170,7 +153,7 @@ diff_config() {
     fi
 
     if command -v diff &> /dev/null; then
-        diff -u "${backups[1]}" "${backups[0]}" || true
+        sudo diff -u "${backups[1]}" "${backups[0]}" || true
     else
         warn "diff not available"
     fi
@@ -182,19 +165,21 @@ add_zone() {
 
     section "Adding Zone"
 
-    read -p "Zone name (e.g., example.com): " zone_name
+    read -r -p "Zone name (e.g., example.com): " zone_name
 
-    if [ -z "$zone_name" ]; then
-        error "Zone name required"
+    zone_name="${zone_name%.}"
+    if ! [[ "${zone_name}" =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$ ]]; then
+        error "Invalid zone name: ${zone_name}"
         return 1
     fi
 
     local zone_file="${CONFIG_DIR}/zones/${zone_name}.zone"
 
-    if [ -f "$zone_file" ]; then
+    if sudo test -f "$zone_file"; then
         warn "Zone file already exists at ${zone_file}"
     else
-        cat > "$zone_file" << EOF
+        sudo mkdir -p "${CONFIG_DIR}/zones"
+        sudo tee "$zone_file" > /dev/null << EOF
 \$ORIGIN ${zone_name}.
 \$TTL 3600
 
@@ -212,13 +197,10 @@ EOF
         info "Created zone file at ${zone_file}"
     fi
 
-    # Add to config
-    if grep -q "zones:" "${CONFIG_FILE}"; then
-        if grep -q "^zones: \[\]$\|^- name:\|^- .*\.zone" "${CONFIG_FILE}"; then
-            info "Zone file created. Manually add to config zones section:"
-            echo "  - ${zone_file}"
-        fi
-    fi
+    info "Add the zone file to the zones: list in ${CONFIG_FILE}, e.g."
+    echo "  zones:"
+    echo "    - ${zone_file}"
+    info "then run: $(basename "$0") check && $(basename "$0") reload"
 }
 
 # Reload config
@@ -227,6 +209,7 @@ reload_config() {
 
     if command -v systemctl &> /dev/null; then
         if systemctl is-active --quiet nothingdns 2>/dev/null; then
+            validate_config || { error "Not reloading an invalid config"; return 1; }
             info "Sending SIGHUP to reload config..."
             sudo systemctl kill -s HUP nothingdns
             sleep 1
@@ -248,9 +231,10 @@ show_status() {
     fi
 
     echo ""
-    if curl -s http://127.0.0.1:8080/health > /dev/null 2>&1; then
+    if curl -s --max-time 3 http://127.0.0.1:8080/health > /dev/null 2>&1; then
         info "HTTP API is responding"
-        curl -s http://127.0.0.1:8080/api/v1/status 2>/dev/null | python3 -m json.tool 2>/dev/null || curl -s http://127.0.0.1:8080/api/v1/status
+        curl -s --max-time 3 http://127.0.0.1:8080/health
+        echo ""
     else
         warn "HTTP API not responding"
     fi
@@ -266,8 +250,8 @@ Usage: $(basename "$0") <command>
 Commands:
     show          Show current configuration
     edit          Edit configuration in \$EDITOR
-    validate      Validate YAML syntax
-    check         Full validation (YAML + binary)
+    validate      Validate the config with the nothingdns binary
+    check         Same as validate
     backup        Backup configuration
     restore       Restore from backup
     diff          Compare two latest backups
@@ -294,8 +278,7 @@ main() {
     case "$1" in
         show) show_config ;;
         edit) edit_config ;;
-        validate) validate_yaml ;;
-        check) validate_yaml && validate_config ;;
+        validate|check) validate_config ;;
         backup) backup_config ;;
         restore) restore_config ;;
         diff) diff_config ;;

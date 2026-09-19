@@ -116,6 +116,7 @@ func (r *RDataNSEC) Unpack(buf []byte, offset int, rdlength uint16) (int, error)
 		return 0, fmt.Errorf("unpacking next domain: %w", err)
 	}
 	if offset+n > endOffset {
+		nextDomain.Release()
 		return 0, ErrBufferTooSmall
 	}
 	r.NextDomain = nextDomain

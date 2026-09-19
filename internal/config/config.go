@@ -55,6 +55,16 @@ type Config struct {
 	// ACL configuration
 	ACL []ACLRule `yaml:"acl"`
 
+	// AllowRecursion lists the networks (CIDRs or IPs) allowed to use
+	// recursion: upstream forwarding, iterative resolution and cached
+	// answers. Everyone passing the ACL still gets answers from the server's
+	// own zones. See AllowRecursionSet for the behaviour when omitted.
+	AllowRecursion []string `yaml:"allow_recursion"`
+
+	// AllowRecursionSet records whether allow_recursion appeared in the
+	// config (an explicit empty list means "no client may recurse").
+	AllowRecursionSet bool `yaml:"-"`
+
 	// RRL configuration
 	RRL RRLConfig `yaml:"rrl"`
 
@@ -115,6 +125,11 @@ func UnmarshalYAML(data string) (*Config, error) {
 
 // UnmarshalYAMLWithEnv parses YAML with optional environment variable expansion.
 func UnmarshalYAMLWithEnv(data string, expandEnv bool) (*Config, error) {
+	// A UTF-8 byte order mark (written by Windows PowerShell 5.1's
+	// Out-File -Encoding UTF8 and some editors) would otherwise glue onto the
+	// first key, turning "server:" into an unknown key and silently dropping
+	// that whole section.
+	data = strings.TrimPrefix(data, "\ufeff")
 	parser := NewParser(data)
 	node, err := parser.ParseMapping()
 	if err != nil {
@@ -213,7 +228,7 @@ var knownTopLevelConfigKeys = map[string]struct{}{
 	"server": {}, "resolution": {}, "upstream": {}, "cache": {},
 	"logging": {}, "metrics": {}, "dnssec": {}, "zones": {},
 	"zone_dir": {}, "zonemd": {}, "memory_limit_mb": {},
-	"shutdown_timeout": {}, "acl": {}, "rrl": {},
+	"shutdown_timeout": {}, "acl": {}, "allow_recursion": {}, "rrl": {},
 	"blocklist": {}, "rpz": {}, "geodns": {}, "dns64": {},
 	"cookie": {}, "cluster": {}, "storage": {}, "slave_zones": {},
 	"transfer": {}, "views": {}, "dso": {}, "idna": {}, "mdns": {}, "odoh": {},
@@ -366,6 +381,12 @@ func unmarshalToConfig(node *Node, cfg *Config) error {
 				cfg.ACL = append(cfg.ACL, rule)
 			}
 		}
+	}
+
+	// Recursion allow list
+	if recNode := node.Get("allow_recursion"); recNode != nil {
+		cfg.AllowRecursionSet = true
+		cfg.AllowRecursion = getStringSlice(node, "allow_recursion", nil)
 	}
 
 	// RRL config

@@ -363,10 +363,11 @@ func (c *Config) validateExtensions() []string {
 	}
 
 	if c.ODoH.Enabled {
-		if c.ODoH.TargetURL == "" {
-			errors = appendODoHSuiteValidation(errors, "odoh", "kem", "kdf", "aead",
-				c.ODoH.KEM, c.ODoH.KDF, c.ODoH.AEAD)
-		}
+		// The suite validation runs whenever ODoH is enabled: a KEM/KDF/AEAD
+		// the odoh runtime rejects produces an unusable ObliviousDoHConfigs
+		// regardless of whether a target URL is configured.
+		errors = appendODoHSuiteValidation(errors, "odoh", "kem", "kdf", "aead",
+			c.ODoH.KEM, c.ODoH.KDF, c.ODoH.AEAD)
 		errors = appendURLValidation(errors, "odoh", "target_url", c.ODoH.TargetURL)
 		errors = appendURLValidation(errors, "odoh", "proxy_url", c.ODoH.ProxyURL)
 	}
@@ -409,15 +410,21 @@ func appendODoHSuiteValidation(errors []string, prefix, kemField, kdfField, aead
 }
 
 func isValidODoHKEM(kem int) bool {
-	return kem == 4
+	// 0x0020 (32) = DHKEM(X25519, HKDF-SHA256) — the only KEM the odoh
+	// runtime implements (internal/odoh parseConfigContents rejects the
+	// rest with "odoh: unsupported suite"). The former value 4 matched no
+	// HPKE KEM and made the runtime-implemented suite unconfigurable.
+	return kem == 32
 }
 
 func isValidODoHKDF(kdf int) bool {
 	return kdf == 1
 }
 
+// isValidODoHAEAD accepts the RFC 9180 AEAD ids the odoh runtime
+// implements: 1 = AES-128-GCM, 2 = AES-256-GCM.
 func isValidODoHAEAD(aead int) bool {
-	return aead == 1 || aead == 3
+	return aead == 1 || aead == 2
 }
 
 func (c *Config) validateResolution() []string {
@@ -561,6 +568,15 @@ func (c *Config) validateLogging() []string {
 		errors = append(errors, fmt.Sprintf("logging: invalid format '%s' (must be json or text)", c.Logging.Format))
 	}
 
+	switch out := c.Logging.Output; {
+	case out == "" || out == "stdout" || out == "stderr":
+	case !filepath.IsAbs(out):
+		errors = append(errors, fmt.Sprintf("logging: invalid output '%s' (must be stdout, stderr or an absolute file path)", out))
+	}
+	if f := c.Logging.QueryLogFile; f != "" && !filepath.IsAbs(f) {
+		errors = append(errors, fmt.Sprintf("logging: query_log_file '%s' must be an absolute path", f))
+	}
+
 	return errors
 }
 
@@ -582,6 +598,11 @@ func (c *Config) validateMetrics() []string {
 	}
 	if !strings.HasPrefix(c.Metrics.Path, "/") {
 		errors = append(errors, fmt.Sprintf("metrics: path '%s' must start with /", c.Metrics.Path))
+	}
+	// Mirrors the runtime check in metrics.Start, so -validate-config catches
+	// a config the server would refuse to start with.
+	if isPublicListenAddress(c.Metrics.Bind) && strings.TrimSpace(c.Metrics.AuthToken) == "" {
+		errors = append(errors, fmt.Sprintf("metrics: auth_token is required when bind %q is not loopback (use e.g. 127.0.0.1:9153 or set auth_token)", c.Metrics.Bind))
 	}
 	return errors
 }
@@ -615,6 +636,13 @@ func (c *Config) validateDNSSEC() []string {
 				}
 			}
 		}
+
+		// signature_validity is parsed with time.ParseDuration at signing
+		// time (main.go loadZoneSigner), which silently keeps the default
+		// validity on error — Go durations reject the natural "30d" idiom,
+		// so the typo would change DNSSEC signature lifetimes without any
+		// warning. Gate it here, at load.
+		errors = appendDurationValidation(errors, "dnssec.signing", "signature_validity", c.DNSSEC.Signing.SignatureValidity)
 	}
 
 	return errors
@@ -622,6 +650,13 @@ func (c *Config) validateDNSSEC() []string {
 
 func (c *Config) validateACL() []string {
 	var errors []string
+
+	for _, entry := range c.AllowRecursion {
+		e := strings.TrimSpace(entry)
+		if net.ParseIP(e) == nil && !isValidCIDR(e) {
+			errors = append(errors, fmt.Sprintf("allow_recursion: invalid IP or CIDR '%s'", entry))
+		}
+	}
 
 	validActions := map[string]bool{"allow": true, "deny": true, "redirect": true}
 
@@ -633,15 +668,23 @@ func (c *Config) validateACL() []string {
 			errors = append(errors, fmt.Sprintf("%s: invalid action '%s' (must be allow, deny, or redirect)", prefix, rule.Action))
 		}
 
-		// Validate redirect for redirect action
-		if rule.Action == "redirect" && rule.Redirect == "" {
-			errors = append(errors, fmt.Sprintf("%s: redirect target is required when action is 'redirect'", prefix))
+		// Validate redirect for redirect action. The server answers with a
+		// CNAME to the target, so it must be a domain name.
+		if rule.Action == "redirect" {
+			target := strings.TrimSpace(rule.Redirect)
+			switch {
+			case target == "":
+				errors = append(errors, fmt.Sprintf("%s: redirect target is required when action is 'redirect'", prefix))
+			case net.ParseIP(strings.TrimSuffix(target, ".")) != nil:
+				errors = append(errors, fmt.Sprintf("%s: redirect target '%s' must be a domain name, not an IP address", prefix, target))
+			}
 		}
 
-		// Validate networks
+		// Validate networks (CIDR or single IP)
 		for _, network := range rule.Networks {
-			if !isValidCIDR(network) {
-				errors = append(errors, fmt.Sprintf("%s: invalid network '%s' (must be valid CIDR)", prefix, network))
+			n := strings.TrimSpace(network)
+			if net.ParseIP(n) == nil && !isValidCIDR(n) {
+				errors = append(errors, fmt.Sprintf("%s: invalid network '%s' (must be a CIDR or IP address)", prefix, network))
 			}
 		}
 

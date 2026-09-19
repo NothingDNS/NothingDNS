@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/nothingdns/nothingdns/internal/cache"
 	"github.com/nothingdns/nothingdns/internal/config"
 	"github.com/nothingdns/nothingdns/internal/filter"
+	"github.com/nothingdns/nothingdns/internal/util"
 )
 
 // --- handleConfigReload tests ---
@@ -1015,5 +1017,39 @@ func TestHandleODoHConfig_NoTarget(t *testing.T) {
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("expected 503, got %d", rec.Code)
+	}
+}
+
+// The dashboard reads the log level from GET /api/v1/config; after a runtime
+// change it must see the level in effect, not the config file's.
+func TestConfigGet_ReportsRuntimeLogLevel(t *testing.T) {
+	prev := util.GetDefaultLogger()
+	util.SetDefaultLogger(util.NewLogger(util.INFO, util.TextFormat, io.Discard))
+	defer util.SetDefaultLogger(prev)
+
+	store := newAuthStoreWithUser(t, "admin", "testpass123", auth.RoleAdmin)
+	s := newServerWithAuth(store)
+	s.configGetter = func() *config.Config {
+		return &config.Config{Logging: config.LoggingConfig{Level: "info"}}
+	}
+	adminUser, _ := store.GetUser("admin")
+
+	body, _ := json.Marshal(map[string]string{"level": "debug"})
+	put := httptest.NewRequest(http.MethodPut, "/api/v1/config/logging", bytes.NewReader(body))
+	putRec := httptest.NewRecorder()
+	s.handleConfigLogging(putRec, put.WithContext(WithUser(put.Context(), adminUser)))
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("PUT logging: %d %s", putRec.Code, putRec.Body.String())
+	}
+
+	get := httptest.NewRequest(http.MethodGet, "/api/v1/config", nil)
+	rec := httptest.NewRecorder()
+	s.handleConfigGet(rec, get.WithContext(WithUser(get.Context(), adminUser)))
+	var result map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	if level := result["Logging"].(map[string]any)["Level"]; level != "debug" {
+		t.Fatalf("Logging.Level = %v, want the runtime level debug", level)
 	}
 }

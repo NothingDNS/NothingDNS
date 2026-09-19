@@ -510,6 +510,7 @@ func (r *RDataCNAME) Unpack(buf []byte, offset int, rdlength uint16) (int, error
 		return 0, err
 	}
 	if n > int(rdlength) {
+		name.Release()
 		return 0, fmt.Errorf("CNAME overflows rdlength (%d > %d)", n, rdlength)
 	}
 	r.CName = name
@@ -583,6 +584,7 @@ func (r *RDataDNAME) Unpack(buf []byte, offset int, rdlength uint16) (int, error
 		return 0, err
 	}
 	if n > int(rdlength) {
+		name.Release()
 		return 0, fmt.Errorf("DNAME overflows rdlength (%d > %d)", n, rdlength)
 	}
 	r.DName = name
@@ -656,6 +658,7 @@ func (r *RDataNS) Unpack(buf []byte, offset int, rdlength uint16) (int, error) {
 		return 0, err
 	}
 	if n > int(rdlength) {
+		name.Release()
 		return 0, fmt.Errorf("NS overflows rdlength (%d > %d)", n, rdlength)
 	}
 	r.NSDName = name
@@ -729,6 +732,7 @@ func (r *RDataPTR) Unpack(buf []byte, offset int, rdlength uint16) (int, error) 
 		return 0, err
 	}
 	if n > int(rdlength) {
+		name.Release()
 		return 0, fmt.Errorf("PTR overflows rdlength (%d > %d)", n, rdlength)
 	}
 	r.PtrDName = name

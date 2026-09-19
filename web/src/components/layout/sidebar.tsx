@@ -1,6 +1,7 @@
 import {
 	ArrowLeftRight,
 	BarChart3,
+	BookOpen,
 	ChevronLeft,
 	ChevronRight,
 	CloudCog,
@@ -39,19 +40,19 @@ import { useAuthStore } from "@/stores/authStore";
 // wrappers on the corresponding routes in App.tsx.
 const nav: { to: string; icon: typeof Globe; label: string; minRole?: Role }[] = [
 	{ to: "/", icon: LayoutDashboard, label: "Dashboard" },
-	{ to: "/zones", icon: Globe, label: "Zones" },
+	{ to: "/zones", icon: Globe, label: "Zones", minRole: "operator" },
 	{ to: "/dnssec", icon: Key, label: "DNSSEC", minRole: "operator" },
 	{ to: "/cluster", icon: Network, label: "Cluster", minRole: "operator" },
-	{ to: "/query-log", icon: ScrollText, label: "Query Log" },
-	{ to: "/top-domains", icon: TrendingUp, label: "Top Domains" },
-	{ to: "/geoip", icon: Globe2, label: "GeoIP" },
+	{ to: "/query-log", icon: ScrollText, label: "Query Log", minRole: "operator" },
+	{ to: "/top-domains", icon: TrendingUp, label: "Top Domains", minRole: "operator" },
+	{ to: "/geoip", icon: Globe2, label: "GeoIP", minRole: "operator" },
 	{ to: "/blocklist", icon: Shield, label: "Blocklist", minRole: "operator" },
 	{ to: "/rpz", icon: ShieldCheck, label: "RPZ", minRole: "operator" },
 	{ to: "/acl", icon: Shield, label: "ACL", minRole: "operator" },
 	{ to: "/upstreams", icon: WifiIcon, label: "Upstreams", minRole: "operator" },
-	{ to: "/zone-transfer", icon: ArrowLeftRight, label: "Zone Transfer" },
-	{ to: "/dns64-cookies", icon: CloudCog, label: "DNS64/Cookies" },
-	{ to: "/charts", icon: BarChart3, label: "Charts" },
+	{ to: "/zone-transfer", icon: ArrowLeftRight, label: "Zone Transfer", minRole: "operator" },
+	{ to: "/dns64-cookies", icon: CloudCog, label: "DNS64/Cookies", minRole: "operator" },
+	{ to: "/charts", icon: BarChart3, label: "Charts", minRole: "operator" },
 	{ to: "/users", icon: Users, label: "Users", minRole: "operator" },
 	{ to: "/settings", icon: Settings, label: "Settings", minRole: "operator" },
 	{ to: "/about", icon: Info, label: "About" },
@@ -168,6 +169,20 @@ export function Sidebar({
 								</NavLink>
 							);
 						})}
+					<a
+						href="/api/docs"
+						target="_blank"
+						rel="noopener noreferrer"
+						title="API Docs"
+						className={cn(
+							"flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+							collapsed && "justify-center px-2",
+						)}
+						onClick={() => setMobileOpen(false)}
+					>
+						<BookOpen className="h-4 w-4 shrink-0" />
+						{!collapsed && <span className="truncate">API Docs</span>}
+					</a>
 				</nav>
 				<div className="border-t p-2 space-y-1">
 					{username && (

@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -13,6 +13,7 @@ import {
   recordTypePalette,
   recordTypeBadgeVariants,
   isReverseIPv4Zone,
+  sortZoneRecords,
 } from './record-utils';
 import { RecordDataDisplay } from './record-form';
 import { AddRecordDialog, EditRecordDialog, BulkPTRDialog } from './record-dialogs';
@@ -27,7 +28,7 @@ interface ZoneEditorProps {
 
 export function ZoneEditor({ zoneName, initialRecords, onRefresh }: ZoneEditorProps) {
   const [records, setRecords] = useState<EditableRecord[]>(
-    initialRecords.map(r => ({ ...r, selected: false }))
+    sortZoneRecords(initialRecords, zoneName).map(r => ({ ...r, selected: false }))
   );
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
@@ -44,9 +45,9 @@ export function ZoneEditor({ zoneName, initialRecords, onRefresh }: ZoneEditorPr
 
   // Keep local state in sync when the parent reloads records after a mutation.
   useEffect(() => {
-    setRecords(initialRecords.map(r => ({ ...r, selected: false })));
+    setRecords(sortZoneRecords(initialRecords, zoneName).map(r => ({ ...r, selected: false })));
     setSelectedRecords(new Set());
-  }, [initialRecords]);
+  }, [initialRecords, zoneName]);
 
   const updateRecord = useCallback((index: number, field: keyof DnsRecord, value: string | number) => {
     setRecords(prev => {
@@ -172,15 +173,35 @@ export function ZoneEditor({ zoneName, initialRecords, onRefresh }: ZoneEditorPr
   // Pair each record with its REAL index before filtering, so selection /
   // edit / delete always target the correct row even when two rows are
   // structurally identical (indexOf would return the first match).
-  const visibleRows = records
-    .map((record, index) => ({ record, index }))
-    .filter(({ record: r }) => {
-      const matchesSearch = !search ||
-        r.name.toLowerCase().includes(search.toLowerCase()) ||
-        r.data.toLowerCase().includes(search.toLowerCase());
-      const matchesType = !typeFilter || r.type === typeFilter;
-      return matchesSearch && matchesType;
+  const visibleRows = useMemo(
+    () =>
+      records
+        .map((record, index) => ({ record, index }))
+        .filter(({ record: r }) => {
+          const matchesSearch = !search ||
+            r.name.toLowerCase().includes(search.toLowerCase()) ||
+            r.data.toLowerCase().includes(search.toLowerCase());
+          const matchesType = !typeFilter || r.type === typeFilter;
+          return matchesSearch && matchesType;
+        }),
+    [records, search, typeFilter],
+  );
+
+  // Selection follows the visible window: filtering can hide rows, and a
+  // hidden row must never be deleted by the bulk action the operator sees.
+  // Drop selected rows the current filter hides.
+  useEffect(() => {
+    setSelectedRecords(prev => {
+      const visible = new Set(visibleRows.map(({ index }) => index));
+      let changed = false;
+      const next = new Set<number>();
+      for (const i of prev) {
+        if (visible.has(i)) next.add(i);
+        else changed = true;
+      }
+      return changed ? next : prev;
     });
+  }, [visibleRows]);
 
   const selectAll = useCallback(() => {
     const visibleIndices = records
@@ -363,7 +384,7 @@ export function ZoneEditor({ zoneName, initialRecords, onRefresh }: ZoneEditorPr
                     aria-label="Select all visible records"
                   />
                 </th>
-                <th scope="col" className="text-left text-xs font-medium text-muted-foreground uppercase tracking-wider px-4 py-3">Name</th>
+                <th scope="col" className="text-left text-xs font-medium text-muted-foreground uppercase tracking-wider px-4 py-3 whitespace-nowrap">Name</th>
                 <th scope="col" className="text-left text-xs font-medium text-muted-foreground uppercase tracking-wider px-4 py-3 w-24">Type</th>
                 <th scope="col" className="text-left text-xs font-medium text-muted-foreground uppercase tracking-wider px-4 py-3 w-24">TTL</th>
                 <th scope="col" className="text-left text-xs font-medium text-muted-foreground uppercase tracking-wider px-4 py-3">Data</th>
@@ -391,8 +412,8 @@ export function ZoneEditor({ zoneName, initialRecords, onRefresh }: ZoneEditorPr
                       aria-label={`Select ${r.type} record ${r.name}`}
                     />
                   </td>
-                  <td className="px-4 py-3">
-                    <span className="font-mono text-sm break-all" title={r.name}>{r.name}</span>
+                  <td className="px-4 py-3 whitespace-nowrap">
+                    <span className="font-mono text-sm" title={r.name}>{r.name}</span>
                   </td>
                   <td className="px-4 py-3">
                     <Badge variant={recordTypeBadgeVariants[r.type] || 'outline'}>{r.type}</Badge>
@@ -404,14 +425,19 @@ export function ZoneEditor({ zoneName, initialRecords, onRefresh }: ZoneEditorPr
                       <InlineEdit
                         value={String(r.ttl)}
                         label={`TTL for ${r.type} record ${r.name}`}
-                        onSave={v => updateRecord(i, 'ttl', parseInt(v, 10) || r.ttl)}
+                        onSave={v => {
+                          // parseInt('0') is 0 — falsy — so `|| r.ttl` silently reverted an
+                          // explicit TTL 0 (no caching) to the record's previous value.
+                          const parsed = parseInt(v, 10);
+                          updateRecord(i, 'ttl', Number.isNaN(parsed) ? r.ttl : parsed);
+                        }}
                         onFinish={() => saveEdit(i)}
                         edited={r.edited}
                         type="number"
                       />
                     )}
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="w-full px-4 py-3">
                     <RecordDataDisplay type={r.type} data={r.data} />
                   </td>
                   <td className="px-4 py-3 text-right">

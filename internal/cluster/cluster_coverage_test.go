@@ -81,8 +81,6 @@ func TestCluster_Start_WithSuccessfulSeedJoin(t *testing.T) {
 	}
 }
 
-
-
 func TestCluster_InvalidateCache_Enabled(t *testing.T) {
 	logger := util.NewLogger(util.INFO, util.TextFormat, nil)
 	cacheCfg := cache.Config{Capacity: 1000}

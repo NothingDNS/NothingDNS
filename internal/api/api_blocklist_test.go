@@ -147,6 +147,31 @@ func TestHandleBlocklists_GetWithBlocklist(t *testing.T) {
 	}
 }
 
+func TestHandleBlocklists_PostAddFile_RequiresBaseDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := tmpDir + "/extra-blocks.txt"
+	if err := os.WriteFile(path, []byte("0.0.0.0 malware.example.com\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	bl := blocklist.New(blocklist.Config{Enabled: true})
+	srv, user := newBlocklistTestServer(t, bl)
+
+	body, _ := json.Marshal(BlocklistAddRequest{File: path})
+	req := reqWithUser(httptest.NewRequest(http.MethodPost, "/api/v1/blocklists", bytes.NewReader(body)), user)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	srv.handleBlocklists(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 without base_dir, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if bl.IsBlocked("malware.example.com") {
+		t.Error("file outside a configured base_dir must not be loaded")
+	}
+}
+
 func TestHandleBlocklists_PostAddFile(t *testing.T) {
 	// Create a temp blocklist file to add via the API.
 	tmpDir := t.TempDir()
@@ -156,7 +181,7 @@ func TestHandleBlocklists_PostAddFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	bl := blocklist.New(blocklist.Config{Enabled: true})
+	bl := blocklist.New(blocklist.Config{Enabled: true, BaseDir: tmpDir})
 	srv, user := newBlocklistTestServer(t, bl)
 
 	body, _ := json.Marshal(BlocklistAddRequest{File: path})

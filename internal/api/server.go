@@ -23,6 +23,7 @@ import (
 	"github.com/nothingdns/nothingdns/internal/cluster"
 	"github.com/nothingdns/nothingdns/internal/config"
 	"github.com/nothingdns/nothingdns/internal/dashboard"
+	"github.com/nothingdns/nothingdns/internal/dns64"
 	"github.com/nothingdns/nothingdns/internal/dnssec"
 	"github.com/nothingdns/nothingdns/internal/doh"
 	"github.com/nothingdns/nothingdns/internal/filter"
@@ -57,6 +58,18 @@ type Server struct {
 	upstreamClient   *upstream.Client
 	upstreamLB       *upstream.LoadBalancer
 	aclChecker       *filter.ACLChecker
+	recursionPolicy  *filter.RecursionPolicy
+	accessPolicyFile string
+	accessPolicyMu   sync.Mutex // serializes ACL/recursion updates and their file write
+	overridesMu      sync.Mutex // serializes override merges and their file write
+	// overridesFile stores the settings the dashboard can change without a
+	// restart ("" when storage.data_dir is unset: changes then apply live but
+	// are lost on restart, like the ACL without an access policy file).
+	overridesFile string
+	dns64Synth    *dns64.Synthesizer
+	// setCookieEnabled toggles the DNS cookie jar on the live DNS handler.
+	// Registered by main (WithCookieControl) because the jar lives there.
+	setCookieEnabled func(enabled bool) error
 	authStore        *auth.Store
 	metrics          *metrics.MetricsCollector
 	validator        *dnssec.Validator
@@ -501,6 +514,44 @@ func (s *Server) WithUpstream(client *upstream.Client, lb *upstream.LoadBalancer
 	return s
 }
 
+// WithAccessPolicy sets the recursion allow list and the file where
+// dashboard changes to the ACL and recursion allow list are persisted
+// ("" keeps them in memory only).
+func (s *Server) WithAccessPolicy(policy *filter.RecursionPolicy, file string) *Server {
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
+	s.recursionPolicy = policy
+	s.accessPolicyFile = file
+	return s
+}
+
+// WithRuntimeOverrides sets the file where settings changed through the API
+// that need no restart are persisted ("" keeps them in memory only, so they
+// apply live and are lost on restart).
+func (s *Server) WithRuntimeOverrides(file string) *Server {
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
+	s.overridesFile = file
+	return s
+}
+
+// WithDNS64 sets the DNS64 synthesizer so it can be toggled at runtime.
+func (s *Server) WithDNS64(synth *dns64.Synthesizer) *Server {
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
+	s.dns64Synth = synth
+	return s
+}
+
+// WithCookieControl registers the callback that enables or disables DNS
+// cookies (RFC 7873) on the live DNS handler.
+func (s *Server) WithCookieControl(fn func(enabled bool) error) *Server {
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
+	s.setCookieEnabled = fn
+	return s
+}
+
 // WithACL sets the ACL checker for the API server.
 func (s *Server) WithACL(acl *filter.ACLChecker) *Server {
 	s.runtimeMu.Lock()
@@ -702,6 +753,7 @@ func (s *Server) Start() error {
 
 	// ACL management (always registered)
 	mux.HandleFunc("/api/v1/acl", s.handleACL)
+	mux.HandleFunc("/api/v1/acl/recursion", s.handleACLRecursion)
 
 	// RPZ management (always registered)
 	mux.HandleFunc("/api/v1/rpz", s.handleRPZ)
@@ -721,6 +773,7 @@ func (s *Server) Start() error {
 	if runtimeSnapshot.authStore != nil {
 		mux.HandleFunc("/api/v1/auth/login", s.handleLogin)
 		mux.HandleFunc("/api/v1/auth/bootstrap", s.handleBootstrap)
+		mux.HandleFunc("/api/v1/auth/session", s.handleSession)
 		mux.HandleFunc("/api/v1/auth/users", s.handleUsers)
 		mux.HandleFunc("/api/v1/auth/users/", s.handleUsers)
 		mux.HandleFunc("/api/v1/auth/roles", s.handleRoles)
@@ -733,6 +786,9 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/v1/config/logging", s.handleConfigLogging)
 	mux.HandleFunc("/api/v1/config/rrl", s.handleConfigRRL)
 	mux.HandleFunc("/api/v1/config/cache", s.handleConfigCache)
+	mux.HandleFunc("/api/v1/config/resolution", s.handleConfigResolution)
+	mux.HandleFunc("/api/v1/config/dns64", s.handleConfigDNS64)
+	mux.HandleFunc("/api/v1/config/cookie", s.handleConfigCookie)
 
 	// DNSSEC status (always registered)
 	mux.HandleFunc("/api/v1/dnssec/status", s.handleDNSSECStatus)
@@ -754,6 +810,7 @@ func (s *Server) Start() error {
 	// OpenAPI / Swagger
 	mux.HandleFunc("/api/openapi.json", s.handleOpenAPISpec)
 	mux.HandleFunc("/api/docs", s.handleSwaggerUI)
+	mux.HandleFunc("/api/docs/app.js", s.handleAPIExplorerScript)
 
 	// CSP violation reporting
 	mux.HandleFunc("/api/v1/csp-report", s.handleCSPReport)
@@ -1565,7 +1622,8 @@ func (s *Server) writeError(w http.ResponseWriter, status int, message string) {
 
 // requireMethod checks that r.Method is one of the allowed methods and writes
 // a 405 response if not. Returns true if the caller should return (method
-// rejected), false if the method is allowed. Use:
+// rejected), false if the method is allowed. The 405 carries the RFC 7231
+// §6.5.5-mandated Allow header listing the permitted methods. Use:
 //
 //	if s.requireMethod(w, r, http.MethodGet, http.MethodPost) { return }
 func (s *Server) requireMethod(w http.ResponseWriter, r *http.Request, methods ...string) bool {
@@ -1574,6 +1632,7 @@ func (s *Server) requireMethod(w http.ResponseWriter, r *http.Request, methods .
 			return false
 		}
 	}
+	w.Header().Set("Allow", strings.Join(methods, ", "))
 	s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 	return true
 }

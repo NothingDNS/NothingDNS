@@ -38,13 +38,50 @@ func (s *stubValidateResolver) Query(_ context.Context, name string, qtype uint1
 		return nil, err
 	}
 	if resp, ok := s.responses[key]; ok {
-		return resp, nil
+		// Production resolvers hand back solely-owned messages and the
+		// dnssec fetch path Releases what Query returns; the stored fixture
+		// must survive that Release (its records share *Name objects with
+		// the live response message), so hand out a private copy.
+		return cloneFixtureMessage(resp), nil
 	}
 	return protocol.NewMessage(protocol.Header{
 		ID:      1,
 		Flags:   protocol.NewResponseFlags(protocol.RcodeSuccess),
 		QDCount: 1,
 	}), nil
+}
+
+// cloneFixtureMessage returns a detached copy of a stored fixture message.
+// Record shells and Names are duplicated (both are pooled and recycled by
+// Release); RData pointers are shared — safe for the rdata types these
+// fixtures carry (DNSKEY, RRSIG), which protocol.releaseRData never pools
+// or mutates.
+func cloneFixtureMessage(in *protocol.Message) *protocol.Message {
+	out := protocol.NewMessage(in.Header)
+	for _, q := range in.Questions {
+		qc := &protocol.Question{QType: q.QType, QClass: q.QClass}
+		if q.Name != nil {
+			qc.Name = q.Name.Copy()
+		}
+		out.AddQuestion(qc)
+	}
+	dup := func(rrs []*protocol.ResourceRecord) []*protocol.ResourceRecord {
+		out := make([]*protocol.ResourceRecord, 0, len(rrs))
+		for _, rr := range rrs {
+			out = append(out, &protocol.ResourceRecord{
+				Name:  rr.Name.Copy(), // nil-safe
+				Type:  rr.Type,
+				Class: rr.Class,
+				TTL:   rr.TTL,
+				Data:  rr.Data,
+			})
+		}
+		return out
+	}
+	out.Answers = dup(in.Answers)
+	out.Authorities = dup(in.Authorities)
+	out.Additionals = dup(in.Additionals)
+	return out
 }
 
 type validateFixture struct {

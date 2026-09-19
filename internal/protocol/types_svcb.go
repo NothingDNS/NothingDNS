@@ -270,6 +270,7 @@ func (r *RDataSVCB) Unpack(buf []byte, offset int, rdlength uint16) (int, error)
 		return 0, err
 	}
 	if offset+n > endOffset {
+		target.Release()
 		return 0, ErrBufferTooSmall
 	}
 	r.Target = target

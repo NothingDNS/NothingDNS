@@ -149,6 +149,12 @@ type HTTPConfig struct {
 	// in-memory only and all sessions are invalidated on restart.
 	TokenPersistencePath string `yaml:"token_persistence_path"`
 
+	// UsersFile stores users created at runtime (bootstrap endpoint,
+	// dashboard, API) so they survive restarts. Defaults to
+	// <storage.data_dir>/users.json when storage.data_dir is set; with
+	// neither set, runtime-created users live in memory only.
+	UsersFile string `yaml:"users_file"`
+
 	// MaxSessionsPerUser caps the number of simultaneous tokens any
 	// single user may hold. 0 means unlimited. The auth.Store
 	// already implements the cap (with eviction-by-oldest semantics);
@@ -167,9 +173,9 @@ type HTTPConfig struct {
 	// ODoH (Oblivious DNS over HTTPS, RFC 9230) settings
 	ODoHEnabled bool   `yaml:"odoh_enabled"` // Enable ODoH endpoint
 	ODoHPath    string `yaml:"odoh_path"`    // ODoH endpoint path (default: /odoh)
-	ODoHKEM     int    `yaml:"odoh_kem"`     // HPKE KEM for target (default: 4 = X25519)
+	ODoHKEM     int    `yaml:"odoh_kem"`     // HPKE KEM for target (default: 32 = X25519 / 0x0020)
 	ODoHKDF     int    `yaml:"odoh_kdf"`     // HPKE KDF for target (default: 1 = HKDF-SHA256)
-	ODoHAEAD    int    `yaml:"odoh_aead"`    // HPKE AEAD for target (default: 1 = AES-256-GCM)
+	ODoHAEAD    int    `yaml:"odoh_aead"`    // HPKE AEAD for target (1 = AES-128-GCM default, 2 = AES-256-GCM)
 
 	// Allowed origins for CORS (empty means only same-origin requests allowed)
 	// Use "*" to allow all origins (not recommended for production)
@@ -241,6 +247,7 @@ func unmarshalServer(node *Node, cfg *ServerConfig) error {
 		cfg.HTTP.AuthTokenRole = httpNode.GetString("auth_token_role")
 		cfg.HTTP.AuthSecret = httpNode.GetString("auth_secret")
 		cfg.HTTP.TokenPersistencePath = httpNode.GetString("token_persistence_path")
+		cfg.HTTP.UsersFile = httpNode.GetString("users_file")
 		if cfg.HTTP.MaxSessionsPerUser, err = getRequiredInt(httpNode, "max_sessions_per_user", cfg.HTTP.MaxSessionsPerUser); err != nil {
 			return fmt.Errorf("http: %w", err)
 		}
@@ -264,7 +271,7 @@ func unmarshalServer(node *Node, cfg *ServerConfig) error {
 			return fmt.Errorf("http: %w", err)
 		}
 		if cfg.HTTP.ODoHKEM == 0 {
-			cfg.HTTP.ODoHKEM = 4 // X25519
+			cfg.HTTP.ODoHKEM = 32 // X25519 (0x0020) — the KEM the odoh runtime implements
 		}
 		if cfg.HTTP.ODoHKDF, err = getRequiredInt(httpNode, "odoh_kdf", cfg.HTTP.ODoHKDF); err != nil {
 			return fmt.Errorf("http: %w", err)
@@ -276,7 +283,7 @@ func unmarshalServer(node *Node, cfg *ServerConfig) error {
 			return fmt.Errorf("http: %w", err)
 		}
 		if cfg.HTTP.ODoHAEAD == 0 {
-			cfg.HTTP.ODoHAEAD = 1 // AES-256-GCM
+			cfg.HTTP.ODoHAEAD = 1 // AES-128-GCM
 		}
 		if usersNode := httpNode.Get("users"); usersNode != nil && usersNode.Type == NodeSequence {
 			for _, userNode := range usersNode.Children {

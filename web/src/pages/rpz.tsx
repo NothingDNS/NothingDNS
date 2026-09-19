@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -22,16 +22,29 @@ export function RPZPage() {
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  // Generation guard for fetchData(): the 10s polling interval and the
+  // toggle/add/delete handlers can overlap an in-flight load, and an older
+  // snapshot — or its late rejection — must not overwrite fresher state
+  // (e.g. a just-added rule reverting out of the list).
+  const fetchDataGeneration = useRef(0);
+
   const fetchData = () => {
+    const gen = ++fetchDataGeneration.current;
     setLoading(true);
     Promise.all([
       api<RPZStats>('GET', '/api/v1/rpz'),
       api<{ rules: RPZRule[] }>('GET', '/api/v1/rpz/rules').then(r => r.rules).catch(() => []),
     ]).then(([s, r]) => {
+      if (gen !== fetchDataGeneration.current) return; // superseded by a newer load
       setStats(s);
       setRules(r);
       setError('');
-    }).catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to load RPZ data')).finally(() => setLoading(false));
+    }).catch((e: unknown) => {
+      if (gen !== fetchDataGeneration.current) return; // superseded
+      setError(e instanceof Error ? e.message : 'Failed to load RPZ data');
+    }).finally(() => {
+      if (gen === fetchDataGeneration.current) setLoading(false);
+    });
   };
 
   useEffect(() => {

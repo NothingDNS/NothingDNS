@@ -38,6 +38,13 @@ func (s *Server) IsHealthy() bool {
 	return s.healthy
 }
 
+// Latency returns the round-trip time of the last successful query.
+func (s *Server) Latency() time.Duration {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.latency
+}
+
 func (s *Server) snapshot() *Server {
 	if s == nil {
 		return nil
@@ -287,25 +294,31 @@ func (c *Client) QueryContext(ctx context.Context, msg *protocol.Message) (*prot
 	// no receiver reads from done. Without buffer size 1, a cancelled context
 	// causes the goroutine to block forever on the send to done.
 	done := make(chan result, 1)
+	// The goroutine may outlive this call when ctx is cancelled, so it works
+	// on its own copy: the caller is free to Release msg once we return.
+	query := msg.Copy()
 	go func() {
-		resp, err := c.Query(msg)
+		resp, err := c.Query(query)
+		query.Release()
 		done <- result{resp, err}
 	}()
 
 	select {
 	case <-ctx.Done():
-		// Block until the goroutine exits, then release the pooled response.
-		// The buffered channel ensures the goroutine always exits cleanly.
-		// Since we return ctx.Err() here, the caller of QueryContext will
-		// never see the response — the caller already has a context timeout
-		// and does not need the (possibly stale) upstream response.
-		r := <-done
-		if r.resp != nil {
-			r.resp.Release()
-		}
+		// Return promptly; release the late pooled response in the background.
+		go drainQueryResult(done, func(r result) *protocol.Message { return r.resp })
 		return nil, ctx.Err()
 	case r := <-done:
 		return r.resp, r.err
+	}
+}
+
+// drainQueryResult waits for an abandoned query goroutine's result and
+// releases its pooled response, so cancelled queries neither block the caller
+// nor leak pooled messages.
+func drainQueryResult[T any](done <-chan T, resp func(T) *protocol.Message) {
+	if m := resp(<-done); m != nil {
+		m.Release()
 	}
 }
 

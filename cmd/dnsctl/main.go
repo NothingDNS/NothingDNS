@@ -238,7 +238,18 @@ Examples:
 
 Subcommands:
   status            Show server status
-  health            Check server health`,
+  health            Check server health
+  bootstrap         Create the first dashboard admin (run on the server host)
+
+Bootstrap options:
+  --username NAME   Admin username (default: admin)
+  --old-password    Also read the current password, to reset an existing admin
+
+The password is read from NOTHINGDNS_ADMIN_PASSWORD or stdin, never argv.
+
+Examples:
+  dnsctl server bootstrap --username admin
+  docker exec -i nothingdns dnsctl server bootstrap < password.txt`,
 	}
 
 	help, ok := helpTexts[cmdName]

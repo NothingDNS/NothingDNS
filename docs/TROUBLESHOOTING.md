@@ -30,6 +30,62 @@ sudo ./nothingdns
 # Alternative: Use port 5354 for testing
 ```
 
+### Port 53 Held by systemd-resolved / Host Cannot Resolve Names
+
+**Problem**: `bind: address already in use` on port 53, or — after stopping
+`systemd-resolved` by hand or with an installer older than 1.2.1 — the server
+itself cannot resolve anything (`apt update`, `curl`, `getent hosts` fail)
+while other clients can use NothingDNS.
+
+**Cause**: `/etc/resolv.conf` still points at the resolved stub
+`127.0.0.53`, which is no longer running.
+
+**Diagnosis**:
+```bash
+ss -tulpn | grep ':53 '                 # who holds port 53
+ls -l /etc/resolv.conf; grep nameserver /etc/resolv.conf
+systemctl is-active systemd-resolved nothingdns
+getent hosts github.com                 # host lookups
+dig @127.0.0.1 github.com               # NothingDNS itself
+```
+
+**Solution**: keep systemd-resolved, disable only its stub listener, and point
+`/etc/resolv.conf` at the upstream servers it knows (`install.sh` does this
+automatically since 1.2.1 and `uninstall.sh` reverts it):
+```bash
+sudo mkdir -p /etc/systemd/resolved.conf.d
+printf '[Resolve]\nDNSStubListener=no\n' | sudo tee /etc/systemd/resolved.conf.d/nothingdns.conf
+sudo systemctl enable --now systemd-resolved
+sudo systemctl restart systemd-resolved
+sudo ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf
+sudo systemctl restart nothingdns
+```
+To make the host resolve through NothingDNS instead, write
+`nameserver 127.0.0.1` to `/etc/resolv.conf` (NothingDNS must be running and
+`127.0.0.1` must be allowed by `acl` and `allow_recursion`).
+
+### Viewing Logs
+
+```bash
+sudo journalctl -u nothingdns -f                 # follow (install.sh / systemd unit)
+sudo journalctl -u nothingdns -n 200 --no-pager  # last 200 lines
+sudo journalctl -u nothingdns --since "10 min ago" -p warning
+sudo tail -f /var/log/nothingdns/server.log      # setup.sh / deploy/nothingdns.service
+docker logs -f nothingdns                        # Docker
+```
+With `install.sh`, server logs go to the systemd journal, so
+`/var/log/nothingdns/` stays empty until you enable one of the file logs:
+```yaml
+logging:
+  output: /var/log/nothingdns/server.log   # server log to a file instead of the journal
+  query_log: true                          # one line per query
+  query_log_file: /var/log/nothingdns/query.log
+```
+Restart after changing `logging` (`sudo systemctl restart nothingdns`). Paths
+must be absolute and under `/var/log/nothingdns` (the unit only allows writes
+there). The logrotate rule rotates `*.log` there with `copytruncate`.
+Set `logging.level: debug` for more detail.
+
 ### Docker Port Binding Fails
 
 **Problem**: Docker container cannot bind to port 53.
@@ -239,7 +295,18 @@ curl http://localhost:8080/api/v1/dnssec/status
    sudo timedatectl set-ntp true
    ```
 
-3. **Invalid signature**:
+3. **SERVFAIL only for some signed domains (1.2.0 and earlier)**: the
+   validator built the chain of trust down to the query name instead of the
+   zone that signed the answer, so names inside a signed zone
+   (`www.isc.org`, `deb.debian.org`), NSEC3 "does not exist" answers and CNAMEs
+   into other signed zones were wrongly treated as Bogus. Upgrade to 1.2.1. As a
+   temporary workaround set `dnssec.enabled: false` and reload.
+   ```bash
+   dig @127.0.0.1 deb.debian.org          # SERVFAIL here, NOERROR at 1.1.1.1
+   sudo journalctl -u nothingdns | grep "DNSSEC validation error"
+   ```
+
+4. **Invalid signature**:
    ```bash
    # Check for BOGUS status
    dig @localhost example.com DS +dnssec
@@ -504,31 +571,50 @@ curl -X POST http://localhost:8080/api/v1/auth/login \
 curl -H "Authorization: Bearer <token>" http://localhost:8080/api/v1/zones
 ```
 
-### ACL Blocking Queries
+### ACL or Recursion Policy Refusing Queries
 
 **Problem**: DNS queries returning `REFUSED`.
 
+Two independent lists can refuse a client:
+
+- **Recursion allow list** (`allow_recursion`): the client gets answers for
+  this server's own zones but `REFUSED` for every other name, with Extended DNS
+  Error 18 (Prohibited) and RA=0. By default only loopback and private networks
+  may recurse.
+- **General ACL** (`acl`): the client is refused for everything, including the
+  server's own zones. Once any rule exists, clients matching no rule are refused.
+
 **Diagnosis**:
 ```bash
-# Check ACL config
-curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:8080/api/v1/acl | jq
+# Which case? An own-zone name answers only when the ACL admits the client.
+dig @SERVER www.your-zone.example A     # NOERROR → ACL is fine
+dig @SERVER example.org A               # REFUSED + "EDE: 18 (Prohibited)" → recursion policy
+
+# Current lists (and whether dashboard changes are persisted)
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/acl | jq
+
+# Server log
+sudo journalctl -u nothingdns | grep -E "ACL denied|Recursion allowed"
 ```
 
-**Solution**:
-```yaml
-acl:
-  - name: allow-private-networks
-    action: allow
-    networks:
-      - "10.0.0.0/8"
-      - "172.16.0.0/12"
-      - "192.168.0.0/16"
-    # Do NOT add `types: [ANY]` here. `types` narrows the rule to specific
-    # QTYPEs, and "ANY" is QTYPE 255 — not a wildcard. A rule carrying it
-    # matches no ordinary A/AAAA query, so every client stays refused and this
-    # "solution" appears not to work. Omit `types` to match all query types.
+**Solution** — allow the client to recurse (dashboard: ACL → Allow Recursion, or):
+```bash
+curl -X PUT -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  http://localhost:8080/api/v1/acl/recursion \
+  -d '{"networks":["127.0.0.0/8","::1/128","192.168.1.0/24","203.0.113.10"]}'
 ```
+
+or in the config (ignored once `<storage.data_dir>/access_policy.json` exists):
+```yaml
+allow_recursion:
+  - 127.0.0.0/8
+  - "::1/128"
+  - 192.168.1.0/24
+```
+
+If the general ACL is refusing the client, add an allow rule that covers it.
+Do NOT add `types: [ANY]`: `types` narrows a rule to specific QTYPEs, and
+"ANY" is QTYPE 255, not a wildcard, so such a rule matches no ordinary query.
 
 ### Rate Limiting Triggered
 

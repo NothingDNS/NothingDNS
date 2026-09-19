@@ -67,7 +67,20 @@ export async function api<T = unknown>(
 	if (token) headers.Authorization = `Bearer ${token}`;
 	const opts: RequestInit = { method, headers };
 	if (body) opts.body = JSON.stringify(body);
-	const resp = await fetch(`${API_BASE}${path}`, opts);
+	// Mirror fetchApi's 10s timeout: a stalled upstream must not leave the
+	// request pending forever (with the dashboard's 10s polling pattern, each
+	// tick would otherwise pile up another permanently in-flight connection).
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), 10_000);
+	let resp: Response;
+	try {
+		resp = await fetch(`${API_BASE}${path}`, {
+			...opts,
+			signal: controller.signal,
+		});
+	} finally {
+		clearTimeout(timeout);
+	}
 
 	// Global 401 handling: a token that expired mid-session must bounce the
 	// user back to login, not surface "HTTP 401" on every page. Clearing auth
@@ -128,6 +141,7 @@ export interface QueryEvent {
 	domain: string;
 	queryType: string;
 	responseCode: string;
+	answers?: string[];
 	duration: number;
 	cached: boolean;
 	blocked: boolean;
@@ -190,6 +204,7 @@ export interface QueryLogEntry {
 	domain: string;
 	query_type: string;
 	response_code: string;
+	answers?: string[];
 	duration_ms: number;
 	cached: boolean;
 	blocked: boolean;
@@ -218,6 +233,26 @@ export interface DNSSECStatus {
 	require_dnssec: boolean;
 }
 
+export interface ACLRule {
+	name: string;
+	networks: string[];
+	action: string;
+	types?: string[];
+	redirect?: string;
+}
+
+export interface RecursionPolicy {
+	allow_all: boolean;
+	networks: string[];
+}
+
+export interface ACLResponse {
+	rules: ACLRule[];
+	allow_recursion: RecursionPolicy;
+	persistent: boolean;
+	policy_file?: string;
+}
+
 export interface BlocklistStatus {
 	enabled: boolean;
 	total_rules: number;
@@ -233,8 +268,15 @@ export interface UpstreamServer {
 	failovers: number;
 }
 
+export interface UpstreamServerHealth {
+	address: string;
+	healthy: boolean;
+	latency_ms: number;
+}
+
 export interface UpstreamsResponse {
-	upstreams: UpstreamServer[];
+	upstreams: UpstreamServer[] | null;
+	servers?: UpstreamServerHealth[];
 }
 
 export interface UserInfo {

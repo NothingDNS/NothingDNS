@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/util"
@@ -9,6 +10,13 @@ import (
 
 func (s *Server) handleSPA(spaHandler http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Unknown API paths are errors, not dashboard routes: answering them
+		// with index.html and 200 made typos such as /api/v1/users look like
+		// successful calls to API clients.
+		if r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/") {
+			s.writeError(w, http.StatusNotFound, "Not found")
+			return
+		}
 		spaHandler.ServeHTTP(w, r)
 	}
 }

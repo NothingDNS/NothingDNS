@@ -86,7 +86,22 @@ export function isReverseIPv4Zone(zoneName: string): boolean {
 export function stripOuterQuotes(value: string): string {
   const trimmed = value.trim();
   if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
-    return trimmed.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+    const inner = trimmed.slice(1, -1);
+    // Single-pass unescape, the exact inverse of quoteDNSString's escape:
+    // a backslash escapes only the immediately following quote or
+    // backslash, and a backslash before anything else (e.g. the \. of a
+    // NAPTR regexp) is a literal backslash and must survive the round trip.
+    let out = '';
+    for (let i = 0; i < inner.length; i++) {
+      const next = inner[i + 1];
+      if (inner[i] === '\\' && (next === '"' || next === '\\')) {
+        out += next;
+        i += 1;
+      } else {
+        out += inner[i];
+      }
+    }
+    return out;
   }
   return trimmed;
 }
@@ -96,7 +111,24 @@ export function quoteDNSString(value: string): string {
   if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
     return trimmed;
   }
-  return `"${trimmed.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  // Escape every quote, and a backslash only where it would otherwise be
+  // read as an escape: before a quote, before another backslash, or at the
+  // end (where it would swallow the closing quote). Other backslashes pass
+  // through so DNS data such as NAPTR regexps (\. is an escaped dot) keeps
+  // its meaning. stripOuterQuotes is the exact inverse.
+  let out = '';
+  for (let i = 0; i < trimmed.length; i++) {
+    const ch = trimmed[i];
+    const next = trimmed[i + 1];
+    if (ch === '"') {
+      out += '\\"';
+    } else if (ch === '\\' && (next === undefined || next === '"' || next === '\\')) {
+      out += '\\\\';
+    } else {
+      out += ch;
+    }
+  }
+  return `"${out}"`;
 }
 
 export function requireField(label: string, value: string): string | null {
@@ -195,7 +227,11 @@ export function buildRecordData(type: string, fields: RecordFormFields): { data:
       missing = requireField('Public key', f('publicKey'));
       return missing ? { error: missing } : { data: `${f('flags') || '256'} ${f('protocol') || '3'} ${f('algorithm') || '13'} ${f('publicKey')}` };
     case 'NAPTR':
-      missing = requireField('Service', f('service')) || requireField('Replacement', f('replacement'));
+      // RFC 3403 §4.2: the Services field may be empty (the textbook
+      // terminal-NAPTR form is `100 10 "" "" "<regexp>" target`), so only
+      // the Replacement is mandatory. Requiring Service made every
+      // empty-service NAPTR re-save-averse in the zone editor.
+      missing = requireField('Replacement', f('replacement'));
       return missing ? { error: missing } : { data: `${f('order') || '100'} ${f('preference') || '10'} ${quoteDNSString(f('flags'))} ${quoteDNSString(f('service'))} ${quoteDNSString(f('regexp'))} ${f('replacement') || '.'}` };
     default:
       missing = requireField('Raw data', f('raw'));
@@ -259,4 +295,34 @@ export function recordDataParts(type: string, data: string): { label: string; va
     default:
       return [{ label: 'Data', value: data }];
   }
+}
+
+const labelCollator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
+
+// sortZoneRecords orders records the way zone files read: the apex SOA and NS
+// first, then owners in DNS hierarchy order (parent before children, labels
+// compared right to left with numeric awareness so 2 < 10 in reverse zones),
+// then by type and data. The API returns records in map order, which reshuffled
+// the table on every load.
+export function sortZoneRecords<T extends { name: string; type: string; data: string }>(records: T[], zoneName: string): T[] {
+	const apex = zoneName.toLowerCase().replace(/\.?$/, '.');
+	const rank = (r: T) => {
+		const atApex = r.name.toLowerCase().replace(/\.?$/, '.') === apex;
+		if (atApex && r.type === 'SOA') return 0;
+		if (atApex && r.type === 'NS') return 1;
+		return 2;
+	};
+	const labels = (name: string) => name.toLowerCase().replace(/\.$/, '').split('.').reverse();
+	return [...records].sort((a, b) => {
+		const byRank = rank(a) - rank(b);
+		if (byRank !== 0) return byRank;
+		const la = labels(a.name);
+		const lb = labels(b.name);
+		for (let i = 0; i < Math.min(la.length, lb.length); i++) {
+			const c = labelCollator.compare(la[i], lb[i]);
+			if (c !== 0) return c;
+		}
+		if (la.length !== lb.length) return la.length - lb.length;
+		return a.type.localeCompare(b.type) || labelCollator.compare(a.data, b.data);
+	});
 }

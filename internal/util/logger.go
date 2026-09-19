@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -87,6 +88,13 @@ func (l *Logger) SetLevel(level LogLevel) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.level = level
+}
+
+// Level returns the current minimum log level.
+func (l *Logger) Level() LogLevel {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.level
 }
 
 // SetFormat sets the log output format.
@@ -200,6 +208,11 @@ func (l *Logger) formatText(fields Fields) string {
 	timestamp := fields["time"].(string)
 	level := fields["level"].(string)
 	msg := fields["msg"].(string)
+	// Sanitize the message with the same CR/LF replacement as field values:
+	// upstream error strings can carry attacker-controlled newlines that
+	// forge fake log entries in the text format.
+	msg = strings.ReplaceAll(msg, "\r", " ")
+	msg = strings.ReplaceAll(msg, "\n", " ")
 
 	result := fmt.Sprintf("[%s] %s: %s", timestamp, level, msg)
 
@@ -268,35 +281,39 @@ func (l *Logger) Fatalf(format string, args ...interface{}) {
 	l.log(FATAL, fmt.Sprintf(format, args...))
 }
 
-// Global logger instance for package-level functions.
-var defaultLogger = DefaultLogger()
+// Global logger instance for package-level functions. It is replaced at
+// startup with the configured logger while other goroutines may be logging,
+// so it is held in an atomic pointer.
+var defaultLogger atomic.Pointer[Logger]
+
+func init() { defaultLogger.Store(DefaultLogger()) }
 
 // SetDefaultLogger sets the global default logger.
 func SetDefaultLogger(l *Logger) {
 	if l == nil {
 		l = DefaultLogger()
 	}
-	defaultLogger = l
+	defaultLogger.Store(l)
 }
 
 // GetDefaultLogger returns the global default logger.
 func GetDefaultLogger() *Logger {
-	return defaultLogger
+	return defaultLogger.Load()
 }
 
 // Package-level convenience functions.
 
-func Debug(msg string)                          { defaultLogger.Debug(msg) }
-func Debugf(format string, args ...interface{}) { defaultLogger.Debugf(format, args...) }
-func Info(msg string)                           { defaultLogger.Info(msg) }
-func Infof(format string, args ...interface{})  { defaultLogger.Infof(format, args...) }
-func Warn(msg string)                           { defaultLogger.Warn(msg) }
-func Warnf(format string, args ...interface{})  { defaultLogger.Warnf(format, args...) }
-func Error(msg string)                          { defaultLogger.Error(msg) }
-func Errorf(format string, args ...interface{}) { defaultLogger.Errorf(format, args...) }
+func Debug(msg string)                          { defaultLogger.Load().Debug(msg) }
+func Debugf(format string, args ...interface{}) { defaultLogger.Load().Debugf(format, args...) }
+func Info(msg string)                           { defaultLogger.Load().Info(msg) }
+func Infof(format string, args ...interface{})  { defaultLogger.Load().Infof(format, args...) }
+func Warn(msg string)                           { defaultLogger.Load().Warn(msg) }
+func Warnf(format string, args ...interface{})  { defaultLogger.Load().Warnf(format, args...) }
+func Error(msg string)                          { defaultLogger.Load().Error(msg) }
+func Errorf(format string, args ...interface{}) { defaultLogger.Load().Errorf(format, args...) }
 func WithField(key string, value interface{}) *Logger {
-	return defaultLogger.WithField(key, value)
+	return defaultLogger.Load().WithField(key, value)
 }
 func WithFields(fields Fields) *Logger {
-	return defaultLogger.WithFields(fields)
+	return defaultLogger.Load().WithFields(fields)
 }

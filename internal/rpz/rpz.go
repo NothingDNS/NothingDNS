@@ -662,7 +662,7 @@ func (e *Engine) AddQNAMERule(pattern string, action PolicyAction, overrideData 
 	rule := &Rule{
 		Action:       action,
 		Trigger:      TriggerQNAME,
-		Pattern:      strings.ToLower(pattern),
+		Pattern:      normalizeQNAMEPattern(pattern),
 		OverrideData: overrideData,
 		TTL:          300,
 		PolicyName:   "dynamic",
@@ -676,7 +676,14 @@ func (e *Engine) RemoveQNAMERule(pattern string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	delete(e.qnameRules, strings.ToLower(pattern))
+	delete(e.qnameRules, normalizeQNAMEPattern(pattern))
+}
+
+// normalizeQNAMEPattern matches the key form QNAMEPolicy looks up: lowercase,
+// without the trailing root dot. A rule added as "bad.example." was stored
+// with its dot and never matched.
+func normalizeQNAMEPattern(pattern string) string {
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(pattern)), ".")
 }
 
 // ListQNAMERules returns all QNAME rules as a slice.

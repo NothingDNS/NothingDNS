@@ -402,7 +402,8 @@ func TestPackDNSKEYPublicKeyRejectsInvalidTypedKeys(t *testing.T) {
 			name: "off-curve ECDSA public key",
 			key: &PublicKey{
 				Algorithm: protocol.AlgorithmECDSAP256SHA256,
-				Key:       &ecdsa.PublicKey{Curve: elliptic.P256(), X: big.NewInt(1), Y: big.NewInt(1)},
+				//lint:ignore SA1019 deliberately constructs an invalid off-curve key
+				Key: &ecdsa.PublicKey{Curve: elliptic.P256(), X: big.NewInt(1), Y: big.NewInt(1)},
 			},
 		},
 		{
@@ -938,8 +939,10 @@ func TestSignRejectsInvalidTypedKeys(t *testing.T) {
 	if _, err := signECDSA([]byte("data"), &PrivateKey{
 		Algorithm: protocol.AlgorithmECDSAP256SHA256,
 		Key: &ecdsa.PrivateKey{
+			//lint:ignore SA1019 deliberately constructs an invalid off-curve key
 			PublicKey: ecdsa.PublicKey{Curve: elliptic.P256(), X: big.NewInt(1), Y: big.NewInt(1)},
-			D:         big.NewInt(1),
+			//lint:ignore SA1019 deliberately constructs an invalid off-curve key
+			D: big.NewInt(1),
 		},
 	}); err == nil {
 		t.Fatal("Expected error for off-curve ECDSA private key")
@@ -1009,7 +1012,8 @@ func TestVerifyRejectsInvalidTypedKeys(t *testing.T) {
 	}
 	if err := verifyECDSA(make([]byte, 64), []byte("data"), &PublicKey{
 		Algorithm: protocol.AlgorithmECDSAP256SHA256,
-		Key:       &ecdsa.PublicKey{Curve: elliptic.P256(), X: big.NewInt(1), Y: big.NewInt(1)},
+		//lint:ignore SA1019 deliberately constructs an invalid off-curve key
+		Key: &ecdsa.PublicKey{Curve: elliptic.P256(), X: big.NewInt(1), Y: big.NewInt(1)},
 	}); err == nil {
 		t.Fatal("Expected error for off-curve ECDSA public key")
 	}

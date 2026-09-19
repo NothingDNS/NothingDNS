@@ -16,6 +16,13 @@ if [ ! -f "${CONFIG_FILE}" ] && [ -f "${CONFIG_DIR}/config.yaml" ]; then
 fi
 BINARY_NAME="nothingdns"
 DNSCTL_NAME="dnsctl"
+# Release assets are verified against the published SHA256SUMS (same control as
+# install.sh). Override only in trusted/offline environments.
+SKIP_CHECKSUM="${NOTHINGDNS_SKIP_CHECKSUM:-0}"
+CHECKSUMS_FILE=""
+TEMP_FILES=()
+cleanup() { rm -f "${TEMP_FILES[@]}"; }
+trap cleanup EXIT
 
 # Colors
 RED='\033[0;31m'
@@ -30,6 +37,38 @@ error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 # Check if stdin is a terminal
 is_interactive() {
     [ -t 0 ]
+}
+
+sha256_of() {
+    if command -v sha256sum &> /dev/null; then
+        sha256sum "$1" | awk '{print $1}'
+    elif command -v shasum &> /dev/null; then
+        shasum -a 256 "$1" | awk '{print $1}'
+    fi
+}
+
+# Download the release SHA256SUMS (fail-closed).
+fetch_checksums() {
+    if [ "${SKIP_CHECKSUM}" = "1" ]; then
+        warn "NOTHINGDNS_SKIP_CHECKSUM=1 — release integrity verification DISABLED"
+        return
+    fi
+    [ -n "$(sha256_of /dev/null)" ] || error "No sha256sum/shasum tool available to verify the release (set NOTHINGDNS_SKIP_CHECKSUM=1 to bypass, NOT recommended)."
+    CHECKSUMS_FILE=$(mktemp)
+    TEMP_FILES+=("${CHECKSUMS_FILE}")
+    local url="https://github.com/${REPO}/releases/download/${LATEST_VERSION}/SHA256SUMS"
+    curl -fsSL -o "${CHECKSUMS_FILE}" "${url}" || error "Could not download release checksums (${url}); refusing to install unverified binaries."
+}
+
+verify_checksum() {
+    local file="$1" asset="$2"
+    [ "${SKIP_CHECKSUM}" = "1" ] && return
+    local expected actual
+    expected=$(grep -E "[[:space:]][*]?${asset}\$" "${CHECKSUMS_FILE}" | awk '{print $1}' | head -n1)
+    [ -n "${expected}" ] || error "No checksum entry for ${asset} in SHA256SUMS — refusing to install."
+    actual=$(sha256_of "${file}")
+    [ "${expected}" = "${actual}" ] || error "Checksum mismatch for ${asset}: expected ${expected}, got ${actual}."
+    info "Verified ${asset} (sha256 ${actual})"
 }
 
 # Detect OS and architecture
@@ -64,7 +103,8 @@ get_latest_version() {
 # Get current version
 get_current_version() {
     if [ -f "${INSTALL_DIR}/${BINARY_NAME}" ]; then
-        CURRENT_VERSION=$("${INSTALL_DIR}/${BINARY_NAME}" --version 2>/dev/null | grep -oP 'v?\d+\.\d+\.\d+' | head -1 || echo "unknown")
+        CURRENT_VERSION=$("${INSTALL_DIR}/${BINARY_NAME}" -version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+        CURRENT_VERSION="${CURRENT_VERSION:-unknown}"
     else
         CURRENT_VERSION="not installed"
     fi
@@ -73,7 +113,8 @@ get_current_version() {
 
 # Check if update is needed
 check_update_needed() {
-    if [ "$CURRENT_VERSION" = "v${LATEST_VERSION}" ] || [ "$CURRENT_VERSION" = "${LATEST_VERSION}" ]; then
+    # Release tags carry a "v" prefix; the binary reports bare semver.
+    if [ "${CURRENT_VERSION}" = "${LATEST_VERSION#v}" ]; then
         info "NothingDNS is already up to date!"
         exit 0
     fi
@@ -96,17 +137,21 @@ download_binary() {
     DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST_VERSION}/${BINARY_NAME}-${PLATFORM}"
     info "Downloading from ${DOWNLOAD_URL}..."
 
-    TEMP_FILE=$(mktemp)
-    trap "rm -f ${TEMP_FILE}" EXIT
+    NEW_BINARY=$(mktemp)
+    TEMP_FILES+=("${NEW_BINARY}")
+    curl -fsSL -o "${NEW_BINARY}" "${DOWNLOAD_URL}" || error "Download failed"
+    verify_checksum "${NEW_BINARY}" "${BINARY_NAME}-${PLATFORM}"
+    chmod +x "${NEW_BINARY}"
 
-    curl -fsSL -o "${TEMP_FILE}" "${DOWNLOAD_URL}" || error "Download failed"
-    chmod +x "${TEMP_FILE}"
-
-    if [ -w "${INSTALL_DIR}" ]; then
-        mv "${TEMP_FILE}" "${INSTALL_DIR}/${BINARY_NAME}" || error "Failed to install to ${INSTALL_DIR}"
-    else
-        sudo mv "${TEMP_FILE}" "${INSTALL_DIR}/${BINARY_NAME}" || error "Failed to install to ${INSTALL_DIR}"
+    # Refuse to swap in a binary that rejects the current config: the service
+    # would stay down after the update.
+    if [ -f "${CONFIG_FILE}" ] && ! sudo "${NEW_BINARY}" -config "${CONFIG_FILE}" -validate-config; then
+        error "The new version rejects ${CONFIG_FILE}; fix the config first. Nothing was changed."
     fi
+}
+
+install_binary() {
+    sudo install -m 0755 "${NEW_BINARY}" "${INSTALL_DIR}/${BINARY_NAME}" || error "Failed to install to ${INSTALL_DIR}"
     info "Updated ${INSTALL_DIR}/${BINARY_NAME}"
 }
 
@@ -115,18 +160,15 @@ download_dnsctl() {
     DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST_VERSION}/${DNSCTL_NAME}-${PLATFORM}"
     info "Downloading dnsctl..."
 
-    TEMP_FILE=$(mktemp)
-    curl -fsSL -o "${TEMP_FILE}" "${DOWNLOAD_URL}" 2>/dev/null || {
+    local tmp
+    tmp=$(mktemp)
+    TEMP_FILES+=("${tmp}")
+    curl -fsSL -o "${tmp}" "${DOWNLOAD_URL}" 2>/dev/null || {
         warn "dnsctl download failed, skipping..."
         return
     }
-    chmod +x "${TEMP_FILE}"
-
-    if [ -w "${INSTALL_DIR}" ]; then
-        mv "${TEMP_FILE}" "${INSTALL_DIR}/${DNSCTL_NAME}" 2>/dev/null || sudo mv "${TEMP_FILE}" "${INSTALL_DIR}/${DNSCTL_NAME}"
-    else
-        sudo mv "${TEMP_FILE}" "${INSTALL_DIR}/${DNSCTL_NAME}" 2>/dev/null || warn "Failed to update dnsctl"
-    fi
+    verify_checksum "${tmp}" "${DNSCTL_NAME}-${PLATFORM}"
+    sudo install -m 0755 "${tmp}" "${INSTALL_DIR}/${DNSCTL_NAME}" || { warn "Failed to update dnsctl"; return; }
     info "Updated dnsctl"
 }
 
@@ -139,10 +181,11 @@ start_service() {
         if systemctl is-active --quiet nothingdns; then
             info "NothingDNS is running"
         else
-            warn "NothingDNS failed to start. Check logs: sudo journalctl -u nothingdns"
+            warn "NothingDNS failed to start. Recent log:"
+            sudo journalctl -u nothingdns -n 30 --no-pager 2>/dev/null || true
         fi
     else
-        sudo ${INSTALL_DIR}/${BINARY_NAME} --config ${CONFIG_FILE} &
+        sudo "${INSTALL_DIR}/${BINARY_NAME}" -config "${CONFIG_FILE}" &
         sleep 3
         info "NothingDNS started in background"
     fi
@@ -155,7 +198,7 @@ check_health() {
 
     info "Checking health..."
     while [ $attempt -lt $max_attempts ]; do
-        if curl -s --max-time 2 http://localhost:8080/health > /dev/null 2>&1; then
+        if curl -s --max-time 2 http://127.0.0.1:8080/health > /dev/null 2>&1; then
             info "Health check passed!"
             return 0
         fi
@@ -214,8 +257,10 @@ main() {
         fi
     fi
 
-    stop_service
+    fetch_checksums
     download_binary
+    stop_service
+    install_binary
     download_dnsctl
     start_service
     check_health

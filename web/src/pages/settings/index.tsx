@@ -105,10 +105,10 @@ export function SettingsPage() {
           <GeneralSettings config={config} />
         </TabsContent>
         <TabsContent value="dns" className="mt-4 space-y-4">
-          <DNSSettings config={config} />
+          <DNSSettings config={config} onReload={loadConfig} />
         </TabsContent>
         <TabsContent value="upstream" className="mt-4 space-y-4">
-          <UpstreamSettings config={config} />
+          <UpstreamSettings config={config} onReload={loadConfig} />
         </TabsContent>
         <TabsContent value="cache" className="mt-4 space-y-4">
           <CacheSettings config={config} onReload={loadConfig} />

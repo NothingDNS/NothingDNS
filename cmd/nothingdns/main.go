@@ -266,6 +266,7 @@ func reloadSecurityComponents(cfg *config.Config, current *SecurityManager, hand
 		handler.security.GeoEngine = result.GeoEngine
 		handler.security.DNS64Synth = result.DNS64Synth
 		handler.security.ACLChecker = result.ACLChecker
+		handler.security.RecursionPolicy = result.RecursionPolicy
 		handler.security.RateLimiter = result.RateLimiter
 		handler.security.RRL = result.RRL
 		handler.runtimeMu.Unlock()
@@ -276,7 +277,10 @@ func reloadSecurityComponents(cfg *config.Config, current *SecurityManager, hand
 			WithRPZ(result.RPZEngine).
 			WithGeoDNS(result.GeoEngine).
 			WithACL(result.ACLChecker).
-			WithRateLimiter(result.RateLimiter)
+			WithAccessPolicy(result.RecursionPolicy, result.AccessPolicyFile).
+			WithRateLimiter(result.RateLimiter).
+			WithDNS64(result.DNS64Synth).
+			WithRuntimeOverrides(config.RuntimeOverridesFile(cfg.Storage.DataDir))
 	}
 	if current != nil {
 		current.Stop()
@@ -412,11 +416,17 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 	// Initialize logger
 	level := logLevelFromString(cfg.Logging.Level)
 	format := logFormatFromString(cfg.Logging.Format)
-	var output *os.File = os.Stdout
-	if cfg.Logging.Output == "stderr" {
-		output = os.Stderr
-	}
+	output, closeOutput, outputErr := openLogOutput(cfg.Logging.Output)
+	defer closeOutput()
 	logger := util.NewLogger(level, format, output)
+	// Package-level util.Infof/Warnf callers (API, dashboard, config) must
+	// honour the configured level, format and output too.
+	prevDefaultLogger := util.GetDefaultLogger()
+	util.SetDefaultLogger(logger)
+	defer util.SetDefaultLogger(prevDefaultLogger) // runs before closeOutput
+	if outputErr != nil {
+		logger.Warnf("logging: %v; writing logs to stdout", outputErr)
+	}
 	logger.Infof("Starting %s v%s", Name, util.Version)
 
 	// Initialize cache manager
@@ -579,6 +589,19 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 	}
 	logger.Infof("Auth store initialized with %d users", len(cfg.Server.HTTP.Users))
 
+	if usersFile := authUsersFile(cfg); usersFile != "" {
+		loaded, err := authStore.EnableUsersFile(usersFile)
+		if err != nil {
+			logger.Fatalf("Failed to load users from %s: %v", usersFile, err)
+		}
+		logger.Infof("Runtime-managed users persisted in %s (%d loaded)", usersFile, loaded)
+	} else {
+		logger.Warnf("No server.http.users_file or storage.data_dir configured: users created from the dashboard or bootstrap endpoint are lost on restart")
+	}
+	if authStore.UsesAutoCreatedAdmin() {
+		logger.Warnf("No users configured. A placeholder admin account with a random password was created; set a password via the localhost bootstrap endpoint (POST /api/v1/auth/bootstrap) before use.")
+	}
+
 	// Restore persistent tokens from file if configured. Validation
 	// lives in cmd/nothingdns/helpers.validateAuthPersistenceConfig
 	// so it's unit-testable (L-4).
@@ -718,13 +741,14 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 		mdnsResponder: mdnsResponder,
 		dsoManager:    dsoManager,
 		security: SecurityComponents{
-			Blocklist:   bl,
-			RPZEngine:   rpzEngine,
-			GeoEngine:   geoEngine,
-			DNS64Synth:  dns64Synth,
-			ACLChecker:  aclChecker,
-			RateLimiter: rateLimiter,
-			RRL:         securityManager.Result().RRL,
+			Blocklist:       bl,
+			RPZEngine:       rpzEngine,
+			GeoEngine:       geoEngine,
+			DNS64Synth:      dns64Synth,
+			ACLChecker:      aclChecker,
+			RateLimiter:     rateLimiter,
+			RRL:             securityManager.Result().RRL,
+			RecursionPolicy: securityManager.Result().RecursionPolicy,
 		},
 		transfer: TransferComponents{
 			AXFRServer:    transferManager.Result().AXFRServer,
@@ -743,6 +767,21 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 		cancelServer: cancelServer,
 	}
 	handlerLogger = logger
+
+	// Wire zone mutations to query routing: after every zone mutation
+	// (REST API, Raft apply, gossip), rebuild the radix tree and zone
+	// provider so created/deleted zones are visible to DNS queries.
+	// Compose with the existing mutation hook (KV persistence, installed
+	// by NewZoneManager) instead of overwriting it.
+	{
+		prevHook := zoneManagerInstance.MutationHook()
+		zoneManagerInstance.SetMutationHook(func(zoneName string, deleted bool) {
+			if prevHook != nil {
+				prevHook(zoneName, deleted)
+			}
+			handler.RebuildZoneTree()
+		})
+	}
 
 	// Initialize iterative recursive resolver if enabled
 	if cfg.Resolution.Recursive {
@@ -791,7 +830,7 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 	}
 
 	// VULN-041: Warn if recursion is enabled without ACL rules but with explicit allow-unrestricted
-	if cfg.Resolution.Recursive && aclChecker == nil && cfg.Server.ACLAllowUnrestrictedRecursion {
+	if cfg.Server.ACLAllowUnrestrictedRecursion && len(aclChecker.GetRules()) == 0 && securityManager.Result().RecursionPolicy.AllowAll() {
 		logger.Warnf("SECURITY WARNING: Recursive resolver is enabled with no ACL rules but acl_allow_unrestricted_recursion=true. This configuration makes the server an OPEN RECURSIVE RESOLVER accessible from any IP. Only set acl_allow_unrestricted_recursion=true if you intentionally want to run an open resolver.")
 	}
 
@@ -828,6 +867,7 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 	dashboardServer.SetAllowedOrigins(cfg.Server.HTTP.AllowedOrigins)
 	dashboardServer.SetAuthStore(authStore)
 	dashboardServer.SetAuthToken(resolveDashboardBearer(cfg.Server.HTTP))
+	dashboardServer.SetAuthTokenRole(cfg.Server.HTTP.AuthTokenRole)
 	dashboardServer.SetZoneManager(zoneManagerInstance)
 	// Feed per-query events into the dashboard (Query Log page + live stream).
 	handler.dashboardServer = dashboardServer
@@ -865,6 +905,7 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 		WithBlocklist(bl).
 		WithUpstream(client, loadBalancer).
 		WithACL(aclChecker).
+		WithAccessPolicy(securityManager.Result().RecursionPolicy, securityManager.Result().AccessPolicyFile).
 		WithAuth(authStore).
 		WithDashboard(dashboardServer).
 		WithMetrics(metricsCollector).
@@ -874,7 +915,33 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 		WithRPZ(rpzEngine).
 		WithGeoDNS(geoEngine).
 		WithSlaveManager(transferManager.Result().SlaveManager).
-		WithRateLimiter(rateLimiter)
+		WithRateLimiter(rateLimiter).
+		WithRuntimeOverrides(config.RuntimeOverridesFile(cfg.Storage.DataDir)).
+		WithDNS64(dns64Synth).
+		WithCookieControl(func(enabled bool) error {
+			// The cookie jar holds the rotating server secret, so enabling
+			// creates a fresh one and disabling drops it — clients simply stop
+			// being challenged. handler.config is the same *Config the API
+			// mutates through its config getter; set both so a reload that
+			// only swaps unrelated sections keeps the toggle.
+			handler.runtimeMu.Lock()
+			defer handler.runtimeMu.Unlock()
+			switch {
+			case enabled && handler.cookieJar == nil:
+				rotation := parseDurationOrDefault(handler.config.Cookie.SecretRotation, 1*time.Hour)
+				jar, err := dnscookie.NewCookieJar(rotation)
+				if err != nil {
+					return fmt.Errorf("initializing DNS cookie jar: %w", err)
+				}
+				handler.cookieJar = jar
+				logger.Infof("DNS cookies enabled at runtime (secret rotation: %s)", rotation)
+			case !enabled && handler.cookieJar != nil:
+				handler.cookieJar = nil
+				logger.Info("DNS cookies disabled at runtime")
+			}
+			handler.config.Cookie.Enabled = enabled
+			return nil
+		})
 	reloadState.apiServer = apiServer // wire apiServer back into reload state
 
 	// Initialize ODoH (RFC 9230) if enabled
@@ -1118,7 +1185,65 @@ func loadConfig(path string) (*config.Config, error) {
 		return nil, fmt.Errorf("configuration validation failed: %d error(s)", len(errs))
 	}
 
+	applyRuntimeOverrides(cfg)
+
 	return cfg, nil
+}
+
+// applyRuntimeOverrides layers the persisted dashboard/API changes
+// (<storage.data_dir>/runtime_overrides.json) on top of the YAML config, so a
+// setting an operator changed at runtime is not reverted by the next start or
+// SIGHUP. Overrides win over the config file for the keys they carry.
+//
+// Resilience over strictness: a missing file is normal, and a corrupt or
+// invalid one is logged and skipped rather than refusing to start — the server
+// then runs on the config file alone, which is always the safer fallback.
+func applyRuntimeOverrides(cfg *config.Config) {
+	file := config.RuntimeOverridesFile(cfg.Storage.DataDir)
+	if file == "" {
+		return
+	}
+	overrides, err := config.LoadRuntimeOverrides(file)
+	if err != nil {
+		util.Warnf("config: ignoring runtime overrides file %s: %v (using the config file values)", file, err)
+		return
+	}
+	if overrides == nil {
+		return
+	}
+
+	// Section by section, so one unusable section (say an upstream list the
+	// dashboard emptied) cannot discard every other stored setting. Each
+	// section is applied to a copy and validated before it is committed.
+	applied := 0
+	for _, section := range []struct {
+		name  string
+		patch *config.RuntimeOverrides
+	}{
+		{"logging", &config.RuntimeOverrides{Logging: overrides.Logging}},
+		{"rrl", &config.RuntimeOverrides{RRL: overrides.RRL}},
+		{"cache", &config.RuntimeOverrides{Cache: overrides.Cache}},
+		{"resolution", &config.RuntimeOverrides{Resolution: overrides.Resolution}},
+		{"dns64", &config.RuntimeOverrides{DNS64: overrides.DNS64}},
+		{"cookie", &config.RuntimeOverrides{Cookie: overrides.Cookie}},
+		{"upstream_servers", &config.RuntimeOverrides{UpstreamServers: overrides.UpstreamServers}},
+	} {
+		if *section.patch == (config.RuntimeOverrides{}) {
+			continue // not overridden
+		}
+		patched := *cfg
+		config.ApplyRuntimeOverrides(&patched, section.patch)
+		if errs := patched.Validate(); len(errs) > 0 {
+			util.Warnf("config: runtime override %q from %s is invalid (%s) — using the config file value",
+				section.name, file, strings.Join(errs, "; "))
+			continue
+		}
+		*cfg = patched
+		applied++
+	}
+	if applied > 0 {
+		util.Infof("Runtime overrides loaded from %s (%d section(s) override the config file)", file, applied)
+	}
 }
 
 // loadZoneFile loads a single zone file.

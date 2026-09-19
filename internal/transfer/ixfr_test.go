@@ -2,8 +2,10 @@ package transfer
 
 import (
 	"bytes"
+	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1215,30 +1217,36 @@ func TestIXFRClient_receiveIXFRResponse_SingleSOA(t *testing.T) {
 		},
 	}
 
+	errCh := make(chan error, 1)
 	go func() {
+		// RFC 1995 §2: an up-to-date IXFR response is a single message
+		// carrying one SOA record. The first single-SOA message is
+		// terminal — a real server never sends a second one.
 		msg1 := &protocol.Message{
 			Header: protocol.Header{
 				ID: 0x1234, Flags: protocol.Flags{QR: true, RCODE: protocol.RcodeSuccess},
 			},
 			Answers: []*protocol.ResourceRecord{soaRR},
 		}
-		ixfrSendTCPMessage(serverConn, msg1, t)
-
-		msg2 := &protocol.Message{
-			Header: protocol.Header{
-				ID: 0x1234, Flags: protocol.Flags{QR: true, RCODE: protocol.RcodeSuccess},
-			},
-			Answers: []*protocol.ResourceRecord{soaRR},
+		if err := ixfrSendTCPMessage(serverConn, msg1); err != nil {
+			errCh <- err
 		}
-		ixfrSendTCPMessage(serverConn, msg2, t)
 	}()
 
 	records, err := client.receiveIXFRResponse(clientConn, 0x1234, nil)
 	if err != nil {
 		t.Fatalf("receiveIXFRResponse returned error: %v", err)
 	}
-	if len(records) != 2 {
-		t.Errorf("Expected 2 SOA records, got %d", len(records))
+	if len(records) != 1 {
+		t.Errorf("Expected 1 SOA record (RFC 1995 §2 up-to-date response), got %d", len(records))
+	}
+	if len(records) > 0 && records[0].Type != protocol.TypeSOA {
+		t.Errorf("Expected an SOA record, got type %d", records[0].Type)
+	}
+	select {
+	case err := <-errCh:
+		t.Fatalf("IXFR server goroutine: %v", err)
+	default:
 	}
 }
 
@@ -1253,13 +1261,16 @@ func TestIXFRClient_receiveIXFRResponse_ServerError(t *testing.T) {
 	defer clientConn.Close()
 	defer serverConn.Close()
 
+	errCh := make(chan error, 1)
 	go func() {
 		msg := &protocol.Message{
 			Header: protocol.Header{
 				ID: 0x1234, Flags: protocol.Flags{QR: true, RCODE: protocol.RcodeRefused},
 			},
 		}
-		ixfrSendTCPMessage(serverConn, msg, t)
+		if err := ixfrSendTCPMessage(serverConn, msg); err != nil {
+			errCh <- err
+		}
 	}()
 
 	_, err := client.receiveIXFRResponse(clientConn, 0x1234, nil)
@@ -1268,6 +1279,11 @@ func TestIXFRClient_receiveIXFRResponse_ServerError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "rcode") {
 		t.Errorf("Expected rcode error, got: %v", err)
+	}
+	select {
+	case err := <-errCh:
+		t.Fatalf("IXFR server goroutine: %v", err)
+	default:
 	}
 }
 
@@ -1364,9 +1380,14 @@ func TestIXFRClient_Transfer_WithTCPServer(t *testing.T) {
 		},
 	}
 
+	var serverWg sync.WaitGroup
+	serverWg.Add(1)
+	errCh := make(chan error, 2)
 	go func() {
+		defer serverWg.Done()
 		conn, err := listener.Accept()
 		if err != nil {
+			errCh <- fmt.Errorf("accept: %w", err)
 			return
 		}
 		defer conn.Close()
@@ -1385,7 +1406,10 @@ func TestIXFRClient_Transfer_WithTCPServer(t *testing.T) {
 			},
 			Answers: []*protocol.ResourceRecord{soaRR},
 		}
-		ixfrSendTCPMessage(conn, msg1, t)
+		if err := ixfrSendTCPMessage(conn, msg1); err != nil {
+			errCh <- err
+			return
+		}
 
 		msg2 := &protocol.Message{
 			Header: protocol.Header{
@@ -1393,7 +1417,10 @@ func TestIXFRClient_Transfer_WithTCPServer(t *testing.T) {
 			},
 			Answers: []*protocol.ResourceRecord{soaRR},
 		}
-		ixfrSendTCPMessage(conn, msg2, t)
+		if err := ixfrSendTCPMessage(conn, msg2); err != nil {
+			errCh <- err
+			return
+		}
 	}()
 
 	client := NewIXFRClient(addr, WithIXFRTimeout(5*time.Second))
@@ -1403,6 +1430,17 @@ func TestIXFRClient_Transfer_WithTCPServer(t *testing.T) {
 	}
 	if len(records) < 1 {
 		t.Errorf("Expected at least 1 record, got %d", len(records))
+	}
+
+	// Join the server goroutine before returning: its late writes fail once
+	// the client closes the connection, and those teardown errors are benign
+	// by construction (the transfer completed). Draining the channel here —
+	// after the goroutine is done — is what removes the
+	// Fail-in-goroutine-after-test-completed panic.
+	serverWg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Logf("IXFR server goroutine teardown: %v", err)
 	}
 }
 
@@ -1460,18 +1498,23 @@ func TestIXFRClient_receiveIXFRResponse_TooLarge(t *testing.T) {
 // Helper: send a DNS message over TCP with length prefix
 // ---------------------------------------------------------------------------
 
-func ixfrSendTCPMessage(conn net.Conn, msg *protocol.Message, t *testing.T) {
-	t.Helper()
+// ixfrSendTCPMessage sends a DNS message over TCP with a length prefix and
+// returns the first failure instead of failing the test: callers run this
+// from server goroutines whose lifetime may outlive the test, and a
+// t.Fatalf from a goroutine after the test has completed panics the whole
+// run (round-5/25 regression guard).
+func ixfrSendTCPMessage(conn net.Conn, msg *protocol.Message) error {
 	buf := make([]byte, 65535)
 	n, err := msg.Pack(buf)
 	if err != nil {
-		t.Fatalf("Failed to pack message: %v", err)
+		return fmt.Errorf("pack message: %w", err)
 	}
 	lengthPrefix := []byte{byte(n >> 8), byte(n)}
 	if _, err := conn.Write(lengthPrefix); err != nil {
-		t.Fatalf("Failed to write length prefix: %v", err)
+		return fmt.Errorf("write length prefix: %w", err)
 	}
 	if _, err := conn.Write(buf[:n]); err != nil {
-		t.Fatalf("Failed to write message: %v", err)
+		return fmt.Errorf("write message: %w", err)
 	}
+	return nil
 }

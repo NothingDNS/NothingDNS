@@ -769,7 +769,7 @@ sudo env NOTHINGDNS_RESTORE_OVERWRITE=1 \
   ./scripts/restore.sh /var/backups/nothingdns/nothingdns-backup-YYYYmmdd_HHMMSS.tar.gz
 
 # 3. Validate before opening traffic.
-sudo -u nobody nothingdns \
+sudo -u nothingdns nothingdns \
   -config /etc/nothingdns/nothingdns.yaml \
   -validate-production-config
 

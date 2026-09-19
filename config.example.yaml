@@ -271,31 +271,34 @@ dnssec:
 # =============================================================================
 # SECURITY SETTINGS
 # =============================================================================
-# Access Control List
-acl:
-  # Allow only specific IP ranges.
-  #
-  # `types` narrows a rule to specific QTYPEs. OMIT IT to match every query
-  # type — that is what "allow these networks" means. Listing "ANY" does NOT
-  # mean "all types": it is QTYPE 255, so such a rule matches only literal ANY
-  # queries and every ordinary A/AAAA query falls through to the default,
-  # which is deny when recursion is enabled without
-  # acl_allow_unrestricted_recursion. The result is a server that refuses
-  # everyone it was meant to allow.
-  - name: allow-private-networks
-    action: allow
-    networks:
-      - 10.0.0.0/8
-      - 172.16.0.0/12
-      - 192.168.0.0/16
+# Recursion allow list. Clients in these networks may use recursion: upstream
+# forwarding, iterative resolution and cached answers. Every other client still
+# gets answers from this server's own zones; other names are refused
+# (REFUSED, EDE 18). Entries are CIDRs or single IPs.
+#
+# When omitted: loopback and private networks if no `acl` rules exist, or
+# every client the ACL admits if it does. `[]` disables recursion for all.
+# Changes made on the dashboard's ACL page are saved to
+# <storage.data_dir>/access_policy.json, which then overrides this list.
+allow_recursion:
+  - 127.0.0.0/8
+  - ::1/128
+  - 10.0.0.0/8
+  - 172.16.0.0/12
+  - 192.168.0.0/16
 
-  # Deny specific IPs
+# General Access Control List, applied to every query (including the server's
+# own zones). Empty: every client may query. Rules are checked in order, the
+# first match wins, and a client matching no rule is refused.
+#
+# `types` narrows a rule to specific QTYPEs. OMIT IT to match every query
+# type. Listing "ANY" does NOT mean "all types": it is QTYPE 255, so such a
+# rule matches only literal ANY queries.
+acl: []
   # - name: deny-test-net
   #   action: deny
   #   networks:
   #     - 192.0.2.0/24
-  #   types:
-  #     - ANY
 
 # Response Rate Limiting (RRL) for amplification prevention
 rrl:
@@ -328,6 +331,10 @@ blocklist:
   # Remote blocklist URLs
   urls:
     # - https://example.com/blocklist.txt
+
+  # Confine blocklist file sources to this directory. Required to add
+  # file sources at runtime through the API (POST /api/v1/blocklists).
+  # base_dir: /etc/nothingdns/blocklists
 
 # =============================================================================
 # RESPONSE POLICY ZONES (RPZ)
@@ -423,11 +430,9 @@ transfer:
 # METRICS & OBSERVABILITY
 # =============================================================================
 metrics:
-  # Disabled by default so the quickstart / docker-compose works out of the box.
-  # The metrics endpoint FAILS CLOSED: enabling it WITHOUT an auth_token makes
-  # the server refuse to start (it will not serve operational metrics
-  # unauthenticated). To enable, set enabled: true AND provide auth_token
-  # (and ideally bind to localhost).
+  # The metrics endpoint FAILS CLOSED: without auth_token it may only bind to
+  # loopback (e.g. 127.0.0.1:9153); on any other address the server refuses to
+  # start and -validate-config reports the error.
   enabled: false
 
   # Prometheus metrics endpoint
@@ -473,10 +478,12 @@ logging:
   # Log format: text, json
   format: json
 
-  # Log output: stdout, stderr, file
+  # Log output: stdout, stderr or an absolute file path. Under systemd,
+  # stdout goes to the journal: journalctl -u nothingdns
   output: stdout
 
-  # Query logging (for audit)
+  # Per-query log (client, name, type, rcode, latency, cache) written to
+  # query_log_file; off by default
   query_log: false
   query_log_file: /var/log/nothingdns/query.log
 
@@ -507,7 +514,7 @@ logging:
 #     http:
 #       odoh_enabled: true
 #       odoh_path: /odoh          # endpoint path (default: /odoh)
-#       odoh_kem: 4               # HPKE KEM (4 = DHKEM-X25519-HKDF-SHA256)
+#       odoh_kem: 32              # HPKE KEM (32 = 0x0020 DHKEM-X25519-HKDF-SHA256, the only one supported)
 
 # =============================================================================
 # SLAVE ZONES (AXFR/IXFR)
