@@ -198,10 +198,23 @@ func (s *IXFRServer) HandleIXFR(req *protocol.Message, clientIP net.IP) ([]*prot
 	clientSerial := s.extractClientSerial(req)
 	serverSerial := z.SOA.Serial
 
-	// If client is up to date, return single SOA
-	// Use RFC 1982 serial arithmetic for wrap-safe comparison
-	if !serialIsNewer(serverSerial, clientSerial) {
+	// If client is up to date (server == client), return single SOA.
+	// RFC 1982 serial arithmetic: serialIsNewer(server, client) is true
+	// only when the server has strictly newer data. Its negation covers
+	// two cases that must NOT be conflated:
+	//   1. server == client          → client is up-to-date, send single SOA.
+	//   2. client is newer than server → server is BEHIND the client (real-world
+	//      condition: secondary misconfiguration, stale zone, client clock
+	//      skew). Sending a single SOA here would falsely tell the client
+	//      it's up-to-date, causing the stale zone to persist silently.
+	//      Fall back to AXFR so the client gets a consistent snapshot.
+	if serverSerial == clientSerial {
 		return s.generateSingleSOA(z)
+	}
+	if serialIsNewer(clientSerial, serverSerial) {
+		// Server is behind the client: refuse the IXFR delta (we can't
+		// produce a correct forward-difference) and force a full AXFR.
+		return s.axfrServer.generateAXFRRecords(z)
 	}
 
 	// Try to generate incremental changes
