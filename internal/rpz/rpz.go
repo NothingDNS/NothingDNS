@@ -137,15 +137,39 @@ func (e *Engine) Load() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	// Clear existing rules
-	e.qnameRules = make(map[string]*Rule)
-	e.clientIPRules = make([]*net.IPNet, 0)
-	e.clientActions = make([]*Rule, 0)
-	e.respIPRules = make([]*net.IPNet, 0)
-	e.respActions = make([]*Rule, 0)
+	// Load into temporary collections so a parse error in any file leaves
+	// the engine's previously-loaded rule set intact. Without this, a
+	// transient parse error in one file would silently destroy all
+	// previously-loaded rules from every other file.
+	newQName := make(map[string]*Rule)
+	newClientCIDRs := make([]*net.IPNet, 0)
+	newClientActions := make([]*Rule, 0)
+	newRespCIDRs := make([]*net.IPNet, 0)
+	newRespActions := make([]*Rule, 0)
+
+	// Save the current collections so we can restore them on failure.
+	prevQName := e.qnameRules
+	prevClientCIDRs := e.clientIPRules
+	prevClientActions := e.clientActions
+	prevRespCIDRs := e.respIPRules
+	prevRespActions := e.respActions
+
+	// Point the engine at the temporary collections for the duration of
+	// the load loop. addRule appends to the engine's current collections.
+	e.qnameRules = newQName
+	e.clientIPRules = newClientCIDRs
+	e.clientActions = newClientActions
+	e.respIPRules = newRespCIDRs
+	e.respActions = newRespActions
 
 	for _, file := range e.files {
 		if err := e.loadFile(file); err != nil {
+			// Restore the previous rule set before returning the error.
+			e.qnameRules = prevQName
+			e.clientIPRules = prevClientCIDRs
+			e.clientActions = prevClientActions
+			e.respIPRules = prevRespCIDRs
+			e.respActions = prevRespActions
 			return fmt.Errorf("rpz: load %s: %w", file, err)
 		}
 	}
