@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -161,14 +162,41 @@ func (h *ReloadHandler) Stop() {
 
 // Reload triggers a manual reload. The newCfg is passed to every callback
 // so they all see the same freshly-loaded config snapshot.
+//
+// Callbacks are executed in priority order (lowest ReloadPriority value
+// first), with ties broken by component name for determinism. The
+// "config" callback is registered at PriorityFirst so that every other
+// callback (zones, blocklist, logging) reads the freshly-stored config
+// snapshot. Without this ordering, Go's non-deterministic map iteration
+// could let zones/blocklist reload before the new config is stored,
+// causing them to operate with stale data.
 func (h *ReloadHandler) Reload(newCfg *Config) []ReloadError {
 	h.mu.RLock()
-	defer h.mu.RUnlock()
+	type entry struct {
+		priority ReloadPriority
+		name     string
+		cb       ReloadCallback
+	}
+	entries := make([]entry, 0, len(h.callbacks))
+	for name, cb := range h.callbacks {
+		entries = append(entries, entry{
+			priority: PriorityFor(name),
+			name:     name,
+			cb:       cb,
+		})
+	}
+	h.mu.RUnlock()
+
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].priority != entries[j].priority {
+			return entries[i].priority < entries[j].priority
+		}
+		return entries[i].name < entries[j].name
+	})
 
 	var errors []ReloadError
-
-	for component, cb := range h.callbacks {
-		func() {
+	for _, e := range entries {
+		func(component string, cb ReloadCallback) {
 			defer func() {
 				if r := recover(); r != nil {
 					errors = append(errors, ReloadError{
@@ -183,10 +211,25 @@ func (h *ReloadHandler) Reload(newCfg *Config) []ReloadError {
 					Error:     err,
 				})
 			}
-		}()
+		}(e.name, e.cb)
 	}
 
 	return errors
+}
+
+// PriorityFor returns the reload priority for a given component name.
+// The "config" component is PriorityFirst because every other callback
+// reads the freshly-stored config snapshot. Unknown components default
+// to PriorityNormal.
+func PriorityFor(name string) ReloadPriority {
+	switch name {
+	case "config":
+		return PriorityFirst
+	case "logging":
+		return PriorityLast
+	default:
+		return PriorityNormal
+	}
 }
 
 // Component returns registered components
