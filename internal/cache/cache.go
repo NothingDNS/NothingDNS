@@ -663,6 +663,14 @@ func (c *Cache) SetNegativeWithTTLNamed(key, name string, rcode uint8, ttl uint3
 // clampNegativeTTL applies the operator-configured negative TTL as a ceiling
 // on an RFC 2308 SOA-derived TTL in seconds.
 func (c *Cache) clampNegativeTTL(ttl uint32) time.Duration {
+	// ttl=0 means the caller has no SOA TTL (e.g. upstream didn't return one,
+	// or the caller deliberately passed zero). Without this fallback the
+	// entry would be stored with ExpireTime == now and immediately expired —
+	// effectively disabling negative caching. SetNegativeMessage already
+	// handles ttl <= 0 this way; keep the two paths consistent.
+	if ttl == 0 {
+		ttl = uint32(c.config().NegativeTTL / time.Second)
+	}
 	d := time.Duration(ttl) * time.Second
 	if c.config().NegativeTTL > 0 && d > c.config().NegativeTTL {
 		d = c.config().NegativeTTL
