@@ -428,10 +428,15 @@ func (s *Store) ValidateToken(tokenStr string) (*User, error) {
 		return nil, fmt.Errorf("invalid token")
 	}
 
-	// Verify HMAC signature to prevent token forgery
+	// Verify HMAC signature to prevent token forgery.
+	// Return a generic "invalid token" error to prevent token-ID
+	// enumeration: an attacker probing with random token strings
+	// could otherwise distinguish "unknown token" (different error)
+	// from "token exists but signature mismatch" / "expired", learning
+	// which token IDs are valid. All rejection reasons share one message.
 	if !s.verifyTokenSignature(tokenStr, token.Signature) {
 		s.mu.RUnlock()
-		return nil, fmt.Errorf("invalid token signature")
+		return nil, fmt.Errorf("invalid token")
 	}
 
 	if tokenExpiredAt(token, time.Now()) {
@@ -452,7 +457,10 @@ func (s *Store) ValidateToken(tokenStr string) (*User, error) {
 			}
 		}
 		s.mu.Unlock()
-		return nil, fmt.Errorf("token expired")
+		// Same generic error as the not-found and bad-signature paths,
+		// so an attacker probing token IDs cannot distinguish expired
+		// tokens from unknown or forged ones.
+		return nil, fmt.Errorf("invalid token")
 	}
 
 	// Note: LastAccess is informational only (never used for expiry
