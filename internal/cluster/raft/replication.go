@@ -61,6 +61,22 @@ func (n *Node) ProposeEntry(command []byte, entryType EntryType) (Index, error) 
 // immediately after a Propose, instead of waiting for the next heartbeat
 // tick. Each peer is served from its own nextIndex via replicateTo, so a
 // lagging follower still receives exactly the entries it's missing.
+// snapshotPeerIDs returns a copy of the current peer IDs under n.mu.
+// Broadcast functions use this to iterate without racing membership
+// changes (which replace n.peers under the same lock). Without the
+// snapshot, iterating n.peers outside the lock races with
+// membership.go's `n.peers = n.jointConfig.NewPeers`, triggering Go's
+// "fatal error: concurrent map iteration and map write."
+func (n *Node) snapshotPeerIDs() []NodeID {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	ids := make([]NodeID, 0, len(n.peers))
+	for id := range n.peers {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
 func (n *Node) replicateToFollowers(_ entry) {
 	n.mu.Lock()
 	term := n.currentTerm
@@ -70,7 +86,7 @@ func (n *Node) replicateToFollowers(_ entry) {
 		return
 	}
 
-	for id := range n.peers {
+	for _, peerID := range n.snapshotPeerIDs() {
 		go func(peerID NodeID) {
 			defer func() {
 				if r := recover(); r != nil {
@@ -78,13 +94,13 @@ func (n *Node) replicateToFollowers(_ entry) {
 				}
 			}()
 			n.replicateTo(peerID, term)
-		}(id)
+		}(peerID)
 	}
 }
 
 // broadcastVoteRequest sends vote requests to all peers.
 func (n *Node) broadcastVoteRequest(term Term, lastLogIndex Index, lastLogTerm Term) {
-	for id := range n.peers {
+	for _, peerID := range n.snapshotPeerIDs() {
 		go func(peerID NodeID) {
 			defer func() {
 				if r := recover(); r != nil {
@@ -99,7 +115,7 @@ func (n *Node) broadcastVoteRequest(term Term, lastLogIndex Index, lastLogTerm T
 			}
 			// RPC call — would be injected in real implementation
 			n.sendVoteRequest(peerID, req)
-		}(id)
+		}(peerID)
 	}
 }
 
@@ -109,7 +125,7 @@ func (n *Node) broadcastVoteRequest(term Term, lastLogIndex Index, lastLogTerm T
 // it's caught up it carries none. This is the standard Raft model and is
 // what lets the leader's periodic tick double as the catch-up driver.
 func (n *Node) broadcastHeartbeat(term Term) {
-	for id := range n.peers {
+	for _, peerID := range n.snapshotPeerIDs() {
 		go func(peerID NodeID) {
 			defer func() {
 				if r := recover(); r != nil {
@@ -117,7 +133,7 @@ func (n *Node) broadcastHeartbeat(term Term) {
 				}
 			}()
 			n.replicateTo(peerID, term)
-		}(id)
+		}(peerID)
 	}
 }
 
