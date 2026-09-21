@@ -137,12 +137,28 @@ func (bl *Blocklist) Load() error {
 	bl.mu.Lock()
 	defer bl.mu.Unlock()
 
-	bl.entries = make(map[string]Entry)
-	bl.sourceEntries = make(map[string]map[string]Entry)
+	// Load into temporary collections so a load error in any file or URL
+	// leaves the blocklist's previously-loaded rule set intact. Without
+	// this, a transient error in one source would silently destroy all
+	// previously-loaded entries from every other source.
+	newEntries := make(map[string]Entry)
+	newSourceEntries := make(map[string]map[string]Entry)
+
+	// Save the current collections so we can restore them on failure.
+	prevEntries := bl.entries
+	prevSourceEntries := bl.sourceEntries
+
+	// Point the blocklist at the temporary collections for the duration
+	// of the load loops. loadFile and loadURL append to the blocklist's
+	// current collections.
+	bl.entries = newEntries
+	bl.sourceEntries = newSourceEntries
 
 	// Load from files
 	for _, file := range bl.files {
 		if err := bl.loadFile(file); err != nil {
+			bl.entries = prevEntries
+			bl.sourceEntries = prevSourceEntries
 			return fmt.Errorf("loading blocklist %s: %w", file, err)
 		}
 	}
@@ -150,6 +166,8 @@ func (bl *Blocklist) Load() error {
 	// Load from URLs
 	for _, url := range bl.urls {
 		if err := bl.loadURL(url); err != nil {
+			bl.entries = prevEntries
+			bl.sourceEntries = prevSourceEntries
 			return fmt.Errorf("loading blocklist from %s: %w", url, err)
 		}
 	}
