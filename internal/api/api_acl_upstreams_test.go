@@ -429,8 +429,8 @@ func TestHandleUpstreams_PutRemoveServer(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&msgResp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if msgResp.Message != "Server removed: 8.8.4.4:53" {
-		t.Errorf("expected 'Server removed: 8.8.4.4:53', got %q", msgResp.Message)
+	if msgResp.Message != "Server removed: 8.8.4.4:53 (resolved from 8.8.4.4:53)" {
+		t.Errorf("expected 'Server removed: 8.8.4.4:53 (resolved from 8.8.4.4:53)', got %q", msgResp.Message)
 	}
 }
 

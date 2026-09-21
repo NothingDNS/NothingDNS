@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/nothingdns/nothingdns/internal/config"
@@ -110,6 +111,16 @@ func (s *Server) handleUpstreams(w http.ResponseWriter, r *http.Request) {
 				s.writeError(w, http.StatusBadRequest, "Server address required")
 				return
 			}
+			// Mirror the add path: resolve and pin hostnames so the address
+			// matches what is actually stored in the pool. Without this,
+			// removing a server that was added by hostname would fail with
+			// "not found" because the pool stores the pinned IP, not the
+			// raw input.
+			pinnedAddr, err := validateAndPinUpstream(req.Server)
+			if err != nil {
+				s.writeError(w, http.StatusBadRequest, sanitizeError(err, "Invalid upstream address"))
+				return
+			}
 			s.runtimeMu.RLock()
 			upstreamClient := s.upstreamClient
 			s.runtimeMu.RUnlock()
@@ -117,18 +128,18 @@ func (s *Server) handleUpstreams(w http.ResponseWriter, r *http.Request) {
 				s.writeError(w, http.StatusServiceUnavailable, "Upstream client not configured")
 				return
 			}
-			if err := upstreamClient.RemoveServer(req.Server); err != nil {
+			if err := upstreamClient.RemoveServer(pinnedAddr); err != nil {
 				s.writeError(w, http.StatusNotFound, sanitizeError(err, "Not found"))
 				return
 			}
 			if err := s.persistUpstreamServers(upstreamClient); err != nil {
-				if rbErr := upstreamClient.AddServer(req.Server); rbErr != nil {
-					util.Warnf("api: failed to restore upstream %s after a persist failure: %v", req.Server, rbErr)
+				if rbErr := upstreamClient.AddServer(pinnedAddr); rbErr != nil {
+					util.Warnf("api: failed to restore upstream %s after a persist failure: %v", pinnedAddr, rbErr)
 				}
 				s.writeError(w, http.StatusInternalServerError, sanitizeError(err, "Failed to save runtime overrides"))
 				return
 			}
-			s.writeJSON(w, http.StatusOK, &MessageResponse{Message: "Server removed: " + req.Server})
+			s.writeJSON(w, http.StatusOK, &MessageResponse{Message: "Server removed: " + pinnedAddr + " (resolved from " + req.Server + ")"})
 
 		default:
 			s.writeError(w, http.StatusBadRequest, "Invalid action: must be 'add' or 'remove'")
@@ -184,7 +195,7 @@ func validateAndPinUpstream(addr string) (string, error) {
 	// doesn't point to a private/internal IP. This prevents DNS rebinding
 	// attacks where a hostname resolves to a public IP at validation time
 	// but rebinds to a private IP before the actual connection.
-	ips, err := net.LookupHost(host)
+	ips, err := lookupHostFn(host)
 	if err != nil {
 		return "", fmt.Errorf("cannot resolve upstream hostname %q: %w", host, err)
 	}
@@ -192,6 +203,14 @@ func validateAndPinUpstream(addr string) (string, error) {
 	// Validate ALL resolved IPs — reject if any is private/internal.
 	// Defense in depth: a hostname that resolves to even one private IP is
 	// suspicious and should be rejected outright.
+	//
+	// Sort the public IPs before picking the first one so the pinned
+	// address is deterministic across calls. net.LookupHost does not
+	// guarantee a stable iteration order, so without sorting the same
+	// hostname could pin to a different address on each call — which
+	// would defeat the whole point of pinning (add and remove of the same
+	// hostname would target different pool entries).
+	sort.Strings(ips)
 	var pinnedIP string
 	for _, ipStr := range ips {
 		ip := net.ParseIP(ipStr)
@@ -202,7 +221,7 @@ func validateAndPinUpstream(addr string) (string, error) {
 			return "", fmt.Errorf("upstream server hostname %q resolves to private/internal IP %s", host, ipStr)
 		}
 		if pinnedIP == "" {
-			pinnedIP = ipStr // Pin to first valid public IP
+			pinnedIP = ipStr // Pin to first valid public IP (deterministic via sort)
 		}
 	}
 	if pinnedIP == "" {
@@ -215,5 +234,10 @@ func validateAndPinUpstream(addr string) (string, error) {
 	}
 	return pinnedIP, nil
 }
+
+// lookupHostFn is the hostname-to-IP resolver used by validateAndPinUpstream.
+// It is a package-level variable so tests can inject a deterministic stub
+// resolver; production code uses net.LookupHost (the default).
+var lookupHostFn = net.LookupHost
 
 // handleACL returns ACL rules or updates them.
