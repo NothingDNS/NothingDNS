@@ -726,20 +726,63 @@ EOF
 
     secure_config_file
     info "Config created at ${CONFIG_FILE}"
-    # Persist the API auth secret to a root-only file rather than echoing it to
-    # stdout, which can leak into terminal scrollback or logs — especially under
-    # curl | bash (V25).
-    printf 'api_auth_secret: %s\n' "${AUTH_SECRET}" | sudo tee "${CONFIG_DIR}/credentials" >/dev/null
-    sudo chmod 600 "${CONFIG_DIR}/credentials"
+    # Persist the API auth secret without wiping a previously saved admin
+    # password (reinstall / config overwrite used to truncate credentials to
+    # only api_auth_secret, then bootstrap failed with "Old password required"
+    # because users.json still had admin — leaving no usable password on disk).
+    write_credentials_secret "${AUTH_SECRET}"
     info "API auth secret saved to ${CONFIG_DIR}/credentials (root-only)."
     info "Retrieve with: sudo cat ${CONFIG_DIR}/credentials"
 }
 
+# Write or refresh api_auth_secret in credentials while keeping username/password.
+write_credentials_secret() {
+    local secret="$1"
+    local tmp existing_user existing_pass
+    tmp=$(mktemp)
+    existing_user=$(sudo grep -E '^username:' "${CONFIG_DIR}/credentials" 2>/dev/null | head -1 | sed 's/^username:[[:space:]]*//' || true)
+    existing_pass=$(sudo grep -E '^password:' "${CONFIG_DIR}/credentials" 2>/dev/null | head -1 | sed 's/^password:[[:space:]]*//' || true)
+    {
+        printf 'api_auth_secret: %s\n' "${secret}"
+        if [ -n "${existing_user}" ] && [ -n "${existing_pass}" ]; then
+            printf 'username: %s\n' "${existing_user}"
+            printf 'password: %s\n' "${existing_pass}"
+        fi
+    } > "${tmp}"
+    sudo cp "${tmp}" "${CONFIG_DIR}/credentials"
+    rm -f "${tmp}"
+    sudo chmod 600 "${CONFIG_DIR}/credentials"
+}
+
+# Append/replace username+password lines in credentials (keeps api_auth_secret).
+write_credentials_admin() {
+    local user="$1"
+    local pass="$2"
+    local secret tmp
+    secret=$(sudo grep -E '^api_auth_secret:' "${CONFIG_DIR}/credentials" 2>/dev/null | head -1 | sed 's/^api_auth_secret:[[:space:]]*//' || true)
+    tmp=$(mktemp)
+    {
+        if [ -n "${secret}" ]; then
+            printf 'api_auth_secret: %s\n' "${secret}"
+        fi
+        printf 'username: %s\n' "${user}"
+        printf 'password: %s\n' "${pass}"
+    } > "${tmp}"
+    sudo cp "${tmp}" "${CONFIG_DIR}/credentials"
+    rm -f "${tmp}"
+    sudo chmod 600 "${CONFIG_DIR}/credentials"
+}
+
 # Create bootstrap user via API
 create_bootstrap_user() {
-    BOOTSTRAP_PASS=$(openssl rand -base64 12 2>/dev/null | tr -d '/+=' | head -c 12)
+    # ≥16 chars after stripping base64 punctuation so we always clear the
+    # API's 8-character minimum even when many '/' '+' '=' are removed.
+    BOOTSTRAP_PASS=$(openssl rand -base64 32 2>/dev/null | tr -d '/+=\n' | head -c 16)
+    if [ ${#BOOTSTRAP_PASS} -lt 8 ]; then
+        BOOTSTRAP_PASS=$(head -c 32 /dev/urandom | base64 | tr -d '/+=\n' | head -c 16)
+    fi
 
-    local max_attempts=15
+    local max_attempts=30
     local attempt=0
 
     info "Waiting for server to start..."
@@ -763,33 +806,48 @@ create_bootstrap_user() {
         return
     fi
 
-    local bootstrap_needed=true
-    if sudo grep -q '^password:' "${CONFIG_DIR}/credentials" 2>/dev/null; then
-        info "Admin credentials already exist in ${CONFIG_DIR}/credentials, skipping bootstrap"
+    # Prefer existing on-disk admin password when present (reinstall).
+    local existing_pass
+    existing_pass=$(sudo grep -E '^password:' "${CONFIG_DIR}/credentials" 2>/dev/null | head -1 | sed 's/^password:[[:space:]]*//' || true)
+    if [ -n "${existing_pass}" ]; then
+        info "Admin credentials already exist in ${CONFIG_DIR}/credentials"
+        BOOTSTRAP_PASS="${existing_pass}"
+        BOOTSTRAP_USER=$(sudo grep -E '^username:' "${CONFIG_DIR}/credentials" 2>/dev/null | head -1 | sed 's/^username:[[:space:]]*//' || true)
+        BOOTSTRAP_USER="${BOOTSTRAP_USER:-admin}"
+        info "Dashboard login: user '${BOOTSTRAP_USER}' — sudo cat ${CONFIG_DIR}/credentials"
+        return
+    fi
+
+    local response http_code
+    response=$(curl -s -w '\n%{http_code}' -X POST http://127.0.0.1:8080/api/v1/auth/bootstrap \
+        -H "Content-Type: application/json" \
+        -d "{\"username\":\"${BOOTSTRAP_USER}\",\"password\":\"${BOOTSTRAP_PASS}\"}" 2>&1) || true
+    http_code=$(printf '%s\n' "${response}" | tail -n1)
+    response=$(printf '%s\n' "${response}" | sed '$d')
+
+    if echo "$response" | grep -q '"token"'; then
+        write_credentials_admin "${BOOTSTRAP_USER}" "${BOOTSTRAP_PASS}"
+        info "Bootstrap user created successfully"
+        info "Admin credentials saved to ${CONFIG_DIR}/credentials (root-only). Retrieve with: sudo cat ${CONFIG_DIR}/credentials"
+        return
+    fi
+
+    # users.json already has a real admin; credentials had no password (wiped
+    # by an older installer). Cannot recover the unknown password here.
+    if echo "$response" | grep -qi 'Old password required'; then
         BOOTSTRAP_PASS=""
-        bootstrap_needed=false
+        warn "An admin user already exists on this server, but ${CONFIG_DIR}/credentials has no password."
+        warn "Reset it from the server host (replace NEWPASS):"
+        warn "  curl -s -X POST http://127.0.0.1:8080/api/v1/auth/bootstrap -H 'Content-Type: application/json' \\"
+        warn "    -d '{\"username\":\"admin\",\"password\":\"NEWPASS\",\"old_password\":\"OLDPASS\"}'"
+        warn "If the old password is unknown, stop the service, remove ${DATA_DIR}/users.json, start again, then re-run bootstrap without old_password."
+        return
     fi
 
-    if [ "$bootstrap_needed" = true ]; then
-        local response
-        response=$(curl -s -X POST http://127.0.0.1:8080/api/v1/auth/bootstrap \
-            -H "Content-Type: application/json" \
-            -d "{\"username\":\"${BOOTSTRAP_USER}\",\"password\":\"${BOOTSTRAP_PASS}\"}" 2>&1)
-
-        if echo "$response" | grep -q "token"; then
-            info "Bootstrap user created successfully"
-            # Save the generated admin password to the root-only credentials file
-            # instead of printing it to stdout (V25).
-            printf 'username: %s\npassword: %s\n' "${BOOTSTRAP_USER}" "${BOOTSTRAP_PASS}" | sudo tee -a "${CONFIG_DIR}/credentials" >/dev/null
-            sudo chmod 600 "${CONFIG_DIR}/credentials"
-            info "Admin credentials saved to ${CONFIG_DIR}/credentials (root-only). Retrieve with: sudo cat ${CONFIG_DIR}/credentials"
-        else
-            BOOTSTRAP_PASS=""
-            warn "Bootstrap response: $response"
-            warn "The admin account was not created. If an admin already exists, sign in with its password;"
-            warn "otherwise create one on this host via POST http://127.0.0.1:8080/api/v1/auth/bootstrap"
-        fi
-    fi
+    BOOTSTRAP_PASS=""
+    warn "Bootstrap failed (HTTP ${http_code}): ${response}"
+    warn "Create the admin on this host with:"
+    warn "curl -s -X POST http://127.0.0.1:8080/api/v1/auth/bootstrap -H 'Content-Type: application/json' -d '{\"username\":\"admin\",\"password\":\"<strong-password>\"}'"
 }
 
 # Setup service (systemd)
@@ -1023,6 +1081,10 @@ main() {
     if [ -n "${BOOTSTRAP_PASS}" ]; then
         echo "Login: user '${BOOTSTRAP_USER}', password in ${CONFIG_DIR}/credentials"
         echo "  sudo cat ${CONFIG_DIR}/credentials"
+    elif sudo test -f "${CONFIG_DIR}/credentials"; then
+        echo "Credentials file: ${CONFIG_DIR}/credentials"
+        echo "  sudo cat ${CONFIG_DIR}/credentials"
+        echo "If there is no password line, bootstrap an admin from this host (see docs)."
     fi
     echo "DNS port: ${port}"
     echo ""

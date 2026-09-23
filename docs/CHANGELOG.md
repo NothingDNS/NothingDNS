@@ -5,6 +5,18 @@ All notable changes to NothingDNS are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.6] — 2026-09-23
+
+### Fixed
+
+- **Installer could leave no usable admin password**: rewriting
+  `/etc/nothingdns/credentials` with only `api_auth_secret` wiped a previous
+  admin password; a later bootstrap then failed with "Old password required"
+  when `users.json` already had an admin. Credentials now preserve
+  username/password across secret refresh, bootstrap passwords are longer
+  (≥16), responses are handled explicitly, and the finish summary always
+  points at the credentials file.
+
 ## [1.2.5] — 2026-09-23
 
 ### Fixed
