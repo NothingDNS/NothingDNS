@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"net"
 	"reflect"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -478,6 +480,118 @@ func (c *Cluster) GetNodesWithHealth() []Node {
 	return c.nodeList.GetAllWithHealth()
 }
 
+// TopologyMember is a cluster member for dashboard/API topology views.
+// Role is set in Raft mode (leader/follower/candidate); empty in SWIM mode.
+type TopologyMember struct {
+	Node
+	Role string // "leader", "follower", "candidate", or ""
+}
+
+// GetTopologyMembers returns membership for the cluster nodes API and dashboard.
+// In Raft mode this is self + configured peers (gossip is not started).
+// In SWIM mode this is the live gossip node list.
+func (c *Cluster) GetTopologyMembers() []TopologyMember {
+	if c.IsRaftMode() {
+		return c.raftTopologyMembers()
+	}
+	nodes := c.nodeList.GetAllWithHealth()
+	out := make([]TopologyMember, 0, len(nodes))
+	for _, n := range nodes {
+		out = append(out, TopologyMember{Node: n})
+	}
+	return out
+}
+
+func (c *Cluster) raftTopologyMembers() []TopologyMember {
+	leaderID := c.RaftLeaderID()
+	selfRole := "follower"
+	if c.raft.IsLeader() {
+		selfRole = "leader"
+	} else if stats := c.raft.Stats(); stats.State == "Candidate" {
+		selfRole = "candidate"
+	} else if leaderID != "" && leaderID == c.config.NodeID {
+		// Learned leader id equals self but we are not leading yet (transition).
+		selfRole = "candidate"
+	}
+
+	self := TopologyMember{
+		Node: Node{
+			ID:      c.config.NodeID,
+			Addr:    c.config.BindAddr,
+			Port:    c.config.GossipPort,
+			State:   NodeStateAlive,
+			Version: 1,
+			Meta: NodeMeta{
+				Region:   c.config.Region,
+				Zone:     c.config.Zone,
+				Weight:   c.config.Weight,
+				HTTPAddr: c.config.HTTPAddr,
+			},
+			Health: c.localHealth,
+		},
+		Role: selfRole,
+	}
+
+	peers := c.raft.Peers()
+	out := make([]TopologyMember, 0, 1+len(peers))
+	out = append(out, self)
+
+	isLeader := c.raft.IsLeader()
+	for _, p := range peers {
+		addr, port := splitHostPort(p.Addr, c.config.GossipPort)
+		state := NodeStateAlive
+		if isLeader && p.MatchIndex == 0 {
+			// Leader has never successfully replicated to this peer.
+			state = NodeStateSuspect
+		}
+		role := "follower"
+		if leaderID != "" && string(p.ID) == leaderID {
+			role = "leader"
+		}
+		out = append(out, TopologyMember{
+			Node: Node{
+				ID:    string(p.ID),
+				Addr:  addr,
+				Port:  port,
+				State: state,
+				Meta: NodeMeta{
+					Region: c.config.Region,
+					Zone:   c.config.Zone,
+					Weight: c.config.Weight,
+				},
+			},
+			Role: role,
+		})
+	}
+
+	// Stable order: leader first, then by id.
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Role == "leader" && out[j].Role != "leader" {
+			return true
+		}
+		if out[j].Role == "leader" && out[i].Role != "leader" {
+			return false
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
+}
+
+func splitHostPort(hostport string, defaultPort int) (string, int) {
+	if hostport == "" {
+		return "", defaultPort
+	}
+	host, portStr, err := net.SplitHostPort(hostport)
+	if err != nil {
+		return hostport, defaultPort
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port < 1 {
+		return host, defaultPort
+	}
+	return host, port
+}
+
 // BroadcastClusterMetrics broadcasts operational metrics to all cluster peers.
 // Call this periodically (e.g., every 30s) with the server's current metrics.
 func (c *Cluster) BroadcastClusterMetrics(queriesTotal, cacheHits, cacheMisses uint64, qps, latencyAvg, latencyP99 float64, uptime uint64) {
@@ -729,6 +843,18 @@ func (c *Cluster) Stats() Stats {
 	if c.consensus == ConsensusRaft {
 		stats.IsLeader = c.raft.IsLeader()
 		stats.RaftStats = c.raft.Stats()
+		// Gossip nodeList only holds self in Raft mode; surface configured
+		// membership so status/dashboard counts match the peer set.
+		members := c.raftTopologyMembers()
+		stats.NodeCount = len(members)
+		alive := 0
+		for _, m := range members {
+			if m.State == NodeStateAlive {
+				alive++
+			}
+		}
+		stats.AliveCount = alive
+		stats.IsHealthy = alive >= (stats.NodeCount/2)+1
 	} else {
 		stats.GossipStats = c.gossip.Stats()
 	}

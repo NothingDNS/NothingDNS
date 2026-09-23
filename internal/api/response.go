@@ -195,6 +195,7 @@ type NodeDetail struct {
 	Addr     string `json:"addr"`
 	Port     int    `json:"port"`
 	State    string `json:"state"`
+	Role     string `json:"role,omitempty"` // Raft: leader|follower|candidate; empty in SWIM
 	Region   string `json:"region"`
 	Zone     string `json:"zone"`
 	Weight   int    `json:"weight"`

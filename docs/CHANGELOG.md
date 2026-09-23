@@ -5,6 +5,32 @@ All notable changes to NothingDNS are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.4] — 2026-09-23
+
+Installer readiness for Raft clustering, a Raft-aware cluster topology in the
+dashboard, and clearer port-53 takeover during install on Ubuntu and similar hosts.
+
+### Added
+
+- **Raft topology in the dashboard and API**: `GET /api/v1/cluster/nodes` returns
+  configured Raft peers (not only the local gossip self-entry) with `role`
+  (`leader` / `follower` / `candidate`). The Cluster page draws a leader-centric
+  topology diagram and labels members. Status `node_count` / `alive_count` match
+  the peer set.
+- **Installer prepares cluster data dirs**: `install.sh` / `setup.sh` create
+  `/var/lib/nothingdns/cluster` owned by the `nothingdns` user (`0750`), and the
+  default config sets `cluster.data_dir` / `consensus_mode: raft` (still
+  `enabled: false`). Docker image includes `/data/cluster` for UID 1000.
+
+### Changed
+
+- **Port 53 conflict UX**: when another DNS process holds port 53, the installer
+  identifies process/pid/unit (e.g. Ubuntu `systemd-resolved`), offers to free
+  port 53 (stop/disable known DNS units; resolved stub-only), or install on
+  5353. If freeing fails, previous DNS is restored and install completes on
+  5353. Non-interactive installs still require `NOTHINGDNS_STOP_HOST_DNS=1` to
+  take over port 53.
+
 ## [1.2.3] — 2026-09-18
 
 ### Fixed

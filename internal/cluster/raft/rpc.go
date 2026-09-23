@@ -479,6 +479,17 @@ func (t *TCPTransport) SetPeerAddr(peerID NodeID, addr string) {
 	t.peerAddrs[peerID] = addr
 }
 
+// PeerAddrs returns a copy of the configured peer ID → RPC address map.
+func (t *TCPTransport) PeerAddrs() map[NodeID]string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	out := make(map[NodeID]string, len(t.peerAddrs))
+	for id, addr := range t.peerAddrs {
+		out[id] = addr
+	}
+	return out
+}
+
 // Stats contains transport statistics.
 type Stats struct {
 	BytesSent     atomic.Uint64

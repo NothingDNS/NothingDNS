@@ -718,6 +718,36 @@ type ClusterStats struct {
 	IsLeader     bool
 }
 
+// PeerReplication holds per-peer replication progress known to this node.
+// MatchIndex is only meaningful when this node is the leader (0 otherwise).
+type PeerReplication struct {
+	ID         NodeID
+	Addr       string
+	MatchIndex Index
+}
+
+// Peers returns configured Raft peers with optional match-index progress.
+func (ci *ClusterIntegration) Peers() []PeerReplication {
+	addrs := ci.transport.PeerAddrs()
+
+	ci.node.mu.Lock()
+	match := make(map[NodeID]Index, len(ci.node.matchIndex))
+	for id, idx := range ci.node.matchIndex {
+		match[id] = idx
+	}
+	ci.node.mu.Unlock()
+
+	out := make([]PeerReplication, 0, len(ci.peers))
+	for _, id := range ci.peers {
+		out = append(out, PeerReplication{
+			ID:         id,
+			Addr:       addrs[id],
+			MatchIndex: match[id],
+		})
+	}
+	return out
+}
+
 // ProposeAddRecord proposes adding a record to a zone.
 func (ci *ClusterIntegration) ProposeAddRecord(zone, name string, rrtype uint16, ttl uint32, rdata string) error {
 	cmd := ZoneCommand{

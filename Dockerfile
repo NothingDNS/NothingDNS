@@ -48,8 +48,8 @@ RUN VERS="${VERSION:-$(cat ./VERSION)}" && CGO_ENABLED=0 GOOS=linux GOARCH=${TAR
 # The scratch image has no shell or mkdir, so prepare the writable data
 # directory here. It must belong to the runtime user (UID 1000): a named
 # volume mounted on /data inherits this ownership, and the server writes its
-# zone database, IXFR journals and users.json there.
-RUN mkdir -p /rootfs/data /rootfs/etc/nothingdns
+# zone database, IXFR journals, users.json and Raft state (data/cluster) there.
+RUN mkdir -p /rootfs/data /rootfs/data/cluster /rootfs/etc/nothingdns
 
 # Final stage - minimal scratch image
 FROM scratch

@@ -61,6 +61,15 @@ metrics:
 storage:
   data_dir: /data
 
+# Clustering is off by default. /data/cluster is created in the image for UID 1000.
+cluster:
+  enabled: false
+  gossip_port: 7946
+  weight: 100
+  cache_sync: true
+  consensus_mode: raft
+  data_dir: /data/cluster
+
 # Recursion only for loopback and private networks (Docker bridge clients
 # included), so the container is not an open resolver. Every client still gets
 # answers from the server's own zones. Change it here or on the dashboard's

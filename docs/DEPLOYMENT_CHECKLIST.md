@@ -403,6 +403,10 @@ dnsperf -s localhost -d query.txt -c 100 -T 10
 
 ## Cluster Setup (Multi-Node)
 
+`install.sh` / `setup.sh` pre-create `/var/lib/nothingdns/cluster` owned by
+the `nothingdns` service user (mode `0750`) and set `cluster.data_dir` in the
+default config. You only need to enable clustering and set peers/keys.
+
 ### 1. First Node (Seed)
 
 ```yaml
@@ -411,10 +415,13 @@ cluster:
   node_id: "node-1"
   bind_addr: "0.0.0.0"
   gossip_port: 7946
-  consensus_mode: "swim"
+  consensus_mode: "raft"
+  data_dir: /var/lib/nothingdns/cluster
   encryption_key: "${NOTHINGDNS_CLUSTER_ENCRYPTION_KEY}"
   cache_sync: true
-  seed_nodes: []
+  peers:
+    - node_id: "node-2"
+      addr: "10.0.0.2:7946"
 ```
 
 ### 2. Additional Nodes
@@ -425,11 +432,13 @@ cluster:
   node_id: "node-2"
   bind_addr: "0.0.0.0"
   gossip_port: 7946
-  consensus_mode: "swim"
+  consensus_mode: "raft"
+  data_dir: /var/lib/nothingdns/cluster
   encryption_key: "${NOTHINGDNS_CLUSTER_ENCRYPTION_KEY}"
   cache_sync: true
-  seed_nodes:
-    - 172.28.0.10:7946
+  peers:
+    - node_id: "node-1"
+      addr: "10.0.0.1:7946"
 ```
 
 ### 3. Verify Cluster

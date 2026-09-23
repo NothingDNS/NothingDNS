@@ -100,9 +100,8 @@ verify_checksum() {
     info "Verified ${asset} (sha256 ${actual})"
 }
 
-# Check if port 53 is in use and find what's using it
-check_port_53() {
-    # Match port 53 exactly (not :5353 or :530).
+# Match port 53 exactly (not :5353 or :530). Fills PORT_53_USERS.
+collect_port_53_listeners() {
     if command -v ss &> /dev/null; then
         PORT_53_USERS=$(ss -tulpn 2>/dev/null | grep -E '[:.]53[[:space:]]' | grep -v nothingdns || true)
     elif command -v netstat &> /dev/null; then
@@ -110,15 +109,69 @@ check_port_53() {
     else
         PORT_53_USERS=""
     fi
+}
 
-    if [ -n "$PORT_53_USERS" ]; then
-        echo ""
-        warn "Port 53 is already in use!"
-        echo "$PORT_53_USERS"
-        echo ""
-        return 1
+# Quiet check: 0 = free, 1 = in use.
+check_port_53() {
+    collect_port_53_listeners
+    [ -z "$PORT_53_USERS" ]
+}
+
+# Resolve a PID to its systemd unit name (empty if unknown).
+unit_for_pid() {
+    local pid="$1"
+    [ -n "${pid}" ] && [ -r "/proc/${pid}/cgroup" ] || return 0
+    tr '\0' '\n' < "/proc/${pid}/cgroup" 2>/dev/null \
+        | grep -oE '[^/]+\.service' \
+        | grep -v '^user@' \
+        | tail -n1 || true
+}
+
+# Print a clear summary of who holds port 53 (Ubuntu resolved, bind, etc.).
+explain_port_53_conflict() {
+    collect_port_53_listeners
+    [ -n "$PORT_53_USERS" ] || return 0
+
+    echo ""
+    warn "Port 53 is already in use — NothingDNS needs it for standard DNS."
+    echo ""
+    echo "Listeners:"
+    echo "$PORT_53_USERS" | sed 's/^/  /'
+    echo ""
+    echo "Identified holders:"
+
+    local found=false
+    local line pid proc unit
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        # ss: users:(("systemd-resolve",pid=123,fd=14))
+        proc=$(echo "$line" | grep -oE 'users:\(\("[^"]+"' | head -1 | sed 's/users:((\"//;s/\"$//' || true)
+        pid=$(echo "$line" | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2 || true)
+        unit=""
+        if [ -n "$pid" ]; then
+            unit=$(unit_for_pid "$pid")
+        fi
+        if [ -z "$proc" ] && [ -n "$pid" ] && [ -r "/proc/${pid}/comm" ]; then
+            proc=$(tr -d '\0' < "/proc/${pid}/comm" 2>/dev/null || true)
+        fi
+        if [ -n "$proc" ] || [ -n "$unit" ] || [ -n "$pid" ]; then
+            found=true
+            printf '  - process=%s  pid=%s  unit=%s\n' \
+                "${proc:-unknown}" "${pid:-?}" "${unit:-unknown}"
+        fi
+    done <<< "$PORT_53_USERS"
+
+    if [ "$found" = false ]; then
+        echo "  (could not map PIDs — see listeners above)"
     fi
-    return 0
+
+    if echo "$PORT_53_USERS" | grep -qiE 'systemd-resolve|resolved'; then
+        echo ""
+        echo "Note (Ubuntu/Debian): systemd-resolved often owns 127.0.0.53:53."
+        echo "Taking port 53 will disable only its stub listener and keep host"
+        echo "DNS working via upstream resolvers — resolved itself stays running."
+    fi
+    echo ""
 }
 
 # Stop and remove existing NothingDNS installation
@@ -176,30 +229,72 @@ point_resolv_conf_upstream() {
 # disabled, and /etc/resolv.conf is pointed at the upstream servers it learned
 # (DHCP/netplan). Stopping resolved outright would leave /etc/resolv.conf
 # pointing at a dead 127.0.0.53 and break every lookup on the host.
-# Other resolvers (unbound, bind9, dnsmasq) are stopped and disabled; if the
-# host used them via 127.0.0.1, NothingDNS answers there once it starts.
+# Other resolvers are stopped and disabled so they do not reclaim port 53
+# after reboot; if the host used them via 127.0.0.1, NothingDNS answers there
+# once it starts.
 release_port_53() {
-    if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+    info "Freeing port 53 (stop conflicting DNS services + disable on boot)..."
+
+    # Ubuntu/Debian default: stub listener on 127.0.0.53:53
+    if systemctl list-unit-files systemd-resolved.service &>/dev/null \
+        && { systemctl is-active --quiet systemd-resolved 2>/dev/null \
+             || echo "${PORT_53_USERS}" | grep -qiE 'systemd-resolve|resolved'; }; then
         info "Disabling the systemd-resolved stub listener on 127.0.0.53:53..."
         sudo mkdir -p "$(dirname "${RESOLVED_DROPIN}")"
         printf '[Resolve]\nDNSStubListener=no\n' | sudo tee "${RESOLVED_DROPIN}" > /dev/null
         if [ -L /etc/resolv.conf ] || [ -f /etc/resolv.conf ]; then
-            sudo cp -P /etc/resolv.conf "${RESOLV_CONF_BACKUP}"
+            sudo cp -P /etc/resolv.conf "${RESOLV_CONF_BACKUP}" 2>/dev/null || true
         fi
-        sudo systemctl restart systemd-resolved
+        sudo systemctl restart systemd-resolved || true
         point_resolv_conf_upstream
         RESOLVED_CHANGED=true
     fi
 
     local svc
-    for svc in unbound bind9 named dnsmasq; do
-        if systemctl is-active --quiet "${svc}" 2>/dev/null; then
-            info "Stopping ${svc}..."
-            sudo systemctl stop "${svc}" || true
+    # Well-known DNS packages on Ubuntu and other distros.
+    for svc in unbound bind9 named dnsmasq pdns pdns-recursor \
+               knot knot-resolver coredns stubby systemd-resolved; do
+        # systemd-resolved: never stop/disable the unit — stub already handled.
+        if [ "${svc}" = "systemd-resolved" ]; then
+            continue
+        fi
+        if systemctl list-unit-files "${svc}.service" &>/dev/null \
+            && { systemctl is-active --quiet "${svc}" 2>/dev/null \
+                 || systemctl is-enabled --quiet "${svc}" 2>/dev/null; }; then
+            info "Stopping and disabling ${svc}.service..."
+            sudo systemctl stop "${svc}" 2>/dev/null || true
             sudo systemctl disable "${svc}" 2>/dev/null || true
             STOPPED_DNS_SERVICES+=("${svc}")
         fi
     done
+
+    # Any remaining listener: map PID → unit and stop DNS-like units.
+    collect_port_53_listeners
+    local line pid unit base
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        pid=$(echo "$line" | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2 || true)
+        [ -n "$pid" ] || continue
+        unit=$(unit_for_pid "$pid")
+        [ -n "$unit" ] || continue
+        base="${unit%.service}"
+        case "${base}" in
+            nothingdns|systemd-resolved) continue ;;
+        esac
+        case "${base}" in
+            *dns*|*bind*|*named*|*unbound*|*pdns*|*knot*|*coredns*|*stubby*|*resolve*)
+                info "Stopping and disabling ${unit} (holds port 53, pid ${pid})..."
+                sudo systemctl stop "${unit}" 2>/dev/null || true
+                sudo systemctl disable "${unit}" 2>/dev/null || true
+                STOPPED_DNS_SERVICES+=("${base}")
+                ;;
+            *)
+                warn "Port 53 still held by ${unit} (pid ${pid}); not auto-stopping unknown unit."
+                ;;
+        esac
+    done <<< "${PORT_53_USERS}"
+
+    sleep 1
 }
 
 # Earlier installers stopped systemd-resolved but left /etc/resolv.conf
@@ -371,6 +466,9 @@ download_dnsctl() {
 # hardcoding nobody:nogroup fails to start there.
 SERVICE_USER="nothingdns"
 DATA_DIR="/var/lib/nothingdns"
+# Raft WAL, HardState and snapshots (cluster.data_dir). Created empty so
+# enabling cluster later does not hit "permission denied" on first start.
+CLUSTER_DIR="${DATA_DIR}/cluster"
 LOG_DIR="/var/log/nothingdns"
 
 create_service_user() {
@@ -395,12 +493,19 @@ create_service_user() {
 }
 
 # Create directories with ownership the service account can use.
+# Includes CLUSTER_DIR so Raft can mkdir raft-wal/snapshots without a
+# manual chown when the operator later sets cluster.enabled: true.
 setup_dirs() {
-    sudo mkdir -p "${CONFIG_DIR}/tls" "${CONFIG_DIR}/zones" "${DATA_DIR}" "${LOG_DIR}"
+    sudo mkdir -p \
+        "${CONFIG_DIR}/tls" \
+        "${CONFIG_DIR}/zones" \
+        "${DATA_DIR}" \
+        "${CLUSTER_DIR}" \
+        "${LOG_DIR}"
     if id -u "${SERVICE_USER}" &> /dev/null; then
         sudo chown -R "${SERVICE_USER}:${SERVICE_USER}" "${DATA_DIR}" "${LOG_DIR}" "${CONFIG_DIR}/zones"
         sudo chown "root:${SERVICE_USER}" "${CONFIG_DIR}"
-        sudo chmod 0750 "${CONFIG_DIR}"
+        sudo chmod 0750 "${CONFIG_DIR}" "${DATA_DIR}" "${CLUSTER_DIR}" "${LOG_DIR}"
     fi
 }
 
@@ -567,11 +672,16 @@ allow_recursion:
 #     networks:
 #       - 198.51.100.0/24
 
+# Clustering is off by default. Directories under cluster.data_dir are
+# pre-created for the service user so enabling Raft later only needs
+# peers/encryption_key in this file (no manual mkdir/chown).
 cluster:
   enabled: false
   gossip_port: 7946
   weight: 100
   cache_sync: true
+  consensus_mode: raft
+  data_dir: /var/lib/nothingdns/cluster
 
 zones: []
 slave_zones: []
@@ -698,6 +808,7 @@ ProtectKernelTunables=true
 ProtectControlGroups=true
 PrivateTmp=true
 PrivateDevices=true
+# /var/lib/nothingdns covers storage + Raft cluster/ subdirectory.
 ReadWritePaths=/var/lib/nothingdns /var/log/nothingdns -/etc/nothingdns/zones
 
 # Logging
@@ -783,16 +894,21 @@ main() {
     check_existing_install
 
     if ! check_port_53; then
+        explain_port_53_conflict
         if is_interactive; then
-            echo ""
-            echo "Port 53 is in use by another service."
-            echo "  1) Stop existing DNS services (recommended)"
-            echo "  2) Use port 5353 instead"
-            echo "  3) Exit"
+            echo "Choose how to continue:"
+            echo "  1) Free port 53 — stop/disable the service(s) above and install on port 53"
+            echo "     (recommended for a primary DNS server; Ubuntu resolved stub is kept alive"
+            echo "      without binding :53 so host name resolution still works)"
+            echo "  2) Keep existing DNS — install NothingDNS on port 5353 instead"
+            echo "  3) Cancel installation"
             echo ""
             read -p "Select [1/2/3]: " -n 1 -r; echo
             case "$REPLY" in
-                1) TAKE_PORT_53=true ;;
+                1)
+                    TAKE_PORT_53=true
+                    info "Will free port 53 after binaries are downloaded and verified."
+                    ;;
                 2)
                     info "Using port 5353 instead of 53"
                     USE_PORT_5353=true
@@ -807,7 +923,7 @@ main() {
             # silently disable the host resolver. Use port 5353 instead.
             warn "Port 53 is in use and this is a non-interactive install."
             warn "Falling back to port 5353 to avoid disrupting host DNS."
-            warn "To take over port 53, re-run with NOTHINGDNS_STOP_HOST_DNS=1."
+            warn "To take over port 53, re-run interactively or with NOTHINGDNS_STOP_HOST_DNS=1."
             USE_PORT_5353=true
         fi
     fi
@@ -822,10 +938,14 @@ main() {
     if [ "${TAKE_PORT_53}" = true ]; then
         release_port_53
         if ! check_port_53; then
-            warn "Port 53 is still in use; falling back to port 5353."
+            warn "Port 53 is still in use after stopping known DNS services:"
+            explain_port_53_conflict
+            warn "Restoring previous DNS setup and completing install on port 5353 instead."
             restore_host_dns
             TAKE_PORT_53=false
             USE_PORT_5353=true
+        else
+            info "Port 53 is free — continuing install as the system DNS on port 53."
         fi
     fi
 

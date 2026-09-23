@@ -379,11 +379,24 @@ grep -i gossip /var/log/nothingdns/*.log
    **Solution**:
    ```yaml
    cluster:
-     encryption_key: "YOUR_32_BYTE_BASE64_ENCODED_KEY"
-   # Generate with: openssl rand -base64 32
+     encryption_key: "YOUR_64_HEX_CHAR_KEY_HERE"
+   # Generate with: openssl rand -hex 32
    ```
 
-2. **Gossip port blocked**:
+2. **Raft data directory permission denied**:
+   ```
+   Error: ... wal: mkdir: mkdir /var/lib/nothingdns/cluster/raft-wal: permission denied
+   ```
+   **Solution** (also done automatically by `install.sh` / `setup.sh`):
+   ```bash
+   sudo mkdir -p /var/lib/nothingdns/cluster
+   sudo chown -R nothingdns:nothingdns /var/lib/nothingdns
+   sudo chmod 750 /var/lib/nothingdns /var/lib/nothingdns/cluster
+   sudo systemctl restart nothingdns
+   ```
+   Re-running the installer refreshes these directories and ownership.
+
+3. **Gossip port blocked**:
    ```bash
    # Test connectivity
    nc -zv 172.28.0.10 7946
@@ -392,7 +405,7 @@ grep -i gossip /var/log/nothingdns/*.log
    sudo firewall-cmd --add-port=7946/tcp --add-port=7946/udp
    ```
 
-3. **Node IDs not unique**:
+4. **Node IDs not unique**:
    ```yaml
    # node-1
    cluster:
@@ -403,7 +416,7 @@ grep -i gossip /var/log/nothingdns/*.log
      node_id: "node-2"
    ```
 
-4. **Seed nodes not reachable**:
+5. **Seed nodes not reachable**:
    ```yaml
    cluster:
      seed_nodes:

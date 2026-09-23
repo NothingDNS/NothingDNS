@@ -15,16 +15,16 @@ function mockJsonResponse(data: unknown, status = 200) {
   );
 }
 
-const aliveNode = (id: string, addr: string, state = 'alive') => ({
-  id, addr, port: 7946, state, region: 'us-east', zone: 'primary',
+const aliveNode = (id: string, addr: string, state = 'alive', role?: string) => ({
+  id, addr, port: 7946, state, role, region: 'us-east', zone: 'primary',
   weight: id === 'node-1' ? 1 : 0, http_addr: `${addr}:8080`, version: 1,
 });
 
 const sampleNodes = {
   nodes: [
-    aliveNode('node-1', '10.0.0.1'),
-    aliveNode('node-2', '10.0.0.2'),
-    aliveNode('node-3', '10.0.0.3', 'dead'),
+    aliveNode('node-1', '10.0.0.1', 'alive', 'leader'),
+    aliveNode('node-2', '10.0.0.2', 'alive', 'follower'),
+    aliveNode('node-3', '10.0.0.3', 'dead', 'follower'),
   ],
 };
 
@@ -158,7 +158,10 @@ describe('ClusterPage', () => {
     render(<ClusterPage />);
 
     expect(await screen.findByText('Cluster Topology')).toBeInTheDocument();
-    expect(screen.getByText('10.0.0.1')).toBeInTheDocument();
+    expect(screen.getByLabelText('Cluster topology diagram')).toBeInTheDocument();
+    expect(screen.getAllByText('node-1').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('Leader').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('Follower').length).toBeGreaterThanOrEqual(1);
   });
 
   it('expands node details on click', async () => {

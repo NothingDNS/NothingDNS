@@ -508,7 +508,7 @@ Operator or admin:
 {
   "status": "running",
   "timestamp": "2026-09-16T17:07:00Z",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "cache": {"size": 0, "capacity": 10000, "hits": 0, "misses": 0, "hit_ratio": 0},
   "cluster": {"enabled": false}
 }
@@ -529,7 +529,7 @@ Role: operator. A short summary of selected settings.
 
 ```json
 {
-  "version": "1.2.3",
+  "version": "1.2.4",
   "listen_port": 5399,
   "log_level": "info",
   "dns64": {"enabled": false, "prefix": "64:ff9b::", "prefix_len": 96},
@@ -1366,14 +1366,20 @@ Role: operator.
 ```json
 {
   "nodes": [
-    {"id": "node-1", "addr": "10.0.0.10", "port": 7946, "state": "alive", "region": "eu-west", "zone": "a",
+    {"id": "node-1", "addr": "10.0.0.10", "port": 7946, "state": "alive", "role": "leader", "region": "eu-west", "zone": "a",
      "weight": 100, "http_addr": "10.0.0.10:8080", "version": 12, "health_score": 98,
      "queries_per_second": 120.5, "latency_ms": 2.1, "cpu_percent": 12.0, "memory_percent": 35.5,
-     "active_connections": 14}
+     "active_connections": 14},
+    {"id": "node-2", "addr": "10.0.0.11", "port": 7946, "state": "alive", "role": "follower", "region": "eu-west", "zone": "a",
+     "weight": 100, "http_addr": "10.0.0.11:8080", "version": 12, "health_score": 50,
+     "queries_per_second": 0, "latency_ms": 0, "cpu_percent": 0, "memory_percent": 0,
+     "active_connections": 0}
   ]
 }
 ```
 
+In Raft mode the list is self plus `cluster.peers` (gossip is not started).
+`role` is `leader`, `follower`, or `candidate`. In SWIM mode `role` is omitted.
 ### POST /api/v1/cluster/join
 
 Role: admin. Joins through a seed node. Gossip (SWIM) mode only; Raft

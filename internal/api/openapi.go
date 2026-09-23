@@ -12,7 +12,7 @@ const OpenAPISpec = `{
   "info": {
     "title": "NothingDNS API",
     "description": "REST API for NothingDNS server management. See docs/API_REFERENCE.md for the full guide. Every operation carries x-required-role (viewer < operator < admin). DNS transports (DoH, DoWS, ODoH) and the /ws dashboard stream are described in the guide.",
-    "version": "1.2.3",
+    "version": "1.2.4",
     "contact": {
       "name": "ECOSTACK TECHNOLOGY OÜ"
     },
@@ -803,6 +803,10 @@ const OpenAPISpec = `{
           },
           "state": {
             "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "description": "Raft role when consensus_mode is raft: leader, follower, or candidate"
           },
           "region": {
             "type": "string"

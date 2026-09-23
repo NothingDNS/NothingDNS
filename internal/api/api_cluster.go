@@ -94,7 +94,7 @@ func (s *Server) handleClusterNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	nodes := s.cluster.GetNodesWithHealth()
+	nodes := s.cluster.GetTopologyMembers()
 	resp := &ClusterNodesResponse{Nodes: make([]NodeDetail, 0, len(nodes))}
 	for _, node := range nodes {
 		resp.Nodes = append(resp.Nodes, NodeDetail{
@@ -102,6 +102,7 @@ func (s *Server) handleClusterNodes(w http.ResponseWriter, r *http.Request) {
 			Addr:              node.Addr,
 			Port:              node.Port,
 			State:             node.State.String(),
+			Role:              node.Role,
 			Region:            node.Meta.Region,
 			Zone:              node.Meta.Zone,
 			Weight:            node.Meta.Weight,
