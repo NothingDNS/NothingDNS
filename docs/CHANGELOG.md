@@ -5,6 +5,17 @@ All notable changes to NothingDNS are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.5] — 2026-09-23
+
+### Fixed
+
+- **`curl | bash` install fell back to 5353 on Ubuntu**: stdin is a pipe so the
+  installer treated the session as non-interactive and refused to free the
+  `systemd-resolved` stub. Prompts now use `/dev/tty` when available, and when
+  only the resolved stub (127.0.0.53/54) holds port 53 the installer frees it
+  automatically and continues on port 53. Other DNS packages still require a
+  TTY choice or `NOTHINGDNS_STOP_HOST_DNS=1`.
+
 ## [1.2.4] — 2026-09-23
 
 Installer readiness for Raft clustering, a Raft-aware cluster topology in the

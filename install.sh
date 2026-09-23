@@ -27,10 +27,9 @@ TAKE_PORT_53=false
 # in trusted/offline environments: NOTHINGDNS_SKIP_CHECKSUM=1.
 SKIP_CHECKSUM="${NOTHINGDNS_SKIP_CHECKSUM:-0}"
 CHECKSUMS_FILE=""
-# In non-interactive installs (e.g. curl | bash) we must NOT silently stop and
-# disable the host's resolver (systemd-resolved/unbound/bind9/dnsmasq) — that
-# can break system DNS. Default: fall back to port 5353. Set
-# NOTHINGDNS_STOP_HOST_DNS=1 to explicitly consent to taking over port 53.
+# In fully non-interactive installs with no TTY (e.g. cloud-init), taking over
+# a real DNS package (bind/unbound/dnsmasq) requires NOTHINGDNS_STOP_HOST_DNS=1.
+# The Ubuntu systemd-resolved stub alone is freed automatically (safe path).
 STOP_HOST_DNS="${NOTHINGDNS_STOP_HOST_DNS:-0}"
 TEMP_FILES=()
 cleanup() { rm -f "${TEMP_FILES[@]}"; }
@@ -46,9 +45,26 @@ info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
-# Check if stdin is a terminal
+# Promptable when stdin is a TTY, or when curl|bash still has /dev/tty
+# (operator is at a real terminal even though the script body arrives on a pipe).
 is_interactive() {
-    [ -t 0 ]
+    [ -t 0 ] && return 0
+    [ -c /dev/tty ] && [ -r /dev/tty ] && [ -w /dev/tty ] 2>/dev/null && return 0
+    return 1
+}
+
+# Single-key prompt. Uses /dev/tty when stdin is not a terminal so
+# `curl … | bash` can still ask the operator.
+read_reply() {
+    local prompt="$1"
+    if [ -t 0 ]; then
+        read -r -n 1 -p "${prompt}"
+        echo
+    else
+        printf '%s' "${prompt}" > /dev/tty
+        read -r -n 1 < /dev/tty
+        echo > /dev/tty
+    fi
 }
 
 # Compute the SHA-256 of a file using whichever tool is available.
@@ -111,11 +127,27 @@ collect_port_53_listeners() {
     fi
 }
 
+# True when every :53 listener is systemd-resolved on the loopback stub
+# addresses (127.0.0.53 / 127.0.0.54). Safe to free via DNSStubListener=no
+# without stopping a real authoritative/recursive DNS package.
+port_53_only_resolved_stub() {
+    collect_port_53_listeners
+    [ -n "${PORT_53_USERS}" ] || return 1
+    local line
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        echo "$line" | grep -qiE 'systemd-resolve|resolved' || return 1
+        echo "$line" | grep -qE '127\.0\.0\.(53|54)' || return 1
+    done <<< "${PORT_53_USERS}"
+    return 0
+}
+
 # Quiet check: 0 = free, 1 = in use.
 check_port_53() {
     collect_port_53_listeners
     [ -z "$PORT_53_USERS" ]
 }
+
 
 # Resolve a PID to its systemd unit name (empty if unknown).
 unit_for_pid() {
@@ -379,7 +411,7 @@ check_existing_install() {
                 echo "  2) Skip download (use existing)"
                 echo "  3) Exit"
                 echo ""
-                read -p "Select [2]: " -n 1 -r; echo
+                read_reply "Select [2]: "
                 case "$REPLY" in
                     1) info "Reinstalling..." ;;
                     3) info "Nothing to do. Exiting."; exit 0 ;;
@@ -397,7 +429,7 @@ check_existing_install() {
             echo "  3) Exit"
             echo ""
             if is_interactive; then
-                read -p "Select [1]: " -n 1 -r; echo
+                read_reply "Select [1]: "
                 case "$REPLY" in
                     2) info "Keeping current version."; SKIP_DOWNLOAD=true ;;
                     3) info "Exiting."; exit 0 ;;
@@ -550,7 +582,7 @@ create_config() {
     if [ -f "${CONFIG_FILE}" ]; then
         warn "Config already exists at ${CONFIG_FILE}"
         if is_interactive; then
-            read -p "Overwrite config? (y/N): " -n 1 -r; echo
+            read_reply "Overwrite config? (y/N): "
             if [[ ! $REPLY =~ ^[Yy]$ ]]; then
                 info "Keeping existing config"
                 if [ "$port" != "53" ]; then
@@ -871,7 +903,7 @@ main() {
         echo "  1) Binary (recommended for servers)"
         echo "  2) Docker (GHCR: ghcr.io/nothingdns/nothingdns)"
         echo ""
-        read -p "Select [1/2]: " -n 1 -r; echo
+        read_reply "Select [1/2]: "
         install_mode="$REPLY"
     else
         info "Running in non-interactive mode, selecting binary installation..."
@@ -903,27 +935,31 @@ main() {
             echo "  2) Keep existing DNS — install NothingDNS on port 5353 instead"
             echo "  3) Cancel installation"
             echo ""
-            read -p "Select [1/2/3]: " -n 1 -r; echo
-            case "$REPLY" in
-                1)
-                    TAKE_PORT_53=true
-                    info "Will free port 53 after binaries are downloaded and verified."
-                    ;;
+            read_reply "Select [1/2/3] (default 1): "
+            case "${REPLY:-1}" in
                 2)
                     info "Using port 5353 instead of 53"
                     USE_PORT_5353=true
                     ;;
-                *) error "Installation cancelled" ;;
+                3) error "Installation cancelled" ;;
+                *)
+                    TAKE_PORT_53=true
+                    info "Will free port 53 after binaries are downloaded and verified."
+                    ;;
             esac
         elif [ "${STOP_HOST_DNS}" = "1" ]; then
             info "NOTHINGDNS_STOP_HOST_DNS=1 — existing DNS services will release port 53 after the download is verified"
             TAKE_PORT_53=true
+        elif port_53_only_resolved_stub; then
+            # Ubuntu/Debian default: only the resolved stub holds :53 on
+            # 127.0.0.53/54. Freeing it via DNSStubListener=no is the planned
+            # primary-DNS install path and keeps host resolution working.
+            info "Only systemd-resolved stub listeners hold port 53 — freeing them for NothingDNS on port 53."
+            TAKE_PORT_53=true
         else
-            # Non-interactive (e.g. curl | bash) without explicit consent: never
-            # silently disable the host resolver. Use port 5353 instead.
-            warn "Port 53 is in use and this is a non-interactive install."
+            warn "Port 53 is in use by a non-stub DNS service and this install cannot prompt."
             warn "Falling back to port 5353 to avoid disrupting host DNS."
-            warn "To take over port 53, re-run interactively or with NOTHINGDNS_STOP_HOST_DNS=1."
+            warn "To take over port 53: re-run on a TTY, or set NOTHINGDNS_STOP_HOST_DNS=1."
             USE_PORT_5353=true
         fi
     fi
