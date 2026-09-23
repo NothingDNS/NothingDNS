@@ -744,8 +744,8 @@ write_credentials_secret() {
     existing_pass=$(sudo grep -E '^password:' "${CONFIG_DIR}/credentials" 2>/dev/null | head -1 | sed 's/^password:[[:space:]]*//' || true)
     {
         printf 'api_auth_secret: %s\n' "${secret}"
-        if [ -n "${existing_user}" ] && [ -n "${existing_pass}" ]; then
-            printf 'username: %s\n' "${existing_user}"
+        if [ -n "${existing_pass}" ]; then
+            printf 'username: %s\n' "${existing_user:-admin}"
             printf 'password: %s\n' "${existing_pass}"
         fi
     } > "${tmp}"
@@ -754,12 +754,15 @@ write_credentials_secret() {
     sudo chmod 600 "${CONFIG_DIR}/credentials"
 }
 
-# Append/replace username+password lines in credentials (keeps api_auth_secret).
+# Write full credentials file (secret + admin login).
 write_credentials_admin() {
     local user="$1"
     local pass="$2"
     local secret tmp
     secret=$(sudo grep -E '^api_auth_secret:' "${CONFIG_DIR}/credentials" 2>/dev/null | head -1 | sed 's/^api_auth_secret:[[:space:]]*//' || true)
+    if [ -z "${secret}" ] && [ -n "${AUTH_SECRET:-}" ]; then
+        secret="${AUTH_SECRET}"
+    fi
     tmp=$(mktemp)
     {
         if [ -n "${secret}" ]; then
@@ -773,81 +776,148 @@ write_credentials_admin() {
     sudo chmod 600 "${CONFIG_DIR}/credentials"
 }
 
-# Create bootstrap user via API
-create_bootstrap_user() {
-    # ≥16 chars after stripping base64 punctuation so we always clear the
-    # API's 8-character minimum even when many '/' '+' '=' are removed.
-    BOOTSTRAP_PASS=$(openssl rand -base64 32 2>/dev/null | tr -d '/+=\n' | head -c 16)
-    if [ ${#BOOTSTRAP_PASS} -lt 8 ]; then
-        BOOTSTRAP_PASS=$(head -c 32 /dev/urandom | base64 | tr -d '/+=\n' | head -c 16)
-    fi
+# Load username/password from credentials into BOOTSTRAP_*.
+load_credentials_admin() {
+    BOOTSTRAP_USER=$(sudo grep -E '^username:' "${CONFIG_DIR}/credentials" 2>/dev/null | head -1 | sed 's/^username:[[:space:]]*//' || true)
+    BOOTSTRAP_PASS=$(sudo grep -E '^password:' "${CONFIG_DIR}/credentials" 2>/dev/null | head -1 | sed 's/^password:[[:space:]]*//' || true)
+    BOOTSTRAP_USER="${BOOTSTRAP_USER:-admin}"
+}
 
-    local max_attempts=30
+wait_for_api() {
+    local max_attempts="${1:-30}"
     local attempt=0
-
-    info "Waiting for server to start..."
     while [ $attempt -lt $max_attempts ]; do
         if curl -s --max-time 2 http://127.0.0.1:8080/health > /dev/null 2>&1; then
-            break
+            return 0
         fi
         attempt=$((attempt + 1))
         sleep 1
     done
+    return 1
+}
 
-    if [ $attempt -eq $max_attempts ]; then
+# POST bootstrap; sets BOOTSTRAP_HTTP_BODY / BOOTSTRAP_HTTP_CODE.
+post_bootstrap() {
+    local user="$1"
+    local pass="$2"
+    local raw
+    raw=$(curl -s -w '\n%{http_code}' -X POST http://127.0.0.1:8080/api/v1/auth/bootstrap \
+        -H "Content-Type: application/json" \
+        -d "{\"username\":\"${user}\",\"password\":\"${pass}\"}" 2>&1) || true
+    BOOTSTRAP_HTTP_CODE=$(printf '%s\n' "${raw}" | tail -n1)
+    BOOTSTRAP_HTTP_BODY=$(printf '%s\n' "${raw}" | sed '$d')
+}
+
+# Clear runtime users so localhost bootstrap can create a fresh admin.
+reset_runtime_users() {
+    info "Resetting runtime users so a new admin can be bootstrapped..."
+    if command -v systemctl &> /dev/null; then
+        sudo systemctl stop nothingdns 2>/dev/null || true
+    fi
+    sudo rm -f "${DATA_DIR}/users.json"
+    if command -v systemctl &> /dev/null; then
+        sudo systemctl start nothingdns 2>/dev/null || true
+    else
+        sudo "${INSTALL_DIR}/${BINARY_NAME}" -config "${CONFIG_FILE}" &
+    fi
+    wait_for_api 30 || return 1
+    return 0
+}
+
+bootstrap_succeeded() {
+    [ "${BOOTSTRAP_HTTP_CODE}" = "200" ] && echo "${BOOTSTRAP_HTTP_BODY}" | grep -qE '"token"[[:space:]]*:'
+}
+
+# Create bootstrap user via API and always persist username+password.
+create_bootstrap_user() {
+    BOOTSTRAP_USER="admin"
+    BOOTSTRAP_PASS=$(openssl rand -base64 32 2>/dev/null | tr -d '/+=\n' | head -c 16)
+    if [ ${#BOOTSTRAP_PASS} -lt 12 ]; then
+        BOOTSTRAP_PASS=$(head -c 48 /dev/urandom | base64 | tr -d '/+=\n' | head -c 16)
+    fi
+
+    info "Waiting for server to start..."
+    if ! wait_for_api 45; then
         BOOTSTRAP_PASS=""
         warn "Server did not start in time, skipping bootstrap user creation"
         if command -v systemctl &> /dev/null; then
             warn "Recent service log:"
             sudo journalctl -u nothingdns -n 20 --no-pager 2>/dev/null || true
         fi
-        warn "Once the server runs, create the admin account on this host with:"
-        warn "curl -X POST http://127.0.0.1:8080/api/v1/auth/bootstrap -H 'Content-Type: application/json' -d '{\"username\":\"admin\",\"password\":\"<your-password>\"}'"
-        return
-    fi
-
-    # Prefer existing on-disk admin password when present (reinstall).
-    local existing_pass
-    existing_pass=$(sudo grep -E '^password:' "${CONFIG_DIR}/credentials" 2>/dev/null | head -1 | sed 's/^password:[[:space:]]*//' || true)
-    if [ -n "${existing_pass}" ]; then
-        info "Admin credentials already exist in ${CONFIG_DIR}/credentials"
-        BOOTSTRAP_PASS="${existing_pass}"
-        BOOTSTRAP_USER=$(sudo grep -E '^username:' "${CONFIG_DIR}/credentials" 2>/dev/null | head -1 | sed 's/^username:[[:space:]]*//' || true)
-        BOOTSTRAP_USER="${BOOTSTRAP_USER:-admin}"
-        info "Dashboard login: user '${BOOTSTRAP_USER}' — sudo cat ${CONFIG_DIR}/credentials"
-        return
-    fi
-
-    local response http_code
-    response=$(curl -s -w '\n%{http_code}' -X POST http://127.0.0.1:8080/api/v1/auth/bootstrap \
-        -H "Content-Type: application/json" \
-        -d "{\"username\":\"${BOOTSTRAP_USER}\",\"password\":\"${BOOTSTRAP_PASS}\"}" 2>&1) || true
-    http_code=$(printf '%s\n' "${response}" | tail -n1)
-    response=$(printf '%s\n' "${response}" | sed '$d')
-
-    if echo "$response" | grep -q '"token"'; then
-        write_credentials_admin "${BOOTSTRAP_USER}" "${BOOTSTRAP_PASS}"
-        info "Bootstrap user created successfully"
-        info "Admin credentials saved to ${CONFIG_DIR}/credentials (root-only). Retrieve with: sudo cat ${CONFIG_DIR}/credentials"
-        return
-    fi
-
-    # users.json already has a real admin; credentials had no password (wiped
-    # by an older installer). Cannot recover the unknown password here.
-    if echo "$response" | grep -qi 'Old password required'; then
-        BOOTSTRAP_PASS=""
-        warn "An admin user already exists on this server, but ${CONFIG_DIR}/credentials has no password."
-        warn "Reset it from the server host (replace NEWPASS):"
+        warn "Once the server runs, create the admin on this host:"
         warn "  curl -s -X POST http://127.0.0.1:8080/api/v1/auth/bootstrap -H 'Content-Type: application/json' \\"
-        warn "    -d '{\"username\":\"admin\",\"password\":\"NEWPASS\",\"old_password\":\"OLDPASS\"}'"
-        warn "If the old password is unknown, stop the service, remove ${DATA_DIR}/users.json, start again, then re-run bootstrap without old_password."
+        warn "    -d '{\"username\":\"admin\",\"password\":\"<strong-password>\"}'"
         return
     fi
 
-    BOOTSTRAP_PASS=""
-    warn "Bootstrap failed (HTTP ${http_code}): ${response}"
-    warn "Create the admin on this host with:"
-    warn "curl -s -X POST http://127.0.0.1:8080/api/v1/auth/bootstrap -H 'Content-Type: application/json' -d '{\"username\":\"admin\",\"password\":\"<strong-password>\"}'"
+    # Reinstall with a complete credentials file — keep it (and ensure username line).
+    local existing_pass existing_user
+    existing_pass=$(sudo grep -E '^password:' "${CONFIG_DIR}/credentials" 2>/dev/null | head -1 | sed 's/^password:[[:space:]]*//' || true)
+    existing_user=$(sudo grep -E '^username:' "${CONFIG_DIR}/credentials" 2>/dev/null | head -1 | sed 's/^username:[[:space:]]*//' || true)
+    if [ -n "${existing_pass}" ]; then
+        BOOTSTRAP_USER="${existing_user:-admin}"
+        BOOTSTRAP_PASS="${existing_pass}"
+        write_credentials_admin "${BOOTSTRAP_USER}" "${BOOTSTRAP_PASS}"
+        info "Using existing admin credentials in ${CONFIG_DIR}/credentials"
+        return
+    fi
+
+    # Persist the intended login before the API call so a crash mid-bootstrap
+    # still leaves username+password on disk for the finish banner / operator.
+    write_credentials_admin "${BOOTSTRAP_USER}" "${BOOTSTRAP_PASS}"
+
+    local attempt=0
+    local max_attempts=5
+    while [ $attempt -lt $max_attempts ]; do
+        post_bootstrap "${BOOTSTRAP_USER}" "${BOOTSTRAP_PASS}"
+        if bootstrap_succeeded; then
+            info "Bootstrap user created successfully"
+            return
+        fi
+        attempt=$((attempt + 1))
+        # Auth store / HTTP may still be coming up right after health is OK.
+        if [ "${BOOTSTRAP_HTTP_CODE}" = "000" ] || [ "${BOOTSTRAP_HTTP_CODE}" = "503" ] || [ -z "${BOOTSTRAP_HTTP_CODE}" ]; then
+            sleep 2
+            continue
+        fi
+        break
+    done
+
+    # Stale users.json / wiped credentials: reclaim and retry once.
+    if echo "${BOOTSTRAP_HTTP_BODY}" | grep -qiE 'Old password required|already exists|Conflict|Invalid old password'; then
+        warn "Bootstrap blocked (${BOOTSTRAP_HTTP_CODE}): ${BOOTSTRAP_HTTP_BODY}"
+        if reset_runtime_users; then
+            post_bootstrap "${BOOTSTRAP_USER}" "${BOOTSTRAP_PASS}"
+            if bootstrap_succeeded; then
+                write_credentials_admin "${BOOTSTRAP_USER}" "${BOOTSTRAP_PASS}"
+                info "Bootstrap user created successfully after reset"
+                return
+            fi
+        fi
+    fi
+
+    # Leave username+password on disk (written above) so the finish banner can
+    # still show them; operator may need to reclaim users.json manually.
+    warn "Bootstrap failed (HTTP ${BOOTSTRAP_HTTP_CODE}): ${BOOTSTRAP_HTTP_BODY}"
+    warn "Login values are in ${CONFIG_DIR}/credentials — if login fails, stop the service,"
+    warn "remove ${DATA_DIR}/users.json, start again, then:"
+    warn "  curl -s -X POST http://127.0.0.1:8080/api/v1/auth/bootstrap -H 'Content-Type: application/json' \\"
+    warn "    -d '{\"username\":\"admin\",\"password\":\"<password-from-credentials>\"}'"
+}
+
+print_login_summary() {
+    load_credentials_admin
+    echo ""
+    if [ -n "${BOOTSTRAP_PASS}" ]; then
+        echo "Dashboard login:"
+        echo "  URL:      http://<this-host>:8080"
+        echo "  Username: ${BOOTSTRAP_USER}"
+        echo "  Password: ${BOOTSTRAP_PASS}"
+        echo "  Saved in: ${CONFIG_DIR}/credentials  (sudo cat ${CONFIG_DIR}/credentials)"
+    else
+        echo "Dashboard: http://<this-host>:8080"
+        echo "Admin login was not written. Check ${CONFIG_DIR}/credentials or bootstrap manually."
+    fi
 }
 
 # Setup service (systemd)
@@ -1075,17 +1145,8 @@ main() {
     echo "======================================"
     echo -e "${GREEN}  Installation Complete!${NC}"
     echo "======================================"
+    print_login_summary
     echo ""
-    echo "Dashboard: http://<this-host>:8080"
-    echo ""
-    if [ -n "${BOOTSTRAP_PASS}" ]; then
-        echo "Login: user '${BOOTSTRAP_USER}', password in ${CONFIG_DIR}/credentials"
-        echo "  sudo cat ${CONFIG_DIR}/credentials"
-    elif sudo test -f "${CONFIG_DIR}/credentials"; then
-        echo "Credentials file: ${CONFIG_DIR}/credentials"
-        echo "  sudo cat ${CONFIG_DIR}/credentials"
-        echo "If there is no password line, bootstrap an admin from this host (see docs)."
-    fi
     echo "DNS port: ${port}"
     echo ""
     echo "Edit config: sudo nano ${CONFIG_FILE}"
