@@ -284,26 +284,47 @@ function TopologyDiagram({
   onSelect: (id: string) => void;
 }) {
   const layout = useMemo(() => {
-    const width = 640;
-    const height = 360;
+    // Leave room for node labels (id + role + addr) so they are never clipped.
+    const labelStack = 52;
+    const padX = 88;
+    const padY = 28;
+    const width = 720;
+    const height = 440;
     const cx = width / 2;
     const cy = height / 2;
     const leader = nodes.find(n => n.id === leaderId) || nodes.find(n => n.role === 'leader') || nodes[0];
     const followers = nodes.filter(n => n.id !== leader?.id);
-    const radius = followers.length <= 1 ? 130 : Math.min(150, 90 + followers.length * 12);
+    const leaderR = 34;
+    const followerR = 26;
 
-    const positions = new Map<string, { x: number; y: number }>();
-    if (leader) positions.set(leader.id, { x: cx, y: cy });
+    // Max orbit so circle + outward labels stay inside the viewBox.
+    const maxOrbit = Math.min(
+      cx - padX - followerR,
+      cy - padY - followerR - labelStack,
+    );
+    const radius = followers.length === 0
+      ? 0
+      : Math.min(maxOrbit, followers.length <= 2 ? 150 : Math.min(170, 100 + followers.length * 10));
 
+    const positions = new Map<string, { x: number; y: number; labelBelow: boolean }>();
+    if (leader) {
+      positions.set(leader.id, { x: cx, y: cy, labelBelow: true });
+    }
+
+    // Two followers: place left/right so labels don't collide with the
+    // leader's downward text stack (top/bottom packing was clipping the
+    // bottom node under overflow:hidden).
+    const startAngle = followers.length === 2 ? 0 : -Math.PI / 2;
     followers.forEach((node, i) => {
-      const angle = (-Math.PI / 2) + (2 * Math.PI * i) / Math.max(followers.length, 1);
-      positions.set(node.id, {
-        x: cx + Math.cos(angle) * radius,
-        y: cy + Math.sin(angle) * radius,
-      });
+      const angle = startAngle + (2 * Math.PI * i) / Math.max(followers.length, 1);
+      const x = cx + Math.cos(angle) * radius;
+      const y = cy + Math.sin(angle) * radius;
+      // Prefer labels on the outward side of the orbit.
+      const labelBelow = y <= cy + 8;
+      positions.set(node.id, { x, y, labelBelow });
     });
 
-    return { width, height, cx, cy, leader, followers, positions };
+    return { width, height, leader, followers, positions, leaderR, followerR };
   }, [nodes, leaderId]);
 
   const leaderPos = layout.leader ? layout.positions.get(layout.leader.id) : null;
@@ -312,7 +333,7 @@ function TopologyDiagram({
     <div className="relative overflow-hidden rounded-xl border border-border bg-[radial-gradient(ellipse_at_center,rgba(59,92,228,0.08),transparent_65%)]">
       <svg
         viewBox={`0 0 ${layout.width} ${layout.height}`}
-        className="w-full h-auto max-h-[420px]"
+        className="w-full h-auto"
         role="img"
         aria-label="Cluster topology diagram"
       >
@@ -349,7 +370,7 @@ function TopologyDiagram({
           const isLeader = node.id === layout.leader?.id || node.role === 'leader';
           const isLocal = node.id === localId;
           const selected = node.id === selectedId;
-          const r = isLeader ? 34 : 26;
+          const r = isLeader ? layout.leaderR : layout.followerR;
           const fill =
             node.state === 'alive' ? (isLeader ? 'rgba(59,92,228,0.18)' : 'rgba(34,197,94,0.14)') :
             node.state === 'dead' ? 'rgba(239,68,68,0.16)' :
@@ -360,6 +381,10 @@ function TopologyDiagram({
             node.state === 'alive' ? 'var(--color-success)' :
             node.state === 'dead' ? 'var(--color-destructive)' :
             'var(--color-warning)';
+          const dir = pos.labelBelow ? 1 : -1;
+          const idY = dir * (r + 16);
+          const roleY = dir * (r + 32);
+          const addrY = dir * (r + 46);
 
           return (
             <g
@@ -384,7 +409,7 @@ function TopologyDiagram({
                 {isLeader ? '★' : '●'}
               </text>
               <text
-                y={r + 16}
+                y={idY}
                 textAnchor="middle"
                 className="fill-foreground"
                 style={{ fontSize: 12, fontWeight: 600 }}
@@ -392,7 +417,7 @@ function TopologyDiagram({
                 {node.id}
               </text>
               <text
-                y={r + 32}
+                y={roleY}
                 textAnchor="middle"
                 className="fill-muted-foreground"
                 style={{ fontSize: 10 }}
@@ -401,7 +426,7 @@ function TopologyDiagram({
                 {isLocal ? ' · you' : ''}
               </text>
               <text
-                y={r + 46}
+                y={addrY}
                 textAnchor="middle"
                 className="fill-muted-foreground"
                 style={{ fontSize: 10 }}

@@ -158,8 +158,14 @@ describe('ClusterPage', () => {
     render(<ClusterPage />);
 
     expect(await screen.findByText('Cluster Topology')).toBeInTheDocument();
-    expect(screen.getByLabelText('Cluster topology diagram')).toBeInTheDocument();
-    expect(screen.getAllByText('node-1').length).toBeGreaterThanOrEqual(1);
+    const diagram = screen.getByLabelText('Cluster topology diagram');
+    expect(diagram).toBeInTheDocument();
+    expect(diagram.getAttribute('viewBox')).toBe('0 0 720 440');
+    // All peers (including a bottom-orbit follower) must be present in the SVG.
+    expect(diagram.textContent).toContain('node-1');
+    expect(diagram.textContent).toContain('node-2');
+    expect(diagram.textContent).toContain('node-3');
+    expect(diagram.textContent).toContain('10.0.0.3');
     expect(screen.getAllByText('Leader').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('Follower').length).toBeGreaterThanOrEqual(1);
   });

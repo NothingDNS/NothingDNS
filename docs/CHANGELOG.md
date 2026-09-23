@@ -5,6 +5,15 @@ All notable changes to NothingDNS are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.9] — 2026-09-23
+
+### Fixed
+
+- **Cluster Topology diagram clipped nodes**: with 2+ followers the bottom
+  node (and its labels) were cut off by `overflow:hidden`. Followers with
+  two peers now sit left/right of the leader, the SVG viewBox is padded for
+  labels, and bottom-half nodes place text above the circle.
+
 ## [1.2.8] — 2026-09-23
 
 ### Fixed
