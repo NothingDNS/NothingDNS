@@ -77,7 +77,7 @@ jobs:
         run: ./scripts/validate-shipped-configs.sh
 
       - name: Lint install scripts
-        run: shellcheck -S warning install.sh setup.sh update.sh config.sh uninstall.sh scripts/validate-shipped-configs.sh
+        run: shellcheck -S warning install.sh setup.sh update.sh config.sh uninstall.sh scripts/validate-shipped-configs.sh scripts/test-install-credentials.sh
 
   binaries:
     runs-on: ubuntu-latest

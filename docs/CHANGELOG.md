@@ -5,6 +5,19 @@ All notable changes to NothingDNS are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.8] — 2026-09-23
+
+### Fixed
+
+- Same installer credentials fix as 1.2.7, **locally verified** before release:
+  fresh bootstrap, secret refresh, reinstall keep, and stale-`users.json`
+  reclaim all write `username`/`password` and print them at finish.
+
+### Added
+
+- `scripts/test-install-credentials.sh` — local no-sudo integration harness for
+  the installer credential/bootstrap flow (used to gate this release).
+
 ## [1.2.7] — 2026-09-23
 
 ### Fixed
