@@ -284,9 +284,11 @@ func (s *servers) tcpServers() []*server.TCPServer {
 // additional bind addresses were silently ignored.
 //
 // A bare IPv4/IPv6 unspecified host (0.0.0.0 / ::) is expanded to the
-// host's current interface addresses for that family (plus loopback). A
-// single wildcard UDP socket cannot sticky-source replies on secondary
-// /32 aliases on all kernels/providers; per-address listeners can.
+// host's current interface addresses for that family (plus loopback),
+// and the original wildcard is kept as a catch-all so provider/floating
+// IPs that are not yet (or never) listed on an interface still accept
+// traffic. Concrete listeners get correct UDP source IPs; the wildcard
+// relies on IP_PKTINFO sticky-source.
 //
 // If expansion finds no addresses (unusual), the original wildcard is kept.
 func dnsListenAddrs(explicit, bind []string, port int) []string {
@@ -304,38 +306,24 @@ func dnsListenAddrs(explicit, bind []string, port int) []string {
 	}
 	addrs = expandUnspecifiedListenAddrs(addrs)
 
-	wildcardPorts := make(map[string]bool)
-	for _, a := range addrs {
-		if host, p, err := net.SplitHostPort(a); err == nil && isWildcardHost(host) {
-			wildcardPorts[p] = true
-		}
-	}
-
+	// Deduplicate only. Do not fold concrete addresses behind a wildcard:
+	// per-IP listeners are required for sticky UDP source on secondary
+	// addresses, and the wildcard is a catch-all for unlisted IPs.
 	out := make([]string, 0, len(addrs))
 	seen := make(map[string]bool)
-	wildcardUsed := make(map[string]bool)
 	for _, a := range addrs {
-		host, p, err := net.SplitHostPort(a)
-		key := a
-		if err == nil && wildcardPorts[p] {
-			if !isWildcardHost(host) || wildcardUsed[p] {
-				continue
-			}
-			wildcardUsed[p] = true
-			key = "*:" + p
-		}
-		if seen[key] {
+		if seen[a] {
 			continue
 		}
-		seen[key] = true
+		seen[a] = true
 		out = append(out, a)
 	}
 	return out
 }
 
-// expandUnspecifiedListenAddrs replaces 0.0.0.0 / :: listen entries with the
-// host's concrete interface addresses so UDP replies use the correct source
-// IP on multi-homed hosts. Loopback is always included for local tooling.
+// expandUnspecifiedListenAddrs adds the host's concrete interface addresses
+// for each 0.0.0.0 / :: listen entry and keeps the original wildcard so
+// packets to unlisted host IPs still arrive. Loopback is always included.
 func expandUnspecifiedListenAddrs(addrs []string) []string {
 	out := make([]string, 0, len(addrs)+8)
 	for _, a := range addrs {
@@ -351,14 +339,11 @@ func expandUnspecifiedListenAddrs(addrs []string) []string {
 		if host == "" {
 			want4, want6 = true, true
 		}
-		expanded := localListenIPs(want4, want6)
-		if len(expanded) == 0 {
-			out = append(out, a)
-			continue
-		}
-		for _, lip := range expanded {
+		for _, lip := range localListenIPs(want4, want6) {
 			out = append(out, net.JoinHostPort(lip, port))
 		}
+		// Always keep the wildcard catch-all (even when expansion is empty).
+		out = append(out, a)
 	}
 	return out
 }

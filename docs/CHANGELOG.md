@@ -5,6 +5,15 @@ All notable changes to NothingDNS are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.14] — 2026-09-25
+
+### Fixed
+
+- **Secondary IP went dark after 1.2.13 when not listed on an interface**:
+  expanding `0.0.0.0`/`::` no longer drops the wildcard catch-all. Concrete
+  interface IPs still get dedicated listeners for sticky UDP source; unlisted
+  / floating provider IPs keep working via the wildcard + `IP_PKTINFO`.
+
 ## [1.2.13] — 2026-09-25
 
 ### Fixed

@@ -875,38 +875,44 @@ func TestDNSListenAddrs(t *testing.T) {
 
 	t.Run("ipv4 unspecified expands to concrete locals", func(t *testing.T) {
 		got := dnsListenAddrs(nil, []string{"0.0.0.0"}, 5354)
-		foundLoopback := false
+		foundLoopback, foundWildcard := false, false
 		for _, a := range got {
 			host, _, err := net.SplitHostPort(a)
 			if err != nil {
 				t.Fatalf("bad addr %q: %v", a, err)
 			}
-			if isWildcardHost(host) {
-				t.Fatalf("wildcard %q survived expansion: %v", a, got)
-			}
 			if host == "127.0.0.1" {
 				foundLoopback = true
+			}
+			if isWildcardHost(host) {
+				foundWildcard = true
 			}
 		}
 		if !foundLoopback {
 			t.Fatalf("expanded addrs missing 127.0.0.1: %v", got)
 		}
+		if !foundWildcard {
+			t.Fatalf("wildcard catch-all missing: %v", got)
+		}
 	})
 
 	t.Run("mixed specific and v6 unspecified keeps specific", func(t *testing.T) {
 		got := dnsListenAddrs(nil, []string{"127.0.0.1", "::"}, 5354)
-		found4, found6 := false, false
+		found4, found6, foundWild := false, false, false
 		for _, a := range got {
 			host, _, _ := net.SplitHostPort(a)
 			if host == "127.0.0.1" {
 				found4 = true
 			}
-			if ip := net.ParseIP(host); ip != nil && ip.To4() == nil {
+			if isWildcardHost(host) {
+				foundWild = true
+			}
+			if ip := net.ParseIP(host); ip != nil && ip.To4() == nil && !ip.IsUnspecified() {
 				found6 = true
 			}
 		}
-		if !found4 || !found6 {
-			t.Fatalf("want both v4 specific and expanded v6, got %v", got)
+		if !found4 || !found6 || !foundWild {
+			t.Fatalf("want v4 specific, expanded v6, and wildcard catch-all; got %v", got)
 		}
 	})
 }
