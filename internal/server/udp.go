@@ -207,7 +207,7 @@ func (s *UDPServer) Listen() error {
 		return fmt.Errorf("listen udp: %w", err)
 	}
 
-	s.conn = conn
+	s.conn = wrapUDPPacketInfo(conn)
 	return nil
 }
 
@@ -280,6 +280,7 @@ func (s *UDPServer) pruner() {
 type udpRequest struct {
 	data []byte
 	addr *net.UDPAddr
+	dst  net.IP // local destination IP (secondary alias); nil if unknown
 	n    int
 }
 
@@ -301,8 +302,18 @@ func (s *UDPServer) reader(requestChan chan<- *udpRequest, readerWg *sync.WaitGr
 		}
 		buf := *bufPtr
 
-		// Read packet
-		n, addr, err := s.conn.ReadFromUDP(buf)
+		// Read packet (prefer destination IP so multi-homed replies stick).
+		var (
+			n    int
+			addr *net.UDPAddr
+			dst  net.IP
+			err  error
+		)
+		if pic, ok := s.conn.(udpPacketInfoConn); ok {
+			n, addr, dst, err = pic.ReadFromUDPWithDst(buf)
+		} else {
+			n, addr, err = s.conn.ReadFromUDP(buf)
+		}
 		if err != nil {
 			s.bufferPool.Put(bufPtr)
 
@@ -324,7 +335,7 @@ func (s *UDPServer) reader(requestChan chan<- *udpRequest, readerWg *sync.WaitGr
 
 		// Send to workers (non-blocking with ctx check)
 		select {
-		case requestChan <- &udpRequest{data: buf, addr: addr, n: n}:
+		case requestChan <- &udpRequest{data: buf, addr: addr, dst: dst, n: n}:
 		case <-s.ctx.Done():
 			s.bufferPool.Put(bufPtr)
 			return
@@ -377,6 +388,7 @@ func (s *UDPServer) handleRequest(req *udpRequest) {
 	rw := &udpResponseWriter{
 		server:  s,
 		client:  client,
+		dst:     req.dst,
 		maxSize: maxSize,
 	}
 
@@ -388,6 +400,7 @@ func (s *UDPServer) handleRequest(req *udpRequest) {
 type udpResponseWriter struct {
 	server  *UDPServer
 	client  *ClientInfo
+	dst     net.IP // local IP the query arrived on; used as UDP reply source
 	maxSize int
 	written bool
 }
@@ -473,16 +486,25 @@ func (w *udpResponseWriter) Write(msg *protocol.Message) (int, error) {
 		}
 	}
 
-	// Send response
+	// Send response. Prefer the inbound local destination as the source IP
+	// so secondary / alias addresses on a wildcard bind answer correctly.
 	addr, ok := w.client.Addr.(*net.UDPAddr)
 	if !ok {
 		return 0, fmt.Errorf("udp: expected *net.UDPAddr, got %T", w.client.Addr)
 	}
-	sent, err := w.server.conn.WriteToUDP(packBuf[:n], addr)
-	if err == nil {
+	var (
+		sent    int
+		writeErr error
+	)
+	if pic, ok := w.server.conn.(udpPacketInfoConn); ok && len(w.dst) > 0 {
+		sent, writeErr = pic.WriteToUDPWithSrc(packBuf[:n], addr, w.dst)
+	} else {
+		sent, writeErr = w.server.conn.WriteToUDP(packBuf[:n], addr)
+	}
+	if writeErr == nil {
 		atomic.AddUint64(&w.server.packetsSent, 1)
 	}
-	return sent, err
+	return sent, writeErr
 }
 
 // truncateRRSet reduces the answer set to fit within size limit.
