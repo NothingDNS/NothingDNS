@@ -301,9 +301,12 @@ func (s *AXFRServer) generateAXFRRecords(z *zone.Zone) ([]*protocol.ResourceReco
 	// requires SOA to be first and last
 	canonicalSort(zoneRecords)
 
-	// Build final response: SOA + sorted zone records + SOA
+	// Build final response: SOA + sorted zone records + ZONEMD + SOA
+	// (RFC 8976 §3: ZONEMD appears after all other records, before the
+	// closing SOA — not between the opening SOA and the zone records).
 	var records []*protocol.ResourceRecord
 	records = append(records, soaRR)
+	records = append(records, zoneRecords...)
 
 	// Add ZONEMD record if present (RFC 8976)
 	if z.ZONEMD != nil {
@@ -319,7 +322,6 @@ func (s *AXFRServer) generateAXFRRecords(z *zone.Zone) ([]*protocol.ResourceReco
 		}
 	}
 
-	records = append(records, zoneRecords...)
 	records = append(records, soaRR)
 
 	return records, nil

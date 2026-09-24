@@ -3372,20 +3372,21 @@ func TestGenerateAXFRRecords_WithZoneRecordsAndZONEMD(t *testing.T) {
 		t.Fatalf("generateAXFRRecords: %v", err)
 	}
 
-	// Expected: SOA + ZONEMD + www A record + SOA = 4 records
+	// Expected: SOA + www A record + ZONEMD + SOA = 4 records
+	// RFC 8976 §3: zone transfer = SOA + (other records)* + ZONEMD + SOA
 	if len(records) != 4 {
 		t.Fatalf("expected 4 records, got %d", len(records))
 	}
 
-	// Verify order: SOA, ZONEMD, A record, SOA
+	// Verify order: SOA, A record, ZONEMD, SOA
 	if records[0].Type != protocol.TypeSOA {
 		t.Errorf("record[0] type = %d, want SOA", records[0].Type)
 	}
-	if records[1].Type != protocol.TypeZONEMD {
-		t.Errorf("record[1] type = %d, want ZONEMD", records[1].Type)
+	if records[1].Type != protocol.TypeA {
+		t.Errorf("record[1] type = %d, want A", records[1].Type)
 	}
-	if records[2].Type != protocol.TypeA {
-		t.Errorf("record[2] type = %d, want A", records[2].Type)
+	if records[2].Type != protocol.TypeZONEMD {
+		t.Errorf("record[2] type = %d, want ZONEMD", records[2].Type)
 	}
 	if records[3].Type != protocol.TypeSOA {
 		t.Errorf("record[3] type = %d, want SOA", records[3].Type)
