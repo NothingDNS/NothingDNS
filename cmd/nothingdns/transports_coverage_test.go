@@ -861,8 +861,11 @@ func TestDNSListenAddrs(t *testing.T) {
 	}{
 		{name: "default", want: []string{":5354"}},
 		{name: "every bind address is used", bind: []string{"127.0.0.1", "::1"}, want: []string{"127.0.0.1:5354", "[::1]:5354"}},
+		{name: "wildcard pair folds to one dual-stack listener", bind: []string{"0.0.0.0", "::"}, want: []string{"0.0.0.0:5354"}},
+		{name: "specific address behind a wildcard is folded", bind: []string{"127.0.0.1", "::"}, want: []string{"[::]:5354"}},
 		{name: "duplicates removed", bind: []string{"127.0.0.1", "127.0.0.1:5354"}, want: []string{"127.0.0.1:5354"}},
 		{name: "explicit list wins", explicit: []string{"127.0.0.2:53"}, bind: []string{"127.0.0.1"}, want: []string{"127.0.0.2:53"}},
+		{name: "wildcard only folds its own port", bind: []string{"0.0.0.0:5354", "127.0.0.1:5355"}, want: []string{"0.0.0.0:5354", "127.0.0.1:5355"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -872,49 +875,6 @@ func TestDNSListenAddrs(t *testing.T) {
 			}
 		})
 	}
-
-	t.Run("ipv4 unspecified expands to concrete locals", func(t *testing.T) {
-		got := dnsListenAddrs(nil, []string{"0.0.0.0"}, 5354)
-		foundLoopback, foundWildcard := false, false
-		for _, a := range got {
-			host, _, err := net.SplitHostPort(a)
-			if err != nil {
-				t.Fatalf("bad addr %q: %v", a, err)
-			}
-			if host == "127.0.0.1" {
-				foundLoopback = true
-			}
-			if isWildcardHost(host) {
-				foundWildcard = true
-			}
-		}
-		if !foundLoopback {
-			t.Fatalf("expanded addrs missing 127.0.0.1: %v", got)
-		}
-		if !foundWildcard {
-			t.Fatalf("wildcard catch-all missing: %v", got)
-		}
-	})
-
-	t.Run("mixed specific and v6 unspecified keeps specific", func(t *testing.T) {
-		got := dnsListenAddrs(nil, []string{"127.0.0.1", "::"}, 5354)
-		found4, found6, foundWild := false, false, false
-		for _, a := range got {
-			host, _, _ := net.SplitHostPort(a)
-			if host == "127.0.0.1" {
-				found4 = true
-			}
-			if isWildcardHost(host) {
-				foundWild = true
-			}
-			if ip := net.ParseIP(host); ip != nil && ip.To4() == nil && !ip.IsUnspecified() {
-				found6 = true
-			}
-		}
-		if !found4 || !found6 || !foundWild {
-			t.Fatalf("want v4 specific, expanded v6, and wildcard catch-all; got %v", got)
-		}
-	})
 }
 
 // Every server.bind address must get its own listener, not just the first.

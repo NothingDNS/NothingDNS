@@ -283,14 +283,14 @@ func (s *servers) tcpServers() []*server.TCPServer {
 // then ":port". Every entry is used — previously only the first was, so
 // additional bind addresses were silently ignored.
 //
-// A bare IPv4/IPv6 unspecified host (0.0.0.0 / ::) is expanded to the
-// host's current interface addresses for that family (plus loopback),
-// and the original wildcard is kept as a catch-all so provider/floating
-// IPs that are not yet (or never) listed on an interface still accept
-// traffic. Concrete listeners get correct UDP source IPs; the wildcard
-// relies on IP_PKTINFO sticky-source.
+// A wildcard entry (0.0.0.0, ::, or an empty host) already accepts traffic
+// on every local address — Go opens it dual-stack — so any other entry on
+// the same port would fail with "address already in use". Such entries are
+// folded into the first wildcard for that port.
 //
-// If expansion finds no addresses (unusual), the original wildcard is kept.
+// Multi-homed / secondary /32 alias UDP source sticky-ness is handled by
+// Linux IP_PKTINFO on the wildcard socket (see internal/server/udp_pktinfo*),
+// not by expanding wildcards into per-IP listeners.
 func dnsListenAddrs(explicit, bind []string, port int) []string {
 	entries := explicit
 	if len(entries) == 0 {
@@ -304,90 +304,32 @@ func dnsListenAddrs(explicit, bind []string, port int) []string {
 	for _, e := range entries {
 		addrs = append(addrs, bindEntryToAddr(e, port))
 	}
-	addrs = expandUnspecifiedListenAddrs(addrs)
 
-	// Deduplicate only. Do not fold concrete addresses behind a wildcard:
-	// per-IP listeners are required for sticky UDP source on secondary
-	// addresses, and the wildcard is a catch-all for unlisted IPs.
+	wildcardPorts := make(map[string]bool)
+	for _, a := range addrs {
+		if host, p, err := net.SplitHostPort(a); err == nil && isWildcardHost(host) {
+			wildcardPorts[p] = true
+		}
+	}
+
 	out := make([]string, 0, len(addrs))
 	seen := make(map[string]bool)
+	wildcardUsed := make(map[string]bool)
 	for _, a := range addrs {
-		if seen[a] {
-			continue
-		}
-		seen[a] = true
-		out = append(out, a)
-	}
-	return out
-}
-
-// expandUnspecifiedListenAddrs adds the host's concrete interface addresses
-// for each 0.0.0.0 / :: listen entry and keeps the original wildcard so
-// packets to unlisted host IPs still arrive. Loopback is always included.
-func expandUnspecifiedListenAddrs(addrs []string) []string {
-	out := make([]string, 0, len(addrs)+8)
-	for _, a := range addrs {
-		host, port, err := net.SplitHostPort(a)
-		if err != nil || !isWildcardHost(host) {
-			out = append(out, a)
-			continue
-		}
-		ip := net.ParseIP(host)
-		want4 := host == "" || (ip != nil && ip.To4() != nil)
-		want6 := host == "" || (ip != nil && ip.To4() == nil)
-		// Empty host (":53") is dual-stack intent — expand both families.
-		if host == "" {
-			want4, want6 = true, true
-		}
-		for _, lip := range localListenIPs(want4, want6) {
-			out = append(out, net.JoinHostPort(lip, port))
-		}
-		// Always keep the wildcard catch-all (even when expansion is empty).
-		out = append(out, a)
-	}
-	return out
-}
-
-func localListenIPs(want4, want6 bool) []string {
-	ifaces, err := net.InterfaceAddrs()
-	if err != nil {
-		return nil
-	}
-	seen := make(map[string]bool)
-	var out []string
-	add := func(s string) {
-		if seen[s] {
-			return
-		}
-		seen[s] = true
-		out = append(out, s)
-	}
-	if want4 {
-		add("127.0.0.1")
-	}
-	if want6 {
-		add("::1")
-	}
-	for _, ia := range ifaces {
-		var ip net.IP
-		switch v := ia.(type) {
-		case *net.IPNet:
-			ip = v.IP
-		case *net.IPAddr:
-			ip = v.IP
-		}
-		if ip == nil || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsMulticast() {
-			continue
-		}
-		if ip4 := ip.To4(); ip4 != nil {
-			if want4 {
-				add(ip4.String())
+		host, p, err := net.SplitHostPort(a)
+		key := a
+		if err == nil && wildcardPorts[p] {
+			if !isWildcardHost(host) || wildcardUsed[p] {
+				continue
 			}
+			wildcardUsed[p] = true
+			key = "*:" + p
+		}
+		if seen[key] {
 			continue
 		}
-		if want6 && ip.To16() != nil {
-			add(ip.String())
-		}
+		seen[key] = true
+		out = append(out, a)
 	}
 	return out
 }

@@ -5,6 +5,17 @@ All notable changes to NothingDNS are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.15] — 2026-09-25
+
+### Fixed
+
+- **Reverted 1.2.13/1.2.14 wildcard expansion**: auto-expanding `0.0.0.0` into
+  per-IP listeners caused production regressions (secondary TCP refused /
+  unstable upgrades). Listen binding is back to a single wildcard fold.
+- **Secondary /32 UDP answers** remain fixed via Linux `IP_PKTINFO` sticky
+  source on the wildcard socket (verified by `scripts/test-multiip-udp.sh`:
+  dig UDP+TCP on primary and secondary, sticky source IP, tcpdump).
+
 ## [1.2.14] — 2026-09-25
 
 ### Fixed
