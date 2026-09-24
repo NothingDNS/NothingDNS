@@ -34,6 +34,9 @@ type Cache interface {
 	Get(key string) *CacheEntry
 	Set(key string, msg *protocol.Message, ttl uint32)
 	SetNegative(key string, rcode uint8)
+	// ApplyTTLPolicy bounds record TTLs in msg to the cache's configured min/max
+	// and returns the effective TTL in seconds. Mutates msg in place.
+	ApplyTTLPolicy(msg *protocol.Message, ttl uint32) uint32
 }
 
 type negativeTTLCache interface {
@@ -464,15 +467,14 @@ func (r *Resolver) resolve(ctx context.Context, name string, qtype uint16, cname
 						return nil, err
 					}
 
-					// Build a new response: DNAME + synthesized CNAME + target answers
-					result := &protocol.Message{
-						Header: protocol.Header{
-							ID:    resp.Header.ID,
-							Flags: protocol.NewResponseFlags(protocol.RcodeSuccess),
-						},
-						Questions: respQuestions,
-					}
+					// Build a new response: DNAME + synthesized CNAME + target answers.
+					// Use AcquireMessage() so the pooled object is properly tracked;
+					// callers must Release() the result when done.
+					result := protocol.AcquireMessage()
+					result.Header.ID = resp.Header.ID
+					result.Header.Flags = protocol.NewResponseFlags(protocol.RcodeSuccess)
 					result.Header.Flags.RA = true
+					result.Questions = respQuestions
 					result.AddAnswer(&dnameRR)
 					result.AddAnswer(synthCNAME)
 					for _, rr := range target.Answers {
@@ -491,8 +493,13 @@ func (r *Resolver) resolve(ctx context.Context, name string, qtype uint16, cname
 
 					target, err := r.resolve(ctx, cname, qtype, cnameDepth+1)
 					if err != nil {
+						// Return the CNAME at least, but release the pooled response
+						// so it is returned to messagePool instead of leaking.
 						resp.Header.Flags.RA = true
-						return resp, nil // Return CNAME at least
+						ret := resp
+						resp = nil
+						ret.Release()
+						return ret, nil
 					}
 
 					// Merge: prepend CNAME records to the target's answer section
@@ -931,6 +938,14 @@ func (r *Resolver) cacheResponse(name string, qtype uint16, msg *protocol.Messag
 	}
 
 	key := cacheKey(name, qtype)
+	// Clamp record TTLs in msg to the cache's configured min/max bounds so the
+	// upstream publisher's TTL does not exceed what this server intends to hold
+	// the response. ApplyTTLPolicy mutates msg in place; Cache.Set deep-copies,
+	// so the clamped message is what gets stored and served on cache hits.
+	// Without this, an upstream with max_ttl=3600 returning TTL=999999 would
+	// have downstream resolvers hold the entry for 11 days while this server
+	// refreshes hourly.
+	ttl = r.cache.ApplyTTLPolicy(msg, ttl)
 	r.cache.Set(key, msg, ttl)
 
 	// Cache individual A/AAAA records by their owner name for later NS-address
@@ -970,13 +985,13 @@ func (r *Resolver) cacheResponse(name string, qtype uint16, msg *protocol.Messag
 		case protocol.TypeA:
 			if a, ok := rr.Data.(*protocol.RDataA); ok && a != nil {
 				if synth := synthesizeSideRecord(owner, protocol.TypeA, msg); synth != nil {
-					r.cache.Set(cacheKey(owner, protocol.TypeA), synth, rr.TTL)
+					r.cache.Set(cacheKey(owner, protocol.TypeA), synth, ttl)
 				}
 			}
 		case protocol.TypeAAAA:
 			if a, ok := rr.Data.(*protocol.RDataAAAA); ok && a != nil {
 				if synth := synthesizeSideRecord(owner, protocol.TypeAAAA, msg); synth != nil {
-					r.cache.Set(cacheKey(owner, protocol.TypeAAAA), synth, rr.TTL)
+					r.cache.Set(cacheKey(owner, protocol.TypeAAAA), synth, ttl)
 				}
 			}
 		}

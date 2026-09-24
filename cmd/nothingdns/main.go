@@ -129,12 +129,18 @@ func prepareConfiguredZoneFiles(configuredZoneFiles []string, loadZoneFileFunc f
 }
 
 func applyConfiguredZoneFiles(handler *integratedHandler, zoneManager *zone.Manager, zoneFiles map[string]string, loaded []loadedZoneFile, logger *util.Logger) {
+	// Load all zones into the manager first (LoadZone is infallible — two map
+	// assignments). Only after all succeed do we update handler.zones and rebuild
+	// the zone tree, so a panic in RebuildZoneTree leaves the previous state intact.
+	for _, item := range loaded {
+		zoneManager.LoadZone(item.zone, item.file)
+	}
+
 	for _, item := range loaded {
 		handler.zonesMu.Lock()
 		handler.zones[item.zone.Origin] = item.zone
 		handler.zonesMu.Unlock()
 		zoneFiles[item.zone.Origin] = item.file
-		zoneManager.LoadZone(item.zone, item.file)
 		logger.Infof("Reloaded zone %s", item.zone.Origin)
 		// Do NOT mirror file-backed zones into the KV store: the zone
 		// file is their durable source, and a KV copy would resurrect

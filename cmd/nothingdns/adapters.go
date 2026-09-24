@@ -142,6 +142,12 @@ func (a *resolverCacheAdapter) SetNegativeMessage(key string, rcode uint8, msg *
 	a.cache.SetNegativeMessage(key, rcode, msg, ttl)
 }
 
+// ApplyTTLPolicy clamps record TTLs in msg to the cache's configured min/max
+// bounds and returns the effective TTL. Satisfies the resolver.Cache interface.
+func (a *resolverCacheAdapter) ApplyTTLPolicy(msg *protocol.Message, ttl uint32) uint32 {
+	return a.cache.ApplyTTLPolicy(msg, ttl)
+}
+
 // doqHandlerAdapter adapts a server.Handler (ServeDNS) into a quic.DoQHandler (ServeDoQ).
 // It unpacks the DNS query from raw bytes, runs it through the DNS handler, and
 // writes the wire-format response back to the QUIC stream.

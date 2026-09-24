@@ -15,8 +15,8 @@ type ZoneManagerInterface interface {
 	// Get returns a zone by origin.
 	Get(origin string) (*zone.Zone, bool)
 
-	// LoadZone loads a zone from a file.
-	LoadZone(z *zone.Zone, file string) error
+	// LoadZone loads a zone in-memory without validation.
+	LoadZone(z *zone.Zone, file string)
 
 	// ReloadZone reloads a zone from its file.
 	ReloadZone(origin string) error

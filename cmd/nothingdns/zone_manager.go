@@ -78,26 +78,37 @@ func NewZoneManager(cfg *config.Config, logger *util.Logger) (*ZoneManager, erro
 		}(zoneFile, zoneChans[i])
 	}
 
+	// Drain all goroutines and collect results first. This ensures we detect every
+	// parse error before committing any zone to the manager — all-or-nothing semantics.
+	var results []zoneResult
 	for _, ch := range zoneChans {
-		result := <-ch
+		results = append(results, <-ch)
+	}
+
+	// Check all results for errors before committing anything.
+	for _, result := range results {
 		if result.err != nil {
 			return nil, fmt.Errorf("loading zone file %s: %w", result.zoneFile, result.err)
 		}
-		if result.zone != nil {
-			// Results are drained in discovery order (configured zones first,
-			// then zone_dir scan). A second file with the same $ORIGIN — e.g.
-			// a stray backup copy in zone_dir — must not silently replace the
-			// zone that was loaded first.
-			if existingFile, ok := mgr.result.ZoneFiles[result.zone.Origin]; ok {
-				logger.Warnf("Skipping zone file %s: zone %s already loaded from %s",
-					result.zoneFile, result.zone.Origin, existingFile)
-				continue
-			}
-			mgr.result.Zones[result.zone.Origin] = result.zone
-			mgr.result.ZoneFiles[result.zone.Origin] = result.zoneFile
-			zoneManager.LoadZone(result.zone, result.zoneFile)
-			logger.Infof("Loaded zone %s with %d records", result.zone.Origin, len(result.zone.Records))
+	}
+
+	// All files loaded successfully — now commit all zones atomically.
+	for _, result := range results {
+		if result.zone == nil {
+			continue
 		}
+		// Results are drained in discovery order (configured zones first, then zone_dir
+		// scan). A second file with the same $ORIGIN — e.g. a stray backup copy in
+		// zone_dir — must not silently replace the zone that was loaded first.
+		if existingFile, ok := mgr.result.ZoneFiles[result.zone.Origin]; ok {
+			logger.Warnf("Skipping zone file %s: zone %s already loaded from %s",
+				result.zoneFile, result.zone.Origin, existingFile)
+			continue
+		}
+		mgr.result.Zones[result.zone.Origin] = result.zone
+		mgr.result.ZoneFiles[result.zone.Origin] = result.zoneFile
+		zoneManager.LoadZone(result.zone, result.zoneFile)
+		logger.Infof("Loaded zone %s with %d records", result.zone.Origin, len(result.zone.Records))
 	}
 
 	// Initialize zone signers if DNSSEC signing is enabled

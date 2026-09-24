@@ -624,10 +624,14 @@ func (h *integratedHandler) resolveCNAMETarget(w server.ResponseWriter, r *proto
 		// allocations under load.
 		defer resp.Release()
 
-		// Cache the upstream response
+		// Cache the upstream response. ApplyTTLPolicy clamps the response's answer
+		// record TTLs in place before caching and before we copy records for the
+		// client — this ensures downstream DNS caches receive the configured max_ttl
+		// cap, not the upstream's raw TTL (e.g. CDN 999999s).
 		if resp.Header.Flags.RCODE == protocol.RcodeSuccess && len(resp.Answers) > 0 {
 			ttl := extractTTL(resp)
-			h.cache.Set(cacheKey, resp, ttl)
+			clampedTTL := h.cache.ApplyTTLPolicy(resp, ttl)
+			h.cache.Set(cacheKey, resp, clampedTTL)
 		}
 
 		// Extract matching answer records
