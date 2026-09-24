@@ -904,7 +904,7 @@ func (s *XoTServer) sendAXFRResponse(conn net.Conn, records []*protocol.Resource
 		msg := &protocol.Message{
 			Header: protocol.Header{
 				ID:      requestID, // RFC 5936 §2.2: every message in the chain carries the query's ID — compliant secondaries reject the stream otherwise
-				Flags:   protocol.Flags{},
+				Flags:   protocol.Flags{QR: true, AA: true},
 				ANCount: uint16(end - i),
 			},
 			Answers: records[i:end],
