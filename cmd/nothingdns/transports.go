@@ -283,10 +283,12 @@ func (s *servers) tcpServers() []*server.TCPServer {
 // then ":port". Every entry is used — previously only the first was, so
 // additional bind addresses were silently ignored.
 //
-// A wildcard entry (0.0.0.0, ::, or an empty host) already accepts traffic
-// on every local address — Go opens it dual-stack — so any other entry on
-// the same port would fail with "address already in use". Such entries are
-// folded into the first wildcard for that port.
+// A bare IPv4/IPv6 unspecified host (0.0.0.0 / ::) is expanded to the
+// host's current interface addresses for that family (plus loopback). A
+// single wildcard UDP socket cannot sticky-source replies on secondary
+// /32 aliases on all kernels/providers; per-address listeners can.
+//
+// If expansion finds no addresses (unusual), the original wildcard is kept.
 func dnsListenAddrs(explicit, bind []string, port int) []string {
 	entries := explicit
 	if len(entries) == 0 {
@@ -300,6 +302,7 @@ func dnsListenAddrs(explicit, bind []string, port int) []string {
 	for _, e := range entries {
 		addrs = append(addrs, bindEntryToAddr(e, port))
 	}
+	addrs = expandUnspecifiedListenAddrs(addrs)
 
 	wildcardPorts := make(map[string]bool)
 	for _, a := range addrs {
@@ -326,6 +329,80 @@ func dnsListenAddrs(explicit, bind []string, port int) []string {
 		}
 		seen[key] = true
 		out = append(out, a)
+	}
+	return out
+}
+
+// expandUnspecifiedListenAddrs replaces 0.0.0.0 / :: listen entries with the
+// host's concrete interface addresses so UDP replies use the correct source
+// IP on multi-homed hosts. Loopback is always included for local tooling.
+func expandUnspecifiedListenAddrs(addrs []string) []string {
+	out := make([]string, 0, len(addrs)+8)
+	for _, a := range addrs {
+		host, port, err := net.SplitHostPort(a)
+		if err != nil || !isWildcardHost(host) {
+			out = append(out, a)
+			continue
+		}
+		ip := net.ParseIP(host)
+		want4 := host == "" || (ip != nil && ip.To4() != nil)
+		want6 := host == "" || (ip != nil && ip.To4() == nil)
+		// Empty host (":53") is dual-stack intent — expand both families.
+		if host == "" {
+			want4, want6 = true, true
+		}
+		expanded := localListenIPs(want4, want6)
+		if len(expanded) == 0 {
+			out = append(out, a)
+			continue
+		}
+		for _, lip := range expanded {
+			out = append(out, net.JoinHostPort(lip, port))
+		}
+	}
+	return out
+}
+
+func localListenIPs(want4, want6 bool) []string {
+	ifaces, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var out []string
+	add := func(s string) {
+		if seen[s] {
+			return
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	if want4 {
+		add("127.0.0.1")
+	}
+	if want6 {
+		add("::1")
+	}
+	for _, ia := range ifaces {
+		var ip net.IP
+		switch v := ia.(type) {
+		case *net.IPNet:
+			ip = v.IP
+		case *net.IPAddr:
+			ip = v.IP
+		}
+		if ip == nil || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsMulticast() {
+			continue
+		}
+		if ip4 := ip.To4(); ip4 != nil {
+			if want4 {
+				add(ip4.String())
+			}
+			continue
+		}
+		if want6 && ip.To16() != nil {
+			add(ip.String())
+		}
 	}
 	return out
 }

@@ -9,12 +9,15 @@ import (
 
 func TestPackParseUDPPktinfoIPv4(t *testing.T) {
 	src := net.ParseIP("37.247.108.2").To4()
-	oob := packUDPPktinfo(src)
+	oob := packUDPPktinfo(udpLocalAddr{IP: src, IfIndex: 2})
 	if len(oob) == 0 {
 		t.Fatal("packUDPPktinfo returned empty oob")
 	}
 	got := parseUDPPktinfo(oob)
-	if !got.Equal(src) {
-		t.Fatalf("parseUDPPktinfo = %v, want %v", got, src)
+	if !got.IP.Equal(src) {
+		t.Fatalf("parseUDPPktinfo IP = %v, want %v", got.IP, src)
+	}
+	if got.IfIndex != 2 {
+		t.Fatalf("parseUDPPktinfo IfIndex = %d, want 2", got.IfIndex)
 	}
 }

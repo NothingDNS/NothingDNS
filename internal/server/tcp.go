@@ -34,7 +34,9 @@ const (
 	TCPMaxConnections = 1000
 
 	// TCPMaxConnectionsPerIP is the maximum number of concurrent TCP connections per source IP.
-	TCPMaxConnectionsPerIP = 10
+	// Kept above typical dig/browser concurrency and shared-NAT fan-in; exceeding this
+	// closes the accepted socket immediately, which clients often report as a timeout.
+	TCPMaxConnectionsPerIP = 64
 
 	// TCPMaxPipelineQueries is the maximum number of concurrent in-flight queries per TCP connection.
 	TCPMaxPipelineQueries = 16

@@ -5,6 +5,20 @@ All notable changes to NothingDNS are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.13] — 2026-09-25
+
+### Fixed
+
+- **UDP on secondary host IPs still timed out after 1.2.12 on some hosts**:
+  `bind: [0.0.0.0]` / `::` is now expanded to the host's concrete interface
+  addresses (plus loopback) so each IP gets its own UDP/TCP listener. Combined
+  with Linux `IP_PKTINFO` sticky source (including ifindex), replies leave with
+  the same local address the query arrived on. Link-local and multicast
+  addresses are skipped.
+- **TCP per-client connection cap**: raised `TCPMaxConnectionsPerIP` from 10 to
+  64 so dig/browser bursts and shared-NAT clients are less likely to hit an
+  immediate close that looks like a dig timeout.
+
 ## [1.2.12] — 2026-09-24
 
 ### Fixed

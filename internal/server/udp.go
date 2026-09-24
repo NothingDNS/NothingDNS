@@ -278,10 +278,10 @@ func (s *UDPServer) pruner() {
 
 // udpRequest represents a single UDP DNS request.
 type udpRequest struct {
-	data []byte
-	addr *net.UDPAddr
-	dst  net.IP // local destination IP (secondary alias); nil if unknown
-	n    int
+	data  []byte
+	addr  *net.UDPAddr
+	local udpLocalAddr // inbound local address / ifindex for sticky reply
+	n     int
 }
 
 // reader reads packets from the UDP socket and dispatches to workers.
@@ -304,13 +304,13 @@ func (s *UDPServer) reader(requestChan chan<- *udpRequest, readerWg *sync.WaitGr
 
 		// Read packet (prefer destination IP so multi-homed replies stick).
 		var (
-			n    int
-			addr *net.UDPAddr
-			dst  net.IP
-			err  error
+			n     int
+			addr  *net.UDPAddr
+			local udpLocalAddr
+			err   error
 		)
 		if pic, ok := s.conn.(udpPacketInfoConn); ok {
-			n, addr, dst, err = pic.ReadFromUDPWithDst(buf)
+			n, addr, local, err = pic.ReadFromUDPWithDst(buf)
 		} else {
 			n, addr, err = s.conn.ReadFromUDP(buf)
 		}
@@ -335,7 +335,7 @@ func (s *UDPServer) reader(requestChan chan<- *udpRequest, readerWg *sync.WaitGr
 
 		// Send to workers (non-blocking with ctx check)
 		select {
-		case requestChan <- &udpRequest{data: buf, addr: addr, dst: dst, n: n}:
+		case requestChan <- &udpRequest{data: buf, addr: addr, local: local, n: n}:
 		case <-s.ctx.Done():
 			s.bufferPool.Put(bufPtr)
 			return
@@ -388,7 +388,7 @@ func (s *UDPServer) handleRequest(req *udpRequest) {
 	rw := &udpResponseWriter{
 		server:  s,
 		client:  client,
-		dst:     req.dst,
+		local:   req.local,
 		maxSize: maxSize,
 	}
 
@@ -400,7 +400,7 @@ func (s *UDPServer) handleRequest(req *udpRequest) {
 type udpResponseWriter struct {
 	server  *UDPServer
 	client  *ClientInfo
-	dst     net.IP // local IP the query arrived on; used as UDP reply source
+	local   udpLocalAddr // inbound local address; used as UDP reply source
 	maxSize int
 	written bool
 }
@@ -493,11 +493,11 @@ func (w *udpResponseWriter) Write(msg *protocol.Message) (int, error) {
 		return 0, fmt.Errorf("udp: expected *net.UDPAddr, got %T", w.client.Addr)
 	}
 	var (
-		sent    int
+		sent     int
 		writeErr error
 	)
-	if pic, ok := w.server.conn.(udpPacketInfoConn); ok && len(w.dst) > 0 {
-		sent, writeErr = pic.WriteToUDPWithSrc(packBuf[:n], addr, w.dst)
+	if pic, ok := w.server.conn.(udpPacketInfoConn); ok && len(w.local.IP) > 0 {
+		sent, writeErr = pic.WriteToUDPWithSrc(packBuf[:n], addr, w.local)
 	} else {
 		sent, writeErr = w.server.conn.WriteToUDP(packBuf[:n], addr)
 	}

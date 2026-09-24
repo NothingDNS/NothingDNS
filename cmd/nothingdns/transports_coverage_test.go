@@ -861,11 +861,8 @@ func TestDNSListenAddrs(t *testing.T) {
 	}{
 		{name: "default", want: []string{":5354"}},
 		{name: "every bind address is used", bind: []string{"127.0.0.1", "::1"}, want: []string{"127.0.0.1:5354", "[::1]:5354"}},
-		{name: "wildcard pair folds to one dual-stack listener", bind: []string{"0.0.0.0", "::"}, want: []string{"0.0.0.0:5354"}},
-		{name: "specific address behind a wildcard is folded", bind: []string{"127.0.0.1", "::"}, want: []string{"[::]:5354"}},
 		{name: "duplicates removed", bind: []string{"127.0.0.1", "127.0.0.1:5354"}, want: []string{"127.0.0.1:5354"}},
 		{name: "explicit list wins", explicit: []string{"127.0.0.2:53"}, bind: []string{"127.0.0.1"}, want: []string{"127.0.0.2:53"}},
-		{name: "wildcard only folds its own port", bind: []string{"0.0.0.0:5354", "127.0.0.1:5355"}, want: []string{"0.0.0.0:5354", "127.0.0.1:5355"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -875,6 +872,43 @@ func TestDNSListenAddrs(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("ipv4 unspecified expands to concrete locals", func(t *testing.T) {
+		got := dnsListenAddrs(nil, []string{"0.0.0.0"}, 5354)
+		foundLoopback := false
+		for _, a := range got {
+			host, _, err := net.SplitHostPort(a)
+			if err != nil {
+				t.Fatalf("bad addr %q: %v", a, err)
+			}
+			if isWildcardHost(host) {
+				t.Fatalf("wildcard %q survived expansion: %v", a, got)
+			}
+			if host == "127.0.0.1" {
+				foundLoopback = true
+			}
+		}
+		if !foundLoopback {
+			t.Fatalf("expanded addrs missing 127.0.0.1: %v", got)
+		}
+	})
+
+	t.Run("mixed specific and v6 unspecified keeps specific", func(t *testing.T) {
+		got := dnsListenAddrs(nil, []string{"127.0.0.1", "::"}, 5354)
+		found4, found6 := false, false
+		for _, a := range got {
+			host, _, _ := net.SplitHostPort(a)
+			if host == "127.0.0.1" {
+				found4 = true
+			}
+			if ip := net.ParseIP(host); ip != nil && ip.To4() == nil {
+				found6 = true
+			}
+		}
+		if !found4 || !found6 {
+			t.Fatalf("want both v4 specific and expanded v6, got %v", got)
+		}
+	})
 }
 
 // Every server.bind address must get its own listener, not just the first.

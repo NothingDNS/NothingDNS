@@ -32,31 +32,44 @@ func wrapUDPPacketInfoImpl(conn *net.UDPConn) UDPConn {
 	return &pktinfoUDPConn{UDPConn: conn}
 }
 
-func (c *pktinfoUDPConn) ReadFromUDPWithDst(buf []byte) (int, *net.UDPAddr, net.IP, error) {
+func (c *pktinfoUDPConn) ReadFromUDPWithDst(buf []byte) (int, *net.UDPAddr, udpLocalAddr, error) {
 	oob := make([]byte, unix.CmsgSpace(unix.SizeofInet4Pktinfo)+unix.CmsgSpace(unix.SizeofInet6Pktinfo))
 	n, oobn, _, addr, err := c.UDPConn.ReadMsgUDP(buf, oob)
 	if err != nil {
-		return n, addr, nil, err
+		return n, addr, udpLocalAddr{}, err
 	}
 	return n, addr, parseUDPPktinfo(oob[:oobn]), nil
 }
 
-func (c *pktinfoUDPConn) WriteToUDPWithSrc(buf []byte, addr *net.UDPAddr, src net.IP) (int, error) {
-	if len(src) == 0 || addr == nil {
+func (c *pktinfoUDPConn) WriteToUDPWithSrc(buf []byte, addr *net.UDPAddr, local udpLocalAddr) (int, error) {
+	if len(local.IP) == 0 || addr == nil {
 		return c.UDPConn.WriteToUDP(buf, addr)
 	}
-	oob := packUDPPktinfo(src)
+	oob := packUDPPktinfo(local)
 	if len(oob) == 0 {
 		return c.UDPConn.WriteToUDP(buf, addr)
 	}
 	n, _, err := c.UDPConn.WriteMsgUDP(buf, oob, addr)
-	return n, err
+	if err != nil {
+		// Some kernels reject a mismatched ifindex; retry with IP only.
+		if local.IfIndex != 0 {
+			oob = packUDPPktinfo(udpLocalAddr{IP: local.IP})
+			if len(oob) > 0 {
+				if n2, _, err2 := c.UDPConn.WriteMsgUDP(buf, oob, addr); err2 == nil {
+					return n2, nil
+				}
+			}
+		}
+		// Last resort: unsticky write (may fail for secondary IPs).
+		return c.UDPConn.WriteToUDP(buf, addr)
+	}
+	return n, nil
 }
 
-func parseUDPPktinfo(oob []byte) net.IP {
+func parseUDPPktinfo(oob []byte) udpLocalAddr {
 	msgs, err := unix.ParseSocketControlMessage(oob)
 	if err != nil {
-		return nil
+		return udpLocalAddr{}
 	}
 	for _, m := range msgs {
 		switch {
@@ -65,13 +78,13 @@ func parseUDPPktinfo(oob []byte) net.IP {
 				continue
 			}
 			info := *(*unix.Inet4Pktinfo)(unsafe.Pointer(&m.Data[0]))
-			// Prefer Spec_dst (local address the datagram was delivered to).
+			// Spec_dst is the local address the datagram was delivered to.
 			ip := net.IP(info.Spec_dst[:]).To4()
 			if ip == nil || ip.IsUnspecified() {
 				ip = net.IP(info.Addr[:]).To4()
 			}
 			if ip != nil && !ip.IsUnspecified() {
-				return append(net.IP(nil), ip...)
+				return udpLocalAddr{IP: append(net.IP(nil), ip...), IfIndex: int(info.Ifindex)}
 			}
 		case m.Header.Level == unix.IPPROTO_IPV6 && m.Header.Type == unix.IPV6_PKTINFO:
 			if len(m.Data) < unix.SizeofInet6Pktinfo {
@@ -80,22 +93,24 @@ func parseUDPPktinfo(oob []byte) net.IP {
 			info := *(*unix.Inet6Pktinfo)(unsafe.Pointer(&m.Data[0]))
 			ip := append(net.IP(nil), info.Addr[:]...)
 			if !ip.IsUnspecified() {
-				return ip
+				return udpLocalAddr{IP: ip, IfIndex: int(info.Ifindex)}
 			}
 		}
 	}
-	return nil
+	return udpLocalAddr{}
 }
 
-func packUDPPktinfo(src net.IP) []byte {
-	if ip4 := src.To4(); ip4 != nil {
+func packUDPPktinfo(local udpLocalAddr) []byte {
+	if ip4 := local.IP.To4(); ip4 != nil {
 		var info unix.Inet4Pktinfo
+		info.Ifindex = int32(local.IfIndex)
 		copy(info.Spec_dst[:], ip4)
 		copy(info.Addr[:], ip4)
 		return unix.PktInfo4(&info)
 	}
-	if ip16 := src.To16(); ip16 != nil {
+	if ip16 := local.IP.To16(); ip16 != nil {
 		var info unix.Inet6Pktinfo
+		info.Ifindex = uint32(local.IfIndex)
 		copy(info.Addr[:], ip16)
 		return unix.PktInfo6(&info)
 	}
