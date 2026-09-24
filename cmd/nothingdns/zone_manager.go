@@ -146,7 +146,10 @@ func NewZoneManager(cfg *config.Config, logger *util.Logger) (*ZoneManager, erro
 	kvStore, err := storage.OpenKVStoreEncrypted(dbDataDir, nil, aeadKey)
 	if err != nil {
 		if cfg.Storage.DataDir != "" || cfg.Storage.EncryptionKey != "" {
-			return nil, fmt.Errorf("initializing persistent zone database at %s: %w", filepath.Join(dbDataDir, storage.DataFile), err)
+			return nil, fmt.Errorf("initializing persistent zone database at %s: %w "+
+				"(if the file is AES-GCM encrypted, restore storage.encryption_key — often also in /etc/nothingdns/credentials as storage_encryption_key — "+
+				"or move data.db aside to start fresh; zone files still load)",
+				filepath.Join(dbDataDir, storage.DataFile), err)
 		}
 		logger.Warnf("Failed to initialize persistent zone database: %v", err)
 	} else {

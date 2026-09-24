@@ -5,6 +5,16 @@ All notable changes to NothingDNS are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.16] — 2026-09-25
+
+### Fixed
+
+- **Startup fail: encrypted `data.db` without `storage.encryption_key`**: install
+  now generates and persists the key (YAML + `/etc/nothingdns/credentials`
+  `storage_encryption_key`), restores it into config on upgrade when missing,
+  and refuses to restart with a clear recovery hint if `data.db` is AES-GCM
+  encrypted and no key can be found. Daemon error text points at the same fix.
+
 ## [1.2.15] — 2026-09-25
 
 ### Fixed

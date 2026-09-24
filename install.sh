@@ -605,6 +605,8 @@ create_config() {
 
     # Generate a random auth secret
     AUTH_SECRET=$(openssl rand -base64 32 2>/dev/null || head -c 32 /dev/urandom | base64)
+    # At-rest key for data.db (64 hex chars = 32 bytes). Persisted in credentials.
+    STORAGE_ENCRYPTION_KEY=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p -c 32)
 
     sudo tee "${CONFIG_FILE}" > /dev/null << EOF
 # NothingDNS Configuration
@@ -684,8 +686,11 @@ metrics:
   path: /metrics
 
 # Zone database and IXFR journals. Must be writable by the service user.
+# encryption_key encrypts data.db at rest (AES-256-GCM). Also saved in
+# ${CONFIG_DIR}/credentials as storage_encryption_key so upgrades keep it.
 storage:
   data_dir: /var/lib/nothingdns
+  encryption_key: "${STORAGE_ENCRYPTION_KEY}"
 
 # Recursion (forwarding to upstreams, cached answers) only for loopback and
 # private networks, so the server is not an open resolver. Every client still
@@ -734,23 +739,55 @@ EOF
     # only api_auth_secret, then bootstrap failed with "Old password required"
     # because users.json still had admin — leaving no usable password on disk).
     write_credentials_secret "${AUTH_SECRET}"
+    # Persist storage encryption key alongside auth credentials so a later
+    # config edit/overwrite cannot leave an encrypted data.db unreadable.
+    write_credentials_storage_key "${STORAGE_ENCRYPTION_KEY}"
     info "API auth secret saved to ${CONFIG_DIR}/credentials (root-only)."
     info "Retrieve with: sudo cat ${CONFIG_DIR}/credentials"
 }
 
-# Write or refresh api_auth_secret in credentials while keeping username/password.
+# Write or refresh api_auth_secret in credentials while keeping username/password
+# and storage_encryption_key.
 write_credentials_secret() {
     local secret="$1"
-    local tmp existing_user existing_pass
+    local tmp existing_user existing_pass existing_storage
     tmp=$(mktemp)
     existing_user=$(sudo grep -E '^username:' "${CONFIG_DIR}/credentials" 2>/dev/null | head -1 | sed 's/^username:[[:space:]]*//' || true)
     existing_pass=$(sudo grep -E '^password:' "${CONFIG_DIR}/credentials" 2>/dev/null | head -1 | sed 's/^password:[[:space:]]*//' || true)
+    existing_storage=$(sudo grep -E '^storage_encryption_key:' "${CONFIG_DIR}/credentials" 2>/dev/null | head -1 | sed 's/^storage_encryption_key:[[:space:]]*//' || true)
     {
         printf 'api_auth_secret: %s\n' "${secret}"
         if [ -n "${existing_pass}" ]; then
             printf 'username: %s\n' "${existing_user:-admin}"
             printf 'password: %s\n' "${existing_pass}"
         fi
+        if [ -n "${existing_storage}" ]; then
+            printf 'storage_encryption_key: %s\n' "${existing_storage}"
+        fi
+    } > "${tmp}"
+    sudo cp "${tmp}" "${CONFIG_DIR}/credentials"
+    rm -f "${tmp}"
+    sudo chmod 600 "${CONFIG_DIR}/credentials"
+}
+
+# Persist / refresh storage_encryption_key without wiping other credentials fields.
+write_credentials_storage_key() {
+    local key="$1"
+    [ -n "${key}" ] || return 0
+    local tmp secret user pass
+    tmp=$(mktemp)
+    secret=$(sudo grep -E '^api_auth_secret:' "${CONFIG_DIR}/credentials" 2>/dev/null | head -1 | sed 's/^api_auth_secret:[[:space:]]*//' || true)
+    user=$(sudo grep -E '^username:' "${CONFIG_DIR}/credentials" 2>/dev/null | head -1 | sed 's/^username:[[:space:]]*//' || true)
+    pass=$(sudo grep -E '^password:' "${CONFIG_DIR}/credentials" 2>/dev/null | head -1 | sed 's/^password:[[:space:]]*//' || true)
+    {
+        if [ -n "${secret}" ]; then
+            printf 'api_auth_secret: %s\n' "${secret}"
+        fi
+        if [ -n "${pass}" ]; then
+            printf 'username: %s\n' "${user:-admin}"
+            printf 'password: %s\n' "${pass}"
+        fi
+        printf 'storage_encryption_key: %s\n' "${key}"
     } > "${tmp}"
     sudo cp "${tmp}" "${CONFIG_DIR}/credentials"
     rm -f "${tmp}"
@@ -761,11 +798,12 @@ write_credentials_secret() {
 write_credentials_admin() {
     local user="$1"
     local pass="$2"
-    local secret tmp
+    local secret tmp storage_key
     secret=$(sudo grep -E '^api_auth_secret:' "${CONFIG_DIR}/credentials" 2>/dev/null | head -1 | sed 's/^api_auth_secret:[[:space:]]*//' || true)
     if [ -z "${secret}" ] && [ -n "${AUTH_SECRET:-}" ]; then
         secret="${AUTH_SECRET}"
     fi
+    storage_key=$(sudo grep -E '^storage_encryption_key:' "${CONFIG_DIR}/credentials" 2>/dev/null | head -1 | sed 's/^storage_encryption_key:[[:space:]]*//' || true)
     tmp=$(mktemp)
     {
         if [ -n "${secret}" ]; then
@@ -773,11 +811,115 @@ write_credentials_admin() {
         fi
         printf 'username: %s\n' "${user}"
         printf 'password: %s\n' "${pass}"
+        if [ -n "${storage_key}" ]; then
+            printf 'storage_encryption_key: %s\n' "${storage_key}"
+        fi
     } > "${tmp}"
     sudo cp "${tmp}" "${CONFIG_DIR}/credentials"
     rm -f "${tmp}"
     sudo chmod 600 "${CONFIG_DIR}/credentials"
 }
+
+# True when data.db exists and starts with AES-GCM magic 0xE0.
+data_db_is_encrypted() {
+    local db="${DATA_DIR}/data.db"
+    [ -f "${db}" ] || return 1
+    # First byte 0xE0 = encryptedFileMagic in internal/storage.
+    local mag
+    mag=$(sudo od -An -tx1 -N1 "${db}" 2>/dev/null | tr -d ' \n' || true)
+    [ "${mag}" = "e0" ]
+}
+
+# Ensure storage.encryption_key is present when data.db is encrypted, and keep
+# credentials in sync. Called on every install/upgrade before service start.
+ensure_storage_encryption_key() {
+    local cfg_key cred_key
+    cfg_key=$(sudo awk '
+        /^storage:/ { in_storage=1; next }
+        /^[^[:space:]#]/ { in_storage=0 }
+        in_storage && /^[[:space:]]*encryption_key:/ {
+            sub(/^[[:space:]]*encryption_key:[[:space:]]*/, "")
+            gsub(/"/, "")
+            print
+            exit
+        }
+    ' "${CONFIG_FILE}" 2>/dev/null || true)
+    cred_key=$(sudo grep -E '^storage_encryption_key:' "${CONFIG_DIR}/credentials" 2>/dev/null | head -1 | sed 's/^storage_encryption_key:[[:space:]]*//' || true)
+
+    if [ -n "${cfg_key}" ]; then
+        write_credentials_storage_key "${cfg_key}"
+        return 0
+    fi
+
+    if [ -n "${cred_key}" ]; then
+        info "Restoring storage.encryption_key from ${CONFIG_DIR}/credentials into config"
+        inject_storage_encryption_key "${cred_key}"
+        return 0
+    fi
+
+    if data_db_is_encrypted; then
+        warn "data.db at ${DATA_DIR}/data.db is AES-GCM encrypted, but storage.encryption_key is missing from config and credentials."
+        echo "  Restore the 64-hex-char key under storage.encryption_key in ${CONFIG_FILE}," >&2
+        echo "  or set storage_encryption_key in ${CONFIG_DIR}/credentials and re-run install." >&2
+        echo "  To start fresh (lose API-managed zone DB state; zone files still load):" >&2
+        echo "    sudo systemctl stop nothingdns" >&2
+        echo "    sudo mv ${DATA_DIR}/data.db ${DATA_DIR}/data.db.encrypted.bak" >&2
+        echo "    sudo systemctl start nothingdns" >&2
+        return 1
+    fi
+    return 0
+}
+
+# Insert or replace storage.encryption_key in the YAML config.
+inject_storage_encryption_key() {
+    local key="$1"
+    local tmp
+    tmp=$(mktemp)
+    sudo cat "${CONFIG_FILE}" | awk -v key="${key}" '
+        BEGIN { done=0 }
+        /^storage:/ {
+            print
+            in_storage=1
+            next
+        }
+        in_storage && /^[[:space:]]*encryption_key:/ {
+            print "  encryption_key: \"" key "\""
+            done=1
+            next
+        }
+        in_storage && /^[^[:space:]#]/ {
+            if (!done) {
+                print "  encryption_key: \"" key "\""
+                done=1
+            }
+            in_storage=0
+            print
+            next
+        }
+        in_storage && /^[[:space:]]*data_dir:/ {
+            print
+            if (!done) {
+                print "  encryption_key: \"" key "\""
+                done=1
+            }
+            next
+        }
+        { print }
+        END {
+            if (!done) {
+                print ""
+                print "storage:"
+                print "  data_dir: /var/lib/nothingdns"
+                print "  encryption_key: \"" key "\""
+            }
+        }
+    ' > "${tmp}"
+    sudo cp "${tmp}" "${CONFIG_FILE}"
+    rm -f "${tmp}"
+    secure_config_file
+    write_credentials_storage_key "${key}"
+}
+
 
 # Load username/password from credentials into BOOTSTRAP_*.
 load_credentials_admin() {
@@ -1123,6 +1265,12 @@ main() {
     fi
 
     create_config $port
+    if ! ensure_storage_encryption_key; then
+        if [ "${TAKE_PORT_53}" = true ]; then
+            restore_host_dns
+        fi
+        exit 1
+    fi
     setup_service
     setup_logrotate
 
@@ -1133,6 +1281,10 @@ main() {
         if ! systemctl is-active --quiet nothingdns; then
             warn "NothingDNS failed to start. Recent log:"
             sudo journalctl -u nothingdns -n 30 --no-pager 2>/dev/null || true
+            if data_db_is_encrypted; then
+                warn "Hint: encrypted data.db without a matching storage.encryption_key causes this."
+                warn "Check: sudo grep encryption_key ${CONFIG_FILE}; sudo grep storage_encryption_key ${CONFIG_DIR}/credentials"
+            fi
             if [ "${TAKE_PORT_53}" = true ]; then
                 restore_host_dns
             fi
