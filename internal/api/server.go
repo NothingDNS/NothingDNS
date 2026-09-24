@@ -312,11 +312,11 @@ type apiRateLimiter struct {
 	windowSecs int                    // Window size in seconds
 }
 
-// apiRateLimit constants for authenticated endpoints
+// API rate-limit defaults and caps (sliding window per client IP on /api/).
 const (
-	apiRateLimitMaxRequests = 100   // Max requests per window
-	apiRateLimitWindowSecs  = 60    // Window size in seconds
-	apiRateLimitMaxEntries  = 50000 // Max tracked IPs to prevent unbounded memory growth
+	DefaultAPIRateLimit      = 600 // requests per window when config is 0
+	DefaultAPIRateWindowSecs = 60
+	apiRateLimitMaxEntries   = 50000 // Max tracked IPs to prevent unbounded memory growth
 )
 
 // maxBodyBytes is the maximum size for request bodies to prevent OOM attacks.
@@ -421,11 +421,17 @@ func (r *apiRateLimiter) cleanup() {
 }
 
 // newAPIRateLimiter creates a new API rate limiter
-func newAPIRateLimiter() *apiRateLimiter {
+func newAPIRateLimiter(maxReqs, windowSecs int) *apiRateLimiter {
+	if maxReqs <= 0 {
+		maxReqs = DefaultAPIRateLimit
+	}
+	if windowSecs <= 0 {
+		windowSecs = DefaultAPIRateWindowSecs
+	}
 	return &apiRateLimiter{
 		requests:   make(map[string][]time.Time),
-		maxReqs:    apiRateLimitMaxRequests,
-		windowSecs: apiRateLimitWindowSecs,
+		maxReqs:    maxReqs,
+		windowSecs: windowSecs,
 	}
 }
 
@@ -453,7 +459,7 @@ func NewServer(cfg config.HTTPConfig, zm *zone.Manager, c *cache.Cache, reload f
 			ipAttempts:   make(map[string]*loginAttempt),
 			userAttempts: make(map[string]*loginAttempt),
 		},
-		apiRateLimiter: newAPIRateLimiter(),
+		apiRateLimiter: newAPIRateLimiter(cfg.APIRateLimit, cfg.APIRateWindowSecs),
 	}
 	s.trustedProxies = parseTrustedProxies(cfg.TrustedProxies)
 	return s

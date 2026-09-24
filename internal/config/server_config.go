@@ -180,6 +180,16 @@ type HTTPConfig struct {
 	// Allowed origins for CORS (empty means only same-origin requests allowed)
 	// Use "*" to allow all origins (not recommended for production)
 	AllowedOrigins []string `yaml:"allowed_origins"`
+
+	// APIRateLimit is the max number of /api/ requests per client IP in
+	// APIRateWindowSecs (sliding window). 0 means the server default (600).
+	// Caps request bursts from the dashboard and API clients; does not affect
+	// DNS query RRL (see rrl:).
+	APIRateLimit int `yaml:"api_rate_limit"`
+
+	// APIRateWindowSecs is the sliding-window length for APIRateLimit.
+	// 0 means 60 seconds.
+	APIRateWindowSecs int `yaml:"api_rate_window_secs"`
 }
 
 // AuthUserConfig defines a user for authentication.
@@ -252,6 +262,12 @@ func unmarshalServer(node *Node, cfg *ServerConfig) error {
 			return fmt.Errorf("http: %w", err)
 		}
 		cfg.HTTP.AllowedOrigins = getStringSlice(httpNode, "allowed_origins", cfg.HTTP.AllowedOrigins)
+		if cfg.HTTP.APIRateLimit, err = getRequiredInt(httpNode, "api_rate_limit", cfg.HTTP.APIRateLimit); err != nil {
+			return fmt.Errorf("http: %w", err)
+		}
+		if cfg.HTTP.APIRateWindowSecs, err = getRequiredInt(httpNode, "api_rate_window_secs", cfg.HTTP.APIRateWindowSecs); err != nil {
+			return fmt.Errorf("http: %w", err)
+		}
 		cfg.HTTP.DoHEnabled = getBool(httpNode, "doh_enabled", cfg.HTTP.DoHEnabled)
 		cfg.HTTP.DoHPath = httpNode.GetString("doh_path")
 		if cfg.HTTP.DoHPath == "" {

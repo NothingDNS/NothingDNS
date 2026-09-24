@@ -216,6 +216,16 @@ func (c *Config) validateHTTPUsers() []string {
 	if c.Server.HTTP.MaxSessionsPerUser < 0 {
 		errors = append(errors, "http.max_sessions_per_user cannot be negative")
 	}
+	if c.Server.HTTP.APIRateLimit < 0 {
+		errors = append(errors, "http.api_rate_limit cannot be negative")
+	} else if c.Server.HTTP.APIRateLimit > 100000 {
+		errors = append(errors, "http.api_rate_limit cannot exceed 100000")
+	}
+	if c.Server.HTTP.APIRateWindowSecs < 0 {
+		errors = append(errors, "http.api_rate_window_secs cannot be negative")
+	} else if c.Server.HTTP.APIRateWindowSecs > 3600 {
+		errors = append(errors, "http.api_rate_window_secs cannot exceed 3600")
+	}
 	seen := make(map[string]int, len(c.Server.HTTP.Users))
 	for i, user := range c.Server.HTTP.Users {
 		prefix := fmt.Sprintf("http.users[%d]", i)

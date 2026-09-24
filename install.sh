@@ -626,6 +626,9 @@ server:
     enabled: true
     bind: "0.0.0.0:8080"
     auth_secret: "${AUTH_SECRET}"
+    # HTTP API rate limit per client IP (dashboard + REST). Default 600/60s.
+    # api_rate_limit: 600
+    # api_rate_window_secs: 60
 
   # TLS/DoT (optional)
   # tls:

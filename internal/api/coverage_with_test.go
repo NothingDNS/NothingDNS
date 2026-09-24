@@ -51,7 +51,7 @@ func TestRedactIP(t *testing.T) {
 }
 
 func TestAPIRateLimiter_Cleanup_DropsStaleEntries(t *testing.T) {
-	r := newAPIRateLimiter()
+	r := newAPIRateLimiter(0, 0)
 	// Force a small window so we can stage entries that fall outside it.
 	r.windowSecs = 1
 	now := time.Now()

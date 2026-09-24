@@ -508,7 +508,7 @@ Operator or admin:
 {
   "status": "running",
   "timestamp": "2026-09-16T17:07:00Z",
-  "version": "1.2.10",
+  "version": "1.2.11",
   "cache": {"size": 0, "capacity": 10000, "hits": 0, "misses": 0, "hit_ratio": 0},
   "cluster": {"enabled": false}
 }
@@ -529,7 +529,7 @@ Role: operator. A short summary of selected settings.
 
 ```json
 {
-  "version": "1.2.10",
+  "version": "1.2.11",
   "listen_port": 5399,
   "log_level": "info",
   "dns64": {"enabled": false, "prefix": "64:ff9b::", "prefix_len": 96},
@@ -1685,7 +1685,7 @@ page (the web app handles login) instead of `401`.
 
 | Limit | Scope | Behaviour |
 |---|---|---|
-| API | every path starting with `/api/`, including login, bootstrap, CSP reports and OpenAPI | 100 requests per 60-second sliding window per client IP, counted before authentication. `429 {"error":"rate limit exceeded"}` with `Retry-After` (seconds). |
+| API | every path starting with `/api/`, including login, bootstrap, CSP reports and OpenAPI | server.http.api_rate_limit requests per server.http.api_rate_window_secs (defaults: 600 per 60s) sliding window per client IP, counted before authentication. `429 {"error":"rate limit exceeded"}` with `Retry-After` (seconds). |
 | Login, per IP | `POST /api/v1/auth/login` | 30-second wait after each failure; 5 failures lock the IP for 5 minutes |
 | Login, per IP and username | `POST /api/v1/auth/login` | 5 failures lock the pair for 5 minutes |
 | DoWS | per connection | 100 queries per second |

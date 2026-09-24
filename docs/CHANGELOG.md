@@ -5,6 +5,15 @@ All notable changes to NothingDNS are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.11] — 2026-09-24
+
+### Changed
+
+- **HTTP API rate limit is configurable** under `server.http`:
+  `api_rate_limit` (default **600**/window, was hardcoded 100) and
+  `api_rate_window_secs` (default 60). Cap `api_rate_limit` at 100000.
+  Does not affect DNS RRL.
+
 ## [1.2.10] — 2026-09-24
 
 ### Fixed

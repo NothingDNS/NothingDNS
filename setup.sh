@@ -267,6 +267,8 @@ server:
     enabled: true
     bind: "0.0.0.0:8080"
     auth_secret: "${secret}"
+    # api_rate_limit: 600
+    # api_rate_window_secs: 60
 
 upstream:
   strategy: round_robin

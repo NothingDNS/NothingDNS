@@ -1212,6 +1212,43 @@ server:
 	}
 }
 
+func TestUnmarshalYAMLHTTPAPIRateLimit(t *testing.T) {
+	input := `
+server:
+  http:
+    enabled: true
+    bind: ":8080"
+    api_rate_limit: 2000
+    api_rate_window_secs: 30
+`
+	cfg, err := UnmarshalYAML(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Server.HTTP.APIRateLimit != 2000 {
+		t.Fatalf("APIRateLimit = %d, want 2000", cfg.Server.HTTP.APIRateLimit)
+	}
+	if cfg.Server.HTTP.APIRateWindowSecs != 30 {
+		t.Fatalf("APIRateWindowSecs = %d, want 30", cfg.Server.HTTP.APIRateWindowSecs)
+	}
+}
+
+func TestValidateHTTPAPIRateLimitBounds(t *testing.T) {
+	cfg := &Config{}
+	cfg.Server.HTTP.APIRateLimit = 100001
+	errs := cfg.validateHTTPUsers()
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e, "api_rate_limit") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected api_rate_limit bound error, got %v", errs)
+	}
+}
+
 func TestUnmarshalYAMLRejectsInvalidServerNestedIntegers(t *testing.T) {
 	tests := []struct {
 		name  string

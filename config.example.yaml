@@ -39,6 +39,12 @@ server:
     #   - "https://dns.example.com"
     #   - "https://dns.internal"
 
+    # HTTP API rate limit (dashboard + REST), per client IP sliding window.
+    # Default when omitted: 600 requests / 60 seconds. Cap: 100000.
+    # Does not affect DNS query RRL (see rrl: below).
+    # api_rate_limit: 600
+    # api_rate_window_secs: 60
+
     # DoH endpoint served from the HTTP listener when TLS is configured.
     doh_enabled: false
     doh_path: /dns-query
