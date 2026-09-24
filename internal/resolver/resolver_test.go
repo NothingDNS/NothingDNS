@@ -133,6 +133,15 @@ func (m *mockCache) SetNegativeWithTTL(key string, rcode uint8, ttl uint32) {
 	m.negativeTTLs = append(m.negativeTTLs, ttl)
 }
 
+func (m *mockCache) ApplyTTLPolicy(msg *protocol.Message, ttl uint32) uint32 {
+	if msg == nil {
+		return 0
+	}
+	// Minimal mock: no-op, caller-provided TTL is used as-is.
+	// Tests that need clamping behavior should use the real cache.Cache.
+	return ttl
+}
+
 // --- Helpers ---
 
 func makeNSRR(name, nsName string) *protocol.ResourceRecord {
