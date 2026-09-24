@@ -1,6 +1,7 @@
 package doh
 
 import (
+	"crypto/rand"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"sync"
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
 	"github.com/nothingdns/nothingdns/internal/server"
@@ -362,6 +364,25 @@ func (rw *dohResponseWriter) Write(msg *protocol.Message) (int, error) {
 	// The Padding option lives inside the OPT record, so the message is
 	// re-packed after the option is added.
 	if rw.padding && queryHasPaddingOption(rw.query) {
+		// padResponseMessage requires an OPT record. The DNS pipeline filters
+		// (ACL, RRL, recursion) may produce REFUSED/NXDOMAIN responses that
+		// carry no OPT record. Inject an empty one so filtered responses are
+		// padded — without this, an observer can distinguish a filtered
+		// response from a successful one by its size, leaking the fact
+		// that a query was filtered.
+		hasOPT := false
+		for _, rr := range msg.Additionals {
+			if rr != nil && rr.Type == protocol.TypeOPT {
+				hasOPT = true
+				break
+			}
+		}
+		if !hasOPT {
+			msg.Additionals = append(msg.Additionals, &protocol.ResourceRecord{
+				Type: protocol.TypeOPT,
+				Data: &protocol.RDataOPT{},
+			})
+		}
 		if padResponseMessage(msg, n) {
 			buf = make([]byte, msg.WireLength())
 			n, err = msg.Pack(buf)
@@ -465,7 +486,24 @@ func padResponseMessage(msg *protocol.Message, packedLen int) bool {
 	// The option itself costs 4 header bytes; the zero-filled data brings
 	// the total up to the next block boundary.
 	withOptionHeader := packedLen + 4
-	padLen := (paddingBlockSize - withOptionHeader%paddingBlockSize) % paddingBlockSize
+	blockFill := (paddingBlockSize - withOptionHeader%paddingBlockSize) % paddingBlockSize
+	// RFC 8467 §4.1 recommends block-aligned padding but allows randomization
+	// within the block boundary to prevent traffic analysis. A fixed padding
+	// length makes the underlying response size predictable: given the block
+	// boundary, the response size uniquely determines the unpadded payload size.
+	// Adding a uniform random offset in [0, paddingBlockSize) makes the final
+	// response size unpredictable to a network observer who knows only the
+	// block boundary.
+	var extra int
+	var randBuf [2]byte
+	if _, err := rand.Read(randBuf[:]); err == nil {
+		extra = int(randBuf[0])<<8 | int(randBuf[1])
+		extra %= paddingBlockSize
+	}
+	padLen := blockFill + extra
 	opt.AddOption(EDNS0OptionPadding, make([]byte, padLen))
 	return true
 }
+
+// padRandMu protects the rand reader from concurrent use.
+var padRandMu sync.Mutex
