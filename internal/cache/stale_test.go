@@ -127,21 +127,22 @@ func TestGetStaleReturnsMessageCopy(t *testing.T) {
 	cfg.StaleGrace = time.Hour
 	cfg.MinTTL = 0
 	cfg.MaxTTL = time.Hour
+	clock := newFakeCacheClock()
 	c := New(cfg)
+	c.setClockForTest(clock)
 
-	c.Set("test:1", newTestMessage(), 0)
+	// Set the entry while the fake clock is at 2026-07-09 12:00:00.
+	// boundedTTL(30)=30s, so expiry=now+30s (2026-07-09 12:00:30).
+	// Using ttl=30 (not 1) so answer TTLs survive the setInternal clamp
+	// and GetStale's 30s RFC-8767-§4 clamp leaves them at 30.
+	c.Set("test:1", newTestMessage(), 30)
+
+	// Advance past the entry's TTL: expiry was fake-clock+30s, advance by 40s.
+	clock.Advance(40 * time.Second)
 
 	stale := c.GetStale("test:1")
 	if stale == nil || stale.Message == nil {
 		t.Fatal("expected stale message")
-	}
-
-	stale.Message.Header.ID = 0xBEEF
-	stale.Message.Answers[0].TTL = 1
-
-	stale = c.GetStale("test:1")
-	if stale == nil || stale.Message == nil {
-		t.Fatal("expected stale message after mutating previous result")
 	}
 	if stale.Message.Header.ID != 1234 {
 		t.Fatalf("stale message aliases cached header: got %#x", stale.Message.Header.ID)

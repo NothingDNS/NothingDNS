@@ -2,6 +2,7 @@ package cache
 
 import (
 	"hash/maphash"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -600,10 +601,33 @@ func (c *Cache) ApplyTTLPolicy(msg *protocol.Message, ttl uint32) uint32 {
 	return secs
 }
 
+// UnboundedTTL is a sentinel value meaning "no TTL was provided by the upstream
+// resolver; apply the configured MaxTTL instead of treating it as zero." This
+// avoids conflating "upstream provided no TTL" with "caller wants immediate
+// expiry," which are distinct semantics both expressed as ttl=0 in Go's
+// unsigned-integer calling convention.
+//
+// Use this sentinel when deriving a cache TTL from answer records that may not
+// contain TTL information (e.g., synthesized or locally-generated answers).
+// Callers that want an entry to expire immediately should pass ttl=0 directly,
+// which boundedTTL passes through as zero, causing immediate expiry.
+const UnboundedTTL uint32 = math.MaxUint32
+
 // boundedTTL applies the configured min/max bounds to a raw TTL.
-// maxTTL == 0 means "no upper bound" — only clamp when a positive ceiling has
-// been configured, since a zero ceiling would expire entries immediately.
+// A ttl value of 0 means the caller wants immediate expiry (zero remaining TTL).
+// Use the UnboundedTTL sentinel if the intent is "no upstream TTL, apply MaxTTL."
 func (c *Cache) boundedTTL(ttl uint32) time.Duration {
+	if ttl == UnboundedTTL {
+		// No TTL provided by the upstream resolver. Fall back to MaxTTL so
+		// the entry is cached for the configured positive-caching window.
+		duration := c.config().MaxTTL
+		if duration < c.config().MinTTL {
+			duration = c.config().MinTTL
+		}
+		return duration
+	}
+	// ttl=0 means "expire immediately": pass through as zero duration so the
+	// entry is eligible for stale-serving immediately and ExpireTime = now.
 	duration := time.Duration(ttl) * time.Second
 	if duration < c.config().MinTTL {
 		duration = c.config().MinTTL
