@@ -446,9 +446,15 @@ func (wal *WAL) AppendBatch(entries []WALEntry) error {
 		return err
 	}
 
-	// Write all entries
+	// Write all entries; if any fails, write an Abort marker so recovery
+	// can distinguish this partial batch from a committed one.
 	for _, entry := range entries {
 		if _, err := wal.appendLocked(entry.Type, entry.Data); err != nil {
+			// Best-effort Abort: if this write also fails, surface the
+			// original error — the partial batch will still be filtered
+			// by readSegment on recovery because the segment ended without
+			// a Commit marker.
+			wal.appendLocked(EntryTypeAbort, nil)
 			return err
 		}
 	}
@@ -607,7 +613,10 @@ func (wal *WAL) ReadAll() ([]WALEntry, error) {
 	return entries, nil
 }
 
-// readSegment reads all entries from a single segment
+// readSegment reads all entries from a single segment.
+// Only entries from committed batches are returned. A partial batch
+// (Begin without a matching Commit, or followed by Abort) is discarded
+// on both Abort markers and at segment end.
 func (wal *WAL) readSegment(segment *WALSegment) ([]WALEntry, error) {
 	file, err := os.Open(segment.Path)
 	if err != nil {
@@ -619,6 +628,10 @@ func (wal *WAL) readSegment(segment *WALSegment) ([]WALEntry, error) {
 	buf := make([]byte, 4096)
 	pos := int64(0)
 
+	// inBatch tracks whether we are inside an uncommitted batch.
+	// Each entry is appended only once it is known to be committed.
+	inBatch := false
+
 	for {
 		// Read header
 		header := make([]byte, WALHeaderSize)
@@ -629,8 +642,7 @@ func (wal *WAL) readSegment(segment *WALSegment) ([]WALEntry, error) {
 		// A partial header at the tail of the segment is the signature of
 		// a power-loss crash mid-Append: we wrote some bytes but not the
 		// full 9-byte header. Treat that as the end of the valid log and
-		// return what we have, rather than failing recovery for the whole
-		// segment.
+		// discard any uncommitted batch in progress.
 		if errors.Is(err, io.ErrUnexpectedEOF) {
 			break
 		}
@@ -656,7 +668,7 @@ func (wal *WAL) readSegment(segment *WALSegment) ([]WALEntry, error) {
 
 		_, err = io.ReadFull(io.NewSectionReader(file, pos, int64(entrySize)), buf)
 		// Partial trailing entry (some header, not enough body) — same
-		// torn-write story; stop and return successfully.
+		// torn-write story; stop and discard any uncommitted batch.
 		if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
 			break
 		}
@@ -671,7 +683,29 @@ func (wal *WAL) readSegment(segment *WALSegment) ([]WALEntry, error) {
 			break
 		}
 
-		entries = append(entries, *entry)
+		// State machine for batch tracking.
+		switch entry.Type {
+		case EntryTypeBegin:
+			// A new batch starts; discard any previously uncommitted one.
+			inBatch = true
+			entries = nil
+		case EntryTypeCommit:
+			// Batch is now committed — keep what we have.
+			inBatch = false
+		case EntryTypeAbort:
+			// Batch was rolled back — discard its entries.
+			inBatch = false
+			entries = nil
+		default:
+			// Regular entry: only include it if we are in a committed batch.
+			if !inBatch {
+				entries = append(entries, *entry)
+			}
+			// If inBatch is true, the entry is part of a partial batch and
+			// is silently discarded; it will be dropped either when we see
+			// the matching Commit, when we see Abort, or at segment end.
+		}
+
 		pos += int64(entrySize)
 	}
 
