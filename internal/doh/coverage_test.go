@@ -544,8 +544,16 @@ func TestPadResponseMessage(t *testing.T) {
 	if po == nil {
 		t.Fatal("padding option not added")
 	}
-	if got := packedLen + 4 + len(po.Data); got%paddingBlockSize != 0 {
-		t.Errorf("padded size %d is not a multiple of %d", got, paddingBlockSize)
+	// RFC 8467 §4.1 block-level padding: padLen = blockFill + extra,
+	// where blockFill = next-block - (packedLen+4) mod blockSize (∈ [0, blockSize))
+	// and extra = rand16 % blockSize (∈ [0, blockSize-1]).
+	// Therefore: padLen ∈ [blockFill, blockFill + blockSize).
+	withOptionHeader := packedLen + 4
+	blockFill := (paddingBlockSize - withOptionHeader%paddingBlockSize) % paddingBlockSize
+	padLen := len(po.Data)
+	if padLen < blockFill || padLen >= blockFill+paddingBlockSize {
+		t.Errorf("padLen %d is outside the valid range [%d, %d)",
+			padLen, blockFill, blockFill+paddingBlockSize)
 	}
 }
 
@@ -567,8 +575,20 @@ func TestPadResponseMessage_ExactBoundary(t *testing.T) {
 	if po == nil {
 		t.Fatal("padding option not added")
 	}
-	if len(po.Data) != 0 {
-		t.Errorf("expected zero-length padding data at exact boundary, got %d", len(po.Data))
+	// With block-level randomization (RFC 8467 §4.1), padLen ∈ [0, paddingBlockSize)
+	// even at exact boundary. The blockFill is 0 but extra is sampled.
+	padLen := len(po.Data)
+	if padLen < 0 || padLen >= paddingBlockSize {
+		t.Errorf("padLen %d is outside the valid range [0, %d)", padLen, paddingBlockSize)
+	}
+	// At exact boundary (withOptionHeader == blockSize), blockFill is 0,
+	// so totalPadded ∈ [blockSize, 2*blockSize).
+	totalPadded := packedLen + 4 + padLen
+	if totalPadded < paddingBlockSize {
+		t.Errorf("padded size %d is below the minimum block size %d", totalPadded, paddingBlockSize)
+	}
+	if totalPadded > 2*paddingBlockSize {
+		t.Errorf("padded size %d exceeds 2× block size %d", totalPadded, paddingBlockSize)
 	}
 }
 

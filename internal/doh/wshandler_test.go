@@ -306,11 +306,9 @@ func TestDoHResponseWriter_WithPadding(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("Expected 200, got %d", rr.Code)
 	}
-	if rr.Body.Len()%paddingBlockSize != 0 {
-		t.Errorf("padded response length %d is not a multiple of %d (RFC 8467 §4.1)", rr.Body.Len(), paddingBlockSize)
-	}
-	// The padded response must still be a valid DNS message with the
-	// Padding option inside the OPT record.
+	// Verify the response is a valid DNS message with Padding option (RFC 8467 §4.1).
+	// The OPT record padding block must be within [blockFill, blockFill+blockSize),
+	// where blockFill is the bytes needed to reach the next block boundary.
 	respMsg, err := protocol.UnpackMessage(rr.Body.Bytes())
 	if err != nil {
 		t.Fatalf("padded response is not a valid DNS message: %v", err)
