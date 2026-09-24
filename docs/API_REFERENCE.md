@@ -508,7 +508,7 @@ Operator or admin:
 {
   "status": "running",
   "timestamp": "2026-09-16T17:07:00Z",
-  "version": "1.2.9",
+  "version": "1.2.10",
   "cache": {"size": 0, "capacity": 10000, "hits": 0, "misses": 0, "hit_ratio": 0},
   "cluster": {"enabled": false}
 }
@@ -529,7 +529,7 @@ Role: operator. A short summary of selected settings.
 
 ```json
 {
-  "version": "1.2.9",
+  "version": "1.2.10",
   "listen_port": 5399,
   "log_level": "info",
   "dns64": {"enabled": false, "prefix": "64:ff9b::", "prefix_len": 96},

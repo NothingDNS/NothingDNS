@@ -161,13 +161,30 @@ describe('ClusterPage', () => {
     const diagram = screen.getByLabelText('Cluster topology diagram');
     expect(diagram).toBeInTheDocument();
     expect(diagram.getAttribute('viewBox')).toBe('0 0 720 440');
-    // All peers (including a bottom-orbit follower) must be present in the SVG.
     expect(diagram.textContent).toContain('node-1');
     expect(diagram.textContent).toContain('node-2');
     expect(diagram.textContent).toContain('node-3');
     expect(diagram.textContent).toContain('10.0.0.3');
     expect(screen.getAllByText('Leader').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('Follower').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('draws a topology link for every follower including the top orbit', async () => {
+    mockFetch
+      .mockResolvedValueOnce(mockJsonResponse(sampleNodes))
+      .mockResolvedValueOnce(mockJsonResponse(sampleStatus));
+    render(<ClusterPage />);
+
+    const diagram = await screen.findByLabelText('Cluster topology diagram');
+    // sampleNodes: leader + 2 followers → 2 <line> edges (no missing vertical link).
+    expect(diagram.querySelectorAll('line')).toHaveLength(2);
+    for (const line of diagram.querySelectorAll('line')) {
+      expect(line.getAttribute('stroke')).not.toMatch(/^url\(/);
+      const samePoint =
+        line.getAttribute('x1') === line.getAttribute('x2') &&
+        line.getAttribute('y1') === line.getAttribute('y2');
+      expect(samePoint).toBe(false);
+    }
   });
 
   it('expands node details on click', async () => {

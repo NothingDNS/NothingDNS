@@ -337,26 +337,31 @@ function TopologyDiagram({
         role="img"
         aria-label="Cluster topology diagram"
       >
-        <defs>
-          <linearGradient id="raft-link" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="var(--color-primary)" stopOpacity="0.55" />
-            <stop offset="100%" stopColor="var(--color-success)" stopOpacity="0.35" />
-          </linearGradient>
-        </defs>
-
         {leaderPos && layout.followers.map((node) => {
           const pos = layout.positions.get(node.id);
           if (!pos) return null;
           const healthy = node.state === 'alive';
+          const dx = pos.x - leaderPos.x;
+          const dy = pos.y - leaderPos.y;
+          const len = Math.hypot(dx, dy) || 1;
+          const ux = dx / len;
+          const uy = dy / len;
+          // Stop at circle edges so the stroke is never covered by node fills.
+          const x1 = leaderPos.x + ux * layout.leaderR;
+          const y1 = leaderPos.y + uy * layout.leaderR;
+          const x2 = pos.x - ux * layout.followerR;
+          const y2 = pos.y - uy * layout.followerR;
           return (
             <g key={`link-${node.id}`}>
               <line
-                x1={leaderPos.x}
-                y1={leaderPos.y}
-                x2={pos.x}
-                y2={pos.y}
-                stroke={healthy ? 'url(#raft-link)' : 'var(--color-warning)'}
+                x1={x1}
+                y1={y1}
+                x2={x2}
+                y2={y2}
+                stroke={healthy ? 'var(--color-primary)' : 'var(--color-warning)'}
+                strokeOpacity={healthy ? 0.65 : 0.8}
                 strokeWidth={healthy ? 2.5 : 1.5}
+                strokeLinecap="round"
                 strokeDasharray={healthy ? undefined : '6 6'}
                 className={healthy ? 'animate-[pulse_2.8s_ease-in-out_infinite]' : undefined}
               />
