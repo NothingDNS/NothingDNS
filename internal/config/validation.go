@@ -299,6 +299,9 @@ func (c *Config) validateServer() []string {
 	}
 
 	// Validate worker counts
+	if c.Server.UDPListeners < 0 || c.Server.UDPListeners > 64 {
+		errors = append(errors, "server: udp_listeners must be between 0 and 64")
+	}
 	if c.Server.UDPWorkers < 0 {
 		errors = append(errors, "server: udp_workers cannot be negative")
 	}

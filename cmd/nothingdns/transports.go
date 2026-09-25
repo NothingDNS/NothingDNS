@@ -42,23 +42,37 @@ func startServers(cfg *config.Config, handler *integratedHandler, transferMgr *T
 	udpAddrs := dnsListenAddrs(cfg.Server.UDPBind, cfg.Server.Bind, cfg.Server.Port)
 	tcpAddrs := dnsListenAddrs(cfg.Server.TCPBind, cfg.Server.Bind, cfg.Server.Port)
 
-	// UDP
-	for i, addr := range udpAddrs {
-		udp := server.NewUDPServerWithWorkers(addr, handler, cfg.Server.UDPWorkers)
-		if err := udp.Listen(); err != nil {
-			return s, fmt.Errorf("starting UDP server on %s: %w", addr, err)
-		}
-		if i == 0 {
-			s.udp = udp
-		} else {
-			s.extraUDP = append(s.extraUDP, udp)
-		}
-		go func() {
-			if err := udp.Serve(); err != nil {
-				logger.Errorf("UDP server error on %s: %v", addr, err)
+	// UDP. udp_listeners>1 opens extra SO_REUSEPORT sockets on the same
+	// address so reads are not stuck on one core (Linux balances them).
+	udpListeners := cfg.Server.UDPListeners
+	if udpListeners < 1 {
+		udpListeners = 1
+	}
+	firstUDP := true
+	for _, addr := range udpAddrs {
+		for n := 0; n < udpListeners; n++ {
+			udp := server.NewUDPServerWithWorkers(addr, handler, cfg.Server.UDPWorkers)
+			// 0 disables the transport per-IP cap (lock-free). Unset keeps the
+			// built-in default so existing configs do not change behavior.
+			if cfg.Server.UDPRatePerIPSet {
+				udp.SetRateLimit(cfg.Server.UDPRatePerIP)
 			}
-		}()
-		logger.Infof("UDP server listening on %s", addr)
+			if err := udp.Listen(); err != nil {
+				return s, fmt.Errorf("starting UDP server on %s: %w", addr, err)
+			}
+			if firstUDP {
+				s.udp = udp
+				firstUDP = false
+			} else {
+				s.extraUDP = append(s.extraUDP, udp)
+			}
+			go func() {
+				if err := udp.Serve(); err != nil {
+					logger.Errorf("UDP server error on %s: %v", addr, err)
+				}
+			}()
+			logger.Infof("UDP server listening on %s", addr)
+		}
 	}
 
 	// DSO (RFC 8490): one shared adapter serves both TCP and DoT — conn

@@ -8,6 +8,7 @@ server:
     - 0.0.0.0
   udp_workers: 0   # auto (NumCPU * 4)
   tcp_workers: 0   # auto (NumCPU * 2)
+  udp_rate_per_ip: 0  # disable silent per-client UDP drop (default 100/s)
   tls:
     enabled: true
     cert_file: /etc/nothingdns/tls/prod.crt

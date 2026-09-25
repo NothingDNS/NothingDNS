@@ -3404,8 +3404,11 @@ func TestUDPServer_SetRateLimit_Zero(t *testing.T) {
 	if rl == nil {
 		t.Fatal("rateLimiter should not be nil")
 	}
-	if rl.maxCount != 1000000 {
-		t.Errorf("maxCount = %d, want 1000000 (unlimited)", rl.maxCount)
+	if !rl.disabled.Load() {
+		t.Fatal("SetRateLimit(0) should disable the limiter")
+	}
+	if !rl.Allow("203.0.113.1") {
+		t.Fatal("disabled limiter must allow")
 	}
 }
 
@@ -3416,8 +3419,8 @@ func TestUDPServer_SetRateLimit_Negative(t *testing.T) {
 	s.SetRateLimit(-1)
 
 	rl := s.rateLimiter.Load()
-	if rl.maxCount != 1000000 {
-		t.Errorf("maxCount = %d, want 1000000 for negative input", rl.maxCount)
+	if rl == nil || !rl.disabled.Load() {
+		t.Fatal("negative rate should disable the limiter")
 	}
 }
 

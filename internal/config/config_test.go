@@ -65,6 +65,30 @@ func TestDefaultConfig(t *testing.T) {
 	}
 }
 
+func TestUnmarshalUDPPerfKnobs(t *testing.T) {
+	cfg, err := UnmarshalYAML("server:\n  udp_rate_per_ip: 0\n  udp_listeners: 4\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Server.UDPRatePerIPSet || cfg.Server.UDPRatePerIP != 0 {
+		t.Fatalf("rate cap: set=%v value=%d", cfg.Server.UDPRatePerIPSet, cfg.Server.UDPRatePerIP)
+	}
+	if cfg.Server.UDPListeners != 4 {
+		t.Fatalf("listeners=%d", cfg.Server.UDPListeners)
+	}
+
+	unset, err := UnmarshalYAML("server:\n  port: 53\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unset.Server.UDPRatePerIPSet {
+		t.Fatal("udp_rate_per_ip should stay unset when omitted")
+	}
+	if unset.Server.UDPListeners != 0 {
+		t.Fatalf("default listeners=%d", unset.Server.UDPListeners)
+	}
+}
+
 func TestUnmarshalYAMLBasic(t *testing.T) {
 	input := `
 server:

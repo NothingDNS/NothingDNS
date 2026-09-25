@@ -5,6 +5,17 @@ All notable changes to NothingDNS are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.17] — 2026-09-25
+
+### Changed
+
+- **UDP query throughput**: shipped configs set `server.udp_rate_per_ip: 0`,
+  which turns off the silent per-client cap (built-in default 100 queries/s,
+  dropped with no response). The disabled cap skips the reader lock.
+  `install.sh` writes the key into an existing config on upgrade when it is
+  absent; an explicit value is left as-is. Optional `server.udp_listeners`
+  opens extra `SO_REUSEPORT` sockets (default 1).
+
 ## [1.2.16] — 2026-09-25
 
 ### Fixed

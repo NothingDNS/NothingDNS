@@ -261,6 +261,8 @@ server:
     - "::"
   udp_workers: 0
   tcp_workers: 0
+  # 0 disables the silent per-client UDP cap (built-in default is 100/s).
+  udp_rate_per_ip: 0
   # Web dashboard and REST API on every interface. Put it behind a TLS reverse
   # proxy or restrict it with a firewall on untrusted networks.
   http:

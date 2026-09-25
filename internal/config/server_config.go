@@ -36,6 +36,17 @@ type ServerConfig struct {
 	UDPWorkers int `yaml:"udp_workers"`
 	TCPWorkers int `yaml:"tcp_workers"`
 
+	// UDPRatePerIP caps datagrams per client IP per second in the UDP
+	// reader (silent drop). 0 disables it. Unset keeps the built-in default
+	// (see UDPRatePerIPSet). Response rate limiting (rrl:) is separate.
+	UDPRatePerIP    int  `yaml:"udp_rate_per_ip"`
+	UDPRatePerIPSet bool `yaml:"-"`
+
+	// UDPListeners is how many SO_REUSEPORT sockets to open per UDP address.
+	// 0 or 1 is a single socket. Higher values spread reads across cores on
+	// Linux; other kernels may not balance, so the default stays 1.
+	UDPListeners int `yaml:"udp_listeners"`
+
 	// PID file path (optional, for daemon mode)
 	PIDFile string `yaml:"pid_file"`
 
@@ -215,6 +226,15 @@ func unmarshalServer(node *Node, cfg *ServerConfig) error {
 		return err
 	}
 	if cfg.TCPWorkers, err = getRequiredInt(node, "tcp_workers", cfg.TCPWorkers); err != nil {
+		return err
+	}
+	if node.Get("udp_rate_per_ip") != nil {
+		if cfg.UDPRatePerIP, err = getRequiredInt(node, "udp_rate_per_ip", 0); err != nil {
+			return err
+		}
+		cfg.UDPRatePerIPSet = true
+	}
+	if cfg.UDPListeners, err = getRequiredInt(node, "udp_listeners", cfg.UDPListeners); err != nil {
 		return err
 	}
 	cfg.PIDFile = node.GetString("pid_file")

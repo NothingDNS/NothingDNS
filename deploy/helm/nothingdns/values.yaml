@@ -177,6 +177,7 @@ config:
     port: 53
     udp_workers: 0  # 0 = auto (NumCPU * 4)
     tcp_workers: 0  # 0 = auto (NumCPU * 2)
+    udp_rate_per_ip: 0  # 0 disables the silent per-client UDP cap
     # TLS configuration for DoT and DoH
     tls:
       cert_file: ""

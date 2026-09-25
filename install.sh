@@ -621,6 +621,8 @@ server:
     - "::"
   udp_workers: 0
   tcp_workers: 0
+  # 0 disables the silent per-client UDP cap (built-in default is 100/s).
+  udp_rate_per_ip: 0
 
   # Web dashboard and REST API on every interface. Put it behind a TLS reverse
   # proxy or restrict it with a firewall on untrusted networks.
@@ -820,7 +822,28 @@ write_credentials_admin() {
     sudo chmod 600 "${CONFIG_DIR}/credentials"
 }
 
-# True when data.db exists and starts with AES-GCM magic 0xE0.
+# Turn off the silent 100 qps/IP UDP drop when the key is missing.
+# Existing explicit values are left alone.
+ensure_udp_rate_per_ip() {
+    if sudo grep -qE '^[[:space:]]*udp_rate_per_ip:' "${CONFIG_FILE}" 2>/dev/null; then
+        return 0
+    fi
+    info "Setting server.udp_rate_per_ip: 0 in ${CONFIG_FILE} (disable silent UDP drop)"
+    local tmp
+    tmp=$(mktemp)
+    sudo awk '
+        /^server:/ {
+            print
+            print "  udp_rate_per_ip: 0"
+            next
+        }
+        { print }
+    ' "${CONFIG_FILE}" > "${tmp}"
+    sudo cp "${tmp}" "${CONFIG_FILE}"
+    rm -f "${tmp}"
+    secure_config_file
+}
+
 data_db_is_encrypted() {
     local db="${DATA_DIR}/data.db"
     [ -f "${db}" ] || return 1
@@ -1265,6 +1288,7 @@ main() {
     fi
 
     create_config $port
+    ensure_udp_rate_per_ip
     if ! ensure_storage_encryption_key; then
         if [ "${TAKE_PORT_53}" = true ]; then
             restore_host_dns

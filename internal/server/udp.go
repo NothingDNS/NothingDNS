@@ -46,7 +46,11 @@ type rateEntry struct {
 }
 
 // rateLimiter implements a sliding window per-IP rate limiter for UDP.
+// disabled skips the map lock entirely (SetRateLimit(0)); the hot path
+// must not serialize every datagram on one mutex when the operator
+// turned the transport cap off.
 type rateLimiter struct {
+	disabled   atomic.Bool
 	mu         sync.Mutex
 	entries    map[string]*rateEntry
 	window     time.Duration
@@ -65,6 +69,9 @@ func newRateLimiter(window time.Duration, maxCount int) *rateLimiter {
 
 // Allow checks if a query from the given IP is within rate limits.
 func (r *rateLimiter) Allow(ip string) bool {
+	if r.disabled.Load() {
+		return true
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -582,7 +589,9 @@ func (s *UDPServer) Addr() net.Addr {
 // for GC after no more references remain.
 func (s *UDPServer) SetRateLimit(maxQueriesPerSecond int) {
 	if maxQueriesPerSecond <= 0 {
-		s.rateLimiter.Store(newRateLimiter(UDPRateLimitWindow, 1000000)) // effectively unlimited
+		rl := newRateLimiter(UDPRateLimitWindow, 0)
+		rl.disabled.Store(true)
+		s.rateLimiter.Store(rl)
 		return
 	}
 	s.rateLimiter.Store(newRateLimiter(UDPRateLimitWindow, maxQueriesPerSecond))

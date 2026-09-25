@@ -16,6 +16,13 @@ server:
   # udp_workers: 0
   # tcp_workers: 0
 
+  # Per-client UDP cap in the reader (queries/second). 0 disables the cap
+  # (lock-free). Omitted means the built-in default of 100, which silently
+  # drops the rest. Use rrl: for DNS response rate limiting.
+  udp_rate_per_ip: 0
+  # Extra SO_REUSEPORT sockets per address (Linux scales reads). Default 1.
+  # udp_listeners: 1
+
   # HTTP API server (for REST API, DoH, Dashboard)
   http:
     enabled: true

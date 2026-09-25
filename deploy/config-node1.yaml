@@ -3,6 +3,7 @@ server:
   port: 53
   bind:
     - 0.0.0.0
+  udp_rate_per_ip: 0
   http:
     enabled: true
     bind: "0.0.0.0:8080"
