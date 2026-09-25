@@ -61,3 +61,42 @@ func TestODoHValidationRejectsBadSuiteWithTargetURL(t *testing.T) {
 	}
 	t.Fatal("FAIL: an unsupported ODoH KEM behind a configured TargetURL was not rejected by config validation")
 }
+
+// RFC 9230 §4.1: "The target URI MUST have the scheme https."
+// HTTP is not acceptable — it would allow an active network attacker to
+// downgrade ODoH traffic to plaintext HTTP, defeating the privacy goal.
+func TestODoHValidationRejectsHTTPTargetURL(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.ODoH.Enabled = true
+	cfg.ODoH.TargetURL = "http://odoh.example.com/dns-query" // HTTP is forbidden
+	cfg.ODoH.KEM = 32
+	cfg.ODoH.KDF = 1
+	cfg.ODoH.AEAD = 1
+
+	for _, err := range cfg.Validate() {
+		if strings.Contains(err, "scheme must be https") {
+			return // correctly rejected
+		}
+	}
+	t.Fatal("FAIL: an HTTP ODoH target_url was not rejected; RFC 9230 §4.1 requires https")
+}
+
+// HTTPS target URLs must still be accepted.
+func TestODoHValidationAcceptsHTTPSTargetURL(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.ODoH.Enabled = true
+	cfg.ODoH.TargetURL = "https://odoh.example.com/dns-query"
+	cfg.ODoH.KEM = 32
+	cfg.ODoH.KDF = 1
+	cfg.ODoH.AEAD = 1
+
+	var odohErrors []string
+	for _, err := range cfg.Validate() {
+		if strings.Contains(err, "odoh") || strings.Contains(err, "target_url") {
+			odohErrors = append(odohErrors, err)
+		}
+	}
+	if len(odohErrors) > 0 {
+		t.Fatalf("FAIL: a valid HTTPS ODoH target_url was rejected: %v", odohErrors)
+	}
+}

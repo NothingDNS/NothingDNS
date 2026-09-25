@@ -79,7 +79,15 @@ func metricsStage(h *integratedHandler) Stage {
 		q.qnameAudit = q.qname
 
 		if h.metrics != nil {
-			h.metrics.RecordQuery(q.qtypeStr)
+			// Bound the metric label to known types only. protocol.TypeToString
+			// falls back to "TYPE<number>" for unknown QTYPEs, which is
+			// unbounded (65 536 distinct labels from attacker-controlled input).
+			// We collapse unknown types to a single "OTHER" label instead.
+			if _, known := protocol.TypeToString[q.qtype]; known {
+				h.metrics.RecordQuery(q.qtypeStr)
+			} else {
+				h.metrics.RecordQuery("OTHER")
+			}
 		}
 		return false, nil
 	}

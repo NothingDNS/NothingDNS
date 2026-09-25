@@ -2607,6 +2607,7 @@ func TestGossipProtocol_HandleGossip_NewNode_NilCallback(t *testing.T) {
 	msg := Message{
 		Type:    MessageTypeGossip,
 		Payload: payloadBytes,
+		From:    "new-node-nil-cb", // msg.From must equal info.ID (impostor protection)
 	}
 
 	from, _ := net.ResolveUDPAddr("udp", "127.0.0.1:12345")
@@ -2645,6 +2646,7 @@ func TestGossipProtocol_HandleGossip_UpdateNode_NilCallback(t *testing.T) {
 	msg := Message{
 		Type:    MessageTypeGossip,
 		Payload: payloadBytes,
+		From:    "existing", // msg.From must equal info.ID (impostor protection)
 	}
 
 	from, _ := net.ResolveUDPAddr("udp", "127.0.0.1:12345")

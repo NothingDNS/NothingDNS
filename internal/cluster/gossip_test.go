@@ -663,6 +663,7 @@ func TestGossipProtocol_handleGossip_NewNode(t *testing.T) {
 	msg := Message{
 		Type:    MessageTypeGossip,
 		Payload: gossipBytes,
+		From:    "new-node", // msg.From must equal info.ID (impostor protection)
 	}
 
 	from, _ := net.ResolveUDPAddr("udp", "127.0.0.1:12345")
@@ -716,6 +717,7 @@ func TestGossipProtocol_handleGossip_UpdateNode(t *testing.T) {
 	msg := Message{
 		Type:    MessageTypeGossip,
 		Payload: gossipBytes,
+		From:    "existing", // msg.From must equal info.ID (impostor protection)
 	}
 
 	from, _ := net.ResolveUDPAddr("udp", "127.0.0.1:12345")

@@ -129,9 +129,21 @@ func prepareConfiguredZoneFiles(configuredZoneFiles []string, loadZoneFileFunc f
 }
 
 func applyConfiguredZoneFiles(handler *integratedHandler, zoneManager *zone.Manager, zoneFiles map[string]string, loaded []loadedZoneFile, logger *util.Logger) {
-	// Load all zones into the manager first (LoadZone is infallible — two map
-	// assignments). Only after all succeed do we update handler.zones and rebuild
-	// the zone tree, so a panic in RebuildZoneTree leaves the previous state intact.
+	// Save: record stale file-backed origins (tracked in zoneFiles) so we can
+	// restore them if any step fails. Only file-backed origins are in zoneFiles;
+	// KV/API-created zones are not, so deleting only tracked origins preserves them.
+	staleOrigins := make([]string, 0, len(zoneFiles))
+	for origin := range zoneFiles {
+		staleOrigins = append(staleOrigins, origin)
+	}
+
+	// Swap: delete stale file-backed zones from the manager.
+	// zoneManager.zones accumulates all ever-loaded file-backed zones across
+	// reloads; without this, a zone removed from config leaks through
+	// RebuildZoneTree via zoneManager.List().
+	zoneManager.RemoveZones(staleOrigins...)
+
+	// Load: add the new zone set.
 	for _, item := range loaded {
 		zoneManager.LoadZone(item.zone, item.file)
 	}

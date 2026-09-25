@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/nothingdns/nothingdns/internal/protocol"
 )
 
 func TestConstantTimeTokenEqual(t *testing.T) {
@@ -762,6 +764,56 @@ func TestIsLoopbackBind(t *testing.T) {
 		if got := IsLoopbackBind(addr); got != want {
 			t.Errorf("IsLoopbackBind(%q) = %v, want %v", addr, got, want)
 		}
+	}
+}
+
+// TestRecordQueryCardinalityBoundedByOtherLabel asserts that RecordQuery and
+// RecordQueryLatency normalize unknown QTYPEs (those absent from
+// protocol.TypeToString) to the single "OTHER" label, preventing unbounded
+// Prometheus label cardinality.  An unbounded cardinality explosion in the
+// nothingdns_queries_total{type="<qtype>"} and
+// nothingdns_query_duration_seconds{type="<qtype>"} metrics would allow a
+// single hostile client to exhaust the Prometheus TSDB's per-label cardinality
+// budget by flooding distinct QTYPE strings.
+//
+// Regression test for: metrics cardinality explosion from unbounded QTYPE labels.
+func TestRecordQueryCardinalityBoundedByOtherLabel(t *testing.T) {
+	// Pick a QTYPE string that is NOT in protocol.TypeToString.
+	// TypeToString covers roughly 35 standard record types; any value outside
+	// that set must collapse to "OTHER".
+	const unknownQtype = "TYPE999"
+	const otherLabel = "OTHER"
+
+	// Verify the unknown QTYPE is genuinely unknown so the test is meaningful.
+	for _, v := range protocol.TypeToString {
+		if v == unknownQtype {
+			t.Fatalf("test precondition failed: %q is already in TypeToString", unknownQtype)
+		}
+	}
+
+	m := New(Config{Enabled: true, Path: "/metrics"})
+
+	// Record the unknown QTYPE via both APIs that carry the type label.
+	m.RecordQuery(unknownQtype)
+	m.RecordQueryLatency(unknownQtype, 5*time.Millisecond)
+
+	// Scrape the Prometheus output.
+	rec := httptest.NewRecorder()
+	m.handleMetrics(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+
+	body := rec.Body.String()
+
+	// The unknown QTYPE string must NOT appear as a label value — that would
+	// indicate unbounded cardinality.
+	if strings.Contains(body, `type="`+unknownQtype+`"`) {
+		t.Errorf("Prometheus output contains unbounded label type=%q; want only %q\n%s",
+			unknownQtype, otherLabel, body)
+	}
+
+	// Unknown QTYPEs must be recorded under the single bounded "OTHER" label.
+	if !strings.Contains(body, `type="`+otherLabel+`"`) {
+		t.Errorf("Prometheus output missing bounded label type=%q for unknown QTYPE %q\n%s",
+			otherLabel, unknownQtype, body)
 	}
 }
 

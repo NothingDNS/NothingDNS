@@ -427,18 +427,15 @@ func (s *Store) ValidateToken(tokenStr string) (*User, error) {
 		s.mu.RUnlock()
 		return nil, fmt.Errorf("invalid token")
 	}
-
-	// Verify HMAC signature to prevent token forgery.
-	// Return a generic "invalid token" error to prevent token-ID
-	// enumeration: an attacker probing with random token strings
-	// could otherwise distinguish "unknown token" (different error)
-	// from "token exists but signature mismatch" / "expired", learning
-	// which token IDs are valid. All rejection reasons share one message.
+	// Verify HMAC signature to prevent token forgery. All rejection reasons
+	// share the same generic error to prevent token-ID enumeration: an attacker
+	// probing with random token strings could otherwise distinguish "unknown
+	// token" (not in map) from "token exists but signature mismatch / expired",
+	// learning which token IDs are valid.
 	if !s.verifyTokenSignature(tokenStr, token.Signature) {
 		s.mu.RUnlock()
 		return nil, fmt.Errorf("invalid token")
 	}
-
 	if tokenExpiredAt(token, time.Now()) {
 		s.mu.RUnlock()
 		s.mu.Lock()
@@ -457,12 +454,8 @@ func (s *Store) ValidateToken(tokenStr string) (*User, error) {
 			}
 		}
 		s.mu.Unlock()
-		// Same generic error as the not-found and bad-signature paths,
-		// so an attacker probing token IDs cannot distinguish expired
-		// tokens from unknown or forged ones.
 		return nil, fmt.Errorf("invalid token")
 	}
-
 	// Note: LastAccess is informational only (never used for expiry
 	// or revocation decisions). Previously this hot path mutated
 	// token.LastAccess under the read lock, which is a data race —
@@ -471,14 +464,16 @@ func (s *Store) ValidateToken(tokenStr string) (*User, error) {
 	// the read lock semantics honest; if a future feature needs
 	// last-access for idle-session detection, switch the storage to
 	// an atomic.Int64 of UnixNano or move the write under s.mu.Lock.
-
 	user, ok := s.users[token.Username]
 	publicUser := clonePublicUser(user)
 	s.mu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("user not found")
+		// Return the same generic error as all other rejection paths so an
+		// attacker probing token IDs cannot distinguish a valid-but-user-deleted
+		// token from a completely unknown one. (SAGE: all rejection reasons
+		// must share one message.)
+		return nil, fmt.Errorf("invalid token")
 	}
-
 	return publicUser, nil
 }
 

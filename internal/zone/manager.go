@@ -170,6 +170,13 @@ func (m *Manager) SetZONEMDEnabled(enabled bool) {
 	m.onemdEnabled = enabled
 }
 
+// IsZONEMDEnabled reports whether ZONEMD computation is enabled.
+func (m *Manager) IsZONEMDEnabled() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.onemdEnabled
+}
+
 // SetZoneDir sets the directory where zone files are stored.
 func (m *Manager) SetZoneDir(dir string) {
 	m.mu.Lock()
@@ -240,6 +247,22 @@ func (m *Manager) Load(name, path string) error {
 
 // LoadZone loads a zone directly without validation.
 // Prefer Load() for new zones, which validates before loading.
+// RemoveZones removes the named origins from the manager. It is safe to call
+// with an empty or partially-overlapping list; only origins that exist are removed.
+// Panics are recovered and logged so a failure here does not abort a reload.
+func (m *Manager) RemoveZones(origins ...string) {
+	if len(origins) == 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, origin := range origins {
+		delete(m.zones, origin)
+		delete(m.files, origin)
+	}
+}
+
 func (m *Manager) LoadZone(z *Zone, path string) {
 	if z == nil {
 		return

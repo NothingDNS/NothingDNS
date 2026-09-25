@@ -193,6 +193,18 @@ func (gp *GossipProtocol) handleGossip(msg Message, from *net.UDPAddr) {
 			continue
 		}
 
+		// Impostor protection: msg.From is the AEAD-authenticated sender;
+		// info.ID is the node the gossip claims to describe. Only the node
+		// itself may broadcast its own state. Without this check, a
+		// compromised keyring peer could inject bogus nodes into the cluster,
+		// reset failure detection for dead nodes (State=Alive), or force
+		// State=Suspect on healthy nodes to trigger unnecessary suspicion
+		// rounds. Mirrors the same check in handlePing/handleAck/handleLeader.
+		if msg.From != info.ID {
+			util.Warnf("gossip: dropped Gossip state for %s from impostor %s", info.ID, msg.From)
+			continue
+		}
+
 		existing, ok := gp.nodeList.Get(info.ID)
 		if !ok {
 			// New node

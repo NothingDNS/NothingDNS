@@ -197,6 +197,18 @@ func synchronizeKVZones(mgr *ZoneManager, zoneManager *zone.Manager, kvPersisten
 			mgr.result.Zones[z.Origin] = z
 			mgr.result.ZoneFiles[z.Origin] = ""
 			zoneManager.LoadZone(z, "")
+
+			// Compute ZONEMD for KV-loaded zones, mirroring Manager.Load.
+			// ZoneMeta does not persist ZONEMD (it is recomputed), so a cold
+			// restart of an API-created zone would lose its ZONEMD without this.
+			if zoneManager.IsZONEMDEnabled() {
+				if zonemd, err := zone.ComputeZoneMD(z, zone.ZONEMDSHA256); err != nil {
+					logger.Warnf("zone: failed to compute ZONEMD for %s: %v", z.Origin, err)
+				} else {
+					z.ZONEMD = zonemd
+				}
+			}
+
 			logger.Infof("Loaded zone %s from persistent database with %d records", z.Origin, len(z.Records))
 		}
 	}

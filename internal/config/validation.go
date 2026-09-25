@@ -403,8 +403,8 @@ func appendURLValidation(errors []string, prefix, field, value string) []string 
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return append(errors, fmt.Sprintf("%s: invalid %s %q", prefix, field, value))
 	}
-	if parsed.Scheme != "https" && parsed.Scheme != "http" {
-		return append(errors, fmt.Sprintf("%s: invalid %s %q: scheme must be http or https", prefix, field, value))
+	if parsed.Scheme != "https" {
+		return append(errors, fmt.Sprintf("%s: invalid %s %q: scheme must be https", prefix, field, value))
 	}
 	return errors
 }

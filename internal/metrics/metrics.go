@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nothingdns/nothingdns/internal/protocol"
 	"github.com/nothingdns/nothingdns/internal/util"
 )
 
@@ -307,23 +308,37 @@ func (m *MetricsCollector) Stop() error {
 	return err
 }
 
+// qtypeToLabel returns the qtype string for use as a Prometheus label value.
+// Unknown QTYPEs (those absent from protocol.StringToType) are normalized to
+// "OTHER" to bound label cardinality: without this, a hostile client could
+// flood distinct QTYPE strings and exhaust the Prometheus TSDB's cardinality
+// budget.
+func qtypeToLabel(qtype string) string {
+	if _, ok := protocol.StringToType[qtype]; ok {
+		return qtype
+	}
+	return "OTHER"
+}
+
 // RecordQuery records a DNS query.
 func (m *MetricsCollector) RecordQuery(qtype string) {
 	if !m.config.Enabled {
 		return
 	}
 
+	label := qtypeToLabel(qtype)
+
 	m.mu.RLock()
-	counter, exists := m.queriesTotal[qtype]
+	counter, exists := m.queriesTotal[label]
 	m.mu.RUnlock()
 
 	if !exists {
 		m.mu.Lock()
-		if m.queriesTotal[qtype] == nil {
+		if m.queriesTotal[label] == nil {
 			var newCounter uint64
-			m.queriesTotal[qtype] = &newCounter
+			m.queriesTotal[label] = &newCounter
 		}
-		counter = m.queriesTotal[qtype]
+		counter = m.queriesTotal[label]
 		m.mu.Unlock()
 	}
 
@@ -391,11 +406,13 @@ func (m *MetricsCollector) RecordQueryLatency(qtype string, duration time.Durati
 		return
 	}
 
+	label := qtypeToLabel(qtype)
+
 	m.latencyMu.Lock()
-	h, ok := m.latencyHists[qtype]
+	h, ok := m.latencyHists[label]
 	if !ok {
 		h = &latencyHistogram{}
-		m.latencyHists[qtype] = h
+		m.latencyHists[label] = h
 	}
 	m.latencyMu.Unlock()
 

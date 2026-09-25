@@ -357,11 +357,22 @@ func (s *TLSServer) Serve() error {
 		s.ipConnCount[ip]++
 		s.ipConnMu.Unlock()
 
-		// Send to worker, respecting shutdown
+		// Send to worker, respecting shutdown.
+		// Decrement the per-IP counter on every exit path — exactly once —
+		// so the counter stays correct whether the connection is accepted,
+		// rejected by the limit check, or dropped during shutdown.
+		connSent := false
 		select {
 		case connChan <- conn:
+			connSent = true
 		case <-s.ctx.Done():
+		}
+		if !connSent {
+			// Shutdown path: connection not accepted by worker.
+			// Decrement counter, close conn, release semaphore slot.
+			s.ipConnMu.Lock()
 			s.decrementIPConn(ip)
+			s.ipConnMu.Unlock()
 			conn.Close()
 			<-s.connSem
 		}
