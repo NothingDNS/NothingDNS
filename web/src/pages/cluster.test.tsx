@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ClusterPage } from './cluster';
+import { layoutMembers } from './cluster-layout';
 
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
@@ -52,7 +53,7 @@ describe('ClusterPage', () => {
 
     expect(await screen.findByText('3')).toBeInTheDocument();
     expect(screen.getByText('2')).toBeInTheDocument();
-    expect(screen.getByText('1')).toBeInTheDocument();
+    expect(screen.getAllByText('1').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Yes')).toBeInTheDocument();
     expect(screen.getByText('Quorum OK')).toBeInTheDocument();
   });
@@ -157,14 +158,15 @@ describe('ClusterPage', () => {
       .mockResolvedValueOnce(mockJsonResponse(sampleStatus));
     render(<ClusterPage />);
 
-    expect(await screen.findByText('Cluster Topology')).toBeInTheDocument();
+    expect(await screen.findByText('Members')).toBeInTheDocument();
+    expect(screen.queryByText('Cluster Nodes')).not.toBeInTheDocument();
     const diagram = screen.getByLabelText('Cluster topology diagram');
     expect(diagram).toBeInTheDocument();
-    expect(diagram.getAttribute('viewBox')).toBe('0 0 720 440');
-    expect(diagram.textContent).toContain('node-1');
-    expect(diagram.textContent).toContain('node-2');
-    expect(diagram.textContent).toContain('node-3');
-    expect(diagram.textContent).toContain('10.0.0.3');
+    expect(diagram.getAttribute('viewBox')).toMatch(/^0 0 \d+ \d+$/);
+    expect(screen.getByRole('button', { name: /node-1/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /node-2/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /node-3/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /10\.0\.0\.3/ })).toBeInTheDocument();
     expect(screen.getAllByText('Leader').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('Follower').length).toBeGreaterThanOrEqual(1);
   });
@@ -196,7 +198,7 @@ describe('ClusterPage', () => {
     render(<ClusterPage />);
 
     // Wait for data to render
-    expect(await screen.findByText('Cluster Topology')).toBeInTheDocument();
+    expect(await screen.findByText('Members')).toBeInTheDocument();
 
     // Find and click the expandable button with "node-1" text
     const nodeButton = screen.getAllByRole('button').find(b =>
@@ -222,7 +224,27 @@ describe('ClusterPage', () => {
     await user.click(screen.getByText('Retry'));
 
     // After retry, node details should appear
-    expect(await screen.findByText('Cluster Topology')).toBeInTheDocument();
+    expect(await screen.findByText('Members')).toBeInTheDocument();
     expect(screen.getAllByText('node-1').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('keeps member cards from overlapping as the cluster grows', () => {
+    for (const count of [1, 2, 5, 8, 12]) {
+      const nodes = Array.from({ length: count }, (_, i) =>
+        aliveNode(`node-${i + 1}`, `10.0.0.${i + 1}`, 'alive', i === 0 ? 'leader' : 'follower'),
+      );
+      const layout = layoutMembers(nodes, 'node-1');
+      const boxes = [...layout.positions.values()];
+      expect(boxes).toHaveLength(count);
+      for (let i = 0; i < boxes.length; i++) {
+        for (let j = i + 1; j < boxes.length; j++) {
+          const a = boxes[i];
+          const b = boxes[j];
+          const gapX = Math.abs(a.x - b.x) - (a.w + b.w) / 2;
+          const gapY = Math.abs(a.y - b.y) - (a.h + b.h) / 2;
+          expect(gapX >= 16 || gapY >= 16).toBe(true);
+        }
+      }
+    }
   });
 });

@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/states';
 import { api } from '@/lib/api';
+import { cn } from '@/lib/utils';
+import { layoutMembers, rectEdge } from '@/pages/cluster-layout';
 import { Server, RefreshCw, Network, AlertCircle, Info, Crown } from 'lucide-react';
 
 interface ClusterNode {
@@ -35,12 +37,17 @@ interface ClusterStatus {
   raft?: RaftInfo;
 }
 
-export function ClusterPage() {
-  const [nodes, setNodes] = useState<ClusterNode[]>([]);
-  const [status, setStatus] = useState<ClusterStatus | null>(null);
-  const [loading, setLoading] = useState(true);
+export function ClusterPage({ preview }: { preview?: { nodes: ClusterNode[]; status: ClusterStatus | null } } = {}) {
+  const [nodes, setNodes] = useState<ClusterNode[]>(preview?.nodes ?? []);
+  const [status, setStatus] = useState<ClusterStatus | null>(preview?.status ?? null);
+  const [loading, setLoading] = useState(!preview);
   const [error, setError] = useState('');
-  const [selectedNode, setSelectedNode] = useState<string | null>(null);
+  const [selectedNode, setSelectedNode] = useState<string | null>(() => {
+    const seed = preview?.nodes ?? [];
+    const local = preview?.status?.node_id;
+    if (local && seed.some((n) => n.id === local)) return local;
+    return preview?.status?.raft?.leader_id || seed[0]?.id || null;
+  });
 
   // Generation guard for load(): the 10s polling interval and the Refresh
   // button can overlap an in-flight load, and an older response landing
@@ -68,11 +75,30 @@ export function ClusterPage() {
     }
   };
 
+  const previewActive = preview != null;
+
   useEffect(() => {
+    if (previewActive) return;
     load();
     const interval = setInterval(load, 10000);
     return () => clearInterval(interval);
-  }, []);
+  }, [previewActive]);
+
+  const leaderId = status?.raft?.leader_id
+    || nodes.find(n => n.role === 'leader')?.id
+    || '';
+
+  useEffect(() => {
+    if (nodes.length === 0) {
+      setSelectedNode(null);
+      return;
+    }
+    setSelectedNode((cur) => {
+      if (cur && nodes.some((n) => n.id === cur)) return cur;
+      if (status?.node_id && nodes.some((n) => n.id === status.node_id)) return status.node_id;
+      return leaderId || nodes[0].id;
+    });
+  }, [nodes, status?.node_id, leaderId]);
 
   if (loading && nodes.length === 0) {
     return (
@@ -85,9 +111,6 @@ export function ClusterPage() {
 
   const onlineCount = nodes.filter(n => n.state === 'alive').length;
   const quorum = nodes.length > 0 && onlineCount >= Math.floor(nodes.length / 2) + 1;
-  const leaderId = status?.raft?.leader_id
-    || nodes.find(n => n.role === 'leader')?.id
-    || '';
 
   return (
     <div className="space-y-6">
@@ -216,8 +239,8 @@ export function ClusterPage() {
       )}
 
       <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Cluster Topology</CardTitle>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">Members</CardTitle>
         </CardHeader>
         <CardContent>
           {nodes.length === 0 ? (
@@ -229,38 +252,13 @@ export function ClusterPage() {
               </p>
             </div>
           ) : (
-            <TopologyDiagram
+            <MembershipBoard
               nodes={nodes}
               leaderId={leaderId}
               localId={status?.node_id}
               selectedId={selectedNode}
-              onSelect={(id) => setSelectedNode(selectedNode === id ? null : id)}
+              onSelect={setSelectedNode}
             />
-          )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Cluster Nodes</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {nodes.length === 0 ? (
-            <div className="text-center py-8 text-sm text-muted-foreground">
-              No members to list.
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {nodes.map(node => (
-                <NodeCard
-                  key={node.id}
-                  node={node}
-                  isLocal={node.id === status?.node_id}
-                  selected={selectedNode === node.id}
-                  onSelect={() => setSelectedNode(selectedNode === node.id ? null : node.id)}
-                />
-              ))}
-            </div>
           )}
         </CardContent>
       </Card>
@@ -270,7 +268,20 @@ export function ClusterPage() {
   );
 }
 
-function TopologyDiagram({
+function memberRole(node: ClusterNode, isLeader: boolean) {
+  if (isLeader) return 'Leader';
+  if (node.role === 'candidate') return 'Candidate';
+  if (node.role === 'follower') return 'Follower';
+  return node.role || 'Member';
+}
+
+function stateDot(state: string) {
+  if (state === 'alive') return 'bg-success';
+  if (state === 'dead') return 'bg-destructive';
+  return 'bg-warning';
+}
+
+function MembershipBoard({
   nodes,
   leaderId,
   localId,
@@ -283,247 +294,179 @@ function TopologyDiagram({
   selectedId: string | null;
   onSelect: (id: string) => void;
 }) {
-  const layout = useMemo(() => {
-    // Leave room for node labels (id + role + addr) so they are never clipped.
-    const labelStack = 52;
-    const padX = 88;
-    const padY = 28;
-    const width = 720;
-    const height = 440;
-    const cx = width / 2;
-    const cy = height / 2;
-    const leader = nodes.find(n => n.id === leaderId) || nodes.find(n => n.role === 'leader') || nodes[0];
-    const followers = nodes.filter(n => n.id !== leader?.id);
-    const leaderR = 34;
-    const followerR = 26;
+  const layout = useMemo(() => layoutMembers(nodes, leaderId), [nodes, leaderId]);
+  const frameRef = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(1);
+  const leaderPos = layout.leaderId ? layout.positions.get(layout.leaderId) : undefined;
+  const selected = nodes.find(n => n.id === selectedId) ?? null;
+  const followers = nodes.filter(n => n.id !== layout.leaderId);
 
-    // Max orbit so circle + outward labels stay inside the viewBox.
-    const maxOrbit = Math.min(
-      cx - padX - followerR,
-      cy - padY - followerR - labelStack,
-    );
-    const radius = followers.length === 0
-      ? 0
-      : Math.min(maxOrbit, followers.length <= 2 ? 150 : Math.min(170, 100 + followers.length * 10));
-
-    const positions = new Map<string, { x: number; y: number; labelBelow: boolean }>();
-    if (leader) {
-      positions.set(leader.id, { x: cx, y: cy, labelBelow: true });
-    }
-
-    // Two followers: place left/right so labels don't collide with the
-    // leader's downward text stack (top/bottom packing was clipping the
-    // bottom node under overflow:hidden).
-    const startAngle = followers.length === 2 ? 0 : -Math.PI / 2;
-    followers.forEach((node, i) => {
-      const angle = startAngle + (2 * Math.PI * i) / Math.max(followers.length, 1);
-      const x = cx + Math.cos(angle) * radius;
-      const y = cy + Math.sin(angle) * radius;
-      // Prefer labels on the outward side of the orbit.
-      const labelBelow = y <= cy + 8;
-      positions.set(node.id, { x, y, labelBelow });
-    });
-
-    return { width, height, leader, followers, positions, leaderR, followerR };
-  }, [nodes, leaderId]);
-
-  const leaderPos = layout.leader ? layout.positions.get(layout.leader.id) : null;
+  useLayoutEffect(() => {
+    const el = frameRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const fit = () => {
+      const available = el.clientWidth;
+      if (available <= 0) return;
+      setScale(Math.min(1, available / layout.width));
+    };
+    fit();
+    const obs = new ResizeObserver(fit);
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [layout.width]);
 
   return (
-    <div className="relative overflow-hidden rounded-xl border border-border bg-[radial-gradient(ellipse_at_center,rgba(59,92,228,0.08),transparent_65%)]">
-      <svg
-        viewBox={`0 0 ${layout.width} ${layout.height}`}
-        className="w-full h-auto"
-        role="img"
-        aria-label="Cluster topology diagram"
-      >
-        {leaderPos && layout.followers.map((node) => {
-          const pos = layout.positions.get(node.id);
-          if (!pos) return null;
-          const healthy = node.state === 'alive';
-          const dx = pos.x - leaderPos.x;
-          const dy = pos.y - leaderPos.y;
-          const len = Math.hypot(dx, dy) || 1;
-          const ux = dx / len;
-          const uy = dy / len;
-          // Stop at circle edges so the stroke is never covered by node fills.
-          const x1 = leaderPos.x + ux * layout.leaderR;
-          const y1 = leaderPos.y + uy * layout.leaderR;
-          const x2 = pos.x - ux * layout.followerR;
-          const y2 = pos.y - uy * layout.followerR;
-          return (
-            <g key={`link-${node.id}`}>
-              <line
-                x1={x1}
-                y1={y1}
-                x2={x2}
-                y2={y2}
-                stroke={healthy ? 'var(--color-primary)' : 'var(--color-warning)'}
-                strokeOpacity={healthy ? 0.65 : 0.8}
-                strokeWidth={healthy ? 2.5 : 1.5}
-                strokeLinecap="round"
-                strokeDasharray={healthy ? undefined : '6 6'}
-                className={healthy ? 'animate-[pulse_2.8s_ease-in-out_infinite]' : undefined}
-              />
-            </g>
-          );
-        })}
+    <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+      <div ref={frameRef} className="min-w-0 flex-1 overflow-hidden rounded-xl border border-border bg-[radial-gradient(ellipse_at_center,rgba(79,109,245,0.10),transparent_62%)]">
+        <div className="mx-auto overflow-hidden" style={{ width: layout.width * scale, height: layout.height * scale }}>
+        <div className="relative" style={{ width: layout.width, height: layout.height, transform: `scale(${scale})`, transformOrigin: 'top left' }}>
+          <svg
+            width={layout.width}
+            height={layout.height}
+            viewBox={`0 0 ${layout.width} ${layout.height}`}
+            className="absolute inset-0"
+            role="img"
+            aria-label="Cluster topology diagram"
+          >
+            {leaderPos && followers.map((node) => {
+              const pos = layout.positions.get(node.id);
+              if (!pos) return null;
+              const healthy = node.state === 'alive';
+              const dx = pos.x - leaderPos.x;
+              const dy = pos.y - leaderPos.y;
+              const len = Math.hypot(dx, dy) || 1;
+              const ux = dx / len;
+              const uy = dy / len;
+              const from = rectEdge(leaderPos, ux, uy);
+              const to = rectEdge(pos, -ux, -uy);
+              return (
+                <line
+                  key={`link-${node.id}`}
+                  x1={from.x}
+                  y1={from.y}
+                  x2={to.x}
+                  y2={to.y}
+                  stroke={healthy ? 'var(--color-primary)' : node.state === 'dead' ? 'var(--color-destructive)' : 'var(--color-warning)'}
+                  strokeOpacity={healthy ? 0.7 : 0.85}
+                  strokeWidth={healthy ? 2 : 1.5}
+                  strokeLinecap="round"
+                  strokeDasharray={healthy ? undefined : '5 5'}
+                />
+              );
+            })}
+          </svg>
 
-        {nodes.map((node) => {
-          const pos = layout.positions.get(node.id);
-          if (!pos) return null;
-          const isLeader = node.id === layout.leader?.id || node.role === 'leader';
-          const isLocal = node.id === localId;
-          const selected = node.id === selectedId;
-          const r = isLeader ? layout.leaderR : layout.followerR;
-          const fill =
-            node.state === 'alive' ? (isLeader ? 'rgba(59,92,228,0.18)' : 'rgba(34,197,94,0.14)') :
-            node.state === 'dead' ? 'rgba(239,68,68,0.16)' :
-            'rgba(245,158,11,0.16)';
-          const stroke =
-            selected ? 'var(--color-primary)' :
-            isLeader ? 'var(--color-primary)' :
-            node.state === 'alive' ? 'var(--color-success)' :
-            node.state === 'dead' ? 'var(--color-destructive)' :
-            'var(--color-warning)';
-          const dir = pos.labelBelow ? 1 : -1;
-          const idY = dir * (r + 16);
-          const roleY = dir * (r + 32);
-          const addrY = dir * (r + 46);
-
-          return (
-            <g
-              key={node.id}
-              transform={`translate(${pos.x}, ${pos.y})`}
-              className="cursor-pointer"
-              onClick={() => onSelect(node.id)}
-            >
-              {isLeader && (
-                <circle r={r + 10} fill="none" stroke="var(--color-primary)" strokeOpacity="0.25" strokeWidth="2">
-                  <animate attributeName="r" values={`${r + 8};${r + 14};${r + 8}`} dur="2.4s" repeatCount="indefinite" />
-                  <animate attributeName="stroke-opacity" values="0.35;0.12;0.35" dur="2.4s" repeatCount="indefinite" />
-                </circle>
-              )}
-              <circle r={r} fill={fill} stroke={stroke} strokeWidth={selected || isLeader ? 3 : 2} />
-              <text
-                textAnchor="middle"
-                dominantBaseline="central"
-                className="fill-foreground"
-                style={{ fontSize: isLeader ? 11 : 10, fontWeight: 600 }}
+          {nodes.map((node) => {
+            const pos = layout.positions.get(node.id);
+            if (!pos) return null;
+            const isLeader = node.id === layout.leaderId;
+            const isLocal = node.id === localId;
+            const pressed = node.id === selectedId;
+            const role = memberRole(node, isLeader);
+            const endpoint = node.addr ? `${node.addr}:${node.port}` : '—';
+            return (
+              <button
+                key={node.id}
+                type="button"
+                aria-pressed={pressed}
+                title={endpoint}
+                onClick={() => onSelect(node.id)}
+                className={cn(
+                  'absolute flex flex-col justify-center gap-0.5 rounded-xl border bg-card px-3 text-left shadow-sm',
+                  'hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  isLeader ? 'border-primary bg-primary/10 ring-4 ring-primary/20' : 'border-border',
+                  !isLeader && node.state === 'alive' && 'border-success/50',
+                  node.state === 'dead' && 'border-destructive/60 bg-destructive/5',
+                  node.state !== 'alive' && node.state !== 'dead' && 'border-warning/60',
+                  pressed && 'z-10 outline outline-2 outline-offset-2 outline-primary',
+                )}
+                style={{
+                  left: pos.x - pos.w / 2,
+                  top: pos.y - pos.h / 2,
+                  width: pos.w,
+                  height: pos.h,
+                }}
               >
-                {isLeader ? '★' : '●'}
-              </text>
-              <text
-                y={idY}
-                textAnchor="middle"
-                className="fill-foreground"
-                style={{ fontSize: 12, fontWeight: 600 }}
-              >
-                {node.id}
-              </text>
-              <text
-                y={roleY}
-                textAnchor="middle"
-                className="fill-muted-foreground"
-                style={{ fontSize: 10 }}
-              >
-                {isLeader ? 'Leader' : (node.role || 'Member')}
-                {isLocal ? ' · you' : ''}
-              </text>
-              <text
-                y={addrY}
-                textAnchor="middle"
-                className="fill-muted-foreground"
-                style={{ fontSize: 10 }}
-              >
-                {node.addr || '—'}
-              </text>
-            </g>
-          );
-        })}
-      </svg>
-
-      <div className="flex flex-wrap items-center justify-center gap-3 px-4 pb-4 text-[11px] text-muted-foreground">
-        <span className="inline-flex items-center gap-1.5">
-          <span className="inline-block h-2.5 w-2.5 rounded-full bg-primary" /> Leader
-        </span>
-        <span className="inline-flex items-center gap-1.5">
-          <span className="inline-block h-2.5 w-2.5 rounded-full bg-success" /> Follower
-        </span>
-        <span className="inline-flex items-center gap-1.5">
-          <span className="inline-block h-2.5 w-2.5 rounded-full bg-warning" /> Suspect
-        </span>
+                <span className="flex items-center gap-1.5">
+                  {isLeader
+                    ? <Crown className="h-3.5 w-3.5 shrink-0 text-primary" aria-hidden />
+                    : <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', stateDot(node.state))} aria-hidden />}
+                  <span className="truncate text-sm font-semibold">{node.id}</span>
+                  {isLocal && (
+                    <span className="ml-auto shrink-0 rounded border border-border px-1 text-[10px] text-muted-foreground">You</span>
+                  )}
+                </span>
+                <span className="truncate text-[11px] text-muted-foreground">{role}</span>
+                <span className="truncate font-mono text-[11px] text-muted-foreground">{endpoint}</span>
+              </button>
+            );
+          })}
+        </div>
+        </div>
+        <div className="flex flex-wrap items-center justify-center gap-3 px-4 py-3 text-[11px] text-muted-foreground">
+          <span className="inline-flex items-center gap-1.5"><span className="inline-block h-2.5 w-2.5 rounded-full bg-primary" /> Leader</span>
+          <span className="inline-flex items-center gap-1.5"><span className="inline-block h-2.5 w-2.5 rounded-full bg-success" /> Alive</span>
+          <span className="inline-flex items-center gap-1.5"><span className="inline-block h-2.5 w-2.5 rounded-full bg-warning" /> Suspect</span>
+          <span className="inline-flex items-center gap-1.5"><span className="inline-block h-2.5 w-2.5 rounded-full bg-destructive" /> Dead</span>
+        </div>
       </div>
+
+      <NodeDetail node={selected} isLocal={selected?.id === localId} isLeader={selected?.id === layout.leaderId} />
     </div>
   );
 }
 
-function NodeCard({ node, isLocal, selected, onSelect }: {
-  node: ClusterNode;
-  isLocal?: boolean;
-  selected: boolean;
-  onSelect: () => void;
+function NodeDetail({ node, isLocal, isLeader }: {
+  node: ClusterNode | null;
+  isLocal: boolean;
+  isLeader: boolean;
 }) {
-  const statusColors: Record<string, string> = {
-    alive: 'text-success bg-success/10 border-success/20',
-    dead: 'text-destructive bg-destructive/10 border-destructive/20',
-    suspect: 'text-warning bg-warning/10 border-warning/20',
-    draining: 'text-muted-foreground bg-muted border-muted',
-  };
-  const isLeader = node.role === 'leader';
-
   return (
-    <button
-      type="button"
-      aria-expanded={selected}
-      className={`w-full text-left border rounded-lg p-4 transition-all hover:shadow-md ${
-        selected ? 'border-primary shadow-md' : isLeader ? 'border-primary/40' : 'border-border'
-      }`}
-      onClick={onSelect}
-    >
-      <div className="flex items-start justify-between">
-        <div className="flex items-center gap-3">
-          <div className={`p-2 rounded-lg ${statusColors[node.state] || 'border-muted'}`}>
-            {isLeader ? <Crown className="h-4 w-4 text-primary" /> : <Server className="h-4 w-4" />}
-          </div>
+    <aside className="w-full shrink-0 rounded-xl border border-border bg-card p-4 lg:w-72" aria-label="Node details">
+      {!node ? (
+        <p className="text-sm text-muted-foreground">Select a node to see its address, region and weight.</p>
+      ) : (
+        <div className="space-y-4">
           <div>
-            <div className="font-medium text-sm flex items-center gap-2 flex-wrap">
-              {node.id}
+            <div className="flex items-center gap-2">
+              {isLeader ? <Crown className="h-4 w-4 text-primary" /> : <Server className="h-4 w-4 text-muted-foreground" />}
+              <h3 className="text-sm font-semibold">{node.id}</h3>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-1.5">
               <Badge variant={node.state === 'alive' ? 'success' : node.state === 'dead' ? 'destructive' : 'secondary'} className="text-[10px]">
                 {node.state}
               </Badge>
-              {isLeader && <Badge variant="default" className="text-[10px]">Leader</Badge>}
-              {node.role === 'follower' && <Badge variant="secondary" className="text-[10px]">Follower</Badge>}
-              {node.role === 'candidate' && <Badge variant="warning" className="text-[10px]">Candidate</Badge>}
+              <Badge variant={isLeader ? 'default' : node.role === 'candidate' ? 'warning' : 'secondary'} className="text-[10px]">
+                {memberRole(node, isLeader)}
+              </Badge>
               {isLocal && <Badge variant="outline" className="text-[10px]">this node</Badge>}
             </div>
-            <div className="text-xs text-muted-foreground mt-0.5">
-              {node.addr}:{node.port} • v{node.version || 1}
+            <p className="mt-2 font-mono text-xs text-muted-foreground">
+              {node.addr || '—'}:{node.port}
+              <span className="ml-2">v{node.version || 1}</span>
+            </p>
+          </div>
+          <dl className="grid grid-cols-2 gap-3 border-t border-border pt-3">
+            <div>
+              <dt className="text-xs text-muted-foreground">Region</dt>
+              <dd className="text-sm font-medium">{node.region || 'N/A'}</dd>
             </div>
-          </div>
-        </div>
-      </div>
-
-      {selected && (
-        <div className="mt-4 pt-4 border-t grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div>
-            <div className="text-xs text-muted-foreground">Region</div>
-            <div className="text-sm font-medium">{node.region || 'N/A'}</div>
-          </div>
-          <div>
-            <div className="text-xs text-muted-foreground">Zone</div>
-            <div className="text-sm font-medium">{node.zone || 'N/A'}</div>
-          </div>
-          <div>
-            <div className="text-xs text-muted-foreground">HTTPAddr</div>
-            <div className="text-sm font-medium">{node.http_addr || 'N/A'}</div>
-          </div>
-          <div>
-            <div className="text-xs text-muted-foreground">Weight</div>
-            <div className="text-sm font-medium">{node.weight}</div>
-          </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Zone</dt>
+              <dd className="text-sm font-medium">{node.zone || 'N/A'}</dd>
+            </div>
+            <div className="col-span-2">
+              <dt className="text-xs text-muted-foreground">HTTP address</dt>
+              <dd className="break-all font-mono text-sm font-medium">{node.http_addr || 'N/A'}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Weight</dt>
+              <dd className="text-sm font-medium tabular-nums">{node.weight}</dd>
+            </div>
+          </dl>
         </div>
       )}
-    </button>
+    </aside>
   );
 }
+

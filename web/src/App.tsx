@@ -34,6 +34,9 @@ const ACLPage = lazy(() => import('@/pages/acl').then(({ ACLPage }) => ({ defaul
 const GeoIPPage = lazy(() => import('@/pages/geoip').then(({ GeoIPPage }) => ({ default: GeoIPPage })));
 const DNS64CookiesPage = lazy(() => import('@/pages/dns64-cookies').then(({ DNS64CookiesPage }) => ({ default: DNS64CookiesPage })));
 const ZoneTransferPage = lazy(() => import('@/pages/zone-transfer').then(({ ZoneTransferPage }) => ({ default: ZoneTransferPage })));
+const DevClusterPreview = import.meta.env.DEV
+  ? lazy(() => import('@/pages/cluster-preview').then(({ DevClusterPreview }) => ({ default: DevClusterPreview })))
+  : null;
 
 function PageFallback() {
   return (
@@ -114,6 +117,10 @@ function AppContent() {
   useEffect(() => { setStreamConnected(connected); }, [connected, setStreamConnected]);
 
   useEffect(() => {
+    if (import.meta.env.DEV && window.location.pathname.startsWith('/dev/cluster')) {
+      setSessionChecked(true);
+      return;
+    }
     if (token) {
       setSessionChecked(true);
       return;
@@ -150,6 +157,14 @@ function AppContent() {
         .catch(() => {});
     }
   }, [isAuthenticated, token]);
+
+  if (import.meta.env.DEV && DevClusterPreview && window.location.pathname.startsWith('/dev/cluster')) {
+    return (
+      <Suspense fallback={<PageFallback />}>
+        <DevClusterPreview />
+      </Suspense>
+    );
+  }
 
   if (!sessionChecked) {
     return (

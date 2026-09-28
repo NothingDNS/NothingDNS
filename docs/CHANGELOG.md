@@ -5,6 +5,26 @@ All notable changes to NothingDNS are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.18] — 2026-09-28
+
+### Fixed
+
+- **Cluster page stacked nodes as membership grew**: labels sat outside the circles on a fixed canvas, and the same members were listed again under Cluster Nodes. The page is now one diagram of member cards (name, role, address). Selecting a card shows region, zone, HTTP address and weight beside the diagram. The orbit grows with the node count so cards do not overlap.
+
+Also included from `main` since 1.2.17:
+
+- Truncated IXFR is rejected unless it ends with the zone SOA, so a partial diff cannot advance the slave serial.
+- Aggressive NSEC cache entries are scoped to their zone apex.
+- Empty-non-terminal index is rebuilt from the live zone after record changes.
+- Delegation glue matches when the NS target and the glue name differ only by case.
+- `dnsctl record update` no longer clears TTL when the flag is omitted.
+- Blocklist source ids that contain `+` can be removed and toggled.
+- Gossip ignores a membership update whose sender id does not match the claimed node.
+- Token validation returns one generic invalid-token error.
+- Unknown query types share a single `OTHER` metrics label.
+- Zone, RPZ and blocklist reloads keep the previous data if a file fails to load.
+- DoT shutdown no longer deadlocks on the per-IP connection lock.
+
 ## [1.2.17] — 2026-09-25
 
 ### Changed
