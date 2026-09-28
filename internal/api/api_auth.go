@@ -163,6 +163,25 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 	// the impossible OldPassword check. The localhost gate above is
 	// already the strong authority for this path.
 	if len(users) == 1 && users[0].Username == "admin" && users[0].IsAutoCreated {
+		// Validate the replacement credentials with the SAME validators
+		// CreateUser applies, BEFORE the destructive step below. This
+		// handler's own checks only bound the username to 2-64 characters
+		// and the password to >=8 / <=MaxPasswordBytes; auth.CreateUser
+		// additionally rejects usernames containing control characters.
+		// Deleting the admin first and creating second therefore turned a
+		// routine 400 ("username must not contain control characters") into
+		// a server with ZERO users — no administrator and no way to
+		// authenticate, from a branch whose entire purpose is to escape the
+		// unbootstrappable-default-admin state. Every other rejection path
+		// here leaves the existing administrator intact; this one did not.
+		if err := auth.ValidateUsername(req.Username); err != nil {
+			s.writeError(w, http.StatusBadRequest, sanitizeError(err, "Invalid username"))
+			return
+		}
+		if err := auth.ValidatePassword(req.Password); err != nil {
+			s.writeError(w, http.StatusBadRequest, sanitizeError(err, "Invalid password"))
+			return
+		}
 		// Remove the synthetic admin and create the operator's chosen
 		// account fresh. Using CreateUser (not UpdateUser) means the
 		// new account loses the IsAutoCreated marker and behaves like

@@ -88,6 +88,21 @@ func (p *tcpConnPool) get() (*tcpConn, error) {
 			continue
 		}
 
+		// Discard a connection the upstream has already closed. The
+		// read-deadline check below performs no I/O and therefore cannot
+		// observe a peer close, so without this probe a dead connection is
+		// handed back out, its query fails, and queryTCPBuf's deferred
+		// markFailure() records a failure against a healthy upstream —
+		// enough stale connections flip IsHealthy() false and pull a
+		// working upstream out of rotation. See tcppool_liveness_unix.go.
+		if !tcpConnReusable(c.conn) {
+			if err := p.closeConnLocked(c); err != nil {
+				p.mu.Unlock()
+				return nil, err
+			}
+			continue
+		}
+
 		// Check if connection is still alive with a zero-read deadline
 		if err := c.conn.SetReadDeadline(time.Now()); err != nil {
 			if closeErr := p.closeConnLocked(c); closeErr != nil {

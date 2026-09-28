@@ -5,6 +5,7 @@ package zone
 import (
 	"crypto/sha256"
 	"crypto/sha512"
+	"encoding/binary"
 	"fmt"
 	"sort"
 
@@ -161,9 +162,24 @@ func collectZoneRRsets(z *Zone) ([][]byte, error) {
 			if rdata == nil {
 				return nil, fmt.Errorf("record %s type %s has malformed RDATA and cannot be serialized", rec.Name, rec.Type)
 			}
+			// RFC 4034 §6.2: in the canonical RR form an RRSIG's TTL field
+			// carries the *Signer's TTL* — the "original TTL" stored in the
+			// RRSIG RDATA (4th uint32) — NOT the RRSIG RR's own TTL header.
+			// That is precisely why an operator may LOWER an RRSIG's RR TTL
+			// during key rollover without invalidating its signature.
+			// Digesting the RR header's TTL here makes the ZONEMD disagree
+			// with any RFC-compliant peer (BIND/Knot) on any signed zone
+			// whose RRSIG TTL was lowered.
+			effectiveTTL := rec.TTL
+			if rtype == typeRRSIG {
+				if signerTTL, ok := rrsigSignerTTL(rdata); ok {
+					effectiveTTL = signerTTL
+				}
+			}
+
 			rrsetMap[rtype] = append(rrsetMap[rtype], rdata)
 			if _, ok := rrsetTTL[rtype]; !ok {
-				rrsetTTL[rtype] = rec.TTL
+				rrsetTTL[rtype] = effectiveTTL
 			}
 		}
 
@@ -178,6 +194,23 @@ func collectZoneRRsets(z *Zone) ([][]byte, error) {
 	}
 
 	return rrsets, nil
+}
+
+// rrsigSignerTTL extracts the Signer's TTL ("original TTL") from wire-format
+// RRSIG RDATA. RFC 4034 §3.1.3 lays RRSIG RDATA out as:
+//
+//	Type Covered (2) | Algorithm (1) | Labels (1) |
+//	Original TTL (4) | Signature Expiration (4) | Signature Inception (4) |
+//	Key Tag (2) | Signer Name (variable) | Signature (variable)
+//
+// so the Signer's TTL is the uint32 at offset 4. Returns ok=false when the
+// RDATA is too short to contain the fixed fields, in which case the caller
+// must keep the RR's own TTL rather than digesting a guessed value.
+func rrsigSignerTTL(rdata []byte) (uint32, bool) {
+	if len(rdata) < 8 {
+		return 0, false
+	}
+	return binary.BigEndian.Uint32(rdata[4:8]), true
 }
 
 // sortRRsets sorts RRsets in canonical order per RFC 8976 Section 4.2.

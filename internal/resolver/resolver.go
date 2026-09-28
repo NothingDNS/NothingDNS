@@ -493,13 +493,30 @@ func (r *Resolver) resolve(ctx context.Context, name string, qtype uint16, cname
 
 					target, err := r.resolve(ctx, cname, qtype, cnameDepth+1)
 					if err != nil {
-						// Return the CNAME at least, but release the pooled response
-						// so it is returned to messagePool instead of leaking.
-						resp.Header.Flags.RA = true
-						ret := resp
-						resp = nil
-						ret.Release()
-						return ret, nil
+						// Return the CNAME at least. The records still live in
+						// resp's backing array, so they must be copied out
+						// BEFORE resp goes back to the pool: returning resp
+						// itself after Release() hands the caller a message the
+						// pool now owns — emptied of content and shared with any
+						// concurrent resolution, which would also double-Put it
+						// on the caller's later Release. Mirrors the DNAME path
+						// above, which builds a fresh message for the same reason.
+						out := protocol.AcquireMessage()
+						out.Header.ID = resp.Header.ID
+						out.Header.Flags = protocol.NewResponseFlags(protocol.RcodeSuccess)
+						out.Header.Flags.RA = true
+						for _, q := range resp.Questions {
+							if q != nil {
+								out.AddQuestion(q.Copy())
+							}
+						}
+						for _, rr := range cnameAnswers {
+							if rr != nil {
+								out.AddAnswer(rr.Copy())
+							}
+						}
+						resp.Release()
+						return out, nil
 					}
 
 					// Merge: prepend CNAME records to the target's answer section
