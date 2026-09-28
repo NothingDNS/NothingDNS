@@ -722,7 +722,17 @@ func (r *Resolver) extractDelegation(resp *protocol.Message, zoneCut string) (*d
 		if !ok || ns == nil || ns.NSDName == nil {
 			continue
 		}
-		nsName := ns.NSDName.String()
+		// Canonicalise the NS target name to lowercase, PRESERVING the trailing
+		// dot so it matches the delegation map's existing key form (the root-hints
+		// path keys deleg.addrs by the full dotted h.Name too). DNS names are
+		// case-insensitive (RFC 4343 §4), and every consumer
+		// (queryDelegation / resolveNSAddresses / hasAnyAddress) looks an address
+		// up by these nsNames entries. Previously the raw-case NSDName went into
+		// nsNames while the address was stored under the raw-case owner, so a
+		// referral whose NS target and its glue differed only in case passed the
+		// nsTargets gate (which lowercases) and was then dropped as "no address",
+		// SERVFAILing a delegation that carried perfectly valid glue.
+		nsName := strings.ToLower(ns.NSDName.String())
 		if !containsString(deleg.nsNames, nsName) {
 			deleg.nsNames = append(deleg.nsNames, nsName)
 		}
@@ -749,10 +759,15 @@ func (r *Resolver) extractDelegation(resp *protocol.Message, zoneCut string) (*d
 		if !inBailiwick(owner, zoneCut) {
 			continue
 		}
+		// The nsTargets set is keyed dot-stripped, so the gate uses that form.
 		ownerKey := strings.ToLower(strings.TrimSuffix(owner, "."))
 		if !nsTargets[ownerKey] {
 			continue
 		}
+		// Store under the same canonical form used for nsNames above (lowercase,
+		// trailing dot preserved) so consumers that look an address up by an
+		// nsNames entry find it regardless of the case the server used.
+		addrsKey := strings.ToLower(owner)
 
 		switch rr.Type {
 		case protocol.TypeA:
@@ -764,7 +779,7 @@ func (r *Resolver) extractDelegation(resp *protocol.Message, zoneCut string) (*d
 				if !r.config.AllowPrivateUpstream && isDisallowedUpstreamIP(ip) {
 					continue
 				}
-				deleg.addrs[owner] = append(deleg.addrs[owner], withPort(ip.String(), "53"))
+				deleg.addrs[addrsKey] = append(deleg.addrs[addrsKey], withPort(ip.String(), "53"))
 			}
 		case protocol.TypeAAAA:
 			if a, ok := rr.Data.(*protocol.RDataAAAA); ok {
@@ -775,7 +790,7 @@ func (r *Resolver) extractDelegation(resp *protocol.Message, zoneCut string) (*d
 				if !r.config.AllowPrivateUpstream && isDisallowedUpstreamIP(ip) {
 					continue
 				}
-				deleg.addrs[owner] = append(deleg.addrs[owner], withPort(ip.String(), "53"))
+				deleg.addrs[addrsKey] = append(deleg.addrs[addrsKey], withPort(ip.String(), "53"))
 			}
 		}
 	}

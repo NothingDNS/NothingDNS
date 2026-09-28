@@ -38,6 +38,32 @@ func nsecEntryExpiredAt(entry *nsecEntry, now time.Time) bool {
 	return entry == nil || !now.Before(entry.ExpireTime)
 }
 
+// nsecEntryZone returns the zone apex that the cached entry was proven for,
+// taken from the SOA carried in the same NXDOMAIN response. It returns nil
+// when the entry has no usable SOA, in which case the zone the record covers
+// is unknown and the entry must not be used to deny any name.
+func nsecEntryZone(entry *nsecEntry) *protocol.Name {
+	if entry == nil || entry.SOA == nil || entry.SOA.Name == nil {
+		return nil
+	}
+	if _, ok := entry.SOA.Data.(*protocol.RDataSOA); !ok {
+		return nil
+	}
+	return entry.SOA.Name
+}
+
+// nameWithinZone reports whether name is zone itself or a subdomain of it.
+// Comparison is case-insensitive, as DNS names are.
+func nameWithinZone(name, zone *protocol.Name) bool {
+	if name == nil || zone == nil {
+		return false
+	}
+	if protocol.CompareNames(name, zone) == 0 {
+		return true
+	}
+	return protocol.IsSubdomain(name, zone)
+}
+
 // NewNSECCache creates a new aggressive NSEC cache.
 func NewNSECCache(maxSize int) *NSECCache {
 	if maxSize <= 0 {
@@ -144,6 +170,20 @@ func (nc *NSECCache) lookupAt(qname string, qtype uint16, now time.Time) *protoc
 			continue
 		}
 		if nsecEntryExpiredAt(entry, now) {
+			continue
+		}
+
+		// An NSEC only proves non-existence for names inside its OWN zone
+		// (RFC 4034 §4.1.1, RFC 8198 §5.3). This cache is global: entries
+		// from every zone share one map, and nameInNSECRange is a pure
+		// canonical-order comparison. Without this guard a zone's
+		// wrap-around record (last owner -> apex) denies unrelated names
+		// that sort below its apex, handing out a false AD=1 NXDOMAIN for
+		// a zone the resolver has no evidence about. Require the query
+		// name to be within the zone this response was for, and fail
+		// closed when that zone is unknown.
+		zone := nsecEntryZone(entry)
+		if zone == nil || !nameWithinZone(qnameParsed, zone) {
 			continue
 		}
 

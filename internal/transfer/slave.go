@@ -546,6 +546,28 @@ func (sm *SlaveManager) applyIncrementalIXFR(slaveZone *SlaveZone, base *zone.Zo
 		return fmt.Errorf("incremental IXFR does not begin with an SOA")
 	}
 
+	// RFC 1995 §4: "The first and the last RR of the response is the SOA
+	// record of the zone." A stream that does not end in that terminating SOA
+	// was cut short (the master died mid-diff — receiveIXFRResponse returns a
+	// partial record list once it has seen two SOAs and the read fails). The
+	// deletions and additions actually delivered therefore do not add up to
+	// the target serial, so this is not a completed transfer. Applying it
+	// would commit targetSOA.Serial over a half-built zone, and because the
+	// slave's serial would then match it would never re-fetch. Reject it and
+	// let the retry re-request the whole diff.
+	if len(records) < 2 {
+		return fmt.Errorf("incremental IXFR has no terminating SOA")
+	}
+	trailing := records[len(records)-1]
+	trailingSOA, ok := trailing.Data.(*protocol.RDataSOA)
+	if trailing.Type != protocol.TypeSOA || !ok {
+		return fmt.Errorf("incremental IXFR does not end with an SOA record: truncated transfer")
+	}
+	if trailingSOA.Serial != targetSOA.Serial {
+		return fmt.Errorf("IXFR terminating SOA serial %d does not match target serial %d",
+			trailingSOA.Serial, targetSOA.Serial)
+	}
+
 	// RFC 1995 §4: the first interior SOA carries the diff's base serial; it
 	// must match the serial this slave already holds, or the deletions and
 	// additions were computed for a different generation of the zone. The

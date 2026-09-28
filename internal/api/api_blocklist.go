@@ -3,7 +3,6 @@ package api
 import (
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 )
 
@@ -121,12 +120,15 @@ func (s *Server) handleBlocklistActions(w http.ResponseWriter, r *http.Request) 
 		if s.requireAdmin(w, r) {
 			return
 		}
+		// r.URL.Path is already percent-decoded by net/http, and a source ID
+		// (a file path or a full URL) is a path, not a query string. Decoding
+		// it a second time with url.QueryUnescape is wrong twice over: the
+		// query decoder rewrites a literal '+' into a space, so any source
+		// whose ID contains one — a base64 token or a space-encoded query
+		// parameter in a blocklist URL — could be added through the API but
+		// never removed or toggled again. Use the decoded path as-is.
 		id := strings.TrimSuffix(path, "/toggle")
-		decodedID, err := url.QueryUnescape(id)
-		if err != nil {
-			decodedID = id
-		}
-		enabled, err := blocklistService.ToggleSource(decodedID)
+		enabled, err := blocklistService.ToggleSource(id)
 		if err != nil {
 			s.writeError(w, http.StatusNotFound, "Source not found")
 			return
@@ -141,12 +143,10 @@ func (s *Server) handleBlocklistActions(w http.ResponseWriter, r *http.Request) 
 		if s.requireAdmin(w, r) {
 			return
 		}
-		// URL-decode the path to handle encoded slashes
-		decodedPath, err := url.QueryUnescape(path)
-		if err != nil {
-			decodedPath = path
-		}
-		if err := blocklistService.RemoveSource(decodedPath); err != nil {
+		// r.URL.Path is already decoded by net/http and the source ID is a
+		// path, so it is used as-is — see the note on the toggle branch above
+		// for why a second url.QueryUnescape is wrong here.
+		if err := blocklistService.RemoveSource(path); err != nil {
 			s.writeError(w, http.StatusBadRequest, sanitizeError(err, "Failed to remove blocklist source"))
 			return
 		}

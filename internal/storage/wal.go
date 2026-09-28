@@ -454,7 +454,7 @@ func (wal *WAL) AppendBatch(entries []WALEntry) error {
 			// original error — the partial batch will still be filtered
 			// by readSegment on recovery because the segment ended without
 			// a Commit marker.
-			wal.appendLocked(EntryTypeAbort, nil)
+			_, _ = wal.appendLocked(EntryTypeAbort, nil)
 			return err
 		}
 	}

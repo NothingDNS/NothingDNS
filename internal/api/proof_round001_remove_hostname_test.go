@@ -31,8 +31,8 @@ import (
 )
 
 const (
-	proofRound001Hostname  = "upstream.example.test"
-	proofRound001PinnedIP  = "192.0.2.10" // RFC 5737 TEST-NET-1
+	proofRound001Hostname = "upstream.example.test"
+	proofRound001PinnedIP = "192.0.2.10" // RFC 5737 TEST-NET-1
 )
 
 func TestProofRound001_RemoveUpstreamByHostname(t *testing.T) {

@@ -370,9 +370,12 @@ func (s *TLSServer) Serve() error {
 		if !connSent {
 			// Shutdown path: connection not accepted by worker.
 			// Decrement counter, close conn, release semaphore slot.
-			s.ipConnMu.Lock()
+			// Call decrementIPConn directly: it takes ipConnMu itself, and
+			// ipConnMu is a non-reentrant sync.Mutex, so an extra Lock/Unlock
+			// wrapped around the call here self-deadlocked the accept loop
+			// (it held the mutex, then decrementIPConn tried to re-acquire it),
+			// wedging Serve and every worker that later calls decrementIPConn.
 			s.decrementIPConn(ip)
-			s.ipConnMu.Unlock()
 			conn.Close()
 			<-s.connSem
 		}

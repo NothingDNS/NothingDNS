@@ -10,7 +10,6 @@ import (
 	"net"
 	"net/http"
 	"strconv"
-	"sync"
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
 	"github.com/nothingdns/nothingdns/internal/server"
@@ -504,6 +503,3 @@ func padResponseMessage(msg *protocol.Message, packedLen int) bool {
 	opt.AddOption(EDNS0OptionPadding, make([]byte, padLen))
 	return true
 }
-
-// padRandMu protects the rand reader from concurrent use.
-var padRandMu sync.Mutex

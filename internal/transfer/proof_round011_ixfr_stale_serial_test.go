@@ -1,11 +1,11 @@
 // Round-011 proof: HandleIXFR's "client up-to-date" check used
 // `!serialIsNewer(serverSerial, clientSerial)`, which conflates two
 // distinct cases:
-//   1. server == client          → client is up-to-date, send single SOA (correct)
-//   2. client > server           → server is BEHIND the client (stale zone, misconfig);
-//                                  sending a single SOA falsely tells the client it's
-//                                  up-to-date, causing the stale zone to persist silently.
-//                                  Correct behavior: fall back to AXFR.
+//  1. server == client          → client is up-to-date, send single SOA (correct)
+//  2. client > server           → server is BEHIND the client (stale zone, misconfig);
+//     sending a single SOA falsely tells the client it's
+//     up-to-date, causing the stale zone to persist silently.
+//     Correct behavior: fall back to AXFR.
 //
 // The fix splits the check into:
 //   - serverSerial == clientSerial → generateSingleSOA

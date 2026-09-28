@@ -549,9 +549,16 @@ func (m *Manager) cleanupExpiredSessions() {
 	m.sessionsMu.Lock()
 	defer m.sessionsMu.Unlock()
 
-	now := time.Now()
 	for id, session := range m.sessions {
-		if sessionExpiredAt(session.LastActivity, now, m.inactivityTimeout) {
+		// Read LastActivity through IsExpired, which takes s.mu.RLock.
+		// Reading session.LastActivity directly here raced with
+		// UpdateActivity (which writes it under s.mu) on the DSO
+		// request path: the two accesses are ordered by different locks
+		// (m.sessionsMu vs s.mu), so the pair was a data race and a
+		// multi-word time.Time could be read torn. Lock order stays
+		// m.sessionsMu -> s.mu, which this loop already used via
+		// session.Close() below.
+		if session.IsExpired(m.inactivityTimeout) {
 			session.Close()
 			delete(m.sessions, id)
 			if m.logger != nil {

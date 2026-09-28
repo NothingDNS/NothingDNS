@@ -14,7 +14,8 @@
 //
 // Build tag `proof_round009` keeps this proof as durable regression
 // evidence without dirtying the default suite. Run with:
-//   go test -tags proof_round009 ./internal/cache/ -run TestProofRound009 -v
+//
+//	go test -tags proof_round009 ./internal/cache/ -run TestProofRound009 -v
 package cache
 
 import (

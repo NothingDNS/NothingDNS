@@ -124,7 +124,7 @@ func TestProofRound012ZoneMDRRSIGUsesSignerTTLInCanonicalForm(t *testing.T) {
 		expectedRRSetBytes(t, "www.example.com.", protocol.TypeA, 300, aRDATA, 0),
 	})
 	if !equalDigest(gotControl.Hash, wantControl) {
-		t.Fatalf("FAIL: harness setup: control zone (no RRSIG) digest mismatch; "+
+		t.Fatalf("FAIL: harness setup: control zone (no RRSIG) digest mismatch; " +
 			"the reference builder does not agree with production on the unaffected path")
 	}
 

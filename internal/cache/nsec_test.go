@@ -467,7 +467,13 @@ func TestNSECCacheEntriesSurviveSourceMessageRelease(t *testing.T) {
 		},
 		Authorities: []*protocol.ResourceRecord{
 			{
-				Name:  mustName("_covered.example.com."),
+				// RFC 4034 §3.1.3.1: the authority SOA in an NXDOMAIN
+				// response is the zone's own SOA, i.e. it sits at the ZONE
+				// APEX. It was previously planted at the query name
+				// (_covered.example.com.), which no real authoritative
+				// server emits, and the NSEC cache derives each entry's
+				// zone from this record to refuse cross-zone denials.
+				Name:  mustName("example.com."),
 				Type:  protocol.TypeSOA,
 				Class: protocol.ClassIN,
 				TTL:   300,

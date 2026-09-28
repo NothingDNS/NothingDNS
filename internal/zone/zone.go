@@ -61,12 +61,12 @@ type Zone struct {
 	// entNames is the set of empty non-terminals: names that exist in this
 	// zone as DNS nodes because they have descendants, but own no records of
 	// their own (RFC 4592 §2.2.2). Derived from Records; see ensureENTIndex.
+	//
+	// It is rebuilt from the live zone on every lookup rather than cached
+	// against a staleness counter: Records is an exported field that
+	// transfer/DDNS code mutates directly, so no counter kept here can
+	// observe every change to the owner set.
 	entNames map[string]struct{}
-
-	// entBuiltFor is len(Records) at the time entNames was built. Records is
-	// an exported field that transfer/DDNS code mutates directly, so the set
-	// is revalidated against the owner count rather than trusted forever.
-	entBuiltFor int
 
 	// mu protects Records, SOA, NS, ZONEMD, and the ENT index from
 	// concurrent access.
@@ -1196,21 +1196,27 @@ func (z *Zone) nodeExistsLocked(name string) bool {
 	return ok
 }
 
-// ensureENTIndex rebuilds the empty-non-terminal set when it is missing or
-// stale. Called before taking the read lock, never while holding it.
+// ensureENTIndex rebuilds the empty-non-terminal set from the live zone.
+// Called before taking the read lock, never while holding it.
+//
+// The set is rebuilt unconditionally. It was previously cached and considered
+// fresh while `entBuiltFor == len(z.Records)`, but that compares an owner
+// COUNT, not identity: a mutation pair that removes one owner and adds
+// another (delete a.b.example.com., add y.c.example.com.) leaves the count
+// unchanged while completely changing which names are empty non-terminals.
+// Records is an exported field that transfer/DDNS code mutates directly, so
+// no counter maintained here can see that change, and the stale set then
+// produced DNSSEC negative proofs for names that no longer exist.
+//
+// Rebuilding costs one pass over the owner set — the same order of work the
+// per-query NSEC walk (previousNodeLocked/nextNodeLocked) already performs —
+// so the correctness win is free relative to the existing cost, and it is what
+// the package documents: the proof is computed from the live zone because "a
+// stale NSEC chain is worse than a slow one" (nsec.go).
 func (z *Zone) ensureENTIndex() {
-	z.mu.RLock()
-	fresh := z.entNames != nil && z.entBuiltFor == len(z.Records)
-	z.mu.RUnlock()
-	if fresh {
-		return
-	}
-
 	z.mu.Lock()
 	defer z.mu.Unlock()
-	if z.entNames == nil || z.entBuiltFor != len(z.Records) {
-		z.rebuildENTIndexLocked()
-	}
+	z.rebuildENTIndexLocked()
 }
 
 // rebuildENTIndexLocked recomputes entNames. Must hold the write lock.
@@ -1244,7 +1250,6 @@ func (z *Zone) rebuildENTIndexLocked() {
 	}
 
 	z.entNames = ents
-	z.entBuiltFor = len(z.Records)
 }
 
 // LookupWildcard performs RFC 4592 wildcard matching for a query name.

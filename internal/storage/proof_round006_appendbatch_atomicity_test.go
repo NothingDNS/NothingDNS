@@ -15,7 +15,8 @@
 //
 // Build tag `proof_round006` keeps this proof as durable regression
 // evidence without dirtying the default suite. Run with:
-//   go test -tags proof_round006 ./internal/storage/ -run TestProofRound006 -v
+//
+//	go test -tags proof_round006 ./internal/storage/ -run TestProofRound006 -v
 package storage
 
 import (

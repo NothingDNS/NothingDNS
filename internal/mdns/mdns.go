@@ -219,14 +219,21 @@ func (r *Responder) Stop() {
 	stopCh := r.stopCh
 	conn := r.conn
 	r.stopCh = nil
-	r.conn = nil
 	r.running = false
 
 	close(stopCh)
+	// Wait for every wg-tracked goroutine to exit BEFORE clearing or closing
+	// the conn field. The send* path (sendMulticast and friends) reads r.conn
+	// without taking lifecycleMu, so nil-ing it here raced with those readers.
+	// sendMulticast cannot grab lifecycleMu itself to fix that: Stop holds the
+	// mutex across this wg.Wait(), so a reader acquiring it here would
+	// deadlock against the Wait. Clearing the field after the Wait orders every
+	// reader (which lives inside a wg goroutine) before the write.
+	r.wg.Wait()
+	r.conn = nil
 	if conn != nil {
 		r.closeUDPConn(conn)
 	}
-	r.wg.Wait()
 	r.lifecycleMu.Unlock()
 
 	if r.logger != nil {

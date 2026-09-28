@@ -107,20 +107,29 @@ func cmdRecord(args []string) error {
 		rtype := args[3]
 		oldData := args[4]
 		newData := args[5]
-		ttl := uint32(0)
+		// TTL is optional on the server: an omitted "ttl" keeps the
+		// record's current TTL, while an explicit 0 is honoured as
+		// "no caching" (see internal/api/api_zones.go handleUpdateRecord).
+		// Defaulting to 0 and always sending it made `update` with no
+		// [ttl] argument indistinguishable from asking for TTL 0, so
+		// simply changing a record's address silently zeroed its TTL.
+		// Only send the field when the operator actually supplied one.
+		var ttl *uint32
 		if len(args) > 6 {
 			t, err := parseRecordTTL(args[6])
 			if err != nil {
 				return err
 			}
-			ttl = t
+			ttl = &t
 		}
 		body := map[string]interface{}{
 			"name":     name,
 			"type":     rtype,
 			"old_data": oldData,
 			"data":     newData,
-			"ttl":      ttl,
+		}
+		if ttl != nil {
+			body["ttl"] = *ttl
 		}
 		b, _ := json.Marshal(body)
 		result, err := apiPut("/api/v1/zones/"+url.PathEscape(zone)+"/records", string(b))
