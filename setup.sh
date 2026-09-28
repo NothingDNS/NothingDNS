@@ -485,7 +485,7 @@ release_port_53() {
         base="${unit%.service}"
         case "${base}" in nothingdns|systemd-resolved) continue ;; esac
         case "${base}" in
-            *dns*|*bind*|*named*|*unbound*|*pdns*|*knot*|*coredns*|*stubby*|*resolve*)
+            *dns*|*bind*|*named*|*unbound*|*knot*|*stubby*|*resolve*)
                 info "Stopping and disabling ${unit} (holds port 53, pid ${pid})..."
                 sudo systemctl stop "${unit}" 2>/dev/null || true
                 sudo systemctl disable "${unit}" 2>/dev/null || true
