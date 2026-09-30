@@ -688,14 +688,22 @@ func minimizeResponse(resp *protocol.Message) {
 			resp.Authorities = nil
 		}
 	} else {
-		// Non-authoritative: keep NS (referrals) and SOA (negative caching).
+		// Non-authoritative: keep NS (referrals) and SOA (negative caching),
+		// plus the DNSSEC denial records. Recursive NXDOMAIN/NODATA answers
+		// for signed zones arrive with NSEC/NSEC3 and their RRSIGs in the
+		// authority section; RFC 4035 §2.2 (DO bit) and §3.1.3 require the
+		// response to carry them so the recipient can determine the security
+		// status — a validator rejects a proof-less negative answer as Bogus.
+		// scrubForClient has already removed every DNSSEC record this client
+		// did not ask for (no DO bit), so what survives to this point is
+		// exactly what may go out. Same rationale as the AA branch above.
 		if hasSOA || hasNS {
 			filtered := make([]*protocol.ResourceRecord, 0, len(resp.Authorities))
 			for _, rr := range resp.Authorities {
 				if rr == nil {
 					continue
 				}
-				if rr.Type == protocol.TypeSOA || rr.Type == protocol.TypeNS {
+				if rr.Type == protocol.TypeSOA || rr.Type == protocol.TypeNS || isDNSSECType(rr.Type) {
 					filtered = append(filtered, rr)
 				}
 			}
