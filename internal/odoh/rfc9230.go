@@ -231,14 +231,14 @@ func encryptQueryRFC9230(targetConfig []byte, dnsQuery []byte) (msgBytes []byte,
 	if err != nil {
 		return nil, nil, err
 	}
-	return msgBytes, &queryContext{suite: suite, ctx: ctx, enc: enc, keyID: keyID}, nil
+	return msgBytes, &queryContext{suite: suite, ctx: ctx, qPlain: pt, keyID: keyID}, nil
 }
 
 type queryContext struct {
-	suite hpkeSuite
-	ctx   *hpkeContext
-	enc   []byte // ephemeral public key bytes
-	keyID []byte
+	suite  hpkeSuite
+	ctx    *hpkeContext
+	qPlain []byte // this client's query plaintext; part of the RFC 9230 §6.2 response salt
+	keyID  []byte
 }
 
 // parseConfigContents parses a single ObliviousDoHConfigContents (NOT
@@ -318,17 +318,17 @@ func (kp *odohKeyPair) decryptQuery(msgBytes []byte) (dnsQuery []byte, respCtx *
 	copy(dnsQuery, pt[2:2+dnsLen])
 
 	// Capture the context needed to derive the response AEAD later
-	// (deriveResponseAEAD). The response secret is
+	// (deriveResponseAEAD). Per RFC 9230 §6.2 the IKM is
 	// Context.Export("odoh response", Nk) — bound to the HPKE DH shared
-	// secret, NOT the guessable query plaintext (the old plaintext-IKM
-	// design enabled an offline dictionary attack by the proxy; see
-	// deriveResponseAEAD's doc comment). A fresh random response_nonce is
-	// folded into the HKDF salt per response to prevent AES-GCM nonce
-	// reuse on replayed queries.
+	// secret — and the HKDF salt folds in the exact serialized Q_plain plus
+	// a fresh random response_nonce per response, so every response gets a
+	// unique (key, nonce) even for a byte-identical replayed query. Q_plain
+	// must be preserved byte-for-byte: it is part of that salt, and a peer
+	// deriving with a different form fails AEAD authentication.
 	respCtx = &responseContext{
 		suite:         kp.suite,
 		ctx:           ctx,
-		enc:           append([]byte(nil), enc...),
+		qPlain:        append([]byte(nil), pt...),
 		responseLabel: odohResponseLabel,
 	}
 	return dnsQuery, respCtx, nil
@@ -339,7 +339,7 @@ func (kp *odohKeyPair) decryptQuery(msgBytes []byte) (dnsQuery []byte, respCtx *
 type responseContext struct {
 	suite         hpkeSuite
 	ctx           *hpkeContext
-	enc           []byte
+	qPlain        []byte // serialized query plaintext; part of the RFC 9230 §6.2 response salt
 	responseLabel []byte
 }
 
@@ -357,7 +357,7 @@ func (rc *responseContext) encryptResponse(dnsResponse []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("odoh: export response secret: %w", err)
 	}
-	aead, nonce, err := rc.suite.deriveResponseAEAD(rc.enc, odohSecret, responseNonce, rc.responseLabel)
+	aead, nonce, err := rc.suite.deriveResponseAEAD(rc.qPlain, odohSecret, responseNonce)
 	if err != nil {
 		return nil, err
 	}
@@ -416,7 +416,7 @@ func (qc *queryContext) decryptResponse(msgBytes []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("odoh: export response secret: %w", err)
 	}
-	aead, nonce, err := qc.suite.deriveResponseAEAD(qc.enc, odohSecret, responseNonce, odohResponseLabel)
+	aead, nonce, err := qc.suite.deriveResponseAEAD(qc.qPlain, odohSecret, responseNonce)
 	if err != nil {
 		return nil, err
 	}
@@ -437,31 +437,44 @@ func (qc *queryContext) decryptResponse(msgBytes []byte) ([]byte, error) {
 	return append([]byte(nil), pt[2:2+dnsLen]...), nil
 }
 
-// deriveResponseAEAD turns (enc, odoh_secret, response_nonce) into a fresh AEAD
-// key+nonce for the response transit, per RFC 9230 §4.2. The IKM is odohSecret =
-// Context.Export("odoh response", Nk), cryptographically bound to the HPKE DH
-// shared secret — NOT the guessable query plaintext. Using the low-entropy
-// query as IKM let a malicious proxy mount an offline dictionary attack on the
-// response (confirming the query and forging answers); binding to the DH secret
-// makes that infeasible. The random per-response responseNonce is folded into
-// the HKDF salt so every response gets a unique (key, nonce) even for a
-// byte-identical replayed query (preventing AES-GCM nonce reuse).
-func (s hpkeSuite) deriveResponseAEAD(enc, odohSecret, responseNonce, label []byte) (cipher.AEAD, []byte, error) {
-	// salt = enc || response_nonce; ikm = odoh_secret (DH-bound).
-	salt := make([]byte, 0, len(enc)+len(responseNonce))
-	salt = append(salt, enc...)
+// deriveResponseAEAD turns (Q_plain, odoh_secret, response_nonce) into the
+// fresh AEAD key+nonce for the response transit, per RFC 9230 §6.2:
+//
+//	secret = context.Export("odoh response", Nk)  (passed in as odohSecret)
+//	salt   = Q_plain || u16(len(resp_nonce)) || resp_nonce
+//	prk    = Extract(salt, secret)
+//	key    = Expand(prk, "odoh key", Nk)
+//	nonce  = Expand(prk, "odoh nonce", Nn)
+//
+// The IKM stays bound to the HPKE DH shared secret; Q_plain and the random
+// per-response nonce only salt the extraction, so every response gets a
+// unique (key, nonce) even for a byte-identical replayed query. Q_plain must
+// match the peer's serialized plaintext envelope byte-for-byte, or the
+// derived keys differ and AEAD authentication fails on both ends. This
+// matches the odoh-rs reference implementation; the previous derivation
+// (salt = enc || resp_nonce, HPKE-labeled "key"/"nonce" expands) produced
+// keys no conformant peer could derive, so the ODoH target and client could
+// only talk to themselves.
+func (s hpkeSuite) deriveResponseAEAD(qPlain, odohSecret, responseNonce []byte) (cipher.AEAD, []byte, error) {
+	hash := s.hkdfHash()
+	salt := make([]byte, 0, len(qPlain)+2+len(responseNonce))
+	salt = append(salt, qPlain...)
+	var nl [2]byte
+	binary.BigEndian.PutUint16(nl[:], uint16(len(responseNonce)))
+	salt = append(salt, nl[:]...)
 	salt = append(salt, responseNonce...)
-	secret, err := hkdf.Extract(s.hkdfHash(), odohSecret, salt)
+
+	prk, err := hkdf.Extract(hash, odohSecret, salt)
 	if err != nil {
 		return nil, nil, fmt.Errorf("odoh: response hkdf extract: %w", err)
 	}
-	key, err := s.labeledExpand(secret, []byte("key"), label, s.aeadKeyLen(), labelKindHPKE)
+	key, err := hkdf.Expand(hash, prk, "odoh key", s.aeadKeyLen())
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("odoh: response aead key: %w", err)
 	}
-	nonceBytes, err := s.labeledExpand(secret, []byte("nonce"), label, s.aeadNonceLen(), labelKindHPKE)
+	nonce, err := hkdf.Expand(hash, prk, "odoh nonce", s.aeadNonceLen())
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("odoh: response aead nonce: %w", err)
 	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -471,7 +484,7 @@ func (s hpkeSuite) deriveResponseAEAD(enc, odohSecret, responseNonce, label []by
 	if err != nil {
 		return nil, nil, fmt.Errorf("odoh: response aead init: %w", err)
 	}
-	return gcm, nonceBytes, nil
+	return gcm, nonce, nil
 }
 
 func u16BE(v uint16) []byte {
