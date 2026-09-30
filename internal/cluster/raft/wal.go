@@ -183,11 +183,29 @@ func (w *WAL) rewriteLocked(kept []entry) error {
 	}
 	cleanup = false
 
+	// The rename has already happened, so the live log is now the temp
+	// file's inode and w.logFile still references the original, which the
+	// rename unlinked. Swap the handle FIRST: returning early on a
+	// dir-fsync error before the swap would leave every later append going
+	// to an unlinked inode, silently losing committed entries on restart
+	// while reporting an error the caller only logs.
+	//
+	// The dir fsync governs durability of the rename, not which inode the
+	// open handle refers to, so doing the swap first is safe.
+	if err := w.swapLogFileLocked(logPath); err != nil {
+		return err
+	}
+
 	if err := syncHardStateParentDir(w.dir); err != nil {
 		return fmt.Errorf("fsync WAL dir: %w", err)
 	}
 
-	// Swap in a fresh append handle for the renamed file.
+	return nil
+}
+
+// swapLogFileLocked closes the current append handle and reopens logPath in
+// append mode, installing the fresh handle on the WAL. Caller must hold w.mu.
+func (w *WAL) swapLogFileLocked(logPath string) error {
 	if err := w.logFile.Close(); err != nil {
 		return fmt.Errorf("close old WAL handle: %w", err)
 	}

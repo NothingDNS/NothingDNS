@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -160,7 +161,70 @@ func (s *Snapshotter) Save(snap *Snapshot) error {
 		return fmt.Errorf("fsync snapshot dir: %w", err)
 	}
 
+	// The new snapshot is durable, so now drop the ones it supersedes.
+	// This is best-effort: the snapshot itself is already committed, so a
+	// prune failure only leaves dead weight on disk and must not turn a
+	// successful Save into a failed one.
+	s.pruneLocked()
+
 	return nil
+}
+
+// maxRetainedSnapshots bounds how many snapshot files a Snapshotter keeps.
+//
+// Load() reads only the highest-index file, so every other copy is
+// unreachable by construction. A leader snapshots every SnapshotInterval
+// (30s by default) and each file holds a full serialization of the state
+// machine, so keeping all of them turns the bounded log this subsystem
+// exists to maintain into an unbounded pile of dead snapshots. Two are
+// retained so an operator still has a fallback if the newest file turns
+// out to be unreadable.
+const maxRetainedSnapshots = 2
+
+// pruneLocked removes every snapshot file beyond the maxRetainedSnapshots
+// highest-indexed ones. Caller must hold s.mu — Save does for its whole body.
+func (s *Snapshotter) pruneLocked() {
+	entries, err := os.ReadDir(s.snapshotsDir)
+	if err != nil {
+		util.Warnf("raft: snapshot prune: readdir %s: %v", s.snapshotsDir, err)
+		return
+	}
+
+	type snapFile struct {
+		name  string
+		index Index
+	}
+	var files []snapFile
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		// parseSnapshotFilename only accepts "snapshot-<digits>", so the
+		// in-flight ".snapshot-*.tmp" file Save is currently writing is
+		// never a candidate for removal.
+		idx, ok := parseSnapshotFilename(e.Name())
+		if !ok {
+			continue
+		}
+		files = append(files, snapFile{name: e.Name(), index: idx})
+	}
+	if len(files) <= maxRetainedSnapshots {
+		return
+	}
+
+	// Highest index first, then drop everything past the retention window.
+	sort.Slice(files, func(i, j int) bool { return files[i].index > files[j].index })
+	for _, f := range files[maxRetainedSnapshots:] {
+		p := filepath.Join(s.snapshotsDir, f.name)
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			util.Warnf("raft: snapshot prune: remove %s: %v", p, err)
+		}
+	}
+	// The unlinks are dirent mutations and must be flushed too, or a
+	// restart can still list the pruned files.
+	if err := syncSnapshotDir(s.snapshotsDir); err != nil {
+		util.Warnf("raft: snapshot prune: fsync dir: %v", err)
+	}
 }
 
 // Load loads the latest snapshot from disk.

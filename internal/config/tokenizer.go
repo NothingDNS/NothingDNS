@@ -92,6 +92,14 @@ func (t *Tokenizer) Next() Token {
 		if t.isNumberStart() {
 			return t.readNumber()
 		}
+		// A '-' at end of line or followed by white space is a block-sequence
+		// marker, which the parser consumes structurally (TokenDash). A '-'
+		// glued to a non-space character instead begins a plain scalar: "-abc"
+		// is the string "-abc". Emitting TokenDash there yielded an empty
+		// value, so read the scalar instead.
+		if next := t.peekNext(); next != 0 && !isSpaceByte(next) {
+			return t.readScalar()
+		}
 		return t.emitChar(TokenDash)
 	case ',':
 		return t.emitChar(TokenComma)
@@ -341,15 +349,20 @@ func (t *Tokenizer) readQuotedString() Token {
 // isNumberStart checks if current position starts a number.
 func (t *Tokenizer) isNumberStart() bool {
 	ch := t.peek()
+	hasSign := false
 	if ch == '-' || ch == '+' {
-		// Look ahead
-		if t.pos+1 < len(t.input) {
-			next := t.input[t.pos+1]
-			return unicode.IsDigit(rune(next)) || next == '.'
+		// A sign must be followed by a digit or dot. Do not return true here:
+		// the rest of the token still has to be scanned, or "-7#tag" is read
+		// as the number -7 and "#tag" is silently dropped as a comment.
+		if t.pos+1 >= len(t.input) {
+			return false
 		}
-		return false
-	}
-	if !unicode.IsDigit(rune(ch)) {
+		next := t.input[t.pos+1]
+		if !unicode.IsDigit(rune(next)) && next != '.' {
+			return false
+		}
+		hasSign = true
+	} else if !unicode.IsDigit(rune(ch)) {
 		return false
 	}
 
@@ -359,7 +372,10 @@ func (t *Tokenizer) isNumberStart() bool {
 	pos := start
 	dotCount := 0
 
-	// Skip the first digit(s)
+	// Skip an optional sign, then the first digit(s)
+	if hasSign {
+		pos++
+	}
 	for pos < len(t.input) && unicode.IsDigit(rune(t.input[pos])) {
 		pos++
 	}
@@ -368,8 +384,19 @@ func (t *Tokenizer) isNumberStart() bool {
 	for pos < len(t.input) {
 		ch := t.input[pos]
 		// Stop at whitespace or structural characters
-		if ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == ',' || ch == ']' || ch == '}' || ch == '#' || ch == 0 {
+		if ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == ',' || ch == ']' || ch == '}' || ch == 0 {
 			break
+		}
+		// A '#' ends the number only when white space separates it (YAML
+		// §7.3.1: a comment must be separated from the preceding token).
+		// Glued to the digits it belongs to the token, so "123#abc" is a plain
+		// scalar rather than the number 123 — return false and let readScalar
+		// keep it whole.
+		if ch == '#' {
+			if isSpaceByte(t.input[pos-1]) {
+				break
+			}
+			return false
 		}
 		// Colon followed by space is a separator
 		if ch == ':' {
@@ -440,6 +467,13 @@ func (t *Tokenizer) readNumber() Token {
 	return Token{Type: TokenNumber, Value: value, Line: t.line, Col: startCol}
 }
 
+// isSpaceByte reports whether b is a YAML white-space character. Used to
+// decide whether a '#' begins a comment (it must be preceded by white space)
+// rather than being part of the scalar itself.
+func isSpaceByte(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\n' || b == '\r'
+}
+
 // readScalar reads an unquoted scalar value.
 func (t *Tokenizer) readScalar() Token {
 	start := t.pos
@@ -448,7 +482,15 @@ func (t *Tokenizer) readScalar() Token {
 
 	for {
 		ch := t.peek()
-		if ch == 0 || ch == '\n' || ch == '\r' || ch == '#' {
+		if ch == 0 || ch == '\n' || ch == '\r' {
+			break
+		}
+		// '#' only starts a comment at the start of the scalar or when
+		// preceded by whitespace (YAML §7.3.1: a comment must be separated
+		// from the preceding token by white space). Breaking on every '#'
+		// truncated any unquoted value containing one — "api_key: abc#def"
+		// silently became "abc" with the remainder dropped as a comment.
+		if ch == '#' && (t.pos == start || isSpaceByte(t.input[t.pos-1])) {
 			break
 		}
 		if inEnvBraced {

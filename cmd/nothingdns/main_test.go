@@ -11198,12 +11198,32 @@ func TestReloadAllComponents_ConcurrentTriggers(t *testing.T) {
 		t.Fatalf("reload bodies overlapped: maxOverlap=%d (want ≤1)", maxOverlap)
 	}
 
-	// Final state is consistent: each origin was applied at least once.
-	// Exactly one of the competing origins "won" the last apply.
+	// Final state is consistent: exactly one of the competing origins "won"
+	// the last apply, and the handler must serve exactly that origin.
+	//
+	// This assertion previously required ALL THREE origins to still be present
+	// in h.zones. That expectation contradicted the comment directly above it
+	// and encoded a real defect: applyConfiguredZoneFiles pruned stale
+	// file-backed origins from zoneManager but never from handler.zones, and
+	// RebuildZoneTree merges handler.zones as a source, so a zone removed from
+	// the config kept being served with its stale records. Here each reload
+	// applies a single distinct origin, so under the corrected contract only
+	// the last-applied origin may remain.
+	winners := 0
 	for _, origin := range origins {
-		if _, ok := h.zones[origin]; !ok {
-			t.Errorf("expected zone %s in handler after concurrent reloads", origin)
+		if _, ok := h.zones[origin]; ok {
+			winners++
 		}
+	}
+	if winners != 1 {
+		t.Errorf("expected exactly one origin to survive the last apply (last writer wins), "+
+			"got %d of %v — a removed zone is being retained in handler.zones", winners, origins)
+	}
+
+	// The seed zone was tracked in zoneFiles before the first reload and was
+	// replaced by it, so it must be gone from the handler.
+	if _, ok := h.zones["seed.example."]; ok {
+		t.Error("seed.example. was replaced by the reload and must no longer be in handler.zones")
 	}
 }
 

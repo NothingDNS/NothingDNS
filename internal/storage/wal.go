@@ -628,9 +628,16 @@ func (wal *WAL) readSegment(segment *WALSegment) ([]WALEntry, error) {
 	buf := make([]byte, 4096)
 	pos := int64(0)
 
-	// inBatch tracks whether we are inside an uncommitted batch.
-	// Each entry is appended only once it is known to be committed.
+	// inBatch tracks whether the reader is inside a batch, and pending holds
+	// that batch's entries. AppendBatch writes [Begin, entry..., Commit], so a
+	// batch is only known to be committed once its Commit marker is read: its
+	// entries are buffered here and appended at that point. Appending them as
+	// they are seen would also admit a batch that never commits, and skipping
+	// them until after the Commit dropped a committed batch entirely.
+	// Entries still pending at segment end belong to a torn, uncommitted batch
+	// and are correctly discarded.
 	inBatch := false
+	var pending []WALEntry
 
 	for {
 		// Read header
@@ -688,22 +695,24 @@ func (wal *WAL) readSegment(segment *WALSegment) ([]WALEntry, error) {
 		case EntryTypeBegin:
 			// A new batch starts; discard any previously uncommitted one.
 			inBatch = true
-			entries = nil
+			pending = pending[:0]
 		case EntryTypeCommit:
-			// Batch is now committed — keep what we have.
+			// Batch is now committed — its entries become durable.
+			entries = append(entries, pending...)
+			pending = pending[:0]
 			inBatch = false
 		case EntryTypeAbort:
 			// Batch was rolled back — discard its entries.
+			pending = pending[:0]
 			inBatch = false
-			entries = nil
 		default:
-			// Regular entry: only include it if we are in a committed batch.
-			if !inBatch {
+			// An entry inside a batch is held until the batch commits; one
+			// outside any batch is standalone and is kept immediately.
+			if inBatch {
+				pending = append(pending, *entry)
+			} else {
 				entries = append(entries, *entry)
 			}
-			// If inBatch is true, the entry is part of a partial batch and
-			// is silently discarded; it will be dropped either when we see
-			// the matching Commit, when we see Abort, or at segment end.
 		}
 
 		pos += int64(entrySize)

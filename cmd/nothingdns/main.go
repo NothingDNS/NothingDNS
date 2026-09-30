@@ -137,11 +137,25 @@ func applyConfiguredZoneFiles(handler *integratedHandler, zoneManager *zone.Mana
 		staleOrigins = append(staleOrigins, origin)
 	}
 
-	// Swap: delete stale file-backed zones from the manager.
+	// Swap: delete stale file-backed zones from the manager AND the handler map.
 	// zoneManager.zones accumulates all ever-loaded file-backed zones across
 	// reloads; without this, a zone removed from config leaks through
-	// RebuildZoneTree via zoneManager.List().
+	// RebuildZoneTree via zoneManager.List(). RebuildZoneTree also merges
+	// handler.zones as a source (and hands the merged map to
+	// NewMultiZoneProvider), so pruning only the manager left the removed zone
+	// in handler.zones — the zone kept being served with its stale records even
+	// though the operator had deleted it from the config. Prune every tracked
+	// origin from both stores, and from the zoneFiles tracking map so it does
+	// not accumulate stale origins (and so the next reload's staleOrigins is
+	// accurate). KV/API-created zones are never in zoneFiles, so they are
+	// preserved.
 	zoneManager.RemoveZones(staleOrigins...)
+	handler.zonesMu.Lock()
+	for _, origin := range staleOrigins {
+		delete(handler.zones, origin)
+		delete(zoneFiles, origin)
+	}
+	handler.zonesMu.Unlock()
 
 	// Load: add the new zone set.
 	for _, item := range loaded {

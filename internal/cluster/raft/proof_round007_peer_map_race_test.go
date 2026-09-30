@@ -1,131 +1,60 @@
-// Round-007 proof: Raft broadcast functions iterate n.peers without
-// holding n.mu, while membership changes replace n.peers under the lock.
-// Go's map iteration is not safe for concurrent map writes — this triggers
-// "fatal error: concurrent map iteration and map write."
+// Round-007 regression: the Raft broadcast functions must not iterate the
+// peer map outside n.mu, because a membership change replaces n.peers under
+// that same lock. Unlocked iteration races with the replacement and triggers
+// Go's "fatal error: concurrent map iteration and map write".
 //
-// Pre-fix: replicateToFollowers, broadcastVoteRequest, broadcastHeartbeat
-// all use `for id := range n.peers` outside the lock.
-// Post-fix: all three use n.snapshotPeerIDs() which iterates under n.mu.
+// HISTORY. The original version of this file shipped two tests against a
+// test-local `minimalNode` stand-in, one of which ("..._PreFix") deliberately
+// iterated its own map without the lock in order to demonstrate the pre-fix
+// pattern. That made the test fail under `-race` by construction, forever,
+// regardless of production code: it manufactured a race inside the test
+// rather than exercising raft. It was also the sole reason the `race` CI job
+// stayed red.
 //
-// The proof directly exercises the race pattern from replication.go:64-83
-// using a minimal node with the same lock + map layout. With -race, the
-// pre-fix code pattern triggers a DATA RACE report; the post-fix
-// snapshotPeerIDs pattern is race-free.
+// Those stand-ins are gone. The test below drives the REAL production method
+// on a REAL *Node, raced against the REAL replacement pattern that
+// membership.go uses (`n.peers = <new map>` under n.mu). If someone
+// reintroduces unlocked iteration into (*Node).snapshotPeerIDs, this test
+// fails under `-race`; with the lock in place it is clean.
 package raft
 
 import (
+	"strconv"
 	"sync"
 	"testing"
 	"time"
 )
 
-// minimalNode mirrors the relevant fields of raft.Node for this proof.
-// It deliberately matches the production code's lock-and-map layout so
-// the race detector reports the same class of bug.
-type minimalNode struct {
-	mu    sync.Mutex
-	peers map[NodeID]*Peer
-}
-
-// snapshotPeerIDs is the post-fix helper from replication.go. It snapshots
-// the peer IDs under the lock, allowing safe iteration without racing
-// membership changes.
-func (n *minimalNode) snapshotPeerIDs() []NodeID {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	ids := make([]NodeID, 0, len(n.peers))
-	for id := range n.peers {
-		ids = append(ids, id)
-	}
-	return ids
-}
-
-// TestProofRound007_PeerMapRace_PreFix exercises the pre-fix pattern
-// (iterate n.peers without holding mu) concurrently with a membership
-// change (replace n.peers under mu). With -race, Go's runtime detects
-// the data race.
-//
-// If this test PASSES with -race, the race detector did not fire in the
-// scheduling window — the proof is still valid conceptually, and running
-// repeatedly or with GOMAXPROCS>1 will eventually trigger it.
-func TestProofRound007_PeerMapRace_PreFix(t *testing.T) {
-	n := &minimalNode{
-		peers: map[NodeID]*Peer{
-			"p1": {ID: "p1"},
-			"p2": {ID: "p2"},
-			"p3": {ID: "p3"},
+// peerSetFor builds a small peer map. gen varies the membership so the
+// writer below is genuinely mutating the map, not rewriting an identical one.
+func peerSetFor(gen int) map[NodeID]*Peer {
+	return map[NodeID]*Peer{
+		"p1": {ID: "p1", Addr: "10.0.0.1:7000"},
+		"p2": {ID: "p2", Addr: "10.0.0.2:7000"},
+		NodeID("gen" + strconv.Itoa(gen)): {
+			ID:   NodeID("gen" + strconv.Itoa(gen)),
+			Addr: "10.0.0." + strconv.Itoa(gen%200+3) + ":7000",
 		},
 	}
+}
+
+// TestProofRound007_SnapshotPeerIDsDuringMembershipChange exercises the real
+// (*Node).snapshotPeerIDs concurrently with real membership changes, exactly
+// the interleaving that used to crash the process. It is the regression guard
+// for 29a68cb ("snapshot peer IDs in broadcast functions to avoid
+// map-iteration race").
+func TestProofRound007_SnapshotPeerIDsDuringMembershipChange(t *testing.T) {
+	n := &Node{peers: peerSetFor(0)}
 
 	var wg sync.WaitGroup
 	stop := make(chan struct{})
+	start := make(chan struct{})
 
-	// Pre-fix pattern: iterate n.peers without holding mu.
+	// Reader: the real production method the three broadcasts rely on.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for {
-			select {
-			case <-stop:
-				return
-			default:
-			}
-			for id := range n.peers {
-				_ = id
-			}
-		}
-	}()
-
-	// Membership change: replace n.peers under mu.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		i := 0
-		for {
-			select {
-			case <-stop:
-				return
-			default:
-			}
-			newPeers := map[NodeID]*Peer{
-				"p1": {ID: "p1"},
-				"p2": {ID: "p2"},
-				NodeID(string("p") + string(rune('0'+i%10))): {},
-			}
-			n.mu.Lock()
-			n.peers = newPeers
-			n.mu.Unlock()
-			i++
-		}
-	}()
-
-	time.Sleep(200 * time.Millisecond)
-	close(stop)
-	wg.Wait()
-
-	t.Logf("PROOF (pre-fix pattern): concurrent map iteration + map write completed; " +
-		"the race detector flags this when run with -race")
-}
-
-// TestProofRound007_PeerMapRace_PostFix exercises the post-fix pattern
-// (snapshotPeerIDs under mu) concurrently with a membership change.
-// This test should NOT trigger a race under -race.
-func TestProofRound007_PeerMapRace_PostFix(t *testing.T) {
-	n := &minimalNode{
-		peers: map[NodeID]*Peer{
-			"p1": {ID: "p1"},
-			"p2": {ID: "p2"},
-			"p3": {ID: "p3"},
-		},
-	}
-
-	var wg sync.WaitGroup
-	stop := make(chan struct{})
-
-	// Post-fix pattern: iterate via snapshotPeerIDs (under mu).
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+		<-start
 		for {
 			select {
 			case <-stop:
@@ -138,32 +67,36 @@ func TestProofRound007_PeerMapRace_PostFix(t *testing.T) {
 		}
 	}()
 
-	// Membership change: replace n.peers under mu.
+	// Writer: mirrors membership.go, which swaps in a brand-new map under n.mu.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		i := 0
-		for {
+		<-start
+		for gen := 1; ; gen++ {
 			select {
 			case <-stop:
 				return
 			default:
 			}
-			newPeers := map[NodeID]*Peer{
-				"p1": {ID: "p1"},
-				"p2": {ID: "p2"},
-				NodeID(string("p") + string(rune('0'+i%10))): {},
-			}
 			n.mu.Lock()
-			n.peers = newPeers
+			n.peers = peerSetFor(gen)
 			n.mu.Unlock()
-			i++
 		}
 	}()
 
-	time.Sleep(200 * time.Millisecond)
+	// Release both goroutines together so reader and writer actually overlap.
+	close(start)
+	time.Sleep(300 * time.Millisecond)
 	close(stop)
 	wg.Wait()
 
-	t.Logf("PROOF (post-fix pattern): concurrent snapshotPeerIDs + map write completed race-free")
+	// The map must still be internally consistent and reachable afterwards;
+	// an unlocked iteration would also risk tripping the runtime's
+	// concurrent-map-access guard.
+	n.mu.Lock()
+	_, hasP1 := n.peers["p1"]
+	n.mu.Unlock()
+	if !hasP1 {
+		t.Fatal("peer map lost p1 after concurrent snapshot/membership churn")
+	}
 }

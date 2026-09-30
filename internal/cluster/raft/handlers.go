@@ -13,11 +13,11 @@ func (n *Node) handleVoteRequest(req VoteRequest) {
 
 	// Reply false if term < currentTerm
 	if req.Term < n.currentTerm {
-		n.voteRespCh <- VoteResponse{
+		n.sendVoteResponseLocked(VoteResponse{
 			Term:        n.currentTerm,
 			VoteGranted: false,
 			From:        n.config.NodeID,
-		}
+		})
 		return
 	}
 
@@ -37,11 +37,11 @@ func (n *Node) handleVoteRequest(req VoteRequest) {
 	if req.Term > n.currentTerm {
 		if err := n.advanceTermLocked(req.Term); err != nil {
 			util.Errorf("raft: vote request term advance failed: %v", err)
-			n.voteRespCh <- VoteResponse{
+			n.sendVoteResponseLocked(VoteResponse{
 				Term:        n.currentTerm,
 				VoteGranted: false,
 				From:        n.config.NodeID,
-			}
+			})
 			return
 		}
 	}
@@ -51,27 +51,46 @@ func (n *Node) handleVoteRequest(req VoteRequest) {
 	if (n.votedFor == "" || n.votedFor == req.CandidateID) && n.isLogUpToDate(req.LastLogIndex, req.LastLogTerm) {
 		if err := n.setVotedForLocked(req.CandidateID); err != nil {
 			util.Errorf("raft: vote persistence failed: %v", err)
-			n.voteRespCh <- VoteResponse{
+			n.sendVoteResponseLocked(VoteResponse{
 				Term:        n.currentTerm,
 				VoteGranted: false,
 				From:        n.config.NodeID,
-			}
+			})
 			return
 		}
 		// Granting a vote counts as leader contact: don't immediately start
 		// our own campaign against the candidate we just endorsed.
 		n.signalElectionReset()
-		n.voteRespCh <- VoteResponse{
+		n.sendVoteResponseLocked(VoteResponse{
 			Term:        n.currentTerm,
 			VoteGranted: true,
 			From:        n.config.NodeID,
-		}
+		})
 	} else {
-		n.voteRespCh <- VoteResponse{
+		n.sendVoteResponseLocked(VoteResponse{
 			Term:        n.currentTerm,
 			VoteGranted: false,
 			From:        n.config.NodeID,
-		}
+		})
+	}
+}
+
+// sendVoteResponseLocked delivers a vote response without ever blocking the
+// caller. voteRespCh is bounded (size 10) and its only consumer is
+// runCandidate, so a node that is NOT a candidate never drains it. A blocking
+// send there would wedge handleVoteRequest — which runs under n.mu — after
+// the buffer filled, deadlocking every other n.mu holder. This mirrors the
+// non-blocking send-and-drop used by the transport path in sendVoteRequest.
+//
+// Dropping is safe: a vote response nobody collects is a response to a
+// campaign this node is not running, and the candidate's own election timeout
+// expires it. MUST be called with n.mu held.
+func (n *Node) sendVoteResponseLocked(resp VoteResponse) {
+	select {
+	case n.voteRespCh <- resp:
+	default:
+		// voteRespCh is bounded (size 10); if full drop the response
+		// rather than block the handler while holding n.mu.
 	}
 }
 

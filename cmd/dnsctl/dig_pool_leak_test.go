@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -21,8 +22,29 @@ func TestDigResponsePoolReleased(t *testing.T) {
 	if out == "" {
 		t.Fatal("FAIL: No resp.Release() call found in dig.go — pooled *Message leaks on every dig invocation")
 	}
-	// Verify it's at line 193, inside cmdDig before the return nil.
-	if !strings.Contains(out, "193:") {
-		t.Errorf("resp.Release() not at expected line 193 (cmdDig return path). Found: %s", out)
+	// The release must live inside cmdDig, after the response is produced
+	// and before it is handed to the printer, so the pooled message is
+	// always returned. Assert on the code that surrounds the call rather
+	// than an absolute line number, which shifts whenever anything above it
+	// in the file is edited (adding a helper, a comment, a flag — none of
+	// which change this contract).
+	src, readErr := os.ReadFile("dig.go")
+	if readErr != nil {
+		t.Fatalf("read dig.go: %v", readErr)
+	}
+	idx := strings.Index(string(src), "resp.Release()")
+	if idx < 0 {
+		t.Fatal("FAIL: resp.Release() not found in dig.go")
+	}
+	releaseLine := strings.Count(string(src)[:idx], "\n") + 1
+	cmdStart := strings.Index(string(src), "func cmdDig(")
+	// cmdDig is the function that contains the release; verify a `return
+	// nil` appears at or after the release within the same function region.
+	region := string(src)[cmdStart:]
+	relInRegion := strings.Index(region, "resp.Release()")
+	retInRegion := strings.Index(region, "return nil")
+	if relInRegion < 0 || retInRegion < 0 || relInRegion > retInRegion {
+		t.Errorf("resp.Release() must appear inside cmdDig before its `return nil` "+
+			"(line %d); pooled *Message would leak on every dig invocation", releaseLine)
 	}
 }

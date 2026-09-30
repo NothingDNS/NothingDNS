@@ -1106,8 +1106,17 @@ func cmdDNSSECValidateZone(args []string) error {
 		}
 
 		if len(coveredRecords) == 0 {
-			fmt.Printf("  WARNING: No records found for RRSIG covering %s type %d\n",
+			// Every other exit from this loop counts the RRSIG in exactly one
+			// bucket, so validSigs+invalidSigs+expiredSigs always adds up to
+			// the number of RRSIGs in the file. This path was the sole
+			// omission: an RRSIG whose covered RRset is absent was skipped
+			// silently, so a zone in which no signature could be checked at
+			// all still reported "Valid: 0, Invalid: 0" and exited 0 — a
+			// false "signed and valid" verdict from a validation tool. An
+			// RRSIG that cannot be verified is counted as invalid.
+			fmt.Printf("  ERROR: No records found for RRSIG covering %s type %d\n",
 				rr.Name.String(), rrsig.TypeCovered)
+			invalidSigs++
 			continue
 		}
 
@@ -1149,6 +1158,16 @@ func cmdDNSSECValidateZone(args []string) error {
 
 	if invalidSigs > 0 {
 		return fmt.Errorf("zone validation failed: %d invalid signatures", invalidSigs)
+	}
+	// An expired or not-yet-valid signature means the zone is not currently
+	// validly signed, so it is a validation failure, not a footnote. The
+	// operator can pass --ignore-time to skip timestamp checking entirely —
+	// expiredSigs only ever moves inside the `!*ignoreTime` branch. Without
+	// this, a zone whose signatures had all expired printed "Valid: 0,
+	// Invalid: 0" and exited 0: a false "signed and valid" verdict from a
+	// validation tool.
+	if expiredSigs > 0 {
+		return fmt.Errorf("zone validation failed: %d expired or not-yet-valid signatures", expiredSigs)
 	}
 
 	return nil

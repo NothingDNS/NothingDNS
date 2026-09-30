@@ -598,12 +598,17 @@ func firstServer(servers []*Server, start int) *Server {
 }
 
 // queryWithFailover performs a query with automatic failover.
+//
+// It deliberately does NOT touch lb.queriesFailed. The failed-query counter is
+// owned by Query, its only production caller, which counts once per failed
+// public call — the same convention (*Client).Query uses (client.go:264,278).
+// Counting failures here as well double-counted every one of them, because each
+// error below propagates straight back into Query.
 func (lb *LoadBalancer) queryWithFailover(target *Target, msg *protocol.Message) (*protocol.Message, error) {
 	cb := lb.getOrCreateCircuitBreaker(target.Address)
 
 	// Check circuit breaker before attempting request
 	if !cb.shouldAllow() {
-		atomic.AddUint64(&lb.queriesFailed, 1)
 		return nil, fmt.Errorf("circuit breaker open for %s", target.Address)
 	}
 
@@ -650,14 +655,12 @@ func (lb *LoadBalancer) queryWithFailover(target *Target, msg *protocol.Message)
 	// Select a different target
 	failoverTarget, selectErr := lb.selectTarget()
 	if selectErr != nil || failoverTarget.Address == target.Address {
-		atomic.AddUint64(&lb.queriesFailed, 1)
 		return nil, fmt.Errorf("query failed and no failover available: %w", err)
 	}
 
 	// Check circuit breaker for failover target
 	failoverCB := lb.getOrCreateCircuitBreaker(failoverTarget.Address)
 	if !failoverCB.shouldAllow() {
-		atomic.AddUint64(&lb.queriesFailed, 1)
 		return nil, fmt.Errorf("circuit breaker open for failover target %s", failoverTarget.Address)
 	}
 
@@ -673,7 +676,6 @@ func (lb *LoadBalancer) queryWithFailover(target *Target, msg *protocol.Message)
 
 	if retryErr != nil {
 		failoverCB.recordFailure()
-		atomic.AddUint64(&lb.queriesFailed, 1)
 		return nil, fmt.Errorf("query failed on primary and failover: %w", retryErr)
 	}
 

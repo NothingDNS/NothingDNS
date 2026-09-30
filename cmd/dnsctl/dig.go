@@ -54,6 +54,31 @@ func digQueryTCP(addr string, query []byte) (*protocol.Message, error) {
 	return protocol.UnpackMessage(respBuf)
 }
 
+// digServerAddr returns the host:port to dial for a dig "@server" argument,
+// defaulting to port 53 when no port is given.
+//
+// net.SplitHostPort is the correct way to detect a port. A naive
+// `strings.Contains(addr, ":")` sees the colons that are part of a bare IPv6
+// literal and wrongly concludes a port is already present, so
+// `dig @2001:db8::1 example.com` handed the unbracketed literal to net.Dial
+// and was rejected with "too many colons in address" — an IPv6 resolver could
+// never be queried without spelling out an explicit port. A bare IPv6
+// literal must also be bracketed before a port can be appended, because
+// "2001:db8::1" + ":53" is still unparseable.
+func digServerAddr(server string) string {
+	if _, _, err := net.SplitHostPort(server); err == nil {
+		return server // already host:port
+	}
+	switch {
+	case strings.HasPrefix(server, "["):
+		return server + ":53" // bracketed literal, no port: "[::1]" -> "[::1]:53"
+	case strings.Contains(server, ":"):
+		return "[" + server + "]:53" // bare IPv6 literal
+	default:
+		return server + ":53" // IPv4 address or hostname
+	}
+}
+
 func cmdDig(args []string) error {
 	// Parse dig-style arguments: [@server] <name> [<type>] [+dnssec]
 	var server string
@@ -148,10 +173,7 @@ func cmdDig(args []string) error {
 	}
 
 	// Send via UDP
-	addr := server
-	if !strings.Contains(addr, ":") {
-		addr += ":53"
-	}
+	addr := digServerAddr(server)
 	conn, err := net.Dial("udp", addr)
 	if err != nil {
 		return fmt.Errorf("connecting to %s: %w", addr, err)

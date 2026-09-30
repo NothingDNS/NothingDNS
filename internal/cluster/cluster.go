@@ -1060,9 +1060,20 @@ func (c *Cluster) snapshotZones() ([]byte, error) {
 	return json.Marshal(out)
 }
 
-// restoreZones loads a snapshot produced by snapshotZones into the local zone
-// store, replacing each zone's contents. Used when a follower installs a
-// snapshot from the leader.
+// restoreZones installs a snapshot produced by snapshotZones into the local
+// zone store. A Raft snapshot carries the COMPLETE state machine, so this
+// REPLACES the local zone set rather than merging into it: a zone absent from
+// the payload was deleted on the leader and must not survive here.
+//
+// Merging resurrected such a zone on every follower that had to catch up via
+// snapshot — the case snapshots exist for, because the log entry carrying the
+// delete has already been compacted off the leader by then, so nothing else
+// ever removes it and the follower serves data the leader no longer has.
+//
+// Removal goes through Manager.DeleteZone, the same call the log-replayed
+// delete_zone path (applyRaftZoneCommand) makes, so installing a snapshot and
+// replaying the equivalent log entry have identical semantics — including
+// leaving an operator's zone file on disk when it lives outside zone_dir.
 func (c *Cluster) restoreZones(data []byte) error {
 	if c.zoneManager == nil {
 		return fmt.Errorf("zoneManager not configured")
@@ -1071,14 +1082,49 @@ func (c *Cluster) restoreZones(data []byte) error {
 	if err := json.Unmarshal(data, &in); err != nil {
 		return fmt.Errorf("unmarshal snapshot: %w", err)
 	}
+
+	// Parse every zone before mutating anything, so a payload that is
+	// malformed part-way through leaves the existing state untouched instead
+	// of half-replaced.
+	parsed := make(map[string]*zone.Zone, len(in))
 	for name, txt := range in {
 		z, err := zone.ParseFile(name, strings.NewReader(txt))
 		if err != nil {
 			return fmt.Errorf("parse zone %s: %w", name, err)
 		}
+		parsed[normalizeClusterZoneName(name)] = z
+	}
+
+	// Drop zones the leader no longer has.
+	for name := range c.zoneManager.List() {
+		if _, ok := parsed[normalizeClusterZoneName(name)]; ok {
+			continue
+		}
+		if err := c.zoneManager.DeleteZone(name); err != nil {
+			return fmt.Errorf("removing zone %s absent from snapshot: %w", name, err)
+		}
+	}
+
+	for _, z := range parsed {
 		c.zoneManager.LoadZone(z, "")
 	}
 	return nil
+}
+
+// normalizeClusterZoneName matches zone.Manager's internal key form (lowercase,
+// fully qualified with a trailing dot) so snapshot keys and manager keys are
+// compared on the same footing. zone.normalizeZoneName is package-private, and
+// Manager.Get is an exact map lookup, so an unnormalized comparison would make
+// every zone look absent from the payload.
+func normalizeClusterZoneName(name string) string {
+	name = strings.TrimSpace(strings.ToLower(name))
+	if name == "" {
+		return ""
+	}
+	if !strings.HasSuffix(name, ".") {
+		name += "."
+	}
+	return name
 }
 
 // applyRaftZoneCommand projects a committed Raft ZoneCommand onto the local

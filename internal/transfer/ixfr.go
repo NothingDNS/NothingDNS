@@ -37,6 +37,15 @@ type IXFRResponse struct {
 
 // IXFRJournalEntry represents a single change to the zone
 type IXFRJournalEntry struct {
+	// OldSerial is the SOA serial BEFORE this change. It is the entry's
+	// lower bound: a client at this serial is covered by the entry, a client
+	// at anything older is not. generateIncrementalIXFR needs it to decide
+	// whether the oldest retained entry is the client's next version (a delta
+	// is correct) or a much later one (a delta would corrupt the secondary).
+	// 0 is a legitimate serial, so a journal restored from the store — which
+	// does not persist this field — degrades to "unknown" and safely falls
+	// back to a full AXFR rather than serving a wrong delta.
+	OldSerial uint32 // SOA serial before this change
 	Serial    uint32 // SOA serial after this change
 	Added     []zone.RecordChange
 	Deleted   []zone.RecordChange
@@ -93,6 +102,7 @@ func (s *IXFRServer) RecordChange(zoneName string, oldSerial, newSerial uint32, 
 	zoneName = strings.ToLower(zoneName)
 
 	entry := &IXFRJournalEntry{
+		OldSerial: oldSerial,
 		Serial:    newSerial,
 		Added:     added,
 		Deleted:   deleted,
@@ -305,10 +315,32 @@ func (s *IXFRServer) generateIncrementalIXFR(z *zone.Zone, clientSerial uint32) 
 		return nil, fmt.Errorf("client serial %d not in journal range", clientSerial)
 	}
 
-	// Check if we have all changes from client serial to current
-	// The journal entry at startIdx-1 should have serial <= clientSerial
-	if startIdx > 0 && journal[startIdx-1].Serial != clientSerial {
-		// We don't have the exact starting point
+	// Check if we have all changes from client serial to current.
+	//
+	// The journal covers the client's serial only when the entry immediately
+	// before the first newer entry starts exactly at the client serial:
+	//
+	//   startIdx > 0  -> the preceding entry's post-change Serial must equal
+	//                   clientSerial.
+	//   startIdx == 0 -> the client is at (or before) the oldest retained
+	//                   entry, whose PRE-change OldSerial bounds it. A client
+	//                   older than that is not covered: the journal was trimmed
+	//                   at maxJournalSize (RecordChange) or never spanned that
+	//                   far, so the changes between the client and journal[0]
+	//                   are gone. Building a delta from journal[0] would apply
+	//                   the wrong diff onto the wrong base version and silently
+	//                   corrupt the secondary.
+	//
+	// In the uncovered case we return an error so HandleIXFR falls back to a
+	// full AXFR (RFC 1995 §4 / RFC 5936 §4.2) — the only correct answer.
+	uncovered := false
+	switch {
+	case startIdx > 0:
+		uncovered = journal[startIdx-1].Serial != clientSerial
+	default:
+		uncovered = journal[0].OldSerial != clientSerial
+	}
+	if uncovered {
 		return nil, fmt.Errorf("journal doesn't cover client serial %d", clientSerial)
 	}
 

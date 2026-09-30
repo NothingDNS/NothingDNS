@@ -223,6 +223,17 @@ func (n *Node) runCandidate() {
 				n.becomeFollower(resp.Term)
 				return
 			}
+			if resp.Term < term {
+				// Stale reply left over from a previous candidacy. Raft
+				// §5.2 counts votes only for the term in which they were
+				// granted, and voteRespCh is never drained between
+				// elections (run() re-dispatches into runCandidate on
+				// every iteration), so a late response from term-1 would
+				// otherwise slip past the higher-term check and inflate
+				// voteCount — letting this node win a term in which it
+				// never won a majority, i.e. two leaders in one term.
+				continue
+			}
 			if resp.VoteGranted {
 				voteCount++
 				if voteCount >= quorum {
