@@ -191,11 +191,21 @@ func TestServeHTTP_CloseFrameExits(t *testing.T) {
 
 	c.writeMaskedFrame(8, nil) // opcode 8 = close
 
-	// The handler must return (and close the conn) rather than hang. The
-	// read deadline in ServeHTTP is 30s, so use a shorter client deadline.
+	// RFC 6455 §5.5.1: the server MUST answer a client close frame with a
+	// close frame before closing (the echo lives in Conn.ReadMessage), and
+	// then ServeHTTP returns and the deferred close ends the TCP
+	// connection. The read deadline in ServeHTTP is 30s, so use a shorter
+	// client deadline.
 	_ = c.conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	op, _, err := c.readServerFrame()
+	if err != nil {
+		t.Fatalf("expected close frame echo after client close, got error: %v", err)
+	}
+	if op != 8 {
+		t.Fatalf("frame opcode = %d, want 8 (close echo)", op)
+	}
 	if _, _, err := c.readServerFrame(); err == nil {
-		t.Error("expected connection close after close frame")
+		t.Error("expected connection close after close echo")
 	}
 }
 

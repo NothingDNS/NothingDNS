@@ -346,8 +346,15 @@ func (c *Conn) ReadMessage() (int, []byte, error) {
 			c.fragAccum = append(c.fragAccum, payload...)
 			c.mu.Unlock()
 
-		case 0x8: // close
+		case 0x8: // close - echo per RFC 6455 §5.5.1: an endpoint that receives
+			// a close frame and has not previously sent one MUST respond with
+			// a close frame before closing. Same shape as the ping path: the
+			// response is written from the read loop, and a failed write
+			// surfaces to the caller exactly like a failed pong.
 			c.mu.Unlock()
+			if err := c.WriteMessage(0x8, payload); err != nil {
+				return 0, nil, err
+			}
 			return 8, payload, nil
 
 		case 0x9: // ping - respond with pong
