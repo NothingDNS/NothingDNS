@@ -94,7 +94,10 @@ func (p *tcpConnPool) get() (*tcpConn, error) {
 		// handed back out, its query fails, and queryTCPBuf's deferred
 		// markFailure() records a failure against a healthy upstream —
 		// enough stale connections flip IsHealthy() false and pull a
-		// working upstream out of rotation. See tcppool_liveness_unix.go.
+		// working upstream out of rotation. See tcppool_liveness_unix.go
+		// and tcppool_liveness_windows.go (the platform probes; the unix
+		// one is a non-blocking peek, the Windows one a deadline-bounded
+		// read whose window is a serialized stall under this lock).
 		if !tcpConnReusable(c.conn) {
 			if err := p.closeConnLocked(c); err != nil {
 				p.mu.Unlock()

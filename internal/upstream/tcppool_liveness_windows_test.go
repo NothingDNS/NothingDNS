@@ -2,7 +2,7 @@
 
 package upstream
 
-// Windows-specific tests for the WSARecv MSG_PEEK liveness probe.
+// Windows-specific tests for the deadline-bounded liveness probe.
 //
 // NOTE ON VERIFICATION: on a Linux host this file can only be compile-checked
 // (GOOS=windows go vet / go test -c), not executed — there is no Windows
@@ -11,16 +11,21 @@ package upstream
 // same classifyRecv this wrapper feeds, and the end-to-end pool behaviour in
 // tcppool_liveness_test.go, which carries no build tag and therefore already
 // runs on Windows. These tests close the remaining gap: that the Windows
-// wrapper feeds classifyRecv correctly and uses the right Winsock constants.
+// wrapper returns PROMPTLY on an idle connection (the first WSARecv-based
+// implementation hung there and blew the 10-minute test timeout), feeds
+// classifyRecv correctly, and keeps the Winsock constant contract pinned.
 
 import (
+	"net"
+	"os"
 	"testing"
 	"time"
 )
 
 // TestWindowsLivenessSentinels pins the Winsock error classification. A typo
 // in a WSAE* value would silently turn a dead connection into a reusable one,
-// which is the original bug.
+// which is the original bug. The deadline sentinel (os.ErrDeadlineExceeded,
+// the would-block category of the Read-based probe) is asserted alongside.
 func TestWindowsLivenessSentinels(t *testing.T) {
 	s := windowsLivenessSentinels
 
@@ -33,6 +38,7 @@ func TestWindowsLivenessSentinels(t *testing.T) {
 		{"WSAEINTR means alive", wsaeintr, recvVerdictAlive},
 		{"WSAENOTSOCK is inconclusive", wsaenotsock, recvVerdictInconclusive},
 		{"WSAEOPNOTSUPP is inconclusive", wsaeopnotsupp, recvVerdictInconclusive},
+		{"deadline exceeded means alive", os.ErrDeadlineExceeded, recvVerdictAlive},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -46,9 +52,6 @@ func TestWindowsLivenessSentinels(t *testing.T) {
 // TestWindowsLivenessConstants pins the Winsock constant values, which Go's
 // syscall package for Windows does not provide.
 func TestWindowsLivenessConstants(t *testing.T) {
-	if msgPeek != 0x2 {
-		t.Errorf("msgPeek = %#x, want 0x2", msgPeek)
-	}
 	for _, c := range []struct {
 		name string
 		got  int
@@ -65,35 +68,53 @@ func TestWindowsLivenessConstants(t *testing.T) {
 	}
 }
 
-// TestWindowsWSARecv_StalePooledConnNotReused exercises the real WSARecv probe
-// end to end against a live loopback listener. Named distinctly from the
-// untagged equivalent in tcppool_liveness_test.go so both coexist in a Windows
-// build, where the untagged one runs the same scenario.
-func TestWindowsWSARecv_StalePooledConnNotReused(t *testing.T) {
+// TestWindowsProbe_StalePooledConnNotReused exercises the probe end to end
+// against a live loopback listener: once the upstream closes the connection,
+// the EOF path must judge it not reusable.
+func TestWindowsProbe_StalePooledConnNotReused(t *testing.T) {
 	ln, accepted := newLivenessTestListener(t)
 	defer ln.Close()
 
-	pool := newTCPConnPool(ln.Addr().String(), 2, 4, time.Minute, 2*time.Second)
-
-	first, err := pool.get()
+	client, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
-		t.Fatalf("first get(): %v", err)
+		t.Fatalf("dial: %v", err)
 	}
+	defer client.Close()
 	serverSide := <-accepted
-	if err := pool.put(first); err != nil {
-		t.Fatalf("put(): %v", err)
-	}
 
 	serverSide.Close()
-	waitForPeerClose(t, first.conn)
+	waitForPeerClose(t, client)
 
-	second, err := pool.get()
-	if err != nil {
-		t.Fatalf("second get(): %v", err)
+	if tcpConnReusable(client) {
+		t.Fatal("probe handed back a connection the upstream had closed")
 	}
-	defer second.close()
+}
 
-	if second == first {
-		t.Fatalf("WSARecv probe handed back a connection the upstream had closed")
+// TestWindowsProbe_IdleConnIsReusableAndPrompt is the regression guard for
+// the original CI failure: probing an idle-but-live connection must return
+// quickly with an alive verdict. The WSARecv implementation parked in
+// syscall.WSARecv for minutes here and blew the 10-minute test timeout.
+func TestWindowsProbe_IdleConnIsReusableAndPrompt(t *testing.T) {
+	ln, accepted := newLivenessTestListener(t)
+	defer ln.Close()
+
+	client, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+	serverSide := <-accepted
+	defer serverSide.Close()
+
+	done := make(chan bool, 1)
+	go func() { done <- tcpConnReusable(client) }()
+
+	select {
+	case reusable := <-done:
+		if !reusable {
+			t.Fatal("idle live connection judged not reusable")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("tcpConnReusable did not return within 5s on an idle connection — probe hang regression")
 	}
 }

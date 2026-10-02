@@ -4,39 +4,68 @@ package upstream
 
 // Liveness probe for pooled DNS-over-TCP connections (Windows).
 //
-// The Windows equivalent of the unix recv(2) MSG_PEEK|MSG_DONTWAIT probe is
-// WSARecv with MSG_PEEK. Inside syscall.RawConn.Read the handle is already in
-// non-blocking mode, so a peek with nothing queued returns WSAEWOULDBLOCK
-// immediately rather than parking the caller — the same guarantee MSG_DONTWAIT
-// gives on unix.
+// HISTORY: the first implementation peeked with WSARecv(MSG_PEEK) inside
+// syscall.RawConn.Read, assuming the handle was in non-blocking mode there so
+// an empty peek would return WSAEWOULDBLOCK immediately. On the Windows runner
+// that assumption is false: a synchronous nil-overlapped WSARecv on Go's
+// overlapped-mode socket is a blocking receive, and the probe parked in
+// syscall.WSARecv for the entire test timeout on an idle connection
+// ("panic: test timed out after 10m0s", goroutine stuck at
+// tcppool_liveness_windows.go:75). Windows offers no non-blocking peek
+// through the raw handle, so the Winsock receive path is gone entirely.
 //
-// MSG_PEEK leaves any bytes queued, so the stream is never disturbed. The
-// decision logic is shared with the unix path via classifyRecv, so it is unit
-// tested on every platform even though this wrapper only runs on Windows.
+// The probe now uses the public net API instead: a deadline-bounded 1-byte
+// Read. The poller enforces the deadline by canceling the overlapped read, so
+// the probe always returns within the window, and the outcome is classified
+// by the shared classifyRecv table:
+//
+//	os.ErrDeadlineExceeded → nothing arrived → idle and open → alive
+//	                         (the read is canceled before any byte is
+//	                         consumed, so the stream is untouched)
+//	io.EOF (0 bytes)       → peer closed → discard
+//	n > 0, no error        → data queued outside a query → desynced → discard
+//	anything else          → hard error (ECONNRESET, …) → discard
+//
+// This mirrors the unix probe's classifyRecv table (EAGAIN ≡ deadline
+// exceeded, 0-byte peek ≡ EOF, readable data ≡ unusable), with one documented
+// divergence: the deadline case is the alive signal, so probing an idle
+// connection always costs the window. Keep livenessProbeWindow small — the
+// probe runs under tcpConnPool.mu, so the window is a serialized stall for
+// concurrent callers (the unix probe, by contrast, never waits).
 
 import (
+	"errors"
+	"io"
 	"net"
+	"os"
 	"syscall"
+	"time"
 )
 
 const (
-	// msgPeek is Winsock's MSG_PEEK. Go's syscall package for Windows does
-	// not define the MSG_* constants, so they are spelled out here; 0x2 is
-	// the stable Winsock value.
-	msgPeek = 0x2
+	// livenessProbeWindow bounds one probe. A peer FIN queued before the
+	// probe is observed almost immediately; only a genuinely idle connection
+	// pays the full window, which is the alive signal. Keep it small: the
+	// probe runs under tcpConnPool.mu (get probes candidates while holding
+	// the pool lock), so the window is a serialized stall for concurrent
+	// callers. A FIN missed because the window was too short is caught on
+	// the next checkout — the probe runs every time a pooled connection is
+	// handed out.
+	livenessProbeWindow = 10 * time.Millisecond
 
-	// Winsock error codes. Go's syscall for Windows likewise does not define
-	// the WSAE* constants, and these values are fixed by the Winsock
-	// specification. They arrive from WSARecv as syscall.Errno, which is why
-	// classifyRecv's errors.Is comparison works.
-	wsaeintr       syscall.Errno = 10004
+	// wsaewouldblock and the other WSAE* values below remain part of the
+	// classification contract for raw Winsock errors (see classifyRecv).
 	wsaewouldblock syscall.Errno = 10035
+	wsaeintr       syscall.Errno = 10004
 	wsaenotsock    syscall.Errno = 10038
 	wsaeopnotsupp  syscall.Errno = 10045
 )
 
 var windowsLivenessSentinels = livenessSentinels{
-	wouldBlock:   []error{wsaewouldblock},
+	// A read that outlives livenessProbeWindow means nothing was queued: the
+	// connection is idle and open. Go reports that as a deadline error, so it
+	// takes the wouldBlock (alive) category.
+	wouldBlock:   []error{wsaewouldblock, os.ErrDeadlineExceeded},
 	interrupted:  []error{wsaeintr},
 	notSupported: []error{wsaenotsock, wsaeopnotsupp},
 }
@@ -48,37 +77,34 @@ func currentLivenessSentinels() livenessSentinels {
 }
 
 // tcpConnReusable reports whether a pooled connection is safe to hand out for
-// another DNS-over-TCP exchange. Semantics are identical to the unix probe.
+// another DNS-over-TCP exchange. The outcome mapping mirrors the unix probe's
+// classifyRecv table; see probeVerdict.
 func tcpConnReusable(conn net.Conn) bool {
 	if conn == nil {
 		return false
 	}
+	return verdictReusable(probeVerdict(conn))
+}
 
-	sc, ok := conn.(syscall.Conn)
-	if !ok {
-		// Not a syscall-backed connection (e.g. net.Pipe in tests).
-		return true
+// probeVerdict bounds one 1-byte read to livenessProbeWindow and maps the
+// result through the shared classifier.
+func probeVerdict(conn net.Conn) recvVerdict {
+	if err := conn.SetReadDeadline(time.Now().Add(livenessProbeWindow)); err != nil {
+		// Deadlines unsupported: the probe cannot be bounded, so it must not
+		// run. Reuse the connection — never discard one on a guess.
+		return recvVerdictInconclusive
 	}
-	raw, err := sc.SyscallConn()
-	if err != nil {
-		return true
-	}
+	defer conn.SetReadDeadline(time.Time{}) // restore the no-deadline default
 
-	verdict := recvVerdictInconclusive
-	if err := raw.Read(func(fd uintptr) bool {
-		var b [1]byte
-		buf := syscall.WSABuf{Len: 1, Buf: &b[0]}
-		var recvd uint32
-		flags := uint32(msgPeek)
-		// overlapped and croutine are nil: the handle is in non-blocking
-		// mode inside this callback, so this is the synchronous form.
-		recvErr := syscall.WSARecv(syscall.Handle(fd), &buf, 1, &recvd, &flags, nil, nil)
-		verdict = classifyRecv(int(recvd), recvErr, windowsLivenessSentinels)
-		return true
-	}); err != nil {
-		// The callback never ran. Inconclusive: keep the connection.
-		return true
+	var b [1]byte
+	n, err := conn.Read(b[:])
+	if errors.Is(err, io.EOF) {
+		// net.Conn reports a closed peer as (0, io.EOF); classifyRecv's
+		// table expects that as a successful 0-byte receive.
+		n, err = 0, nil
 	}
-
-	return verdictReusable(verdict)
+	// os.ErrDeadlineExceeded is registered as a wouldBlock sentinel, so an
+	// idle window classifies as alive; queued data classifies as unusable;
+	// a reset or anything hard falls through to unusable as well.
+	return classifyRecv(n, err, windowsLivenessSentinels)
 }
