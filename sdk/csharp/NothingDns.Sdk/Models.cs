@@ -502,14 +502,28 @@ public sealed class AclRule
 
     /// <summary>Convert the rule to the wire payload used by <c>PUT /api/v1/acl</c>.</summary>
     /// <returns>A dictionary keyed by the server's field names.</returns>
-    public Dictionary<string, object?> ToPayload() => new(StringComparer.Ordinal)
+    /// <remarks>
+    /// Mirrors the Python SDK's <c>ACLRule.to_dict</c>: <c>types</c> is omitted when empty
+    /// (empty means all types server-side) and <c>redirect</c> is omitted when unset.
+    /// </remarks>
+    public Dictionary<string, object?> ToPayload()
     {
-        ["name"] = Name,
-        ["networks"] = Networks,
-        ["action"] = Action,
-        ["types"] = Types,
-        ["redirect"] = Redirect,
-    };
+        var payload = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["name"] = Name,
+            ["networks"] = Networks,
+            ["action"] = Action,
+        };
+        if (Types.Count > 0)
+        {
+            payload["types"] = Types;
+        }
+        if (!string.IsNullOrEmpty(Redirect))
+        {
+            payload["redirect"] = Redirect;
+        }
+        return payload;
+    }
 }
 
 /// <summary>The list of clients permitted to use recursive resolution.</summary>

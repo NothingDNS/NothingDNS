@@ -314,10 +314,18 @@ public sealed class NothingDnsClientTests
         var message = await client.Acl.SetAsync(
         [
             new AclRule { Name = "vpn", Networks = { "10.1.0.0/16" }, Action = "deny" },
+            new AclRule
+            {
+                Name = "lan",
+                Networks = { "192.168.0.0/16" },
+                Action = "redirect",
+                Types = { "A", "AAAA" },
+                Redirect = "127.0.0.1",
+            },
         ]);
         Assert.Equal("PUT", mock.Last.Method);
-        // The C# client serialises types and redirect even when empty — the wire
-        // body must match what it actually sends.
+        // Mirrors the Python SDK's ACLRule.to_dict: types and redirect are omitted
+        // when empty and included when set.
         Assert.True(
             JsonNode.DeepEquals(
                 new JsonObject
@@ -328,8 +336,14 @@ public sealed class NothingDnsClientTests
                             ["name"] = "vpn",
                             ["networks"] = new JsonArray("10.1.0.0/16"),
                             ["action"] = "deny",
-                            ["types"] = new JsonArray(),
-                            ["redirect"] = "",
+                        },
+                        new JsonObject
+                        {
+                            ["name"] = "lan",
+                            ["networks"] = new JsonArray("192.168.0.0/16"),
+                            ["action"] = "redirect",
+                            ["types"] = new JsonArray("A", "AAAA"),
+                            ["redirect"] = "127.0.0.1",
                         }),
                 },
                 mock.Last.BodyJson),
@@ -449,6 +463,7 @@ public sealed class NothingDnsClientTests
             ("empty-acl", () => client.Acl.SetAsync([])),
             ("bad-log-level", () => client.Config.SetLoggingAsync("loud")),
             ("blocklist-without-source", () => client.Blocklists.AddAsync()),
+            ("blocklist-with-both-sources", () => client.Blocklists.AddAsync("/etc/hosts", "https://example.com/hosts")),
             ("unknown-role", () => client.Auth.CreateUserAsync("ops", "pw-op-1", role: "root")),
             ("unknown-rpz-action", () => client.Rpz.AddRuleAsync("ads.example.com", action: "DENY")),
             ("zone-without-nameservers", () => client.Zones.CreateAsync("example.com", [])),

@@ -33,7 +33,9 @@ public sealed class NothingDnsBlocklists
     /// <param name="url">URL of a hosts-format list to fetch.</param>
     /// <param name="cancellationToken">Token to cancel the request.</param>
     /// <returns>The server's confirmation message.</returns>
-    /// <exception cref="NothingDnsValidationException">Neither <paramref name="file"/> nor <paramref name="url"/> was supplied.</exception>
+    /// <exception cref="NothingDnsValidationException">
+    /// Neither <paramref name="file"/> nor <paramref name="url"/> was supplied, or both were.
+    /// </exception>
     /// <exception cref="NothingDnsApiException">
     /// 400 when the source is unreadable, or 403 when the caller is not an admin.
     /// </exception>
@@ -45,6 +47,11 @@ public sealed class NothingDnsBlocklists
         if (string.IsNullOrWhiteSpace(file) && string.IsNullOrWhiteSpace(url))
         {
             throw new NothingDnsValidationException("supply either a file path or a url to add");
+        }
+
+        if (!string.IsNullOrWhiteSpace(file) && !string.IsNullOrWhiteSpace(url))
+        {
+            throw new NothingDnsValidationException("pass either a file path or a url, not both");
         }
 
         var body = NothingDnsTransport.Body(("file", file), ("url", url));
