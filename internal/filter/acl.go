@@ -73,6 +73,12 @@ func NewEmptyACLChecker() *ACLChecker {
 // NewACLChecker creates an ACL checker from configuration rules.
 // Returns nil if rules is empty (allow-all default), unless denyByDefault is true.
 // When denyByDefault is true, an empty rule set results in deny-by-default behavior.
+//
+// Note: checkers built here do NOT refuse unmatched clients unless denyByDefault
+// is set (denyUnmatched stays false). The server's always-installed checker is
+// built by NewEmptyACLChecker, whose denyUnmatched flag refuses unmatched clients
+// once any rule exists — prefer NewEmptyACLChecker plus UpdateRules for checkers
+// whose rules change at runtime or that must follow the AGENTS.md ACL contract.
 func NewACLChecker(rules []config.ACLRule, denyByDefault bool) (*ACLChecker, error) {
 	if len(rules) == 0 {
 		if denyByDefault {
@@ -150,7 +156,16 @@ func ParseNetwork(entry string) (*net.IPNet, error) {
 
 // IsAllowed checks if a client IP is allowed to make a query of the given type.
 // Returns (allowed bool, redirectTarget string).
-// If no rule matches, the default is allow, unless denyByDefault is set.
+//
+// Unmatched semantics depend on how the checker was built:
+//   - NewEmptyACLChecker sets denyUnmatched: once any rule exists, a client
+//     matching no rule is REFUSED regardless of denyByDefault. This is the
+//     checker the server always installs, so it is the production contract
+//     (AGENTS.md: "unmatched clients are refused once any rule exists").
+//   - NewACLChecker leaves denyUnmatched false: with denyByDefault also false,
+//     an unmatched client is allowed.
+//
+// An empty rule set allows everyone unless denyByDefault is set.
 func (a *ACLChecker) IsAllowed(clientIP net.IP, queryType uint16) (bool, string) {
 	if a == nil {
 		return true, ""
