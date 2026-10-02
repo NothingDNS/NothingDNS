@@ -718,6 +718,21 @@ coverage.
   (`openapiSpec()`) are returned as `JsonObject`, because their shape is
   server-defined and can grow between releases.
 
+## Testing
+
+The SDK ships a JUnit 5 test suite under `src/test/java` (`ClientTest`,
+`ErrorsTest`) that runs against an in-process mock management API built on the
+JDK's own `com.sun.net.httpserver` (`MockApi`) — no additional dependencies
+beyond the test-scoped `org.junit.jupiter:junit-jupiter`. It mirrors the
+Python and TypeScript SDK suites: bearer-token propagation, record CRUD
+bodies, zone export as raw text, camelCase wire groups (dashboard, PTR bulk),
+null-dropping partial updates, path escaping, local validation before any
+request, and the 401/403/404/429 error mappings.
+
+```bash
+mvn test      # compile and run the suite (surefire)
+```
+
 ## License
 
 Distributed under the same license as the NothingDNS project.

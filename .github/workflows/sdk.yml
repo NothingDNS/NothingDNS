@@ -1,6 +1,6 @@
 name: SDKs
 
-# Compile-verification for the client SDKs shipped under sdk/.
+# Compile- and test-verification for the client SDKs shipped under sdk/.
 #
 # These are independent modules the `Go` workflow never touches: the Go SDK
 # has its own go.mod (so the root module's ./... patterns exclude it), and
@@ -19,7 +19,7 @@ permissions:
 
 jobs:
   sdk-go:
-    name: Go SDK (build + vet)
+    name: Go SDK (build + vet + test)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -52,6 +52,9 @@ jobs:
             exit 1
           fi
 
+      - name: Test
+        run: go test ./...
+
   sdk-csharp:
     name: C# SDK (dotnet build)
     runs-on: ubuntu-latest
@@ -73,7 +76,7 @@ jobs:
         run: dotnet build
 
   sdk-java:
-    name: Java SDK (mvn compile)
+    name: Java SDK (mvn test)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -92,6 +95,9 @@ jobs:
 
       - name: Compile
         run: mvn -q compile
+
+      - name: Test
+        run: mvn -q test
 
   sdk-python:
     name: Python SDK (pytest)

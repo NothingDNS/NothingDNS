@@ -547,3 +547,17 @@ All 71 operations of the management API, in contract order. The **Role** column 
 ## License
 
 Distributed under the same license as the NothingDNS project.
+
+---
+
+## Testing
+
+The suite is stdlib-only (`net/http/httptest` + `encoding/json`, no testify) and runs entirely in-process against a mock of the management API:
+
+```bash
+cd sdk/go
+go test ./...
+```
+
+`mockserver_test.go` starts a fresh mock server per test and records every request (method, raw path including query string, JSON body, `Authorization` header), so `client_test.go` and `errors_test.go` can assert on paths, query strings, JSON bodies, bearer-token propagation, camelCase/snake_case wire mapping and typed error translation — mirroring the Python (`sdk/python/tests/`) and TypeScript (`sdk/typescript/test/`) suites. Local validation failures (unknown role, unknown log level, unknown RPZ action, …) are checked to reject *before* any request is made, and path-segment escaping (`%2F`, `%20`), config partial updates (nil fields omitted) and connection errors are covered as well.
+
