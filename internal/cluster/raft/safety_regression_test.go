@@ -238,7 +238,7 @@ func TestHandleSnapshotRequest_RestoreFailureReturnsFailure(t *testing.T) {
 	transport := &mockTransport{}
 	config := DefaultConfig()
 	config.NodeID = "follower"
-	node := NewNode(config, []NodeID{"leader"}, transport)
+	node, _ := NewNode(config, []NodeID{"leader"}, transport)
 	node.SetStateMachine(&failingRestoreSM{})
 
 	resp := node.HandleSnapshotRequest(SnapshotRequest{
@@ -264,7 +264,7 @@ func TestHandleSnapshotRequest_StaleTermRefused(t *testing.T) {
 	transport := &mockTransport{}
 	config := DefaultConfig()
 	config.NodeID = "follower"
-	node := NewNode(config, []NodeID{"leader"}, transport)
+	node, _ := NewNode(config, []NodeID{"leader"}, transport)
 
 	node.mu.Lock()
 	node.currentTerm = 5
@@ -307,7 +307,7 @@ func leaderMatchIndexAfterSnapshot(t *testing.T, resp *SnapshotResponse, sendErr
 	tr := &ackTransport{resp: resp, err: sendErr, sent: make(chan struct{}, 1)}
 	config := DefaultConfig()
 	config.NodeID = "leader"
-	node := NewNode(config, []NodeID{"follower"}, tr)
+	node, _ := NewNode(config, []NodeID{"follower"}, tr)
 
 	node.mu.Lock()
 	node.state = StateLeader
@@ -428,7 +428,7 @@ func TestSendInstallSnapshot_InFlightGuard(t *testing.T) {
 	tr := &blockingSnapshotTransport{release: make(chan struct{})}
 	config := DefaultConfig()
 	config.NodeID = "leader"
-	node := NewNode(config, []NodeID{"follower"}, tr)
+	node, _ := NewNode(config, []NodeID{"follower"}, tr)
 
 	node.mu.Lock()
 	node.state = StateLeader
@@ -469,7 +469,7 @@ func TestHandleSnapshotRequest_StaleSnapshotDoesNotRewind(t *testing.T) {
 	transport := &mockTransport{}
 	config := DefaultConfig()
 	config.NodeID = "follower"
-	node := NewNode(config, []NodeID{"leader"}, transport)
+	node, _ := NewNode(config, []NodeID{"leader"}, transport)
 
 	node.mu.Lock()
 	node.currentTerm = 3

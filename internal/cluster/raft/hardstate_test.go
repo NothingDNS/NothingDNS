@@ -161,7 +161,7 @@ func TestVoteRequestRejectsWhenHardStatePersistenceFails(t *testing.T) {
 	}
 	t.Cleanup(func() { syncHardStateParentDir = originalSyncParentDir })
 
-	node := NewNode(Config{
+	node, _ := NewNode(Config{
 		NodeID:  "node-1",
 		DataDir: t.TempDir(),
 	}, nil, nil)

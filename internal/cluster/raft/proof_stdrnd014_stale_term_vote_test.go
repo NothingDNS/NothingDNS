@@ -17,7 +17,7 @@ func buildStaleVoteNode(t *testing.T, term Term) *Node {
 	cfg.ElectionTimeout = 30 * time.Second // long: the timer must not fire
 	cfg.HeartbeatInterval = 20 * time.Millisecond
 
-	n := NewNode(cfg, []NodeID{"peer1"}, nil)
+	n, _ := NewNode(cfg, []NodeID{"peer1"}, nil)
 	n.currentTerm = term
 	n.votedFor = cfg.NodeID
 	n.state = StateCandidate

@@ -95,7 +95,7 @@ func TestWAL_RewriteDurableAcrossReopen(t *testing.T) {
 
 func TestNode_ProposePersistsToWAL(t *testing.T) {
 	wal := openTestWAL(t)
-	n := NewNode(Config{NodeID: "leader"}, nil, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "leader"}, nil, &mockTransport{})
 	defer n.Stop()
 	n.SetLogPersister(wal)
 	n.mu.Lock()
@@ -128,7 +128,7 @@ func TestNode_ProposePersistsToWAL(t *testing.T) {
 
 func TestNode_ConflictingAppendRewritesWAL(t *testing.T) {
 	wal := openTestWAL(t)
-	n := NewNode(Config{NodeID: "follower"}, nil, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "follower"}, nil, &mockTransport{})
 	defer n.Stop()
 	n.SetLogPersister(wal)
 	n.mu.Lock()

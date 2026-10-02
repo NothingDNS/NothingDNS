@@ -37,7 +37,7 @@ func TestNewNode(t *testing.T) {
 	config.HeartbeatInterval = 50 * time.Millisecond
 	config.ElectionTimeout = 150 * time.Millisecond
 
-	node := NewNode(config, []NodeID{"node2", "node3"}, transport)
+	node, _ := NewNode(config, []NodeID{"node2", "node3"}, transport)
 
 	if node == nil {
 		t.Fatal("NewNode returned nil")
@@ -61,7 +61,7 @@ func TestNodeStartStop(t *testing.T) {
 	config := DefaultConfig()
 	config.NodeID = "node1"
 
-	node := NewNode(config, nil, transport)
+	node, _ := NewNode(config, nil, transport)
 
 	// Test that node can be created and stopped without starting
 	// (Start would require proper async handling for election timeouts)
@@ -127,7 +127,7 @@ func TestHandleVoteRequest(t *testing.T) {
 			config := DefaultConfig()
 			config.NodeID = "node1"
 
-			node := NewNode(config, nil, transport)
+			node, _ := NewNode(config, nil, transport)
 			node.mu.Lock()
 			node.currentTerm = tt.nodeTerm
 			node.votedFor = tt.votedFor
@@ -209,7 +209,7 @@ func TestHandleAppendRequest(t *testing.T) {
 			config := DefaultConfig()
 			config.NodeID = "node1"
 
-			node := NewNode(config, nil, transport)
+			node, _ := NewNode(config, nil, transport)
 			node.mu.Lock()
 			node.currentTerm = tt.nodeTerm
 			node.log = tt.log
@@ -258,7 +258,7 @@ func TestNodePeers(t *testing.T) {
 	config := DefaultConfig()
 	config.NodeID = "node1"
 
-	node := NewNode(config, []NodeID{"node2", "node3", "node4"}, transport)
+	node, _ := NewNode(config, []NodeID{"node2", "node3", "node4"}, transport)
 
 	if len(node.peers) != 3 {
 		t.Fatalf("expected 3 peers, got %d", len(node.peers))
@@ -306,7 +306,7 @@ func TestPropose(t *testing.T) {
 	config := DefaultConfig()
 	config.NodeID = "node1"
 
-	node := NewNode(config, []NodeID{"node2"}, transport)
+	node, _ := NewNode(config, []NodeID{"node2"}, transport)
 
 	// Propose returns error when not leader (expected)
 	err := node.Propose([]byte("test command"), EntryNormal)
@@ -322,7 +322,7 @@ func TestLeadershipCh(t *testing.T) {
 	config := DefaultConfig()
 	config.NodeID = "node1"
 
-	node := NewNode(config, []NodeID{"node2"}, transport)
+	node, _ := NewNode(config, []NodeID{"node2"}, transport)
 
 	ch := node.LeadershipCh()
 	if ch == nil {
@@ -888,7 +888,7 @@ func TestHasQuorumOldAndNew(t *testing.T) {
 func TestIsInJoint(t *testing.T) {
 	config := DefaultConfig()
 	transport := &mockTransport{}
-	node := NewNode(config, []NodeID{"node2"}, transport)
+	node, _ := NewNode(config, []NodeID{"node2"}, transport)
 
 	if node.IsInJoint() {
 		t.Error("IsInJoint should be false initially")
@@ -905,7 +905,7 @@ func TestElectionTimeoutBasics(t *testing.T) {
 	config.ElectionTimeout = 100 * time.Millisecond
 	config.HeartbeatInterval = 30 * time.Millisecond
 
-	node := NewNode(config, []NodeID{"node2", "node3"}, transport)
+	node, _ := NewNode(config, []NodeID{"node2", "node3"}, transport)
 	defer node.Stop()
 
 	// Verify initial state
@@ -925,7 +925,7 @@ func TestTermAdvancement(t *testing.T) {
 	config := DefaultConfig()
 	config.NodeID = "node1"
 
-	node := NewNode(config, nil, transport)
+	node, _ := NewNode(config, nil, transport)
 	defer node.Stop()
 
 	initialTerm := node.Term()
@@ -1001,7 +1001,7 @@ func TestLogConsistencyRules(t *testing.T) {
 			config := DefaultConfig()
 			config.NodeID = "node1"
 
-			node := NewNode(config, nil, transport)
+			node, _ := NewNode(config, nil, transport)
 			defer node.Stop()
 
 			node.mu.Lock()
@@ -1085,7 +1085,7 @@ func TestVoteRequestLogComparison(t *testing.T) {
 			config := DefaultConfig()
 			config.NodeID = "node1"
 
-			node := NewNode(config, nil, transport)
+			node, _ := NewNode(config, nil, transport)
 			defer node.Stop()
 
 			node.mu.Lock()
@@ -1115,7 +1115,7 @@ func TestCommitIndexAdvancement(t *testing.T) {
 	config := DefaultConfig()
 	config.NodeID = "leader1"
 
-	node := NewNode(config, []NodeID{"follower1", "follower2"}, transport)
+	node, _ := NewNode(config, []NodeID{"follower1", "follower2"}, transport)
 	defer node.Stop()
 
 	// Set up as leader with some log entries
@@ -1151,7 +1151,7 @@ func TestLeaderReplicationCount(t *testing.T) {
 	config.NodeID = "leader"
 
 	peers := []NodeID{"f1", "f2", "f3", "f4"}
-	node := NewNode(config, peers, transport)
+	node, _ := NewNode(config, peers, transport)
 	defer node.Stop()
 
 	node.mu.Lock()
@@ -1553,7 +1553,7 @@ func TestEmptyNodeOperations(t *testing.T) {
 	config := DefaultConfig()
 	config.NodeID = "single"
 
-	node := NewNode(config, nil, transport)
+	node, _ := NewNode(config, nil, transport)
 	defer node.Stop()
 
 	if len(node.peers) != 0 {
@@ -1684,7 +1684,7 @@ func TestPeerOperations(t *testing.T) {
 	config.NodeID = "node1"
 
 	peers := []NodeID{"node2", "node3", "node4"}
-	node := NewNode(config, peers, transport)
+	node, _ := NewNode(config, peers, transport)
 	defer node.Stop()
 
 	// Test peer tracking

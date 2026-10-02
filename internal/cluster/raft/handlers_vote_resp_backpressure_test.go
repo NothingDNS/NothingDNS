@@ -33,7 +33,7 @@ func TestHandleVoteRequestDoesNotDeadlockOnFullVoteRespChannel(t *testing.T) {
 	cfg.HeartbeatInterval = 15 * time.Millisecond
 	cfg.ElectionTimeout = 10 * time.Second
 
-	node := NewNode(cfg, []NodeID{"leader"}, &mockTransport{})
+	node, _ := NewNode(cfg, []NodeID{"leader"}, &mockTransport{})
 	node.Start()
 	defer node.Stop()
 

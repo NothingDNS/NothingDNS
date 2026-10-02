@@ -12,7 +12,7 @@ import (
 func TestHandleAppendResponse_IgnoresStaleTerm(t *testing.T) {
 	config := DefaultConfig()
 	config.NodeID = "node1"
-	node := NewNode(config, []NodeID{"p"}, &mockTransport{})
+	node, _ := NewNode(config, []NodeID{"p"}, &mockTransport{})
 
 	node.mu.Lock()
 	node.state = StateLeader

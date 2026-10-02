@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"fmt"
 	"sync"
 	"time"
 )
@@ -339,8 +340,10 @@ type Node struct {
 	rng *LockedRand
 }
 
-// NewNode creates a new Raft node.
-func NewNode(config Config, peers []NodeID, transport Transport) *Node {
+// NewNode creates a new Raft node. It returns an error when the data dir
+// holds an unreadable HardState file (fail-closed boot; see the comment on
+// the restore block below).
+func NewNode(config Config, peers []NodeID, transport Transport) (*Node, error) {
 	if config.HeartbeatInterval <= 0 {
 		config.HeartbeatInterval = 150 * time.Millisecond
 	}
@@ -380,11 +383,18 @@ func NewNode(config Config, peers []NodeID, transport Transport) *Node {
 	// vote twice and violate election safety on the very first RPC after
 	// reboot. If DataDir is empty (e.g. unit tests, in-memory clusters)
 	// persistence is silently skipped — production callers must set it.
+	//
+	// A hardstate file that exists but cannot be READ (bad magic, truncation,
+	// I/O error) is fail-closed, like ErrWALCorrupt for the WAL: booting
+	// fresh on top of unreadable durable state would forget the previous
+	// term's vote and allow a second vote in that term (split-brain).
 	if config.DataDir != "" {
-		if hs, err := loadHardState(config.DataDir); err == nil {
-			n.currentTerm = hs.CurrentTerm
-			n.votedFor = hs.VotedFor
+		hs, err := loadHardState(config.DataDir)
+		if err != nil {
+			return nil, fmt.Errorf("raft: refusing to boot: unreadable hardstate in %s: %w", config.DataDir, err)
 		}
+		n.currentTerm = hs.CurrentTerm
+		n.votedFor = hs.VotedFor
 	}
 
 	// Initialize peer tracking
@@ -394,7 +404,7 @@ func NewNode(config Config, peers []NodeID, transport Transport) *Node {
 		n.matchIndex[id] = 0
 	}
 
-	return n
+	return n, nil
 }
 
 // IsInJoint returns true if we're currently in joint consensus.

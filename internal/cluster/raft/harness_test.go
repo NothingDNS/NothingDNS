@@ -66,8 +66,9 @@ func (t *inMemTransport) SendSnapshot(_ context.Context, peerID NodeID, req Snap
 	return &resp, nil
 }
 
-// newClusterNode builds one node whose peer set is every other id.
-func newClusterNode(id NodeID, ids []NodeID, tr *inMemTransport) *Node {
+// newClusterNode builds one node whose peer set is every other id. Fails the
+// test if construction fails (e.g. unreadable HardState — fail-closed boot).
+func newClusterNode(t *testing.T, id NodeID, ids []NodeID, tr *inMemTransport) *Node {
 	peers := make([]NodeID, 0, len(ids)-1)
 	for _, other := range ids {
 		if other != id {
@@ -78,7 +79,11 @@ func newClusterNode(id NodeID, ids []NodeID, tr *inMemTransport) *Node {
 	cfg.NodeID = id
 	cfg.HeartbeatInterval = 15 * time.Millisecond
 	cfg.ElectionTimeout = 60 * time.Millisecond
-	return NewNode(cfg, peers, tr)
+	n, err := NewNode(cfg, peers, tr)
+	if err != nil {
+		t.Fatalf("newClusterNode(%s): %v", id, err)
+	}
+	return n
 }
 
 // waitForLeader polls until exactly one node reports StateLeader, returning
@@ -135,7 +140,7 @@ func TestCluster_ElectsSingleLeader(t *testing.T) {
 	tr := newInMemTransport()
 	var nodes []*Node
 	for _, id := range ids {
-		n := newClusterNode(id, ids, tr)
+		n := newClusterNode(t, id, ids, tr)
 		tr.register(id, n)
 		nodes = append(nodes, n)
 	}
@@ -201,7 +206,7 @@ func TestCluster_ReplicatesAndCommits(t *testing.T) {
 	tr := newInMemTransport()
 	var nodes []*Node
 	for _, id := range ids {
-		n := newClusterNode(id, ids, tr)
+		n := newClusterNode(t, id, ids, tr)
 		tr.register(id, n)
 		nodes = append(nodes, n)
 	}
@@ -266,7 +271,7 @@ func TestCluster_RecoveredFollowerCatchesUp(t *testing.T) {
 	tr := newInMemTransport()
 	nodeByID := map[NodeID]*Node{}
 	for _, id := range ids {
-		nodeByID[id] = newClusterNode(id, ids, tr)
+		nodeByID[id] = newClusterNode(t, id, ids, tr)
 	}
 
 	// Bring up only two nodes — still a quorum of three. The third is

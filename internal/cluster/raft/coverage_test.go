@@ -30,7 +30,7 @@ func TestStateStringUnknown(t *testing.T) {
 
 func TestNewNodeZeroConfigFields(t *testing.T) {
 	cfg := Config{NodeID: "n1"}
-	node := NewNode(cfg, []NodeID{"n2"}, &mockTransport{})
+	node, _ := NewNode(cfg, []NodeID{"n2"}, &mockTransport{})
 	defer node.Stop()
 
 	node.mu.Lock()
@@ -53,7 +53,7 @@ func TestNewNodeInvalidConfigFields(t *testing.T) {
 		ElectionTimeout:   -time.Second,
 		MaxLogEntries:     -1,
 	}
-	node := NewNode(cfg, []NodeID{"n2"}, &mockTransport{})
+	node, _ := NewNode(cfg, []NodeID{"n2"}, &mockTransport{})
 	defer node.Stop()
 
 	node.mu.Lock()
@@ -74,7 +74,7 @@ func TestNewNodeInvalidConfigFields(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestNodeCommitIndexInitial(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
 	defer n.Stop()
 	if ci := n.CommitIndex(); ci != 0 {
 		t.Errorf("CommitIndex = %d, want 0", ci)
@@ -82,7 +82,7 @@ func TestNodeCommitIndexInitial(t *testing.T) {
 }
 
 func TestNodeApplyCh(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
 	defer n.Stop()
 	if ch := n.ApplyCh(); ch == nil {
 		t.Error("ApplyCh returned nil")
@@ -90,7 +90,7 @@ func TestNodeApplyCh(t *testing.T) {
 }
 
 func TestNodeCommitCh(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
 	defer n.Stop()
 	if ch := n.CommitCh(); ch == nil {
 		t.Error("CommitCh returned nil")
@@ -102,7 +102,7 @@ func TestNodeCommitCh(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestLastLogInfoEmpty(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
 	defer n.Stop()
 	idx, trm := n.lastLogInfo()
 	if idx != 0 || trm != 0 {
@@ -125,7 +125,7 @@ func mkLog(n int, lastTerm Term) []entry {
 }
 
 func TestLastLogInfoNonEmpty(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
 	defer n.Stop()
 	n.mu.Lock()
 	// lastIndex is positional: 5 contiguous entries ⇒ last index 5.
@@ -158,7 +158,7 @@ func TestIsLogUpToDate(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			n := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
+			n, _ := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
 			defer n.Stop()
 			n.mu.Lock()
 			n.log = tt.log
@@ -176,7 +176,7 @@ func TestIsLogUpToDate(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHandleSnapshotRequestStaleTerm(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
 	defer n.Stop()
 	n.mu.Lock()
 	n.currentTerm = 5
@@ -197,7 +197,7 @@ func TestHandleSnapshotRequestStaleTerm(t *testing.T) {
 }
 
 func TestHandleSnapshotRequestValidInstall(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
 	defer n.Stop()
 	n.mu.Lock()
 	n.currentTerm = 1
@@ -250,7 +250,7 @@ func (failingStateMachine) Restore(_ []byte) error    { return fmt.Errorf("simul
 // leaving it permanently divergent (state machine still at the old
 // snapshot, indices claiming a newer one we couldn't actually load).
 func TestHandleSnapshotRequest_RestoreFailureKeepsLog(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
 	defer n.Stop()
 	n.SetStateMachine(failingStateMachine{})
 	n.mu.Lock()
@@ -291,7 +291,7 @@ func TestHandleSnapshotRequest_RestoreFailureKeepsLog(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHandleAppendRequestCommitIndexAdvance(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
 	defer n.Stop()
 	n.mu.Lock()
 	n.currentTerm = 1
@@ -316,7 +316,7 @@ func TestHandleAppendRequestCommitIndexAdvance(t *testing.T) {
 
 func TestHandleAppendRequestCommitIndexClamp(t *testing.T) {
 	// LeaderCommit exceeds log length => clamp to log length
-	n := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
 	defer n.Stop()
 	n.mu.Lock()
 	n.currentTerm = 1
@@ -340,7 +340,7 @@ func TestHandleAppendRequestCommitIndexClamp(t *testing.T) {
 }
 
 func TestHandleAppendRequestHigherTermConversion(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
 	defer n.Stop()
 	n.mu.Lock()
 	n.currentTerm = 1
@@ -373,7 +373,7 @@ func TestHandleAppendRequestHigherTermConversion(t *testing.T) {
 }
 
 func TestHandleAppendRequestOverwriteConflicting(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
 	defer n.Stop()
 	n.mu.Lock()
 	n.currentTerm = 1
@@ -409,7 +409,7 @@ func TestHandleAppendRequestOverwriteConflicting(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHandleVoteRequestHigherTermConversion(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
 	defer n.Stop()
 	n.mu.Lock()
 	n.currentTerm = 2
@@ -451,7 +451,7 @@ func TestMaybeAdvanceCommitIndex(t *testing.T) {
 	// quorum in a single call (the old code broke after the first such index
 	// and needed N calls — wrong, it under-committed). With both followers at
 	// matchIndex 3 and all entries in the current term, one call commits 3.
-	n := NewNode(Config{NodeID: "leader"}, []NodeID{"f1", "f2"}, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "leader"}, []NodeID{"f1", "f2"}, &mockTransport{})
 	defer n.Stop()
 	n.mu.Lock()
 	n.state = StateLeader
@@ -472,7 +472,7 @@ func TestMaybeAdvanceCommitIndex(t *testing.T) {
 }
 
 func TestMaybeAdvanceCommitIndexNotLeader(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, []NodeID{"f1"}, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, []NodeID{"f1"}, &mockTransport{})
 	defer n.Stop()
 	n.mu.Lock()
 	n.state = StateFollower
@@ -490,7 +490,7 @@ func TestMaybeAdvanceCommitIndexNotLeader(t *testing.T) {
 
 func TestMaybeAdvanceCommitIndexOnlyCurrentTerm(t *testing.T) {
 	// Entries from previous term should not be committed via replica count
-	n := NewNode(Config{NodeID: "leader"}, []NodeID{"f1"}, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "leader"}, []NodeID{"f1"}, &mockTransport{})
 	defer n.Stop()
 	n.mu.Lock()
 	n.state = StateLeader
@@ -513,7 +513,7 @@ func TestMaybeAdvanceCommitIndexNoQuorum(t *testing.T) {
 	// With 5 peers: len(peers)/2 = 2, need replicas > 2 (i.e. >= 3)
 	// Leader counts as 1, so need at least 2 peers matching.
 	// If only leader matches, replicas = 1, which is not > 2.
-	n := NewNode(Config{NodeID: "leader"}, []NodeID{"f1", "f2", "f3", "f4", "f5"}, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "leader"}, []NodeID{"f1", "f2", "f3", "f4", "f5"}, &mockTransport{})
 	defer n.Stop()
 	n.mu.Lock()
 	n.state = StateLeader
@@ -537,7 +537,7 @@ func TestMaybeAdvanceCommitIndexNoQuorum(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHandleAppendResponseSuccess(t *testing.T) {
-	n := NewNode(Config{NodeID: "leader"}, []NodeID{"f1"}, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "leader"}, []NodeID{"f1"}, &mockTransport{})
 	defer n.Stop()
 	n.mu.Lock()
 	n.state = StateLeader
@@ -565,7 +565,7 @@ func TestHandleAppendResponseSuccess(t *testing.T) {
 }
 
 func TestHandleAppendResponseFailureDecrementsNextIndex(t *testing.T) {
-	n := NewNode(Config{NodeID: "leader"}, []NodeID{"f1"}, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "leader"}, []NodeID{"f1"}, &mockTransport{})
 	defer n.Stop()
 	n.mu.Lock()
 	n.state = StateLeader
@@ -596,7 +596,7 @@ func TestHandleAppendResponseFailureDecrementsNextIndex(t *testing.T) {
 // the follower's hint isn't lower than the current nextIndex: the leader
 // still makes progress by decrementing one step.
 func TestHandleAppendResponseFailureDecrementsByOne(t *testing.T) {
-	n := NewNode(Config{NodeID: "leader"}, []NodeID{"f1"}, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "leader"}, []NodeID{"f1"}, &mockTransport{})
 	defer n.Stop()
 	n.mu.Lock()
 	n.state = StateLeader
@@ -621,7 +621,7 @@ func TestHandleAppendResponseFailureDecrementsByOne(t *testing.T) {
 }
 
 func TestHandleAppendResponseHigherTerm(t *testing.T) {
-	n := NewNode(Config{NodeID: "leader"}, []NodeID{"f1"}, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "leader"}, []NodeID{"f1"}, &mockTransport{})
 	defer n.Stop()
 	n.mu.Lock()
 	n.state = StateLeader
@@ -648,7 +648,7 @@ func TestHandleAppendResponseHigherTerm(t *testing.T) {
 }
 
 func TestHandleAppendResponseNotLeader(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, []NodeID{"f1"}, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, []NodeID{"f1"}, &mockTransport{})
 	defer n.Stop()
 	n.mu.Lock()
 	n.state = StateFollower
@@ -664,7 +664,7 @@ func TestHandleAppendResponseNotLeader(t *testing.T) {
 
 func TestHandleAppendResponseNextIndexFloor(t *testing.T) {
 	// nextIndex should not go below 1
-	n := NewNode(Config{NodeID: "leader"}, []NodeID{"f1"}, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "leader"}, []NodeID{"f1"}, &mockTransport{})
 	defer n.Stop()
 	n.mu.Lock()
 	n.state = StateLeader
@@ -688,7 +688,7 @@ func TestHandleAppendResponseNextIndexFloor(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestBecomeFollower(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, []NodeID{"f1"}, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, []NodeID{"f1"}, &mockTransport{})
 	n.mu.Lock()
 	n.state = StateCandidate
 	n.currentTerm = 3
@@ -720,7 +720,7 @@ func TestBecomeFollower(t *testing.T) {
 }
 
 func TestBecomeLeaderInitializesTracking(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, []NodeID{"f1", "f2"}, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, []NodeID{"f1", "f2"}, &mockTransport{})
 	n.mu.Lock()
 	n.currentTerm = 2
 	n.log = []entry{{Index: 1, Term: 1}, {Index: 2, Term: 2}}
@@ -763,7 +763,7 @@ func TestBecomeLeaderInitializesTracking(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAddPeerAlreadyExists(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, []NodeID{"n2"}, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, []NodeID{"n2"}, &mockTransport{})
 	defer n.Stop()
 	err := n.AddPeer("n2", "addr")
 	if err != nil {
@@ -772,7 +772,7 @@ func TestAddPeerAlreadyExists(t *testing.T) {
 }
 
 func TestAddPeerSelf(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
 	defer n.Stop()
 	err := n.AddPeer("n1", "addr")
 	if err == nil {
@@ -781,7 +781,7 @@ func TestAddPeerSelf(t *testing.T) {
 }
 
 func TestAddPeerDuringJointConfig(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, []NodeID{"n2"}, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, []NodeID{"n2"}, &mockTransport{})
 	defer n.Stop()
 	// Set up a joint config
 	n.mu.Lock()
@@ -794,7 +794,7 @@ func TestAddPeerDuringJointConfig(t *testing.T) {
 }
 
 func TestRemovePeerNonexistent(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, []NodeID{"n2"}, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, []NodeID{"n2"}, &mockTransport{})
 	defer n.Stop()
 	err := n.RemovePeer("n99")
 	if err != nil {
@@ -804,7 +804,7 @@ func TestRemovePeerNonexistent(t *testing.T) {
 
 func TestRemovePeerSelf(t *testing.T) {
 	// Include self in the peers list so the self-check is reached
-	n := NewNode(Config{NodeID: "n1"}, []NodeID{"n1", "n2"}, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, []NodeID{"n1", "n2"}, &mockTransport{})
 	defer n.Stop()
 	err := n.RemovePeer("n1")
 	if err == nil {
@@ -813,7 +813,7 @@ func TestRemovePeerSelf(t *testing.T) {
 }
 
 func TestRemovePeerDuringJointConfig(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, []NodeID{"n2"}, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, []NodeID{"n2"}, &mockTransport{})
 	defer n.Stop()
 	n.mu.Lock()
 	n.jointConfig = &JointConfig{}
@@ -825,7 +825,7 @@ func TestRemovePeerDuringJointConfig(t *testing.T) {
 }
 
 func TestAddPeerTracking(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, []NodeID{"n2"}, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, []NodeID{"n2"}, &mockTransport{})
 	defer n.Stop()
 	err := n.AddPeer("n3", "127.0.0.1:9000")
 	if err != nil {
@@ -848,7 +848,7 @@ func TestAddPeerTracking(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestProposeConfChangeNotLeader(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
 	defer n.Stop()
 	err := n.ProposeConfChange(&JointConfigProposal{Type: EntryAddNode, PeerID: "n2", PeerAddr: "a"})
 	if err == nil {
@@ -857,7 +857,7 @@ func TestProposeConfChangeNotLeader(t *testing.T) {
 }
 
 func TestProposeConfChangeAddNode(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, []NodeID{"n2"}, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, []NodeID{"n2"}, &mockTransport{})
 	defer n.Stop()
 	n.mu.Lock()
 	n.state = StateLeader
@@ -889,7 +889,7 @@ func TestProposeConfChangeAddNode(t *testing.T) {
 }
 
 func TestProposeConfChangeRemoveNode(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, []NodeID{"n2", "n3"}, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, []NodeID{"n2", "n3"}, &mockTransport{})
 	defer n.Stop()
 	n.mu.Lock()
 	n.state = StateLeader
@@ -922,14 +922,14 @@ func TestProposeConfChangeRemoveNode(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAdvanceJointConfigNil(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
 	defer n.Stop()
 	// Should be a no-op
 	n.advanceJointConfig()
 }
 
 func TestAdvanceJointConfigUpdatesPeers(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, []NodeID{"n2"}, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, []NodeID{"n2"}, &mockTransport{})
 	defer n.Stop()
 	newPeers := map[NodeID]*Peer{
 		"n1": {ID: "n1"},
@@ -1018,7 +1018,7 @@ func TestEncodeJointConfig(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestNewElectionTimerDuration(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1", ElectionTimeout: 500 * time.Millisecond}, nil, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1", ElectionTimeout: 500 * time.Millisecond}, nil, &mockTransport{})
 	defer n.Stop()
 
 	// Verify timers are created and fire within expected bounds
@@ -1666,7 +1666,7 @@ func TestRPCServerWriteReadSnapshotRequest(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestProposeLeaderNilCommand(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
 	defer n.Stop()
 	n.mu.Lock()
 	n.state = StateLeader
@@ -1688,7 +1688,7 @@ func TestProposeLeaderNilCommand(t *testing.T) {
 }
 
 func TestProposeLeaderWithCommand(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
 	defer n.Stop()
 	n.mu.Lock()
 	n.state = StateLeader
@@ -1724,7 +1724,7 @@ func TestProposeLeaderWithCommand(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSendCommittedNoUnapplied(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
 	n.mu.Lock()
 	n.commitIndex = 0
 	n.lastApplied = 0
@@ -1737,7 +1737,7 @@ func TestSendCommittedSnapshotOffset(t *testing.T) {
 	// With lastSnapshot=5, log has entries for indices 6 and 7.
 	// Boundary check: end <= len(log) + lastSnapshot
 	// commitIndex=6 -> end=7, len(log)+lastSnapshot = 2+5 = 7, 7 <= 7 passes.
-	n := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
 	n.mu.Lock()
 	n.lastSnapshot = 5
 	n.lastApplied = 5
@@ -1767,7 +1767,7 @@ func TestSendCommittedSnapshotOffset(t *testing.T) {
 }
 
 func TestSendCommittedChannelFull(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
 	// Fill the commit channel
 	for i := 0; i < cap(n.commitCh); i++ {
 		n.commitCh <- Commit{}
@@ -1888,7 +1888,7 @@ func TestIndexTermTypes(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestNodeStopWithoutStart(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
 	// Stop on unstarted node — close(stopCh) then wg.Wait()
 	// The run() goroutine was never started, so wg counter is 0.
 	// close(stopCh) will work fine, and wg.Wait() returns immediately.
@@ -1900,13 +1900,13 @@ func TestNodeStopWithoutStart(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSendVoteRequestNilTransport(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, nil, nil)
+	n, _ := NewNode(Config{NodeID: "n1"}, nil, nil)
 	// Should not panic
 	n.sendVoteRequest("peer", VoteRequest{Term: 1})
 }
 
 func TestSendAppendRequestNilTransport(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, nil, nil)
+	n, _ := NewNode(Config{NodeID: "n1"}, nil, nil)
 	// Should not panic
 	n.sendAppendRequest("peer", AppendRequest{Term: 1})
 }
@@ -2028,7 +2028,7 @@ func TestZoneStateMachineConcurrentApply(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHandleVoteRequestInternalRejectStaleTerm(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
 	n.mu.Lock()
 	n.currentTerm = 5
 	n.mu.Unlock()
@@ -2063,7 +2063,7 @@ func TestHandleVoteRequestInternalRejectStaleTerm(t *testing.T) {
 // append) happened to advance the term as a side effect.
 func TestHandleVoteRequest_Internal_HigherTermResetsVote(t *testing.T) {
 	dir := t.TempDir()
-	n := NewNode(Config{NodeID: "n1", DataDir: dir}, nil, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1", DataDir: dir}, nil, &mockTransport{})
 	defer n.Stop()
 
 	n.mu.Lock()
@@ -2104,7 +2104,7 @@ func TestHandleVoteRequest_Internal_HigherTermResetsVote(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHandleAppendRequestInternal(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
 	n.mu.Lock()
 	n.currentTerm = 1
 	n.log = []entry{{Index: 1, Term: 1}}
@@ -2135,7 +2135,7 @@ func TestHandleAppendRequestInternal(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHandleSnapshotRequestInternal(t *testing.T) {
-	n := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
+	n, _ := NewNode(Config{NodeID: "n1"}, nil, &mockTransport{})
 	n.mu.Lock()
 	n.currentTerm = 1
 	n.log = []entry{{Index: 1, Term: 1}}
@@ -2164,7 +2164,7 @@ func TestHandleSnapshotRequestInternal(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestLeaderID_LearnedFromAppendEntries(t *testing.T) {
-	n := NewNode(Config{NodeID: "follower"}, []NodeID{"leader"}, nil)
+	n, _ := NewNode(Config{NodeID: "follower"}, []NodeID{"leader"}, nil)
 	if got := n.LeaderID(); got != "" {
 		t.Errorf("fresh follower should have empty LeaderID, got %q", got)
 	}
@@ -2185,7 +2185,7 @@ func TestLeaderID_SelfOnBecomeLeader(t *testing.T) {
 	// require full transport wiring; we only assert the leaderID
 	// assignment here by setting state directly the same way
 	// becomeLeader does.
-	n := NewNode(Config{NodeID: "me"}, []NodeID{"me"}, nil)
+	n, _ := NewNode(Config{NodeID: "me"}, []NodeID{"me"}, nil)
 	n.mu.Lock()
 	n.state = StateLeader
 	n.leaderID = n.config.NodeID

@@ -125,7 +125,10 @@ func NewClusterIntegration(nodeID NodeID, peers []NodeID, peerAddrs map[NodeID]s
 	}
 
 	// Create Raft node.
-	node := NewNode(config, peers, transport)
+	node, err := NewNode(config, peers, transport)
+	if err != nil {
+		return nil, fmt.Errorf("raft node: %w", err)
+	}
 
 	// ONE shared state machine. The node uses it for snapshot install
 	// (Restore), and the apply loop below uses the same instance to apply
