@@ -1,0 +1,58 @@
+{
+  "name": "@nothingdns/sdk",
+  "version": "1.0.0",
+  "description": "TypeScript/JavaScript client for the NothingDNS DNS server management API",
+  "keywords": [
+    "dns",
+    "nothingdns",
+    "dns-server",
+    "client",
+    "sdk",
+    "rest",
+    "typescript"
+  ],
+  "license": "MIT",
+  "author": "NothingDNS contributors",
+  "homepage": "https://github.com/nothingdns/nothingdns#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nothingdns/nothingdns.git",
+    "directory": "sdk/typescript"
+  },
+  "bugs": {
+    "url": "https://github.com/nothingdns/nothingdns/issues"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.examples.json",
+    "typecheck:examples": "tsc -p tsconfig.examples.json",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run clean && npm run build",
+    "pretest": "npm run build",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0"
+  }
+}
