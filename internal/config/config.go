@@ -487,6 +487,7 @@ func unmarshalToConfig(node *Node, cfg *Config) error {
 	if transferNode := node.Get("transfer"); transferNode != nil {
 		cfg.Transfer.AllowList = getStringSlice(transferNode, "allow_list", cfg.Transfer.AllowList)
 		cfg.Transfer.RequireTSIG = getBool(transferNode, "require_tsig", cfg.Transfer.RequireTSIG)
+		cfg.Transfer.JournalDir = transferNode.GetString("journal_dir")
 	}
 
 	// IDNA config
