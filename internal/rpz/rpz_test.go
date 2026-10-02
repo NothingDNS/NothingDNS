@@ -35,7 +35,11 @@ func TestReverseRPZToCIDR(t *testing.T) {
 		{"32.1.0.168.192", "192.168.0.1/32"},
 		{"24.0.168.192", "192.168.0.0/24"},
 		{"16.0.10", "10.0.0.0/16"},
-		{"128.1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0", "0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.1/128"},
+		// Round-033: 16 single-hex-digit labels are a reversed IPv6 nibble
+		// encoding (0:0:0:1::/128), not dotted-quad IPv4 — a /128 prefix is
+		// invalid for IPv4 and the previous dotted output was not parseable
+		// by net.ParseCIDR, so addRule silently dropped the rule.
+		{"128.1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0", "0000:0000:0000:0001:0000:0000:0000:0000/128"},
 	}
 	for _, tc := range tests {
 		got := reverseRPZToCIDR(tc.input)

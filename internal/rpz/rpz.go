@@ -403,6 +403,7 @@ func (e *Engine) parseOwnerName(owner string) (TriggerType, string) {
 // reverseRPZToCIDR converts a reversed RPZ IP encoding to CIDR notation.
 // e.g., "32.1.0.168.192" -> "192.168.0.1/32"
 // e.g., "24.0.168.192" -> "192.168.0.0/24"
+// e.g., "48.8.b.d.0.1.0.0.2" -> "2001:0db8:0000:...::/48" (IPv6 nibbles)
 func reverseRPZToCIDR(rpzIP string) string {
 	parts := strings.Split(rpzIP, ".")
 	if len(parts) < 2 {
@@ -418,12 +419,63 @@ func reverseRPZToCIDR(rpzIP string) string {
 		ipParts[i], ipParts[j] = ipParts[j], ipParts[i]
 	}
 
+	// DNS-RPZ encodes IPv6 triggers as reversed single-hex-digit nibbles
+	// (up to 32 labels). A dotted-quad string can never have more than four
+	// labels, so 5+ all-nibble labels are unambiguously IPv6 — decode them
+	// to a standard IPv6 CIDR. Anything with four or fewer labels (every
+	// currently-loading IPv4 rule, including single-digit octets) keeps the
+	// exact legacy dotted interpretation below.
+	if len(ipParts) > 4 {
+		if cidr := reversedNibblesToCIDR(ipParts, prefixLen); cidr != "" {
+			return cidr
+		}
+	}
+
 	// Pad with zeros for IPv4
 	for len(ipParts) < 4 {
 		ipParts = append(ipParts, "0")
 	}
 
 	return strings.Join(ipParts, ".") + "/" + prefixLen
+}
+
+// reversedNibblesToCIDR converts already-reversed IPv6 nibble labels plus an
+// RPZ prefix length into a canonical IPv6 CIDR string, e.g.
+// [2 0 0 1 0 d b 8], "48" -> "2001:0db8:0000:0000:0000:0000:0000:0000/48".
+// It returns "" when the labels are not a valid nibble encoding (e.g. the
+// legacy "ip6.arpa"-suffixed form), leaving the caller's legacy dotted-quad
+// handling in place.
+func reversedNibblesToCIDR(nibbles []string, prefixLen string) string {
+	plen, err := strconv.Atoi(prefixLen)
+	if err != nil || plen < 0 || plen > 128 {
+		return ""
+	}
+	if len(nibbles) > 32 {
+		return ""
+	}
+	isNibble := func(s string) bool {
+		if len(s) != 1 {
+			return false
+		}
+		c := s[0]
+		return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+	}
+	groups := make([]string, 8)
+	for g := range groups {
+		var sb strings.Builder
+		for n := 0; n < 4; n++ {
+			ch := "0"
+			if idx := g*4 + n; idx < len(nibbles) {
+				ch = nibbles[idx]
+			}
+			if !isNibble(ch) {
+				return ""
+			}
+			sb.WriteByte(ch[0])
+		}
+		groups[g] = sb.String()
+	}
+	return strings.Join(groups, ":") + "/" + prefixLen
 }
 
 // parseAction determines the policy action from record type and rdata.
