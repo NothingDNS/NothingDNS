@@ -911,29 +911,34 @@ example.
 ```
 sdk/csharp/
 ├── NothingDns.sln
-└── NothingDns.Sdk/
-    ├── NothingDns.Sdk.csproj      # the library (net8.0, BCL only)
-    ├── NothingDnsError.cs         # error types and status predicates
-    ├── NothingDnsTransport.cs     # HTTP core: URLs, bearer header, query, JSON, timeouts
-    ├── NothingDnsAuth.cs          # credential acquisition: login, bootstrap, users, roles
-    ├── NothingDnsClient.cs        # client wiring plus health/status/documents
-    ├── NothingDnsZones.cs
-    ├── NothingDnsCache.cs
-    ├── NothingDnsConfig.cs
-    ├── NothingDnsAcl.cs
-    ├── NothingDnsBlocklists.cs
-    ├── NothingDnsRpz.cs
-    ├── NothingDnsDnssec.cs
-    ├── NothingDnsUpstreams.cs
-    ├── NothingDnsGeoIp.cs
-    ├── NothingDnsCluster.cs
-    ├── NothingDnsDashboard.cs
-    ├── NothingDnsMetrics.cs
-    ├── Models.cs                  # every response shape
-    ├── README.md
-    └── Examples/
-        ├── QuickStart.cs          # runnable tour
-        └── QuickStart.csproj
+├── NothingDns.Sdk/
+│   ├── NothingDns.Sdk.csproj      # the library (net8.0, BCL only)
+│   ├── NothingDnsError.cs         # error types and status predicates
+│   ├── NothingDnsTransport.cs     # HTTP core: URLs, bearer header, query, JSON, timeouts
+│   ├── NothingDnsAuth.cs          # credential acquisition: login, bootstrap, users, roles
+│   ├── NothingDnsClient.cs        # client wiring plus health/status/documents
+│   ├── NothingDnsZones.cs
+│   ├── NothingDnsCache.cs
+│   ├── NothingDnsConfig.cs
+│   ├── NothingDnsAcl.cs
+│   ├── NothingDnsBlocklists.cs
+│   ├── NothingDnsRpz.cs
+│   ├── NothingDnsDnssec.cs
+│   ├── NothingDnsUpstreams.cs
+│   ├── NothingDnsGeoIp.cs
+│   ├── NothingDnsCluster.cs
+│   ├── NothingDnsDashboard.cs
+│   ├── NothingDnsMetrics.cs
+│   ├── Models.cs                  # every response shape
+│   ├── README.md
+│   └── Examples/
+│       ├── QuickStart.cs          # runnable tour
+│       └── QuickStart.csproj
+└── NothingDns.Sdk.Tests/
+    ├── NothingDns.Sdk.Tests.csproj # xUnit test suite
+    ├── MockApi.cs                  # in-process loopback mock of the management API
+    ├── NothingDnsClientTests.cs    # request-level contract and model decoding
+    └── NothingDnsErrorTests.cs     # error translation and predicates
 ```
 
 Build both projects:
@@ -964,3 +969,27 @@ lives in `NothingDnsAuth.cs`. Credential **transmission** — the code that cons
 `Authorization: Bearer` header — lives in `NothingDnsTransport.cs`. The two concerns are
 deliberately kept in separate files so that the code handling a plaintext secret is
 never co-located with the code that attaches a token to every outgoing request.
+
+## Testing
+
+The suite in `NothingDns.Sdk.Tests/` mirrors the request-level coverage of the Python
+(`sdk/python/tests/`) and Go (`sdk/go/client_test.go`) suites: health probes without
+auth, bearer-token propagation after login, record CRUD bodies, zone export,
+PTR-bulk camelCase wire keys, ACL round-trips, config partial updates that omit null
+fields, dashboard camelCase decoding, query-log parameters, path-segment escaping,
+local validation before any request is sent, HTTP status translation
+(`NothingDnsApiException` plus the `IsUnauthorized`/`IsForbidden`/`IsNotFound`/
+`IsRateLimited` predicates) and connection failures.
+
+The tests run against `MockApi.cs`, an in-process loopback mock of the management API
+(a raw `TcpListener` HTTP/1.1 server — no Kestrel, no URL ACLs) that records every
+request so assertions can inspect methods, paths, JSON bodies and headers. The library
+itself stays BCL-only; the test project carries the only NuGet packages
+(xunit, xunit.runner.visualstudio, Microsoft.NET.Test.Sdk).
+
+Run the suite from `sdk/csharp/`:
+
+```bash
+dotnet build NothingDns.sln   # library, example and tests
+dotnet test NothingDns.sln    # all tests, no server required
+```

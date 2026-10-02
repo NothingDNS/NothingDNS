@@ -56,7 +56,7 @@ jobs:
         run: go test ./...
 
   sdk-csharp:
-    name: C# SDK (dotnet build)
+    name: C# SDK (build + test)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -72,8 +72,12 @@ jobs:
           dotnet-version: 8.0.x
 
       - name: Build
-        # Builds NothingDns.sln: the library and the QuickStart example project.
+        # Builds NothingDns.sln: the library, the test project and the QuickStart example.
         run: dotnet build
+
+      - name: Test
+        # --no-build reuses the Build step's output; the sln includes the test project.
+        run: dotnet test --no-build
 
   sdk-java:
     name: Java SDK (mvn test)
