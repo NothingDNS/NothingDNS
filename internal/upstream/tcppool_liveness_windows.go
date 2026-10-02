@@ -100,8 +100,9 @@ func tcpConnReusable(conn net.Conn) bool {
 // The SetReadDeadline is advisory: a net.Conn is free to ignore it (test
 // stubs do), and a read on such a conn would otherwise park forever inside
 // get() — under the pool lock. So the read runs in a goroutine and the probe
-// gives up after a hard wall-clock bound, keeping the connection. A goroutine
-// still parked in Read unblocks when the connection is eventually closed
+// gives up after a hard wall-clock bound, retiring the connection (unusable):
+// a read still parked on it could otherwise steal the first byte of the next
+// exchange. The goroutine unblocks when get() closes the retired connection
 // (the pool closes discarded and evicted connections).
 func probeVerdict(conn net.Conn) recvVerdict {
 	if err := conn.SetReadDeadline(time.Now().Add(livenessProbeWindow)); err != nil {
