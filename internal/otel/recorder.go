@@ -120,16 +120,22 @@ func (r *memoryRecorder) Shutdown(_ context.Context) error { return nil }
 // ForceFlush implements sdktrace.SpanProcessor.
 func (r *memoryRecorder) ForceFlush(_ context.Context) error { return nil }
 
-// drain returns all retained spans and clears the buffer. Caller holds
-// Tracer.recMu.
+// drain returns all retained spans and clears the buffer. It takes r.mu
+// itself: OnEnd appends under r.mu, and the caller's Tracer.recMu does not
+// order against that lock.
 func (r *memoryRecorder) drain() []*Span {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	spans := r.spans
 	r.spans = nil
 	return spans
 }
 
-// takeDropped returns and resets the dropped-span counter.
+// takeDropped returns and resets the dropped-span counter under r.mu, the
+// same lock OnEnd updates it under.
 func (r *memoryRecorder) takeDropped() uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	d := r.dropped
 	r.dropped = 0
 	return d
