@@ -106,9 +106,11 @@ func TestValidateMessage_WildcardWithNSECProof(t *testing.T) {
 	aRecord := &protocol.ResourceRecord{Name: owner, Type: protocol.TypeA, Class: protocol.ClassIN, TTL: 300, Data: &protocol.RDataA{Address: [4]byte{192, 0, 2, 1}}}
 	aRRSIG := signRR(t, v, aRecord, 3, priv, keyTag)
 
-	// Signed NSEC covering anything.wild.example.com. (a. < anything. < z.).
-	nsecOwner, _ := protocol.ParseName("a.wild.example.com.")
-	nsecNext, _ := protocol.ParseName("z.wild.example.com.")
+	// Signed NSEC covering anything.wild.example.com. via the wrap gap:
+	// wire order sorts the 8-label anything. (wire 08 ...) after z. (wire
+	// 01 7a...), so the covering NSEC is (z.wild.example.com. → a.wild.).
+	nsecOwner, _ := protocol.ParseName("z.wild.example.com.")
+	nsecNext, _ := protocol.ParseName("a.wild.example.com.")
 	nsecRR := &protocol.ResourceRecord{Name: nsecOwner, Type: protocol.TypeNSEC, Class: protocol.ClassIN, TTL: 300, Data: &protocol.RDataNSEC{NextDomain: nsecNext, TypeBitMap: []uint16{protocol.TypeA}}}
 	nsecRRSIG := signRR(t, v, nsecRR, 4, priv, keyTag)
 

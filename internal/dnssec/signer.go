@@ -1,6 +1,7 @@
 package dnssec
 
 import (
+	"bytes"
 	"fmt"
 	"sort"
 	"sync"
@@ -649,12 +650,18 @@ func (s *Signer) generateNSEC(records []*protocol.ResourceRecord) []*protocol.Re
 		nameTypes[name][rr.Type] = true
 	}
 
-	// Get sorted list of names
-	var names []string
+	// Get sorted list of names — in RFC 4034 §6.1 canonical (wire) order.
+	// Presentation-format sort.Strings diverges from wire order whenever
+	// sibling labels have different lengths (b.example.com sorts before
+	// aa.example.com by wire length prefix, after it by string compare),
+	// producing NSEC chains whose gaps do not match canonical intervals.
+	names := make([]string, 0, len(nameTypes))
 	for name := range nameTypes {
 		names = append(names, name)
 	}
-	sort.Strings(names)
+	sort.Slice(names, func(i, j int) bool {
+		return bytes.Compare(protocol.CanonicalWireName(names[i]), protocol.CanonicalWireName(names[j])) < 0
+	})
 
 	// Create NSEC chain
 	var nsecRecords []*protocol.ResourceRecord

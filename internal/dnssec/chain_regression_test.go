@@ -217,10 +217,11 @@ func TestCanonicalNameCompare(t *testing.T) {
 		{"EXAMPLE.com.", "example.COM.", 0},
 		{"com.", "example.com.", -1}, // parent sorts before child
 		{"a.example.com.", "b.example.com.", -1},
-		// Plain string order gets this one wrong: "sub.a.example." >
-		// "b.example." bytewise, but canonically everything under
-		// a.example. sorts before b.example.
-		{"sub.a.example.", "b.example.", -1},
+		// RFC 4034 §6.1 wire order compares label LENGTH bytes first:
+		// sub.a.example. (wire 03 73...) sorts AFTER b.example. (wire
+		// 01 62...) even though its content sorts before "b" — the old
+		// label-count expectation here encoded the wrong order.
+		{"sub.a.example.", "b.example.", 1},
 		{"z.", "a.a.", 1}, // rightmost label decides: "a" < "z", so a.a. sorts first
 	}
 	for _, tt := range tests {
@@ -245,15 +246,20 @@ func TestCanonicalNameCompare(t *testing.T) {
 	}
 }
 
-// nameInRange must use canonical order for the NSEC gap test: the name
-// sub.a.example. lies canonically between a.example. and b.example., even
-// though plain string comparison puts it after b.example.
+// nameInRange must use RFC 4034 §6.1 wire order for the NSEC gap test.
+// Wire order sorts by label LENGTH bytes: b.example. (wire 01 62...) sorts
+// before aa.example. (wire 02 61 61...), so aa.example. lies in the NSEC
+// gap (b.example., example.com.) even though plain string comparison puts
+// it after b.example.
 func TestNameInRange_CanonicalOrder(t *testing.T) {
-	if !nameInRange("sub.a.example.", "a.example.", "b.example.") {
-		t.Error("sub.a.example. must fall in NSEC gap (a.example., b.example.) under canonical ordering")
+	if !nameInRange("aa.example.", "b.example.", "example.com.") {
+		t.Error("aa.example. must fall in NSEC gap (b.example., example.com.) under wire ordering")
 	}
-	if nameInRange("c.example.", "a.example.", "b.example.") {
-		t.Error("c.example. must NOT fall in NSEC gap (a.example., b.example.)")
+	if nameInRange("a.example.", "b.example.", "example.com.") {
+		t.Error("a.example. must NOT fall in NSEC gap (b.example., example.com.) — it sorts before b")
+	}
+	if nameInRange("sub.a.example.", "a.example.", "b.example.") {
+		t.Error("sub.a.example. (wire 03 73...) must NOT fall in the gap (a.example., b.example.) — it sorts after b")
 	}
 }
 

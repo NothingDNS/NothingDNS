@@ -1643,21 +1643,13 @@ func extractNSEC3Hash(owner string) string {
 // "b.example." even though canonical order puts everything under "a.example."
 // before "b.example.", which would misjudge NSEC gap membership.
 func canonicalNameCompare(a, b string) int {
-	la := splitLabels(strings.ToLower(a))
-	lb := splitLabels(strings.ToLower(b))
-	for i := 1; i <= len(la) && i <= len(lb); i++ {
-		if c := strings.Compare(la[len(la)-i], lb[len(lb)-i]); c != 0 {
-			return c
-		}
-	}
-	switch {
-	case len(la) < len(lb):
-		return -1
-	case len(la) > len(lb):
-		return 1
-	default:
-		return 0
-	}
+	// RFC 4034 §6.1: canonical order is the order of the length-prefixed
+	// wire-format names, compared as unsigned byte sequences. A label-count
+	// tiebreak (more labels = greater) does NOT reproduce it: b.example.com
+	// (wire 01 62 ...) sorts BEFORE aa.example.com (wire 02 61 61 ...),
+	// while a label-count tiebreak orders it after. Evaluating NSEC gaps
+	// with the wrong order mis-authenticates denials for existing names.
+	return bytes.Compare(protocol.CanonicalWireName(a), protocol.CanonicalWireName(b))
 }
 
 // nameInRange checks if a name falls between owner and next (in canonical order).
