@@ -52,8 +52,8 @@ func proofZoneNames(m *zone.Manager) []string {
 // the situation a snapshot exists to serve, since the log entry carrying the
 // delete has been compacted away by the time the snapshot is needed.
 func TestProofRound017_RestoreZonesIsAuthoritative(t *testing.T) {
-	const keep = "a.example."   // present on both sides
-	const stale = "b.example."  // deleted on the leader while the follower was offline
+	const keep = "a.example."  // present on both sides
+	const stale = "b.example." // deleted on the leader while the follower was offline
 
 	// Leader: zone b was deleted while this follower was offline, so the log
 	// entry carrying the delete has since been compacted out of the leader's
