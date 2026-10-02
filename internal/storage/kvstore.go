@@ -800,7 +800,13 @@ func (tx *Tx) Commit() error {
 }
 
 // Rollback rolls back the transaction and releases the store lock that
-// Begin acquired. Safe to call on an already-closed transaction (no-op).
+// Begin acquired.
+//
+// Rollback on an already-closed transaction returns ErrTxClosed (pinned by
+// TestKVStoreRollbackClosedTransaction): Commit and Rollback each release
+// the transaction's store lock exactly once, so a second call must not
+// unlock again. Callers using the `defer tx.Rollback()` idiom alongside an
+// explicit Commit should therefore ignore the ErrTxClosed return.
 func (tx *Tx) Rollback() error {
 	if tx.closed {
 		return ErrTxClosed
