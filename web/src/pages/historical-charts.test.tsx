@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-import { HistoricalChartsPage, toChronological, toPerIntervalSeries } from './historical-charts';
+import { HistoricalChartsPage } from './historical-charts';
+import { toChronological, toPerIntervalSeries } from './historical-charts-series';
 
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
