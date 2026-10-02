@@ -17,14 +17,18 @@ import (
 // the existing put/closeAll tests in coverage_test.go.
 // ============================================================================
 
-// deadlineErrConn makes SetReadDeadline fail on selected calls so the two
-// deadline-error branches of get()'s idle loop are reachable:
-//   - failOnCall 1 → the time.Now() probe fails (first branch)
-//   - failOnCall 2 → the time.Time{} reset fails (second branch; probe ok)
+// deadlineErrConn makes SetReadDeadline fail by deadline VALUE rather than
+// call order: the platform probes differ in whether they arm deadlines
+// themselves (unix: never; Windows: once per probe), so a call-index pin
+// would couple the tests to one platform's probe. Passing calls are
+// forwarded so a probe's own deadline stays enforced.
+//   - failAll     → every SetReadDeadline fails (the set branch)
+//   - failOnReset → only the zero-time reset fails (the reset branch)
 type deadlineErrConn struct {
 	net.Conn
 	calls       int
-	failOnCall  int
+	failAll     bool
+	failOnReset bool
 	failWith    error
 	gotDeadline []time.Time
 }
@@ -32,10 +36,10 @@ type deadlineErrConn struct {
 func (c *deadlineErrConn) SetReadDeadline(t time.Time) error {
 	c.calls++
 	c.gotDeadline = append(c.gotDeadline, t)
-	if c.calls == c.failOnCall {
+	if c.failAll || (c.failOnReset && t.IsZero()) {
 		return c.failWith
 	}
-	return nil
+	return c.Conn.SetReadDeadline(t)
 }
 
 func TestTCPPoolGet_ClosedPool(t *testing.T) {
@@ -105,7 +109,9 @@ func TestTCPPoolGet_IdleProbeDeadlineError(t *testing.T) {
 	defer serverConn.Close()
 
 	pool := &tcpConnPool{maxIdle: 2, maxTotal: 4, idleTimeout: time.Minute}
-	conn := &deadlineErrConn{Conn: clientConn, failOnCall: 1, failWith: probeErr}
+	// failAll: the probe (Windows arms its own deadline) and the zero-read
+	// check must both surface the error; get() reports whichever hits first.
+	conn := &deadlineErrConn{Conn: clientConn, failAll: true, failWith: probeErr}
 	pool.idle = append(pool.idle, &tcpConn{pool: pool, conn: conn, lastUsedAt: time.Now()})
 
 	got, err := pool.get()
@@ -123,8 +129,9 @@ func TestTCPPoolGet_IdleResetDeadlineError(t *testing.T) {
 	defer serverConn.Close()
 
 	pool := &tcpConnPool{maxIdle: 2, maxTotal: 4, idleTimeout: time.Minute}
-	// Probe (call 1) succeeds, reset (call 2) fails.
-	conn := &deadlineErrConn{Conn: clientConn, failOnCall: 2, failWith: resetErr}
+	// The deadline-set (and the Windows probe's own arm) succeed; only the
+	// zero-time reset fails.
+	conn := &deadlineErrConn{Conn: clientConn, failOnReset: true, failWith: resetErr}
 	pool.idle = append(pool.idle, &tcpConn{pool: pool, conn: conn, lastUsedAt: time.Now()})
 
 	got, err := pool.get()

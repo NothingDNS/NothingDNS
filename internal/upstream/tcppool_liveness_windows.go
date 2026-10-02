@@ -14,10 +14,11 @@ package upstream
 // tcppool_liveness_windows.go:75). Windows offers no non-blocking peek
 // through the raw handle, so the Winsock receive path is gone entirely.
 //
-// The probe now uses the public net API instead: a deadline-bounded 1-byte
-// Read. The poller enforces the deadline by canceling the overlapped read, so
-// the probe always returns within the window, and the outcome is classified
-// by the shared classifyRecv table:
+// The probe now uses the public net API instead: a 1-byte Read bounded twice
+// — an advisory SetReadDeadline the poller enforces, plus a hard wall-clock
+// bound in case a conn ignores deadlines (a probe abandoned at that bound
+// retires the connection) — and the outcome is classified by the shared
+// classifyRecv table:
 //
 //	os.ErrDeadlineExceeded → nothing arrived → idle and open → alive
 //	                         (the read is canceled before any byte is
@@ -53,6 +54,13 @@ const (
 	// handed out.
 	livenessProbeWindow = 10 * time.Millisecond
 
+	// livenessProbeHardBound caps the whole probe regardless of whether the
+	// connection honours its deadline: a net.Conn may ignore SetReadDeadline
+	// (test stubs do; nothing in the net.Conn contract forbids it), and a
+	// read on such a conn would park get() forever. The bound converts that
+	// into an inconclusive verdict instead of a stall.
+	livenessProbeHardBound = 50 * time.Millisecond
+
 	// wsaewouldblock and the other WSAE* values below remain part of the
 	// classification contract for raw Winsock errors (see classifyRecv).
 	wsaewouldblock syscall.Errno = 10035
@@ -86,25 +94,52 @@ func tcpConnReusable(conn net.Conn) bool {
 	return verdictReusable(probeVerdict(conn))
 }
 
-// probeVerdict bounds one 1-byte read to livenessProbeWindow and maps the
-// result through the shared classifier.
+// probeVerdict bounds one 1-byte read and maps the result through the shared
+// classifier.
+//
+// The SetReadDeadline is advisory: a net.Conn is free to ignore it (test
+// stubs do), and a read on such a conn would otherwise park forever inside
+// get() — under the pool lock. So the read runs in a goroutine and the probe
+// gives up after a hard wall-clock bound, keeping the connection. A goroutine
+// still parked in Read unblocks when the connection is eventually closed
+// (the pool closes discarded and evicted connections).
 func probeVerdict(conn net.Conn) recvVerdict {
 	if err := conn.SetReadDeadline(time.Now().Add(livenessProbeWindow)); err != nil {
-		// Deadlines unsupported: the probe cannot be bounded, so it must not
-		// run. Reuse the connection — never discard one on a guess.
+		// Deadlines refused: the probe cannot even ask to be bounded, so it
+		// must not run. Reuse the connection — never discard one on a guess.
 		return recvVerdictInconclusive
 	}
 	defer conn.SetReadDeadline(time.Time{}) // restore the no-deadline default
 
-	var b [1]byte
-	n, err := conn.Read(b[:])
-	if errors.Is(err, io.EOF) {
-		// net.Conn reports a closed peer as (0, io.EOF); classifyRecv's
-		// table expects that as a successful 0-byte receive.
-		n, err = 0, nil
+	type readResult struct {
+		n   int
+		err error
 	}
-	// os.ErrDeadlineExceeded is registered as a wouldBlock sentinel, so an
-	// idle window classifies as alive; queued data classifies as unusable;
-	// a reset or anything hard falls through to unusable as well.
-	return classifyRecv(n, err, windowsLivenessSentinels)
+	ch := make(chan readResult, 1)
+	go func() {
+		var b [1]byte
+		n, err := conn.Read(b[:])
+		ch <- readResult{n, err}
+	}()
+
+	select {
+	case r := <-ch:
+		if errors.Is(r.err, io.EOF) {
+			// net.Conn reports a closed peer as (0, io.EOF); classifyRecv's
+			// table expects that as a successful 0-byte receive.
+			r.n, r.err = 0, nil
+		}
+		// os.ErrDeadlineExceeded is registered as a wouldBlock sentinel, so
+		// an idle window classifies as alive; queued data classifies as
+		// unusable; a reset or anything hard falls through to unusable.
+		return classifyRecv(r.n, r.err, windowsLivenessSentinels)
+	case <-time.After(livenessProbeHardBound):
+		// The conn ignored its deadline and the read did not complete. Retire
+		// the connection: a read still parked on it could complete later and
+		// steal the first byte of the next exchange, desynchronising the
+		// stream — unusable, not inconclusive, on purpose. The goroutine
+		// unblocks when get() closes the discarded connection, and the
+		// buffered channel absorbs its result, so nothing leaks.
+		return recvVerdictUnusable
+	}
 }
