@@ -214,7 +214,7 @@ func (s *KVJournalStore) LoadEntries(zoneName string) ([]*IXFRJournalEntry, erro
 	}
 
 	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].Serial < entries[j].Serial
+		return serialIsNewer(entries[j].Serial, entries[i].Serial)
 	})
 
 	return entries, nil
@@ -248,7 +248,7 @@ func (s *KVJournalStore) trimJournalToLocked(zoneName string, keepCount int) err
 	}
 
 	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].Serial > entries[j].Serial
+		return serialIsNewer(entries[i].Serial, entries[j].Serial)
 	})
 
 	toRemove := entries[keepCount:]
