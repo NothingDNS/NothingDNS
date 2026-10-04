@@ -147,6 +147,9 @@ func unmarshalDNS64(node *Node, cfg *DNS64Config) error {
 	if err != nil {
 		return err
 	}
+	if pl < 0 {
+		return fmt.Errorf("prefix_len must not be negative: %d", pl)
+	}
 	if pl > 0 {
 		cfg.PrefixLen = pl
 	}

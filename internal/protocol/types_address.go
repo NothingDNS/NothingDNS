@@ -25,7 +25,7 @@ func (r *RDataA) Pack(buf []byte, offset int) (int, error) {
 	if r == nil {
 		return 0, fmt.Errorf("nil A record")
 	}
-	if offset+4 > len(buf) {
+	if offset < 0 || offset > len(buf) || 4 > len(buf)-offset {
 		return 0, ErrBufferTooSmall
 	}
 	copy(buf[offset:], r.Address[:])
@@ -40,7 +40,7 @@ func (r *RDataA) Unpack(buf []byte, offset int, rdlength uint16) (int, error) {
 	if rdlength != 4 {
 		return 0, fmt.Errorf("invalid A record length: %d", rdlength)
 	}
-	if offset+4 > len(buf) {
+	if offset < 0 || offset > len(buf) || 4 > len(buf)-offset {
 		return 0, ErrBufferTooSmall
 	}
 	copy(r.Address[:], buf[offset:offset+4])
@@ -108,7 +108,7 @@ func (r *RDataAAAA) Pack(buf []byte, offset int) (int, error) {
 	if r == nil {
 		return 0, fmt.Errorf("nil AAAA record")
 	}
-	if offset+16 > len(buf) {
+	if offset < 0 || offset > len(buf) || 16 > len(buf)-offset {
 		return 0, ErrBufferTooSmall
 	}
 	copy(buf[offset:], r.Address[:])
@@ -123,7 +123,7 @@ func (r *RDataAAAA) Unpack(buf []byte, offset int, rdlength uint16) (int, error)
 	if rdlength != 16 {
 		return 0, fmt.Errorf("invalid AAAA record length: %d", rdlength)
 	}
-	if offset+16 > len(buf) {
+	if offset < 0 || offset > len(buf) || 16 > len(buf)-offset {
 		return 0, ErrBufferTooSmall
 	}
 	copy(r.Address[:], buf[offset:offset+16])
@@ -200,7 +200,7 @@ func (r *RDataLOC) Pack(buf []byte, offset int) (int, error) {
 	if r.Version != 0 {
 		return 0, fmt.Errorf("unsupported LOC version %d", r.Version)
 	}
-	if offset+16 > len(buf) {
+	if offset < 0 || offset > len(buf) || 16 > len(buf)-offset {
 		return 0, ErrBufferTooSmall
 	}
 	buf[offset] = r.Version
@@ -221,7 +221,7 @@ func (r *RDataLOC) Unpack(buf []byte, offset int, rdlength uint16) (int, error) 
 	if rdlength != 16 {
 		return 0, fmt.Errorf("invalid LOC record length: %d", rdlength)
 	}
-	if offset+16 > len(buf) {
+	if offset < 0 || offset > len(buf) || 16 > len(buf)-offset {
 		return 0, ErrBufferTooSmall
 	}
 	r.Version = buf[offset]

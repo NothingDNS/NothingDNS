@@ -288,7 +288,7 @@ func (r *RDataRaw) Pack(buf []byte, offset int) (int, error) {
 		return 0, fmt.Errorf("nil raw record")
 	}
 
-	if offset+len(r.Data) > len(buf) {
+	if offset < 0 || offset > len(buf) || len(r.Data) > len(buf)-offset {
 		return 0, ErrBufferTooSmall
 	}
 	copy(buf[offset:], r.Data)
@@ -301,7 +301,7 @@ func (r *RDataRaw) Unpack(buf []byte, offset int, rdlength uint16) (int, error) 
 		return 0, fmt.Errorf("nil raw record")
 	}
 
-	if offset+int(rdlength) > len(buf) {
+	if offset < 0 || offset > len(buf) || int(rdlength) > len(buf)-offset {
 		return 0, ErrBufferTooSmall
 	}
 	r.Data = make([]byte, rdlength)
