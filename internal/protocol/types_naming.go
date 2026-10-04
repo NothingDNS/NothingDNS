@@ -433,24 +433,23 @@ func (r *RDataURI) Pack(buf []byte, offset int) (int, error) {
 		return 0, fmt.Errorf("nil URI record")
 	}
 
-	startOffset := offset
-	if offset+4 > len(buf) {
+	targetLen := len(r.Target)
+	if targetLen == 0 {
+		return 0, fmt.Errorf("URI target must not be empty")
+	}
+	if targetLen > 65535-4 {
+		return 0, fmt.Errorf("URI RDATA exceeds 65535 bytes")
+	}
+	if offset < 0 || offset > len(buf) || 4+targetLen > len(buf)-offset {
 		return 0, ErrBufferTooSmall
 	}
+	startOffset := offset
 	PutUint16(buf[offset:], r.Priority)
 	offset += 2
 	PutUint16(buf[offset:], r.Weight)
 	offset += 2
 
-	targetLen := len(r.Target)
-	if targetLen > 255 {
-		return 0, ErrLabelTooLong
-	}
-	if offset+1+targetLen > len(buf) {
-		return 0, ErrBufferTooSmall
-	}
-	buf[offset] = byte(targetLen)
-	offset++
+	// RFC 7553 encodes the target as the remaining octets, without a length byte.
 	copy(buf[offset:], r.Target)
 	offset += targetLen
 
@@ -464,10 +463,10 @@ func (r *RDataURI) Unpack(buf []byte, offset int, rdlength uint16) (int, error) 
 	}
 
 	startOffset := offset
-	endOffset := offset + int(rdlength)
-	if endOffset > len(buf) {
+	if offset < 0 || offset > len(buf) || int(rdlength) > len(buf)-offset {
 		return 0, ErrBufferTooSmall
 	}
+	endOffset := offset + int(rdlength)
 	if offset+5 > endOffset {
 		return 0, ErrBufferTooSmall
 	}
@@ -477,16 +476,8 @@ func (r *RDataURI) Unpack(buf []byte, offset int, rdlength uint16) (int, error) 
 	r.Weight = Uint16(buf[offset:])
 	offset += 2
 
-	targetLen := int(buf[offset])
-	offset++
-	if offset+targetLen > endOffset {
-		return 0, ErrBufferTooSmall
-	}
-	r.Target = string(buf[offset : offset+targetLen])
-	offset += targetLen
-	if offset != endOffset {
-		return 0, fmt.Errorf("URI RDATA length mismatch: consumed %d bytes, rdlength %d", offset-startOffset, rdlength)
-	}
+	r.Target = string(buf[offset:endOffset])
+	offset = endOffset
 
 	return offset - startOffset, nil
 }
@@ -504,7 +495,7 @@ func (r *RDataURI) Len() int {
 	if r == nil {
 		return 0
 	}
-	return 2 + 2 + 1 + len(r.Target)
+	return 2 + 2 + len(r.Target)
 }
 
 // Copy creates a copy.
