@@ -408,6 +408,8 @@ func (s *TLSServer) decrementIPConn(ip string) {
 
 // handleConnection processes a single TLS connection.
 func (s *TLSServer) handleConnection(conn net.Conn) {
+	stopClose := context.AfterFunc(s.ctx, func() { conn.Close() })
+	defer stopClose()
 	defer func() {
 		if s.dsoHandler != nil {
 			s.dsoHandler.ConnClosed(conn)
@@ -453,6 +455,9 @@ func (s *TLSServer) handleConnection(conn net.Conn) {
 // handleMessage processes a single DNS message over TLS.
 // Returns false if the connection should be closed.
 func (s *TLSServer) handleMessage(conn *tls.Conn) bool {
+	if s.ctx.Err() != nil {
+		return false
+	}
 	// Read 2-byte length prefix
 	var lengthBuf [2]byte
 	if _, err := io.ReadFull(conn, lengthBuf[:]); err != nil {

@@ -103,11 +103,12 @@ func TestRecursionPolicy_AllowedClientRecurses(t *testing.T) {
 	}
 
 	// No upstream in the test handler: an allowed client reaches the
-	// no-upstream stage (NXDOMAIN) instead of being refused.
+	// no-upstream stage (SERVFAIL since round 020 — a transient failure, not a
+	// nonexistence claim) instead of being refused.
 	w2 := newCaptureWriter("10.1.2.3", "udp")
 	h.ServeDNS(w2, newTestQuery(t, "unknown.example.org.", protocol.TypeA))
-	if w2.msg == nil || w2.msg.Header.Flags.RCODE != protocol.RcodeNameError {
-		t.Fatalf("allowed client without upstream: want NXDOMAIN, got %+v", w2.msg)
+	if w2.msg == nil || w2.msg.Header.Flags.RCODE != protocol.RcodeServerFailure {
+		t.Fatalf("allowed client without upstream: want SERVFAIL, got %+v", w2.msg)
 	}
 }
 

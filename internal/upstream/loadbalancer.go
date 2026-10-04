@@ -764,9 +764,9 @@ func (lb *LoadBalancer) queryUDP(address string, msg *protocol.Message) (*protoc
 	// responses must not be returned as the current answer. This is the same
 	// guard already present in (*Client).queryUDP/queryTCP
 	// (fix for memory 01M1PHJT9DRKY835ZPZEV7R6N0).
-	if resp.Header.ID != msg.Header.ID {
+	if responseID := resp.Header.ID; responseID != msg.Header.ID {
 		resp.Release()
-		return nil, fmt.Errorf("response ID mismatch: got %d, want %d", resp.Header.ID, msg.Header.ID)
+		return nil, fmt.Errorf("response ID mismatch: got %d, want %d", responseID, msg.Header.ID)
 	}
 
 	// Update latency for the target if it's a standalone server
@@ -884,9 +884,9 @@ func (lb *LoadBalancer) queryTCP(address string, msg *protocol.Message) (*protoc
 	// responses must not be returned as the current answer. This is the same
 	// guard already present in (*Client).queryUDP and (*Client).queryTCP
 	// (fix for memory 01M1PHJT9DRKY835ZPZEV7R6N0).
-	if resp.Header.ID != msg.Header.ID {
+	if responseID := resp.Header.ID; responseID != msg.Header.ID {
 		resp.Release()
-		return nil, fmt.Errorf("response ID mismatch: got %d, want %d", resp.Header.ID, msg.Header.ID)
+		return nil, fmt.Errorf("response ID mismatch: got %d, want %d", responseID, msg.Header.ID)
 	}
 
 	// Update latency for the target

@@ -279,14 +279,15 @@ func (s *Synthesizer) SynthesizeResponse(originalQuestion *protocol.Question, aR
 	// Copy flags so we do not mutate the pooled aResponse message.
 	flags := aResponse.Header.Flags
 	responseFlags := protocol.Flags{
-		QR:    flags.QR,
-		AA:    flags.AA,
-		TC:    flags.TC,
-		RD:    flags.RD,
-		RA:    flags.RA,
-		AD:    false, // cleared per RFC 6147 §5.5
-		CD:    flags.CD,
-		RCODE: flags.RCODE,
+		QR:     flags.QR,
+		Opcode: flags.Opcode,
+		AA:     flags.AA,
+		TC:     flags.TC,
+		RD:     flags.RD,
+		RA:     flags.RA,
+		AD:     false, // cleared per RFC 6147 §5.5
+		CD:     flags.CD,
+		RCODE:  flags.RCODE,
 	}
 	msg := &protocol.Message{
 		Header: protocol.Header{

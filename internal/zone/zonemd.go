@@ -217,6 +217,19 @@ func rrsigSignerTTL(rdata []byte) (uint32, bool) {
 // Order is: name (canonical DNS wire format), then type, then rdatas.
 func sortRRsets(rrsets [][]byte) {
 	sort.Slice(rrsets, func(i, j int) bool {
+		a, _, errA := protocol.UnpackName(rrsets[i], 0)
+		b, _, errB := protocol.UnpackName(rrsets[j], 0)
+		if a != nil {
+			defer a.Release()
+		}
+		if b != nil {
+			defer b.Release()
+		}
+		if errA == nil && errB == nil {
+			if cmp := protocol.CompareNames(a, b); cmp != 0 {
+				return cmp < 0
+			}
+		}
 		return string(rrsets[i]) < string(rrsets[j])
 	})
 }
@@ -243,7 +256,11 @@ func buildCanonicalRRset(name string, rtype uint16, ttl uint32, rdataList [][]by
 	sort.Slice(sorted, func(i, j int) bool { return string(sorted[i]) < string(sorted[j]) })
 
 	var result []byte
-	for _, rdata := range sorted {
+	for i, rdata := range sorted {
+		// RFC 8976 excludes duplicate records from the digest.
+		if i > 0 && string(rdata) == string(sorted[i-1]) {
+			continue
+		}
 		if len(rdata) > 0xffff {
 			return nil, fmt.Errorf("record %s type %d rdata too large: %d bytes (max 65535)", name, rtype, len(rdata))
 		}

@@ -195,13 +195,19 @@ func (r *Runner) sendQuery(conn net.Conn) {
 	}
 
 	// Unpack to validate
+	queryID := msg.Header.ID
 	msg, err = protocol.UnpackMessage(resp)
 	if err != nil {
 		atomic.AddInt64(&r.errors, 1)
 		msg.Release()
 		return
 	}
+	valid := msg.Header.ID == queryID && msg.Header.Flags.QR
 	msg.Release()
+	if !valid {
+		atomic.AddInt64(&r.errors, 1)
+		return
+	}
 
 	atomic.AddInt64(&r.success, 1)
 

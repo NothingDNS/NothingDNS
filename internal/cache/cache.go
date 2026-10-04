@@ -736,6 +736,19 @@ func (c *Cache) setNegativeEntry(key, name string, rcode uint8, msg *protocol.Me
 		ttl = c.config().MaxTTL
 	}
 
+	// Bound the stored message's own TTLs by the entry lifetime, exactly as
+	// setInternal does for positive entries. Without this the entry expired
+	// after the negative TTL while the SOA (and any NSEC/NSEC3 proof) inside it
+	// kept the upstream TTL, so a cache hit served an NXDOMAIN whose SOA said
+	// "cache me for 86400s" from an entry that expires in 60 — RFC 2308 §5 sets
+	// the SOA TTL in a negative response to min(SOA.TTL, SOA.MINIMUM), which is
+	// the value this cache already derives and stores as the lifetime. The
+	// clamp only lowers TTLs, so an upstream that already publishes the
+	// negative TTL is unaffected.
+	if secs := remainingSecondsUint32(ttl); secs > 0 {
+		clampMessageTTLs(msg, secs)
+	}
+
 	now := c.now()
 	expireTime := now.Add(ttl)
 
@@ -1291,6 +1304,18 @@ func (c *Cache) Load(entries []CacheEntryJSON) (restored int) {
 		s := c.shardOf(e.Key)
 		s.mu.Lock()
 		c.setInternal(s, e.Key, msg, remainingTTL, false)
+		// Restoring must not restart the MinTTL window or extend the saved
+		// expiry. The snapshot's remaining lifetime is already policy-bounded.
+		entry := s.entries[e.Key]
+		if entry.ExpireTime.After(e.ExpireTime) {
+			entry.ExpireTime = e.ExpireTime
+			clampMessageTTLs(entry.Message, remainingTTL)
+			if entry.CanPrefetch {
+				threshold := c.config().PrefetchThreshold
+				entry.CanPrefetch = e.ExpireTime.Sub(c.now()) > threshold
+				entry.PrefetchDue = entry.ExpireTime.Add(-threshold)
+			}
+		}
 		s.mu.Unlock()
 		restored++
 	}

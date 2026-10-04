@@ -77,18 +77,27 @@ func (s *Server) isHotPathRequest(path string) bool {
 // written, since the status may be set after the call to WriteHeader.
 type statusRecorder struct {
 	http.ResponseWriter
-	status int
+	status      int
+	wroteHeader bool
 }
 
 func (r *statusRecorder) WriteHeader(code int) {
+	if r.wroteHeader {
+		return
+	}
+	if code >= 100 && code < 200 && code != http.StatusSwitchingProtocols {
+		r.ResponseWriter.WriteHeader(code)
+		return
+	}
+	r.wroteHeader = true
 	r.status = code
 	r.ResponseWriter.WriteHeader(code)
 }
 
 func (r *statusRecorder) Write(b []byte) (int, error) {
-	if r.status == http.StatusOK && r.Header().Get("Content-Type") == "" {
-		// WriteHeader may not have been called; set OK as default
-		r.WriteHeader(http.StatusOK)
+	if !r.wroteHeader {
+		r.wroteHeader = true
+		r.status = http.StatusOK
 	}
 	return r.ResponseWriter.Write(b)
 }

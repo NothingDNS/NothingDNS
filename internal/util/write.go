@@ -76,6 +76,9 @@ func AtomicWriteFile(path string, data []byte, mode ...os.FileMode) error {
 		return err
 	}
 
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
 	keepTemp = true // prevent defer from removing the now-renamed file
-	return os.Rename(tmpPath, path)
+	return nil
 }

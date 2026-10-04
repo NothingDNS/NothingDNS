@@ -242,7 +242,7 @@ func (b *Buffer) ReadBytes(n int) ([]byte, error) {
 	if n < 0 {
 		return nil, ErrInvalidOffset
 	}
-	if b.offset+n > b.length {
+	if n > b.length-b.offset {
 		return nil, ErrBufferTooSmall
 	}
 	data := make([]byte, n)
@@ -270,7 +270,7 @@ func (b *Buffer) Skip(n int) error {
 	if n < 0 {
 		return ErrInvalidOffset
 	}
-	if b.offset+n > b.length {
+	if n > b.length-b.offset {
 		return ErrBufferTooSmall
 	}
 	b.offset += n

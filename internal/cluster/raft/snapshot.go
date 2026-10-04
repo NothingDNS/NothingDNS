@@ -245,7 +245,7 @@ func (s *Snapshotter) Load() (*Snapshot, error) {
 			continue
 		}
 		idx, ok := parseSnapshotFilename(f.Name())
-		if ok && idx > latestIndex {
+		if ok && (latest == "" || idx > latestIndex) {
 			latestIndex = idx
 			latest = f.Name()
 		}

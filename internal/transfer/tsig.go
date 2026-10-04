@@ -551,6 +551,22 @@ func checkReplay(keyName string, timeSigned time.Time, fudge time.Duration) erro
 	return nil
 }
 
+// tsigWireData accepts locally-created TSIGs and the protocol parser's raw
+// representation, avoiding a dependency from protocol back into transfer.
+func tsigWireData(data protocol.RData) ([]byte, error) {
+	switch rd := data.(type) {
+	case *RDataTSIG:
+		if rd != nil {
+			return rd.Raw, nil
+		}
+	case *protocol.RDataRaw:
+		if rd != nil && rd.TypeVal == protocol.TypeTSIG {
+			return rd.Data, nil
+		}
+	}
+	return nil, fmt.Errorf("invalid TSIG data type")
+}
+
 // verifyWithKey performs the actual TSIG verification with a given key
 func verifyWithKey(msg *protocol.Message, key *TSIGKey, previousMAC []byte) error {
 	// Find TSIG record in additional section
@@ -559,15 +575,14 @@ func verifyWithKey(msg *protocol.Message, key *TSIGKey, previousMAC []byte) erro
 		return fmt.Errorf("finding TSIG record: %w", err)
 	}
 
-	// Unpack TSIG data
-	tsigs := &TSIGRecord{}
-	if rdata, ok := tsigRR.Data.(*RDataTSIG); ok {
-		tsigs, _, err = UnpackTSIGRecord(rdata.Raw, 0)
-		if err != nil {
-			return fmt.Errorf("unpacking TSIG: %w", err)
-		}
-	} else {
-		return fmt.Errorf("invalid TSIG data type")
+	// Unpack TSIG data from either in-memory representation.
+	raw, err := tsigWireData(tsigRR.Data)
+	if err != nil {
+		return err
+	}
+	tsigs, _, err := UnpackTSIGRecord(raw, 0)
+	if err != nil {
+		return fmt.Errorf("unpacking TSIG: %w", err)
 	}
 
 	// Check algorithm matches. RFC 8945 §4.3.3 (referencing RFC 1035 §2.3.3)

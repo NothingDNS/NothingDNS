@@ -815,8 +815,30 @@ func (p *parser) parseRecordOwned(line string, ownerInherited bool) error {
 	record.Type = strings.ToUpper(fields[fieldIdx])
 	fieldIdx++
 
-	// Remaining fields are RData
+	// Remaining fields are RData. Domain names inside RDATA obey the same
+	// rule as the owner name: a name that does not end in a dot is relative
+	// to the current origin (RFC 1035 §5.1), so resolve them here — the
+	// parser is the only place that knows the origin.
+	//
+	// Leaving them relative is not a cosmetic difference: Record.RData is the
+	// text protocol.ParseRDataText turns into the served wire record, and that
+	// parser has no origin, so it reads "target" as the root-relative name
+	// "target.". A zone line `www IN CNAME target` was therefore answered as
+	// "www.example.com. CNAME target." — a name in the root zone — instead of
+	// target.example.com., and the same applied to NS/MX/SRV/SOA/PTR/DNAME
+	// targets. Absolute names and "." are returned unchanged by makeAbsolute.
 	if fieldIdx < len(fields) {
+		p.absolutizeRDataNames(record.Type, fields[fieldIdx:])
+		// Character-string types (TXT/SPF/DKIM) carry a SEQUENCE of
+		// character-strings (RFC 1035 §3.3.14), and parseFields has just
+		// dropped the quotes that delimit them. Joining the bare fields leaves
+		// `"first" "second"` and `"first second"` indistinguishable, and the
+		// RDATA parser then packs the joined text as ONE string with an extra
+		// space injected at each boundary — so the served record differs from
+		// the zone file and a DKIM/SPF value split across strings is published
+		// with a space inside it (RFC 6376 §3.6.1). Re-quote each field so the
+		// stored text keeps the boundaries.
+		quoteCharacterStringFields(record.Type, fields[fieldIdx:])
 		record.RData = strings.Join(fields[fieldIdx:], " ")
 	}
 
@@ -847,6 +869,95 @@ func (p *parser) parseRecordOwned(line string, ownerInherited bool) error {
 	}
 
 	return nil
+}
+
+// characterStringRDataTypes lists the record types whose RDATA is a sequence of
+// <character-string>s (RFC 1035 §3.3.14, RFC 6376 §3.6.1, RFC 7208 §3.3): each
+// presentation field of these types is one character-string, so the stored text
+// has to keep the quotes parseFields strips.
+var characterStringRDataTypes = map[string]bool{
+	"TXT": true, "SPF": true, "DKIM": true,
+}
+
+// quoteCharacterStringFields re-quotes each RDATA field of a character-string
+// record type in place, so a value spanning several strings keeps its string
+// boundaries in the stored text that protocol.ParseRDataText reads back.
+//
+// Without it, `txt IN TXT "first" "second"` and `txt IN TXT "first second"`
+// both store `first second`, and the served record carries ONE character-string
+// with an extra space injected at the boundary instead of the two the operator
+// wrote — which changes the published value for DKIM/SPF records that split a
+// long value across strings.
+//
+// The escaping is quoteZoneCharacterString (writer.go), so a zone written by
+// WriteZone and read back by this parser round-trips unchanged.
+func quoteCharacterStringFields(rtype string, rdataFields []string) {
+	if !characterStringRDataTypes[rtype] {
+		return
+	}
+	for i, f := range rdataFields {
+		rdataFields[i] = quoteZoneCharacterString(f)
+	}
+}
+
+// rdataNameFieldIndices lists, per record type, the zero-based positions of
+// the domain-name fields in a record's RDATA field list, using the same layout
+// protocol.ParseRDataText parses (that parser is what turns the stored text
+// into the served wire record). Only types whose RDATA always contains a name
+// at a fixed position are listed here; NAPTR, HIP and IPSECKEY are handled in
+// absolutizeRDataNames because their name field is conditional or trailing.
+var rdataNameFieldIndices = map[string][]int{
+	"NS": {0}, "CNAME": {0}, "DNAME": {0}, "PTR": {0}, "NSEC": {0},
+	"MX": {1}, "AFSDB": {1}, "KX": {1}, "SVCB": {1}, "HTTPS": {1},
+	"SRV": {3}, "SOA": {0, 1}, "RP": {0, 1},
+	"SIG": {7}, "RRSIG": {7},
+}
+
+// absolutizeRDataNames rewrites the domain-name fields of an already-split
+// RDATA field list in place, resolving each relative name against the zone
+// origin (RFC 1035 §5.1). Absolute names, "@" and "." are returned unchanged
+// by makeAbsolute, so this is a no-op for them.
+//
+// The rewrite is index-based on the field list parseRecordOwned already built,
+// so it cannot re-split the RDATA and shift the positions it is rewriting.
+func (p *parser) absolutizeRDataNames(rtype string, rdataFields []string) {
+	indices, ok := rdataNameFieldIndices[rtype]
+	if !ok {
+		switch rtype {
+		case "NAPTR":
+			// order pref flags service regexp replacement — the replacement
+			// is last, but its index cannot be trusted blindly: parseFields
+			// collapses a quoted regexp that contains a space into several
+			// fields, which would shift the index and make this rewrite
+			// corrupt the regexp instead of the name. Only rewrite the
+			// documented shape.
+			if len(rdataFields) != 6 {
+				return
+			}
+			indices = []int{5}
+		case "IPSECKEY":
+			// RFC 4025 §2.2: the gateway field (index 3) is a domain name
+			// only for gateway type 3; types 0/1/2 are ".", IPv4 or IPv6.
+			if len(rdataFields) < 4 || rdataFields[1] != "3" {
+				return
+			}
+			indices = []int{3}
+		case "HIP":
+			// RFC 8005 §6: everything after the HIT and public key is a
+			// rendezvous-server domain name, a variable-length list.
+			for i := 3; i < len(rdataFields); i++ {
+				rdataFields[i] = makeAbsolute(rdataFields[i], p.zone.Origin)
+			}
+			return
+		default:
+			return
+		}
+	}
+	for _, idx := range indices {
+		if idx >= 0 && idx < len(rdataFields) {
+			rdataFields[idx] = makeAbsolute(rdataFields[idx], p.zone.Origin)
+		}
+	}
 }
 
 // handleSpecialRecord handles SOA and NS records specially.

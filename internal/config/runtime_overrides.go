@@ -151,6 +151,9 @@ func SaveRuntimeOverrides(path string, o *RuntimeOverrides) error {
 	if err != nil {
 		return err
 	}
+	if len(data) > maxRuntimeOverridesFileSize {
+		return fmt.Errorf("runtime overrides file %s exceeds %d bytes", path, maxRuntimeOverridesFileSize)
+	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".runtime_overrides-*.json")
 	if err != nil {
 		return err

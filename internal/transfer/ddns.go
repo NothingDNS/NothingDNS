@@ -718,6 +718,15 @@ func zoneTypeExists(z *zone.Zone, name string, rrType uint16) bool {
 	return false
 }
 
+// updateRDataEqual keeps TXT payloads case-sensitive; DNS owner names and
+// domain-name RDATA retain their existing case-insensitive matching.
+func updateRDataEqual(rrType uint16, stored, requested string) bool {
+	if rrType == protocol.TypeTXT {
+		return stored == requested
+	}
+	return strings.EqualFold(stored, requested)
+}
+
 // zoneRecordExists checks if a specific record exists
 func zoneRecordExists(z *zone.Zone, name string, rrType uint16, rdata string) bool {
 	// Normalize name
@@ -728,7 +737,7 @@ func zoneRecordExists(z *zone.Zone, name string, rrType uint16, rdata string) bo
 	}
 	typeStr := protocol.TypeString(rrType)
 	for _, r := range records {
-		if r.Type == typeStr && strings.EqualFold(r.RData, rdata) {
+		if r.Type == typeStr && updateRDataEqual(rrType, r.RData, rdata) {
 			return true
 		}
 	}
@@ -747,7 +756,7 @@ func zoneDeleteRecord(z *zone.Zone, name string, rrType uint16, rdata string) {
 	typeStr := protocol.TypeString(rrType)
 	var newRecords []zone.Record
 	for _, r := range records {
-		if !(r.Type == typeStr && strings.EqualFold(r.RData, rdata)) {
+		if !(r.Type == typeStr && updateRDataEqual(rrType, r.RData, rdata)) {
 			newRecords = append(newRecords, r)
 		}
 	}

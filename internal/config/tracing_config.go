@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 )
 
@@ -37,7 +38,7 @@ func unmarshalTracing(node *Node, cfg *TracingConfig) error {
 
 	if sr := node.GetString("sample_rate"); sr != "" {
 		v, err := strconv.ParseFloat(sr, 64)
-		if err != nil || v < 0 || v > 1 {
+		if err != nil || math.IsNaN(v) || v < 0 || v > 1 {
 			return fmt.Errorf("tracing.sample_rate must be a number in [0, 1], got %q", sr)
 		}
 		cfg.SampleRate = v

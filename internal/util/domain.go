@@ -332,6 +332,9 @@ func IsSubdomain(child, parent string) bool {
 	// Remove trailing dots for comparison
 	child = strings.TrimSuffix(child, ".")
 	parent = strings.TrimSuffix(parent, ".")
+	if parent == "" {
+		return true
+	}
 
 	// Quick length check: child must be longer than parent
 	if len(child) < len(parent) {

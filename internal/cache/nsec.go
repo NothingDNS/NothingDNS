@@ -190,6 +190,17 @@ func (nc *NSECCache) lookupAt(qname string, qtype uint16, now time.Time) *protoc
 		// Check if qname falls in the range (owner, nextDomain) in canonical order.
 		// NSEC proves: no names exist between owner and nextDomain.
 		if nameInNSECRange(qnameParsed, entry.Owner, entry.NextDomain) {
+			// RFC 8198 §5.3 allows this synthesis only when the resolver can
+			// establish "that a name would not exist without the wildcard
+			// match" (RFC 4035 §5.3.4). A covering NSEC proves nothing about a
+			// wildcard at the closest encloser, and the covering NSEC of a real
+			// response can be owned by the wildcard itself — canonical order
+			// puts "*.sub.example.com." before its parent, so its wrap-around
+			// range spans the wildcard's own children. Requiring the wildcard
+			// denial here keeps a wildcard-matched name resolvable.
+			if !nc.wildcardDeniedFor(qnameParsed, zone, entry) {
+				continue
+			}
 			return nc.synthesizeNXDOMAIN(qname, qtype, entry)
 		}
 
@@ -227,6 +238,57 @@ func nameInNSECRange(name, owner, next *protocol.Name) bool {
 	// Wrap-around case: next <= owner (last NSEC wraps to apex)
 	// Name must be: name > owner OR name < next
 	return cmpOwner > 0 || cmpNext < 0
+}
+
+// wildcardDeniedFor reports whether the cached NSEC set also proves that no
+// wildcard at qname's closest encloser could have matched qname — the second
+// half of an aggressive NXDOMAIN (RFC 8198 §5.3, RFC 4035 §5.3.4). Callers must
+// hold nc.mu.
+//
+// The closest encloser is the deepest ancestor of qname that the covering NSEC
+// does not itself cover: an ancestor inside the covering range does not exist,
+// so it cannot be the encloser. The denial then needs an NSEC from the same zone
+// whose range strictly covers "*.<encloser>". Failing closed — no proof cached —
+// leaves the query to normal resolution instead of serving an AD=1 denial for a
+// name that a wildcard may answer.
+func (nc *NSECCache) wildcardDeniedFor(qname, zone *protocol.Name, covering *nsecEntry) bool {
+	if qname == nil || zone == nil || covering == nil {
+		return false
+	}
+
+	labels := strings.Split(strings.ToLower(strings.TrimSuffix(qname.String(), ".")), ".")
+	for i := 1; i < len(labels); i++ {
+		ancestor, err := protocol.ParseName(strings.Join(labels[i:], ".") + ".")
+		if err != nil {
+			return false
+		}
+		if !nameWithinZone(ancestor, zone) {
+			return false
+		}
+		if nameInNSECRange(ancestor, covering.Owner, covering.NextDomain) {
+			// Inside the covering range: this ancestor does not exist.
+			continue
+		}
+
+		wildcard, err := protocol.ParseName("*." + ancestor.String())
+		if err != nil {
+			return false
+		}
+		for _, e := range nc.entries {
+			if e == nil || e.Owner == nil || e.NextDomain == nil {
+				continue
+			}
+			zoneOfEntry := nsecEntryZone(e)
+			if zoneOfEntry == nil || protocol.CompareNames(zoneOfEntry, zone) != 0 {
+				continue
+			}
+			if nameInNSECRange(wildcard, e.Owner, e.NextDomain) {
+				return true
+			}
+		}
+		return false
+	}
+	return false
 }
 
 // typeInBitmap checks if a DNS type is present in an NSEC type bitmap.

@@ -2,7 +2,7 @@ package resolver
 
 // Root hints: IANA root name servers (IPv4 + IPv6).
 // Sourced from https://www.internic.net/domain/named.root
-// Last verified 2024-01. These change extremely rarely.
+// Last verified 2026-10-04 against root hints version 2026093001.
 
 // RootHint represents a root server with its name and addresses.
 type RootHint struct {
@@ -15,7 +15,7 @@ type RootHint struct {
 func RootHints() []RootHint {
 	return []RootHint{
 		{Name: "a.root-servers.net.", IPv4: []string{"198.41.0.4"}, IPv6: []string{"2001:503:ba3e::2:30"}},
-		{Name: "b.root-servers.net.", IPv4: []string{"199.9.14.201"}, IPv6: []string{"2001:500:200::b"}},
+		{Name: "b.root-servers.net.", IPv4: []string{"170.247.170.2"}, IPv6: []string{"2801:1b8:10::b"}},
 		{Name: "c.root-servers.net.", IPv4: []string{"192.33.4.12"}, IPv6: []string{"2001:500:2::c"}},
 		{Name: "d.root-servers.net.", IPv4: []string{"199.7.91.13"}, IPv6: []string{"2001:500:2d::d"}},
 		{Name: "e.root-servers.net.", IPv4: []string{"192.203.230.10"}, IPv6: []string{"2001:500:a8::e"}},

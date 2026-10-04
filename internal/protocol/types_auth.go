@@ -207,7 +207,7 @@ func (r *RDataSRV) Pack(buf []byte, offset int) (int, error) {
 	startOffset := offset
 
 	// Priority, Weight, Port
-	if offset+6 > len(buf) {
+	if offset < 0 || offset > len(buf) || 6 > len(buf)-offset {
 		return 0, ErrBufferTooSmall
 	}
 	PutUint16(buf[offset:], r.Priority)
@@ -239,7 +239,7 @@ func (r *RDataSRV) Unpack(buf []byte, offset int, rdlength uint16) (int, error) 
 	}
 	startOffset := offset
 	endOffset := offset + int(rdlength)
-	if endOffset > len(buf) {
+	if offset < 0 || offset > len(buf) || int(rdlength) > len(buf)-offset {
 		return 0, ErrBufferTooSmall
 	}
 

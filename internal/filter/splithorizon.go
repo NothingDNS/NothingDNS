@@ -86,7 +86,7 @@ func newView(cfg ViewConfig) (*View, error) {
 				return nil, fmt.Errorf("invalid match_clients entry: %q", cidr)
 			}
 			if ip.To4() != nil {
-				cidr = cidr + "/32"
+				cidr = ip.String() + "/32"
 			} else {
 				cidr = cidr + "/128"
 			}

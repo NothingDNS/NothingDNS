@@ -775,7 +775,11 @@ func (tx *Tx) Commit() error {
 	if err := tx.store.save(); err != nil {
 		tx.store.rwtx = nil
 		if rerr := tx.store.load(); rerr != nil {
-			util.Warnf("kvstore: failed to reload data after failed commit: %v", rerr)
+			if os.IsNotExist(rerr) {
+				tx.store.root = newBucketData()
+			} else {
+				util.Warnf("kvstore: failed to reload data after failed commit: %v", rerr)
+			}
 		}
 		tx.closed = true
 		tx.store.removeTx(tx)
@@ -874,6 +878,10 @@ func (tx *Tx) Bucket(name []byte) *KVBucket {
 
 // CreateBucket creates a new bucket. F060: lock-free.
 func (tx *Tx) CreateBucket(name []byte) (*KVBucket, error) {
+	if tx.closed {
+		return nil, ErrTxClosed
+	}
+
 	if !tx.writable {
 		return nil, ErrTxNotWritable
 	}
@@ -898,6 +906,10 @@ func (tx *Tx) CreateBucket(name []byte) (*KVBucket, error) {
 
 // CreateBucketIfNotExists creates a bucket if it doesn't exist
 func (tx *Tx) CreateBucketIfNotExists(name []byte) (*KVBucket, error) {
+	if tx.closed {
+		return nil, ErrTxClosed
+	}
+
 	if bucket := tx.Bucket(name); bucket != nil {
 		return bucket, nil
 	}
@@ -906,6 +918,10 @@ func (tx *Tx) CreateBucketIfNotExists(name []byte) (*KVBucket, error) {
 
 // DeleteBucket deletes a bucket. F060: lock-free.
 func (tx *Tx) DeleteBucket(name []byte) error {
+	if tx.closed {
+		return ErrTxClosed
+	}
+
 	if !tx.writable {
 		return ErrTxNotWritable
 	}
@@ -946,6 +962,10 @@ func (b *KVBucket) Get(key []byte) []byte {
 
 // Put stores a key-value pair
 func (b *KVBucket) Put(key, value []byte) error {
+	if b.tx.closed {
+		return ErrTxClosed
+	}
+
 	if len(key) == 0 {
 		return errors.New("key required")
 	}
@@ -974,6 +994,10 @@ func (b *KVBucket) Put(key, value []byte) error {
 
 // Delete removes a key. F060: lock-free.
 func (b *KVBucket) Delete(key []byte) error {
+	if b.tx.closed {
+		return ErrTxClosed
+	}
+
 	if !b.tx.writable {
 		return ErrTxNotWritable
 	}
@@ -1004,6 +1028,10 @@ func (b *KVBucket) Bucket(name []byte) *KVBucket {
 
 // CreateBucket creates a nested bucket. F060: lock-free.
 func (b *KVBucket) CreateBucket(name []byte) (*KVBucket, error) {
+	if b.tx.closed {
+		return nil, ErrTxClosed
+	}
+
 	if !b.tx.writable {
 		return nil, ErrTxNotWritable
 	}
@@ -1028,6 +1056,10 @@ func (b *KVBucket) CreateBucket(name []byte) (*KVBucket, error) {
 
 // CreateBucketIfNotExists creates a bucket if it doesn't exist
 func (b *KVBucket) CreateBucketIfNotExists(name []byte) (*KVBucket, error) {
+	if b.tx.closed {
+		return nil, ErrTxClosed
+	}
+
 	if child := b.Bucket(name); child != nil {
 		return child, nil
 	}
@@ -1036,6 +1068,10 @@ func (b *KVBucket) CreateBucketIfNotExists(name []byte) (*KVBucket, error) {
 
 // DeleteBucket deletes a nested bucket. F060: lock-free.
 func (b *KVBucket) DeleteBucket(name []byte) error {
+	if b.tx.closed {
+		return ErrTxClosed
+	}
+
 	if !b.tx.writable {
 		return ErrTxNotWritable
 	}
@@ -1127,14 +1163,9 @@ func (c *KVCursor) Prev() ([]byte, []byte) {
 
 // Seek positions the cursor at the given key
 func (c *KVCursor) Seek(seek []byte) ([]byte, []byte) {
-	seekStr := string(seek)
-	for i, k := range c.keys {
-		if k >= seekStr {
-			c.pos = i
-			return c.current()
-		}
-	}
-	return nil, nil
+	i := sort.SearchStrings(c.keys, string(seek))
+	c.pos = i
+	return c.current()
 }
 
 func (c *KVCursor) current() ([]byte, []byte) {

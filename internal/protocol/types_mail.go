@@ -53,6 +53,9 @@ func (r *RDataMX) Unpack(buf []byte, offset int, rdlength uint16) (int, error) {
 		return 0, fmt.Errorf("nil MX record")
 	}
 	startOffset := offset
+	if offset < 0 || offset > len(buf) || int(rdlength) > len(buf)-offset {
+		return 0, ErrBufferTooSmall
+	}
 	endOffset := offset + int(rdlength)
 	if endOffset > len(buf) {
 		return 0, ErrBufferTooSmall
@@ -159,12 +162,16 @@ func (r *RDataTXT) Unpack(buf []byte, offset int, rdlength uint16) (int, error) 
 		return 0, fmt.Errorf("nil TXT record")
 	}
 	startOffset := offset
+	if offset < 0 || offset > len(buf) || int(rdlength) > len(buf)-offset {
+		return 0, ErrBufferTooSmall
+	}
 	endOffset := offset + int(rdlength)
 
 	if endOffset > len(buf) {
 		return 0, ErrBufferTooSmall
 	}
 
+	r.Strings = nil
 	for offset < endOffset {
 		if offset >= len(buf) {
 			return 0, ErrBufferTooSmall

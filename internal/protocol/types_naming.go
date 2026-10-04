@@ -96,7 +96,7 @@ func packCharacterString(buf []byte, offset int, value string) (int, error) {
 	if valueLen > 255 {
 		return 0, ErrLabelTooLong
 	}
-	if offset+1+valueLen > len(buf) {
+	if offset < 0 || offset > len(buf) || 1+valueLen > len(buf)-offset {
 		return 0, ErrBufferTooSmall
 	}
 	buf[offset] = byte(valueLen)
@@ -105,7 +105,7 @@ func packCharacterString(buf []byte, offset int, value string) (int, error) {
 }
 
 func unpackCharacterString(buf []byte, offset, endOffset int) (string, int, error) {
-	if offset >= endOffset {
+	if offset < 0 || endOffset > len(buf) || offset >= endOffset {
 		return "", 0, ErrBufferTooSmall
 	}
 	valueLen := int(buf[offset])

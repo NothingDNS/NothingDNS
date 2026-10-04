@@ -158,14 +158,13 @@ func (m *Monitor) Stop() {
 	}
 
 	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
 	if !m.enabled.Load() {
-		m.lifecycleMu.Unlock()
 		return
 	}
 	cancel := m.cancel
 	m.cancel = nil
 	m.enabled.Store(false)
-	m.lifecycleMu.Unlock()
 
 	if cancel != nil {
 		cancel()

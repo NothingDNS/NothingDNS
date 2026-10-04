@@ -98,6 +98,7 @@ func (r *RDataOPT) Unpack(buf []byte, offset int, rdlength uint16) (int, error) 
 		return 0, ErrBufferTooSmall
 	}
 
+	r.Options = nil
 	for offset < endOffset {
 		// Need at least 4 bytes for code + length
 		if offset+4 > endOffset {

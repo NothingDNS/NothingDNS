@@ -1,7 +1,5 @@
 package util
 
-import "strings"
-
 // Version is the current version of NothingDNS.
 // This is the single source of truth; all packages and binaries should reference this.
 //
@@ -30,5 +28,8 @@ func init() {
 // string, yielding the canonical bare-semver form. Anything that does
 // not start with v/V is returned unchanged.
 func normalizeVersion(v string) string {
-	return strings.TrimPrefix(strings.TrimPrefix(v, "v"), "V")
+	if len(v) > 0 && (v[0] == 'v' || v[0] == 'V') {
+		return v[1:]
+	}
+	return v
 }

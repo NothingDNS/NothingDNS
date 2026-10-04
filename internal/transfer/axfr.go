@@ -653,6 +653,11 @@ func (c *AXFRClient) receiveAXFRResponse(conn net.Conn, expectedTXID uint16, key
 			return nil, fmt.Errorf("AXFR failed with rcode: %d", msg.Header.Flags.RCODE)
 		}
 
+		// A keyed transfer must authenticate its first response.
+		if key != nil && len(records) == 0 && !hasTSIG(msg) {
+			return nil, fmt.Errorf("AXFR first response is missing TSIG")
+		}
+
 		// Verify TSIG if present
 		if key != nil && hasTSIG(msg) {
 			if err := VerifyMessage(msg, key, previousMAC); err != nil {
@@ -677,6 +682,9 @@ func (c *AXFRClient) receiveAXFRResponse(conn net.Conn, expectedTXID uint16, key
 
 		// Check if transfer is complete (second SOA)
 		if soaCount >= 2 {
+			if key != nil && !hasTSIG(msg) {
+				return nil, fmt.Errorf("AXFR final response is missing TSIG")
+			}
 			break
 		}
 
@@ -693,8 +701,8 @@ func (c *AXFRClient) receiveAXFRResponse(conn net.Conn, expectedTXID uint16, key
 func extractMAC(msg *protocol.Message) ([]byte, error) {
 	for _, rr := range msg.Additionals {
 		if rr.Type == protocol.TypeTSIG {
-			if rdata, ok := rr.Data.(*RDataTSIG); ok {
-				ts, _, err := UnpackTSIGRecord(rdata.Raw, 0)
+			if raw, err := tsigWireData(rr.Data); err == nil {
+				ts, _, err := UnpackTSIGRecord(raw, 0)
 				if err != nil {
 					return nil, fmt.Errorf("failed to parse TSIG record for MAC extraction: %w", err)
 				}

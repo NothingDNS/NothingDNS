@@ -482,8 +482,11 @@ func TestServeDNS_NoUpstream_NoZone(t *testing.T) {
 	if w.msg == nil {
 		t.Fatal("expected a response")
 	}
-	if w.msg.Header.Flags.RCODE != protocol.RcodeNameError {
-		t.Errorf("expected NXDOMAIN, got rcode %d", w.msg.Header.Flags.RCODE)
+	// No upstream and no resolver: the server has no path to the name, so it
+	// reports a transient failure (SERVFAIL), not a definitive nonexistence
+	// claim (NXDOMAIN) — see proof_round020_no_upstream_nxdomain_test.go.
+	if w.msg.Header.Flags.RCODE != protocol.RcodeServerFailure {
+		t.Errorf("expected SERVFAIL, got rcode %d", w.msg.Header.Flags.RCODE)
 	}
 }
 
@@ -587,9 +590,11 @@ func TestServeDNS_ACLAllow(t *testing.T) {
 	if w.msg == nil {
 		t.Fatal("expected a response")
 	}
-	// With no upstream, it should return NXDOMAIN (not REFUSED)
-	if w.msg.Header.Flags.RCODE != protocol.RcodeNameError {
-		t.Errorf("expected NXDOMAIN when ACL allows, got rcode %d", w.msg.Header.Flags.RCODE)
+	// With no upstream the query must not be REFUSED (the ACL allowed it) — it
+	// reaches the terminal no-upstream stage, which answers SERVFAIL: the server
+	// has no path to the name and no basis for an NXDOMAIN claim.
+	if w.msg.Header.Flags.RCODE != protocol.RcodeServerFailure {
+		t.Errorf("expected SERVFAIL (allowed, not REFUSED) when ACL allows, got rcode %d", w.msg.Header.Flags.RCODE)
 	}
 }
 
@@ -4938,6 +4943,17 @@ func TestServeDNS_NSEC_CacheHit(t *testing.T) {
 		Name: nsecName, Type: protocol.TypeNSEC, Class: protocol.ClassIN, TTL: 300,
 		Data: &protocol.RDataNSEC{NextDomain: nextName, TypeBitMap: []uint16{protocol.TypeA}},
 	})
+	// RFC 4035 §5.3.4 wildcard denial. The closest encloser of m.example.com. is
+	// example.com., so a real NXDOMAIN response also carries an NSEC whose range
+	// covers *.example.com. The aggressive cache requires that proof (RFC 8198
+	// §5.3) before synthesising; without this record the cache declines and the
+	// assertion below would be measuring the terminal no-upstream stage instead
+	// of the NSEC cache this test is named for.
+	apexName, _ := protocol.ParseName("example.com.")
+	resp.Authorities = append(resp.Authorities, &protocol.ResourceRecord{
+		Name: apexName, Type: protocol.TypeNSEC, Class: protocol.ClassIN, TTL: 300,
+		Data: &protocol.RDataNSEC{NextDomain: nsecName, TypeBitMap: []uint16{protocol.TypeNS}},
+	})
 
 	h.nsecCache.AddFromResponse(resp, true)
 
@@ -4977,8 +4993,10 @@ func TestServeDNS_SplitHorizon_ViewMiss(t *testing.T) {
 	if w.msg == nil {
 		t.Fatal("expected response")
 	}
-	if w.msg.Header.Flags.RCODE != protocol.RcodeNameError {
-		t.Errorf("expected NXDOMAIN after view miss, got %d", w.msg.Header.Flags.RCODE)
+	// The view miss falls through to the terminal no-upstream stage, which
+	// answers SERVFAIL (round 020): the server has no path to the name.
+	if w.msg.Header.Flags.RCODE != protocol.RcodeServerFailure {
+		t.Errorf("expected SERVFAIL after view miss, got %d", w.msg.Header.Flags.RCODE)
 	}
 }
 

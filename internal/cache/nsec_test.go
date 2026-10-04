@@ -91,18 +91,32 @@ func TestNSECCacheAddAndLookupNXDOMAIN(t *testing.T) {
 		},
 	}
 
+	// The wildcard-denial proof a real response carries alongside the covering
+	// NSEC (RFC 4035 §5.3.4): example.com. -> alpha.example.com. covers "*.example.com.", so the
+	// cache can establish that no wildcard would have matched the query name.
+	wildcardRR := &protocol.ResourceRecord{
+		Name:  mustName("example.com."),
+		Type:  protocol.TypeNSEC,
+		Class: protocol.ClassIN,
+		TTL:   300,
+		Data: &protocol.RDataNSEC{
+			NextDomain: mustName("alpha.example.com."),
+			TypeBitMap: []uint16{protocol.TypeNS, protocol.TypeSOA, protocol.TypeRRSIG, protocol.TypeNSEC},
+		},
+	}
+
 	// Simulate NXDOMAIN response with NSEC
 	resp := &protocol.Message{
 		Header: protocol.Header{
 			Flags: protocol.NewResponseFlags(protocol.RcodeNameError),
 		},
-		Authorities: []*protocol.ResourceRecord{soaRR, nsecRR},
+		Authorities: []*protocol.ResourceRecord{soaRR, nsecRR, wildcardRR},
 	}
 
 	nc.AddFromResponse(resp, true)
 
-	if nc.Size() != 1 {
-		t.Fatalf("cache size = %d, want 1", nc.Size())
+	if nc.Size() != 2 {
+		t.Fatalf("cache size = %d, want 2 (covering NSEC + wildcard denial)", nc.Size())
 	}
 
 	// Query for beta.example.com. — should be proven non-existent
@@ -209,6 +223,15 @@ func TestNSECCacheSynthesizedAuthorityTTLsAreBoundedByRemainingProofTTL(t *testi
 		},
 	}
 	nc.entries["alpha.example.com."] = entry
+	// Wildcard denial for the closest encloser example.com. (RFC 4035 §5.3.4):
+	// a covering NSEC alone cannot rule out a wildcard match.
+	nc.entries["example.com."] = &nsecEntry{
+		Owner:      mustName("example.com."),
+		NextDomain: mustName("alpha.example.com."),
+		TypeBitMap: []uint16{protocol.TypeNS, protocol.TypeSOA, protocol.TypeRRSIG, protocol.TypeNSEC},
+		ExpireTime: time.Now().Add(2 * time.Minute),
+		SOA:        entry.SOA,
+	}
 
 	for _, resp := range []*protocol.Message{
 		nc.Lookup("beta.example.com.", protocol.TypeA),
@@ -278,11 +301,25 @@ func TestNSECCacheExpiration(t *testing.T) {
 		},
 	}
 
+	// The wildcard-denial proof a real response carries alongside the covering
+	// NSEC (RFC 4035 §5.3.4): example.com. -> a.example.com. covers "*.example.com.", so the
+	// cache can establish that no wildcard would have matched the query name.
+	wildcardRR := &protocol.ResourceRecord{
+		Name:  mustName("example.com."),
+		Type:  protocol.TypeNSEC,
+		Class: protocol.ClassIN,
+		TTL:   1,
+		Data: &protocol.RDataNSEC{
+			NextDomain: mustName("a.example.com."),
+			TypeBitMap: []uint16{protocol.TypeNS, protocol.TypeSOA, protocol.TypeRRSIG, protocol.TypeNSEC},
+		},
+	}
+
 	resp := &protocol.Message{
 		Header: protocol.Header{
 			Flags: protocol.NewResponseFlags(protocol.RcodeNameError),
 		},
-		Authorities: []*protocol.ResourceRecord{soaRR, nsecRR},
+		Authorities: []*protocol.ResourceRecord{soaRR, nsecRR, wildcardRR},
 	}
 
 	nc.AddFromResponse(resp, true)
@@ -376,13 +413,24 @@ func TestNSECCacheAddFromResponseSkipsMalformedAuthorityRecords(t *testing.T) {
 					TypeBitMap: []uint16{protocol.TypeNSEC},
 				},
 			},
+			{
+				// Wildcard denial for the closest encloser (RFC 4035 §5.3.4).
+				Name:  mustName("example.com."),
+				Type:  protocol.TypeNSEC,
+				Class: protocol.ClassIN,
+				TTL:   300,
+				Data: &protocol.RDataNSEC{
+					NextDomain: mustName("a.example.com."),
+					TypeBitMap: []uint16{protocol.TypeNS, protocol.TypeSOA, protocol.TypeRRSIG, protocol.TypeNSEC},
+				},
+			},
 		},
 	}
 
 	nc.AddFromResponse(resp, true)
 
-	if nc.Size() != 1 {
-		t.Fatalf("cache size = %d, want 1 valid NSEC entry", nc.Size())
+	if nc.Size() != 2 {
+		t.Fatalf("cache size = %d, want 2 valid NSEC entries (covering + wildcard denial)", nc.Size())
 	}
 	synthResp := nc.Lookup("b.example.com.", protocol.TypeA)
 	if synthResp == nil {
@@ -495,6 +543,17 @@ func TestNSECCacheEntriesSurviveSourceMessageRelease(t *testing.T) {
 				Data: &protocol.RDataNSEC{
 					NextDomain: mustName("_end.example.com."),
 					TypeBitMap: []uint16{protocol.TypeA, protocol.TypeNSEC},
+				},
+			},
+			{
+				// Wildcard denial for the closest encloser (RFC 4035 §5.3.4).
+				Name:  mustName("example.com."),
+				Type:  protocol.TypeNSEC,
+				Class: protocol.ClassIN,
+				TTL:   300,
+				Data: &protocol.RDataNSEC{
+					NextDomain: mustName("_covered.example.com."),
+					TypeBitMap: []uint16{protocol.TypeNS, protocol.TypeSOA, protocol.TypeRRSIG, protocol.TypeNSEC},
 				},
 			},
 		},

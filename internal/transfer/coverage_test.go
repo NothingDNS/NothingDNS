@@ -4598,11 +4598,19 @@ func TestXoTServer_generateIXFRRecords_WithJournal_Incremental(t *testing.T) {
 	}
 
 	// Create mock journal store with entries
+	//
+	// OldSerial is set on the oldest entry so the fixture expresses what the
+	// test intends: the client (serial 100) is exactly one change behind the
+	// oldest retained entry, which the XoT journal-coverage check now verifies
+	// (mirroring IXFRServer.generateIncrementalIXFR). Without it the fixture
+	// asserts a delta for a boundary the code cannot prove is covered, which
+	// the fix correctly answers with a full AXFR instead.
 	mockStore := &mockJournalStore{
 		entries: map[string][]*IXFRJournalEntry{
 			"example.com.": {
 				{
-					Serial: 150,
+					OldSerial: 100,
+					Serial:    150,
 					Added: []zone.RecordChange{
 						{Name: "www.example.com.", Type: protocol.TypeA, TTL: 3600, RData: "10.0.0.1"},
 					},
@@ -4676,7 +4684,12 @@ func TestXoTServer_generateIXFRRecords_WrapAroundSerialUsesIncremental(t *testin
 		entries: map[string][]*IXFRJournalEntry{
 			"example.com.": {
 				{
-					Serial: 1,
+					// OldSerial is the pre-change serial the client is at
+					// (0xFFFFFFFF); the journal-coverage check needs it to
+					// prove the client's base version is the one this entry
+					// advances, so the wraparound delta is still served.
+					OldSerial: 0xFFFFFFFF,
+					Serial:    1,
 					Added: []zone.RecordChange{
 						{Name: "www.example.com.", Type: protocol.TypeA, TTL: 3600, RData: "10.0.0.1"},
 					},

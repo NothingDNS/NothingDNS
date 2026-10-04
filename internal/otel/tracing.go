@@ -105,7 +105,7 @@ func NewTracer(cfg Config) *Tracer {
 	if endpoint == "" {
 		endpoint = otlpEndpointFromEnv()
 	}
-	if cfg.SampleRate <= 0 || cfg.SampleRate > 1 {
+	if cfg.SampleRate < 0 || cfg.SampleRate > 1 {
 		cfg.SampleRate = 1.0
 	}
 
@@ -180,10 +180,10 @@ func (t *Tracer) StartSpan(ctx context.Context, name string, opts ...SpanOption)
 
 	sdkCtx, sdkSpan := t.tracer.Start(ctx, name)
 	if !sdkSpan.SpanContext().IsSampled() {
-		// Unsampled: end the SDK span immediately and behave like the
-		// disabled path so no memory is retained and callers skip it.
+		// Keep the unsampled SDK context so children and propagation retain
+		// the trace ID and sampling decision, without recording a facade span.
 		sdkSpan.End()
-		return ctx, nil
+		return sdkCtx, nil
 	}
 
 	sc := sdkSpan.SpanContext()
@@ -223,6 +223,9 @@ func (t *Tracer) EndSpan(span *Span, err error) {
 	if !span.EndTime.IsZero() {
 		return
 	}
+	if err == nil {
+		err = span.Err
+	}
 	span.EndTime = time.Now()
 	span.Err = err
 
@@ -252,6 +255,9 @@ func (t *Tracer) Shutdown(ctx context.Context) error {
 func (t *Tracer) DroppedSpans() uint64 {
 	t.recMu.Lock()
 	defer t.recMu.Unlock()
+	if t.recorder != nil {
+		t.droppedSpns += t.recorder.takeDropped()
+	}
 	return t.droppedSpns
 }
 

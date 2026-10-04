@@ -248,6 +248,9 @@ func SaveAccessPolicy(path string, policy *AccessPolicy) error {
 	if err != nil {
 		return err
 	}
+	if len(data) > maxAccessPolicyFileSize {
+		return fmt.Errorf("access policy file %s exceeds %d bytes", path, maxAccessPolicyFileSize)
+	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".access_policy-*.json")
 	if err != nil {
 		return err

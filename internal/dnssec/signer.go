@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -431,8 +432,17 @@ func (s *Signer) SignRRSet(rrSet []*protocol.ResourceRecord, key *SigningKey, in
 	copy(sorted, rrSet)
 	canonicalSort(sorted)
 
-	// Count labels
+	// Count labels. RFC 4034 §3.1.3: the Labels field does not count the
+	// leftmost label when it is a wildcard, because a validator reconstructs a
+	// wildcard-expanded owner as "*." plus the rightmost Labels labels of the
+	// queried name (RFC 4035 §5.3.2). Counting the wildcard label emitted
+	// Labels=3 for `*.example.com.`, so a validator rebuilt the owner as
+	// "*.foo.example.com." — not the name that was signed — and every
+	// wildcard-expanded answer from this signer was Bogus.
 	labelCount := len(splitLabels(ownerName))
+	if strings.HasPrefix(ownerName, "*.") {
+		labelCount--
+	}
 	if labelCount > 0xff {
 		return nil, fmt.Errorf("owner name has too many labels for RRSIG: %d (max 255)", labelCount)
 	}
@@ -638,9 +648,58 @@ func (s *Signer) createSignedData(rrSet []*protocol.ResourceRecord, rrsig *proto
 }
 
 // generateNSEC creates NSEC records for the zone.
+// emptyNonTerminals returns the names in this zone that exist only as empty
+// non-terminals: names with descendants but no records of their own.
+//
+// The denial chain must cover them. RFC 4035 §3.1.3.1 proves a NODATA answer
+// with a denial record AT the queried name, and this server answers NODATA for
+// an empty non-terminal rather than NXDOMAIN (Zone.NodeExists, used by
+// cmd/nothingdns/authoritative.go); RFC 5155 §8.5 needs the NSEC3 whose owner
+// hash matches the QNAME. A chain built only from the owner names present in
+// the record list leaves every empty non-terminal unprovable, so a validating
+// resolver rejects the negative answer it is served.
+//
+// Names are returned in the presentation form of the owner they were derived
+// from, matching how the chain generators key their maps.
+func (s *Signer) emptyNonTerminals(records []*protocol.ResourceRecord) []string {
+	apex := strings.ToLower(s.zone)
+	seen := make(map[string]struct{})
+	var out []string
+
+	for _, rr := range records {
+		if rr == nil || rr.Name == nil {
+			continue
+		}
+		name := rr.Name.String()
+		for {
+			idx := strings.IndexByte(name, '.')
+			if idx < 0 || idx+1 >= len(name) {
+				break
+			}
+			name = name[idx+1:]
+			if strings.EqualFold(name, apex) || !strings.HasSuffix(strings.ToLower(name), "."+apex) {
+				break
+			}
+			if _, dup := seen[name]; dup {
+				// The rest of this chain was walked already.
+				break
+			}
+			seen[name] = struct{}{}
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
 func (s *Signer) generateNSEC(records []*protocol.ResourceRecord) []*protocol.ResourceRecord {
-	// Collect unique owner names and their types
+	// Collect unique owner names and their types. Empty non-terminals own no
+	// records, so they are seeded separately — a NODATA answer for one of them
+	// needs an NSEC at the name itself.
 	nameTypes := make(map[string]map[uint16]bool)
+
+	for _, name := range s.emptyNonTerminals(records) {
+		nameTypes[name] = make(map[uint16]bool)
+	}
 
 	for _, rr := range records {
 		name := rr.Name.String()
@@ -723,6 +782,13 @@ func (s *Signer) generateNSEC3(records []*protocol.ResourceRecord) []*protocol.R
 		hasOther bool // other records requiring authenticated denial
 	}
 	nameInfos := make(map[string]*nameInfo)
+
+	// Empty non-terminals own no records, so seed them explicitly: a NODATA
+	// answer for one of them needs the NSEC3 whose owner hash matches its name
+	// (RFC 5155 §8.5), and without an entry here the chain omits it entirely.
+	for _, name := range s.emptyNonTerminals(records) {
+		nameInfos[name] = &nameInfo{original: name}
+	}
 
 	for _, rr := range records {
 		name := rr.Name.String()

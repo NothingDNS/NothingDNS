@@ -25,6 +25,10 @@ func (r *RDataNSEC3PARAM) Pack(buf []byte, offset int) (int, error) {
 		return 0, fmt.Errorf("nil NSEC3PARAM record")
 	}
 
+	if offset < 0 || offset > len(buf) {
+		return 0, ErrBufferTooSmall
+	}
+
 	startOffset := offset
 
 	// Hash Algorithm (1 byte)
@@ -73,6 +77,10 @@ func (r *RDataNSEC3PARAM) Pack(buf []byte, offset int) (int, error) {
 func (r *RDataNSEC3PARAM) Unpack(buf []byte, offset int, rdlength uint16) (int, error) {
 	if r == nil {
 		return 0, fmt.Errorf("nil NSEC3PARAM record")
+	}
+
+	if offset < 0 || offset > len(buf) || int(rdlength) > len(buf)-offset {
+		return 0, ErrBufferTooSmall
 	}
 
 	startOffset := offset

@@ -111,8 +111,11 @@ func TestWriteZoneAPIRecordsExportNSAndTXTOnce(t *testing.T) {
 			txt = r.RData
 		}
 	}
-	if txt != "v=spf1 mx -all" {
-		t.Fatalf("round-tripped TXT = %q, want v=spf1 mx -all", txt)
+	// Round 040: the parser stores character-string RDATA in its canonical
+	// quoted form, so a re-parsed export carries the quotes while the VALUE is
+	// unchanged (protocol.ParseRDataText unpacks one string "v=spf1 mx -all").
+	if txt != `"v=spf1 mx -all"` {
+		t.Fatalf("round-tripped TXT = %q, want %q", txt, `"v=spf1 mx -all"`)
 	}
 }
 

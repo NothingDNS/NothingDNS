@@ -161,7 +161,7 @@ func (t *TLV) Pack(buf []byte, offset int) (int, error) {
 	if err := t.validateLength(); err != nil {
 		return 0, err
 	}
-	if offset+t.Size() > len(buf) {
+	if offset < 0 || offset > len(buf) || t.Size() > len(buf)-offset {
 		return 0, fmt.Errorf("buffer too small for TLV")
 	}
 
@@ -181,7 +181,7 @@ func (t *TLV) validateLength() error {
 
 // UnpackTLV deserializes a TLV from wire format.
 func UnpackTLV(buf []byte, offset int) (*TLV, int, error) {
-	if offset+4 > len(buf) {
+	if offset < 0 || offset > len(buf) || len(buf)-offset < 4 {
 		return nil, 0, fmt.Errorf("buffer too small for TLV header")
 	}
 
@@ -190,7 +190,7 @@ func UnpackTLV(buf []byte, offset int) (*TLV, int, error) {
 		Length: binary.BigEndian.Uint16(buf[offset+2:]),
 	}
 
-	if offset+4+int(tlv.Length) > len(buf) {
+	if int(tlv.Length) > len(buf)-offset-4 {
 		return nil, 0, fmt.Errorf("buffer too small for TLV value")
 	}
 
@@ -444,6 +444,12 @@ func (m *Manager) CreateSession(conn net.Conn) (*Session, error) {
 
 	m.sessionsMu.Lock()
 	defer m.sessionsMu.Unlock()
+
+	select {
+	case <-m.stopCh:
+		return nil, fmt.Errorf("dso: manager stopped")
+	default:
+	}
 
 	if len(m.sessions) >= m.maxSessions {
 		return nil, fmt.Errorf("%w: %d", ErrMaxSessions, m.maxSessions)

@@ -399,7 +399,8 @@ func (s *Store) GenerateToken(username string, expiry time.Duration) (*Token, er
 	}
 
 	s.tokens[token] = t
-	return t, nil
+	result := *t
+	return &result, nil
 }
 
 // signToken creates an HMAC-SHA512 signature for a token.

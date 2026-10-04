@@ -169,12 +169,18 @@ func (g *AnycastGroup) RemoveBackend(physicalIP string) {
 	defer g.mu.Unlock()
 
 	filtered := make([]*AnycastBackend, 0, len(g.Backends))
-	for _, b := range g.Backends {
+	active := atomic.LoadUint32(&g.activeIndex)
+	newActive := uint32(0)
+	for i, b := range g.Backends {
 		if b != nil && b.PhysicalIP != physicalIP {
+			if uint32(i) == active {
+				newActive = uint32(len(filtered))
+			}
 			filtered = append(filtered, b)
 		}
 	}
 	g.Backends = filtered
+	atomic.StoreUint32(&g.activeIndex, newActive)
 }
 
 // GetActiveBackend returns the currently active backend (for failover).

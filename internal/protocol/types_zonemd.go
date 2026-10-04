@@ -5,6 +5,7 @@
 package protocol
 
 import (
+	"encoding/hex"
 	"fmt"
 )
 
@@ -99,11 +100,7 @@ func (r *RDataZONEMD) String() string {
 		return ""
 	}
 
-	digestStr := ""
-	for _, b := range r.Digest {
-		digestStr += fmt.Sprintf("%02x", b)
-	}
-	return fmt.Sprintf("%d %d %d %s", r.Serial, r.Scheme, r.Algorithm, digestStr)
+	return fmt.Sprintf("%d %d %d %s", r.Serial, r.Scheme, r.Algorithm, hex.EncodeToString(r.Digest))
 }
 
 // Copy creates a deep copy of the ZONEMD record.

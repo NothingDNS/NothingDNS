@@ -686,8 +686,33 @@ func (s *XoTServer) buildIncrementalIXFR(entries []*IXFRJournalEntry, z *zone.Zo
 		return s.generateAXFRRecords(z)
 	}
 
-	// Verify continuity: entry at startIdx-1 must have Serial == clientSerial
-	if startIdx > 0 && entries[startIdx-1].Serial != clientSerial {
+	// A journal entry is only a usable next version for the client when the
+	// entry immediately before the first newer one ends exactly at the
+	// client's serial:
+	//
+	//   startIdx > 0  -> the preceding entry's post-change Serial must equal
+	//                    clientSerial.
+	//   startIdx == 0 -> the client is at (or before) the oldest retained
+	//                    entry, whose PRE-change OldSerial bounds it. A client
+	//                    older than that is not covered: the journal was
+	//                    trimmed (RecordChange's maxJournalSize) or never
+	//                    spanned that far, so the changes between the client
+	//                    and entries[0] are gone. Building a delta from
+	//                    entries[0] applies the wrong diff onto the wrong base
+	//                    version and silently corrupts the secondary.
+	//
+	// The previous guard was `startIdx > 0 && entries[startIdx-1].Serial !=
+	// clientSerial`, which is vacuous when startIdx == 0 — precisely the
+	// uncovered case. Mirror IXFRServer.generateIncrementalIXFR (ixfr.go),
+	// which already answers a full AXFR here per RFC 1995 §4 / RFC 5936 §4.2.
+	uncovered := false
+	switch {
+	case startIdx > 0:
+		uncovered = entries[startIdx-1].Serial != clientSerial
+	default:
+		uncovered = entries[0].OldSerial != clientSerial
+	}
+	if uncovered {
 		// Gap in journal — fall back to AXFR
 		return s.generateAXFRRecords(z)
 	}

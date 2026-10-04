@@ -43,10 +43,22 @@ func warnUnknownNestedKeys(root *Node, cfgType reflect.Type) {
 			continue // top-level unknowns are reported by unmarshalToConfig
 		}
 		child := root.Get(key)
-		if child == nil || child.Type != NodeMapping {
+		if child == nil {
 			continue
 		}
-		walkUnknownKeys(child, key, ft)
+		switch child.Type {
+		case NodeMapping:
+			walkUnknownKeys(child, key, ft)
+		case NodeSequence:
+			if derefType(ft).Kind() != reflect.Struct {
+				continue
+			}
+			for _, item := range child.Children {
+				if item != nil && item.Type == NodeMapping {
+					walkUnknownKeys(item, key, ft)
+				}
+			}
+		}
 	}
 }
 

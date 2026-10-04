@@ -59,6 +59,9 @@ func (t *RadixTree) Find(name string) *Zone {
 	labels := splitDomainReversed(name)
 	node := t.root
 	var best *Zone
+	if rootZone := node.children["."]; rootZone != nil {
+		best = rootZone.value
+	}
 	for i := 0; i < len(labels); i++ {
 		label := labels[i]
 		if label == "" {

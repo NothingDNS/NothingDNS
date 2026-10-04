@@ -185,11 +185,13 @@ func (j *CookieJar) RotateSecret() error {
 // rotateLocked performs the rotation work assuming j.mu is already held.
 // Used by RotateSecret and by maybeRotate's locked re-check.
 func (j *CookieJar) rotateLocked() error {
-	j.previous = j.current
-	j.hasPrevious = true
-	if _, err := io.ReadFull(rand.Reader, j.current[:]); err != nil {
+	var next ServerSecret
+	if _, err := io.ReadFull(rand.Reader, next[:]); err != nil {
 		return fmt.Errorf("dnscookie: failed to generate rotated secret: %w", err)
 	}
+	j.previous = j.current
+	j.hasPrevious = true
+	j.current = next
 	j.lastRotation = time.Now()
 	return nil
 }

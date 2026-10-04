@@ -92,7 +92,7 @@ func ToASCII(domain string) (string, error) {
 		labels := strings.Split(domain, ".")
 		for _, label := range labels {
 			if label == "" {
-				continue
+				return "", ErrEmptyLabel
 			}
 			if len(label) > MaxLabelLength {
 				return "", ErrLabelTooLong
@@ -110,7 +110,7 @@ func ToASCII(domain string) (string, error) {
 
 	for _, label := range labels {
 		if label == "" {
-			continue
+			return "", ErrEmptyLabel
 		}
 
 		// Try to encode the label
@@ -167,7 +167,7 @@ func ToUnicode(domain string) (string, error) {
 
 	for _, label := range labels {
 		if label == "" {
-			continue
+			return "", ErrEmptyLabel
 		}
 
 		if strings.HasPrefix(label, ACEPrefix) {
@@ -503,6 +503,10 @@ func ValidateDomain(domain string) error {
 	domain = strings.TrimSpace(domain)
 	domain = strings.TrimSuffix(domain, ".")
 
+	if domain == "" {
+		return nil
+	}
+
 	if len(domain) > MaxNameLength {
 		return ErrNameTooLong
 	}
@@ -510,7 +514,7 @@ func ValidateDomain(domain string) error {
 	labels := strings.Split(domain, ".")
 	for _, label := range labels {
 		if label == "" {
-			continue
+			return ErrEmptyLabel
 		}
 		if err := validateLabel(label, true); err != nil {
 			return fmt.Errorf("label %q: %w", label, err)

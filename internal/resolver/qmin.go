@@ -60,5 +60,5 @@ func minimizedName(target, zoneCut string) string {
 // target name, meaning we've reached the final zone and should send
 // the original query type instead of NS.
 func isMinimizedTarget(minimized, target string) bool {
-	return strings.EqualFold(minimized, target)
+	return strings.EqualFold(strings.TrimSuffix(minimized, "."), strings.TrimSuffix(target, "."))
 }

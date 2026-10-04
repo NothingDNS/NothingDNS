@@ -36,6 +36,10 @@ func (r *RDataDS) Pack(buf []byte, offset int) (int, error) {
 		return 0, fmt.Errorf("nil DS record")
 	}
 
+	if offset < 0 || offset > len(buf) {
+		return 0, ErrBufferTooSmall
+	}
+
 	startOffset := offset
 
 	// Key Tag (2 bytes)
@@ -74,6 +78,10 @@ func (r *RDataDS) Pack(buf []byte, offset int) (int, error) {
 func (r *RDataDS) Unpack(buf []byte, offset int, rdlength uint16) (int, error) {
 	if r == nil {
 		return 0, fmt.Errorf("nil DS record")
+	}
+
+	if offset < 0 || offset > len(buf) || int(rdlength) > len(buf)-offset {
+		return 0, ErrBufferTooSmall
 	}
 
 	startOffset := offset

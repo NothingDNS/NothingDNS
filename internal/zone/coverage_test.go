@@ -1990,19 +1990,33 @@ func TestWriteZone_QuotesCharacterStringRDataRoundTrip(t *testing.T) {
 		t.Fatalf("ParseFile round-trip: %v\n%s", err, out)
 	}
 
-	gotDMARC := parsed.Records["_dmarc.example.com."][0].RData
+	// Round 040: character-string RDATA is now stored in its canonical quoted
+	// form, so the round trip is compared on the VALUE protocol.ParseRDataText
+	// packs (what goes on the wire), not on the storage representation.
+	roundTripValue := func(t *testing.T, z *Zone, owner, want string) {
+		t.Helper()
+		for _, r := range z.Records[owner] {
+			if r.Type != "TXT" && r.Type != "SPF" && r.Type != "DKIM" {
+				continue
+			}
+			rd := protocol.ParseRDataText(r.Type, r.RData)
+			txt, ok := rd.(*protocol.RDataTXT)
+			if !ok || txt == nil {
+				t.Fatalf("%s: ParseRDataText(%s, %q) = %T, want *protocol.RDataTXT",
+					owner, r.Type, r.RData, rd)
+			}
+			if len(txt.Strings) != 1 || txt.Strings[0] != want {
+				t.Fatalf("%s round-trip value = %q (stored %q), want one string %q",
+					owner, txt.Strings, r.RData, want)
+			}
+			return
+		}
+		t.Fatalf("%s: no character-string record stored after the round trip", owner)
+	}
 	wantDMARC := "v=DMARC1; p=reject; rua=mailto:dmarc@example.com"
-	if gotDMARC != wantDMARC {
-		t.Fatalf("DMARC RDATA round-trip = %q, want %q", gotDMARC, wantDMARC)
-	}
-	gotDKIM := parsed.Records["selector._domainkey.example.com."][0].RData
-	if gotDKIM != dkim {
-		t.Fatalf("DKIM RDATA round-trip = %q, want %q", gotDKIM, dkim)
-	}
-	gotSPF := parsed.Records["example.com."][0].RData
-	if gotSPF != spf {
-		t.Fatalf("SPF RDATA round-trip = %q, want %q", gotSPF, spf)
-	}
+	roundTripValue(t, parsed, "_dmarc.example.com.", wantDMARC)
+	roundTripValue(t, parsed, "selector._domainkey.example.com.", dkim)
+	roundTripValue(t, parsed, "example.com.", spf)
 }
 
 // ============================================================================

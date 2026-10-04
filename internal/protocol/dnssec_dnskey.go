@@ -135,6 +135,10 @@ func (r *RDataDNSKEY) Pack(buf []byte, offset int) (int, error) {
 		return 0, fmt.Errorf("nil DNSKEY record")
 	}
 
+	if offset < 0 || offset > len(buf) {
+		return 0, ErrBufferTooSmall
+	}
+
 	startOffset := offset
 
 	// Flags (2 bytes)
@@ -173,6 +177,10 @@ func (r *RDataDNSKEY) Pack(buf []byte, offset int) (int, error) {
 func (r *RDataDNSKEY) Unpack(buf []byte, offset int, rdlength uint16) (int, error) {
 	if r == nil {
 		return 0, fmt.Errorf("nil DNSKEY record")
+	}
+
+	if offset < 0 || offset > len(buf) || int(rdlength) > len(buf)-offset {
+		return 0, ErrBufferTooSmall
 	}
 
 	startOffset := offset

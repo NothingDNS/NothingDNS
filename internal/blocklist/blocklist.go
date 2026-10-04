@@ -172,6 +172,10 @@ func (bl *Blocklist) Load() error {
 		}
 	}
 
+	for domain, entry := range bl.manualEntries {
+		bl.entries[domain] = entry
+	}
+
 	return nil
 }
 

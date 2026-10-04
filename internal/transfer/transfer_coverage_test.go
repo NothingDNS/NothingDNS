@@ -351,10 +351,7 @@ func TestAXFRClient_Transfer_FullWithTCPServer(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAXFRClient_Transfer_WithTSIG_TCPServer(t *testing.T) {
-	// This test verifies the Transfer path with TSIG key provided.
-	// Since TSIG records don't survive Pack/Unpack roundtrip in this codebase
-	// (TSIG type is not in createRData), the client will get a TSIG verification
-	// error. We verify that the error path is covered.
+	// Verify that a signed response remains verifiable after the wire roundtrip.
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("Failed to listen: %v", err)
@@ -421,10 +418,17 @@ func TestAXFRClient_Transfer_WithTSIG_TCPServer(t *testing.T) {
 	}()
 
 	axfrClient := NewAXFRClient(addr, WithAXFRTimeout(5*time.Second), WithAXFRKeyStore(NewKeyStore()))
-	_, err = axfrClient.Transfer("example.com.", key)
-	// TSIG verification will fail due to Pack/Unpack roundtrip issue
-	if err == nil {
-		t.Error("Expected TSIG verification error from Pack/Unpack roundtrip")
+	records, err := axfrClient.Transfer("example.com.", key)
+	if err != nil {
+		t.Fatalf("Signed transfer failed: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("Expected two SOA records, got %d", len(records))
+	}
+	for _, record := range records {
+		if record.Type != protocol.TypeSOA {
+			t.Errorf("Expected SOA record, got %v", record.Type)
+		}
 	}
 }
 

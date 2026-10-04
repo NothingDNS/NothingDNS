@@ -68,7 +68,7 @@ func (cz *CatalogZone) AddMember(member *CatalogMember) {
 // RemoveMember removes a zone member by name.
 func (cz *CatalogZone) RemoveMember(zoneName string) {
 	for i, m := range cz.Members {
-		if m.ZoneName == zoneName {
+		if strings.EqualFold(m.ZoneName, zoneName) {
 			cz.Members = append(cz.Members[:i], cz.Members[i+1:]...)
 			return
 		}
@@ -78,7 +78,7 @@ func (cz *CatalogZone) RemoveMember(zoneName string) {
 // GetMember returns a member by zone name.
 func (cz *CatalogZone) GetMember(zoneName string) *CatalogMember {
 	for _, m := range cz.Members {
-		if m.ZoneName == zoneName {
+		if strings.EqualFold(m.ZoneName, zoneName) {
 			return m
 		}
 	}

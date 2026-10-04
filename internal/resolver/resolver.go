@@ -447,7 +447,13 @@ func (r *Resolver) resolve(ctx context.Context, name string, qtype uint16, cname
 					if dnameData != nil && dnameData.DName != nil {
 						dnameRR.Data = &protocol.RDataDNAME{DName: dnameData.DName.Copy()}
 					}
-					respQuestions := resp.Questions
+					responseID := resp.Header.ID
+					respQuestions := make([]*protocol.Question, 0, len(resp.Questions))
+					for _, q := range resp.Questions {
+						if q != nil {
+							respQuestions = append(respQuestions, q.Copy())
+						}
+					}
 					resp.Release()
 
 					// Synthesize a CNAME from the DNAME and chase it
@@ -471,7 +477,7 @@ func (r *Resolver) resolve(ctx context.Context, name string, qtype uint16, cname
 					// Use AcquireMessage() so the pooled object is properly tracked;
 					// callers must Release() the result when done.
 					result := protocol.AcquireMessage()
-					result.Header.ID = resp.Header.ID
+					result.Header.ID = responseID
 					result.Header.Flags = protocol.NewResponseFlags(protocol.RcodeSuccess)
 					result.Header.Flags.RA = true
 					result.Questions = respQuestions
@@ -524,6 +530,15 @@ func (r *Resolver) resolve(ctx context.Context, name string, qtype uint16, cname
 					merged = append(merged, cnameAnswers...)
 					merged = append(merged, target.Answers...)
 					target.Answers = merged
+					// The target's answer belongs to the original client's question.
+					target.Header.ID = resp.Header.ID
+					target.Questions = nil
+					target.Header.QDCount = 0
+					for _, q := range resp.Questions {
+						if q != nil {
+							target.AddQuestion(q.Copy())
+						}
+					}
 					return target, nil
 				}
 			}

@@ -730,6 +730,7 @@ func (m *MetricsCollector) Snapshot() DashboardSnapshot {
 	// samples (≈1-minute resolution). historyQueries holds the cumulative total
 	// at each snapshot, so (newest-prev)/Δt is the recent per-second rate.
 	var qps float64
+	hasRecentRate := false
 	var latency int64
 	m.historyMu.RLock()
 	if m.historyCount >= 2 {
@@ -739,6 +740,7 @@ func (m *MetricsCollector) Snapshot() DashboardSnapshot {
 		dt := float64(m.historyTimestamps[newest] - m.historyTimestamps[prev])
 		if dt > 0 && dq >= 0 {
 			qps = dq / dt
+			hasRecentRate = true
 		}
 	}
 	if m.historyCount >= 1 {
@@ -749,7 +751,7 @@ func (m *MetricsCollector) Snapshot() DashboardSnapshot {
 
 	// Fall back to the lifetime average until at least two history samples
 	// exist (the ring is populated once per minute).
-	if qps == 0 && secs > 0 {
+	if !hasRecentRate && secs > 0 {
 		qps = float64(qtotal) / float64(secs)
 	}
 

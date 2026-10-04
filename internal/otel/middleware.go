@@ -1,6 +1,8 @@
 package otel
 
 import (
+	"bufio"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -31,7 +33,7 @@ func Middleware(tracer *Tracer) func(http.Handler) http.Handler {
 			// mint an unbounded set of span names.
 			ctx, span := tracer.StartSpan(ctx, r.Method+" "+spanPath(r.URL.Path))
 			if span == nil {
-				next.ServeHTTP(w, r)
+				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
 			defer tracer.EndSpan(span, nil)
@@ -119,12 +121,41 @@ func looksDynamicSegment(seg string) bool {
 
 type responseWriter struct {
 	http.ResponseWriter
-	statusCode int
+	statusCode  int
+	wroteHeader bool
+}
+
+func (rw *responseWriter) Unwrap() http.ResponseWriter {
+	return rw.ResponseWriter
+}
+
+func (rw *responseWriter) FlushError() error {
+	if !rw.wroteHeader {
+		rw.WriteHeader(http.StatusOK)
+	}
+	return http.NewResponseController(rw.ResponseWriter).Flush()
 }
 
 func (rw *responseWriter) WriteHeader(code int) {
-	rw.statusCode = code
+	if rw.wroteHeader {
+		return
+	}
+	if code >= 200 || code == http.StatusSwitchingProtocols {
+		rw.statusCode = code
+		rw.wroteHeader = true
+	}
 	rw.ResponseWriter.WriteHeader(code)
+}
+
+func (rw *responseWriter) Write(p []byte) (int, error) {
+	if !rw.wroteHeader {
+		rw.WriteHeader(http.StatusOK)
+	}
+	return rw.ResponseWriter.Write(p)
+}
+
+func (rw *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return http.NewResponseController(rw.ResponseWriter).Hijack()
 }
 
 // TraceHandler wraps an HTTP handler with tracing, extracting the W3C
@@ -139,7 +170,7 @@ func TraceHandler(tracer *Tracer, name string, handler http.HandlerFunc) http.Ha
 		ctx := otelPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
 		ctx, span := tracer.StartSpan(ctx, name)
 		if span == nil {
-			handler(w, r)
+			handler(w, r.WithContext(ctx))
 			return
 		}
 		defer tracer.EndSpan(span, nil)

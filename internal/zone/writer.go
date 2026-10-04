@@ -51,11 +51,12 @@ func WriteZone(z *Zone) (string, error) {
 		if strings.ToUpper(r.Type) != "NS" {
 			continue
 		}
-		ttl := r.TTL
-		if ttl == 0 {
-			ttl = z.DefaultTTL
-		}
-		b.WriteString(fmt.Sprintf("@\t%d\tIN\tNS\t%s\n", ttl, stripZoneControlChars(r.RData)))
+		// TTL is written verbatim: Records holds parsed records, and the
+		// parser assigns DefaultTTL itself when a line carried no TTL field,
+		// so a stored 0 is an explicit "do not cache" (RFC 2181 §8) — see
+		// parseRecordOwned. Substituting DefaultTTL here silently changed
+		// every exported, persisted and cluster-snapshotted zone.
+		b.WriteString(fmt.Sprintf("@\t%d\tIN\tNS\t%s\n", r.TTL, stripZoneControlChars(r.RData)))
 		apexNS++
 	}
 	if apexNS == 0 {
@@ -88,13 +89,10 @@ func WriteZone(z *Zone) (string, error) {
 			}
 
 			rname := stripZoneControlChars(relativize(r.Name, z.Origin))
-			ttl := r.TTL
-			if ttl == 0 {
-				ttl = z.DefaultTTL
-			}
-
+			// TTL verbatim — see the apex-NS loop above: a stored 0 is an
+			// explicit "do not cache" (RFC 2181 §8), not an absent TTL.
 			b.WriteString(fmt.Sprintf("%s\t%d\t%s\t%s\t%s\n",
-				rname, ttl, r.Class, r.Type, formatRDataForZone(r)))
+				rname, r.TTL, r.Class, r.Type, formatRDataForZone(r)))
 		}
 	}
 

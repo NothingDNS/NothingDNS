@@ -274,6 +274,10 @@ func (h *Handler) handleGET(r *http.Request) ([]byte, error) {
 		return nil, fmt.Errorf("invalid base64 encoding")
 	}
 
+	if len(data) > MaxDNSMessageSize {
+		return nil, fmt.Errorf("dns message too large (max %d bytes)", MaxDNSMessageSize)
+	}
+
 	return data, nil
 }
 

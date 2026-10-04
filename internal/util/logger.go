@@ -61,6 +61,7 @@ type Logger struct {
 	output     io.Writer
 	fields     Fields
 	mu         sync.RWMutex
+	writeMu    *sync.Mutex
 	timeFormat string
 }
 
@@ -74,6 +75,7 @@ func NewLogger(level LogLevel, format LogFormat, output io.Writer) *Logger {
 		format:     format,
 		output:     output,
 		fields:     make(Fields),
+		writeMu:    &sync.Mutex{},
 		timeFormat: time.RFC3339,
 	}
 }
@@ -130,6 +132,7 @@ func (l *Logger) WithField(key string, value interface{}) *Logger {
 		format:     l.format,
 		output:     l.output,
 		fields:     newFields,
+		writeMu:    l.writeMu,
 		timeFormat: l.timeFormat,
 	}
 }
@@ -152,6 +155,7 @@ func (l *Logger) WithFields(fields Fields) *Logger {
 		format:     l.format,
 		output:     l.output,
 		fields:     newFields,
+		writeMu:    l.writeMu,
 		timeFormat: l.timeFormat,
 	}
 }
@@ -193,7 +197,9 @@ func (l *Logger) log(level LogLevel, msg string, fields ...Fields) {
 		output = l.formatText(allFields)
 	}
 
+	l.writeMu.Lock()
 	fmt.Fprintln(l.output, output)
+	l.writeMu.Unlock()
 
 	if level == FATAL {
 		osExitFn(1)

@@ -550,6 +550,16 @@ func (m *Manager) AddRecord(zoneName string, record Record) error {
 	// Key by the absolute owner name (relative to the zone origin), matching
 	// the parser — so a relative "api" resolves as "api.<origin>".
 	record.Name = qualifyName(record.Name, z.Origin)
+	// An absolute name from outside the zone passes through qualifyName
+	// unchanged (makeAbsolute returns any dotted name as-is), and storing it
+	// would put out-of-zone data into the zone's data set — which is written to
+	// the zone file, shipped by AXFR/IXFR and signed into the NSEC/NSEC3 denial
+	// chain. nameInZone is the package's own predicate and is label-boundary
+	// aware, so "notexample.com." is correctly outside "example.com.".
+	if !nameInZone(record.Name, z.Origin) {
+		z.Unlock()
+		return fmt.Errorf("record owner %s is outside zone %s", record.Name, z.Origin)
+	}
 	z.Records[record.Name] = append(z.Records[record.Name], record)
 	IncrementSerial(z)
 	z.Unlock()
@@ -656,6 +666,13 @@ func (m *Manager) UpdateRecord(zoneName string, name, rtype, oldData string, new
 
 	name = qualifyName(name, z.Origin)
 	newRecord.Name = qualifyName(newRecord.Name, z.Origin)
+	// Same in-zone requirement as AddRecord: the replacement record's owner is
+	// what gets stored (and later written, transferred and signed), so an
+	// update must not be the way a foreign name enters the zone's data set.
+	if !nameInZone(name, z.Origin) || !nameInZone(newRecord.Name, z.Origin) {
+		z.Unlock()
+		return fmt.Errorf("record owner %s is outside zone %s", newRecord.Name, z.Origin)
+	}
 	records, ok := z.Records[name]
 	if !ok {
 		z.Unlock()

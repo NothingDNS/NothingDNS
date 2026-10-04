@@ -439,6 +439,14 @@ func (wal *WAL) AppendBatch(entries []WALEntry) error {
 		return err
 	}
 
+	// Match Append's recovery size bound before writing any batch markers.
+	for _, entry := range entries {
+		entrySize := int64(WALHeaderSize + len(entry.Data))
+		if entrySize > wal.opts.MaxSegmentSize {
+			return fmt.Errorf("%w: entry %d bytes > segment max %d", ErrEntryTooLarge, entrySize, wal.opts.MaxSegmentSize)
+		}
+	}
+
 	// Write begin marker
 	beginData := make([]byte, 8)
 	binary.BigEndian.PutUint64(beginData, uint64(len(entries)))
@@ -601,9 +609,10 @@ func (wal *WAL) ReadAll() ([]WALEntry, error) {
 	defer wal.mu.Unlock()
 
 	var entries []WALEntry
+	var batch walReadBatch
 
 	for _, segment := range wal.segments {
-		segEntries, err := wal.readSegment(segment)
+		segEntries, err := wal.readSegment(segment, &batch)
 		if err != nil {
 			return nil, fmt.Errorf("read segment %d: %w", segment.ID, err)
 		}
@@ -613,11 +622,14 @@ func (wal *WAL) ReadAll() ([]WALEntry, error) {
 	return entries, nil
 }
 
-// readSegment reads all entries from a single segment.
-// Only entries from committed batches are returned. A partial batch
-// (Begin without a matching Commit, or followed by Abort) is discarded
-// on both Abort markers and at segment end.
-func (wal *WAL) readSegment(segment *WALSegment) ([]WALEntry, error) {
+type walReadBatch struct {
+	inBatch bool
+	pending []WALEntry
+}
+
+// readSegment carries batch state across segments for ReadAll. A normal
+// rotation can split a batch; only Commit makes its buffered entries visible.
+func (wal *WAL) readSegment(segment *WALSegment, batch *walReadBatch) ([]WALEntry, error) {
 	file, err := os.Open(segment.Path)
 	if err != nil {
 		return nil, fmt.Errorf("open segment: %w", err)
@@ -627,17 +639,6 @@ func (wal *WAL) readSegment(segment *WALSegment) ([]WALEntry, error) {
 	var entries []WALEntry
 	buf := make([]byte, 4096)
 	pos := int64(0)
-
-	// inBatch tracks whether the reader is inside a batch, and pending holds
-	// that batch's entries. AppendBatch writes [Begin, entry..., Commit], so a
-	// batch is only known to be committed once its Commit marker is read: its
-	// entries are buffered here and appended at that point. Appending them as
-	// they are seen would also admit a batch that never commits, and skipping
-	// them until after the Commit dropped a committed batch entirely.
-	// Entries still pending at segment end belong to a torn, uncommitted batch
-	// and are correctly discarded.
-	inBatch := false
-	var pending []WALEntry
 
 	for {
 		// Read header
@@ -651,6 +652,7 @@ func (wal *WAL) readSegment(segment *WALSegment) ([]WALEntry, error) {
 		// full 9-byte header. Treat that as the end of the valid log and
 		// discard any uncommitted batch in progress.
 		if errors.Is(err, io.ErrUnexpectedEOF) {
+			*batch = walReadBatch{}
 			break
 		}
 		if err != nil {
@@ -662,6 +664,7 @@ func (wal *WAL) readSegment(segment *WALSegment) ([]WALEntry, error) {
 		// Defensively bound the entry size before allocating — a corrupt
 		// header could claim a 4 GiB body and OOM us.
 		if int64(length) > wal.opts.MaxSegmentSize {
+			*batch = walReadBatch{}
 			break
 		}
 
@@ -677,6 +680,7 @@ func (wal *WAL) readSegment(segment *WALSegment) ([]WALEntry, error) {
 		// Partial trailing entry (some header, not enough body) — same
 		// torn-write story; stop and discard any uncommitted batch.
 		if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+			*batch = walReadBatch{}
 			break
 		}
 		if err != nil {
@@ -687,6 +691,7 @@ func (wal *WAL) readSegment(segment *WALSegment) ([]WALEntry, error) {
 		entry, err := wal.decodeEntry(buf)
 		if err != nil {
 			// Corrupted entry, stop reading
+			*batch = walReadBatch{}
 			break
 		}
 
@@ -694,22 +699,22 @@ func (wal *WAL) readSegment(segment *WALSegment) ([]WALEntry, error) {
 		switch entry.Type {
 		case EntryTypeBegin:
 			// A new batch starts; discard any previously uncommitted one.
-			inBatch = true
-			pending = pending[:0]
+			batch.inBatch = true
+			batch.pending = batch.pending[:0]
 		case EntryTypeCommit:
 			// Batch is now committed — its entries become durable.
-			entries = append(entries, pending...)
-			pending = pending[:0]
-			inBatch = false
+			entries = append(entries, batch.pending...)
+			batch.pending = batch.pending[:0]
+			batch.inBatch = false
 		case EntryTypeAbort:
 			// Batch was rolled back — discard its entries.
-			pending = pending[:0]
-			inBatch = false
+			batch.pending = batch.pending[:0]
+			batch.inBatch = false
 		default:
 			// An entry inside a batch is held until the batch commits; one
 			// outside any batch is standalone and is kept immediately.
-			if inBatch {
-				pending = append(pending, *entry)
+			if batch.inBatch {
+				batch.pending = append(batch.pending, *entry)
 			} else {
 				entries = append(entries, *entry)
 			}

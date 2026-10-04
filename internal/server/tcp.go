@@ -238,6 +238,9 @@ func (s *TCPServer) decrementIPConn(ip string) {
 // Reads are sequential (TCP requires this), but message processing is concurrent
 // up to TCPMaxPipelineQueries in-flight queries (TCP pipelining).
 func (s *TCPServer) handleConnection(conn net.Conn) {
+	// Cancel blocked reads as well as the accept loop during shutdown.
+	stopClose := context.AfterFunc(s.ctx, func() { conn.Close() })
+	defer stopClose()
 	var writeMu sync.Mutex
 	var wg sync.WaitGroup
 	pipeSem := make(chan struct{}, TCPMaxPipelineQueries)
@@ -302,6 +305,9 @@ func (s *TCPServer) handleConnection(conn net.Conn) {
 // handleMessage processes a single DNS message over TCP.
 // writeMu serializes writes on the connection to prevent interleaving during pipelining.
 func (s *TCPServer) handleMessage(conn net.Conn, data []byte, writeMu *sync.Mutex) {
+	if s.ctx.Err() != nil {
+		return
+	}
 	// L-2: per-goroutine recover so a panic in UnpackMessage / EDNS0
 	// parsing — both of which run before any ServeDNSWithRecovery
 	// wrapper sees the message — can't crash the daemon. The

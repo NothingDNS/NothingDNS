@@ -98,6 +98,17 @@ func (h *integratedHandler) denialRecords(z *zone.Zone, qname string, kind denia
 		if data, ok := z.NSECForName(qname); ok {
 			return []zone.NSECRecordData{data}
 		}
+		// RFC 4035 §3.1.3.4 (Wildcard No Data): a wildcard match with no records
+		// of the requested type. The queried name is not a zone node — only the
+		// wildcard owner is — so NSECForName(qname) above cannot find a proof and
+		// the type-absence proof must come from the wildcard itself. Without this
+		// the answer carried a signed SOA and no NSEC, and a validating resolver
+		// marked the NODATA Bogus.
+		if encloser, ok := z.ClosestEncloser(qname); ok {
+			if data, ok := z.NSECForName("*." + encloser); ok {
+				return []zone.NSECRecordData{data}
+			}
+		}
 		return nil
 	}
 

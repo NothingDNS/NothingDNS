@@ -273,11 +273,26 @@ func parseSOAFromRData(rdata string) *SOARecord {
 		return nil // Return nil on parse failure
 	}
 
-	serial, _ := parseUint32(fields[2])
-	refresh, _ := parseTTLValue(fields[3])
-	retry, _ := parseTTLValue(fields[4])
-	expire, _ := parseTTLValue(fields[5])
-	minimum, _ := parseTTLValue(fields[6])
+	serial, err := parseUint32(fields[2])
+	if err != nil {
+		return nil
+	}
+	refresh, err := parseTTLValue(fields[3])
+	if err != nil {
+		return nil
+	}
+	retry, err := parseTTLValue(fields[4])
+	if err != nil {
+		return nil
+	}
+	expire, err := parseTTLValue(fields[5])
+	if err != nil {
+		return nil
+	}
+	minimum, err := parseTTLValue(fields[6])
+	if err != nil {
+		return nil
+	}
 
 	return &SOARecord{
 		MName:   fields[0],

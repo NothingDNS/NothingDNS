@@ -325,19 +325,29 @@ func splitHorizonStage(h *integratedHandler) Stage {
 			return false, nil
 		}
 
-		inView := false
+		// The view's zones are held in a map, so a bare range would decide which
+		// zone answers by Go's randomized iteration order. Answer from the most
+		// specific (longest) matching origin, exactly as ZoneProvider.FindZones
+		// documents (zone_provider.go:16-18) and authoritativeStage relies on:
+		// with both example.com. and sub.example.com. in one view, the parent's
+		// delegation NS RRset would otherwise answer a name the child zone owns
+		// with a referral, non-deterministically.
+		var viewMatches []ZoneMatch
 		for origin, z := range vzMap {
 			if !isSubdomain(q.qname, origin) {
 				continue
 			}
-			inView = true
-			h.logger.Debugf("View %s: checking zone %s for %s", view.Name, origin, q.qname)
-			if h.handleAuthoritative(z, w, q.msg, q.q, q.qname) {
+			viewMatches = append(viewMatches, ZoneMatch{Origin: origin, Zone: z})
+		}
+		if len(viewMatches) == 0 {
+			return false, nil
+		}
+		sortZonesByLength(viewMatches)
+		for _, m := range viewMatches {
+			h.logger.Debugf("View %s: checking zone %s for %s", view.Name, m.Origin, q.qname)
+			if h.handleAuthoritative(m.Zone, w, q.msg, q.q, q.qname) {
 				return true, nil
 			}
-		}
-		if !inView {
-			return false, nil
 		}
 
 		// handleAuthoritative returns false when the name carries a CNAME, as
@@ -869,15 +879,25 @@ func isNilPipelineRData(data protocol.RData) bool {
 	}
 }
 
-// noUpstreamStage is the terminal stage when no upstream is configured.
-// Returns NXDOMAIN with EDE per RFC 8914 §4.21.
+// noUpstreamStage is the terminal stage when neither an upstream nor an
+// iterative resolver is configured: the server has no path to the name and no
+// basis for a definitive answer, so it reports a transient failure.
+//
+// It must NOT answer NXDOMAIN. NXDOMAIN is a definitive nonexistence claim
+// (RFC 1035 §4.1.1 RCODE 3) for a name the server cannot even look up; it is
+// cacheable (RFC 2308 §5) and RFC 8020 resolvers extend it to every name below
+// the owner, so a real name gets reported as nonexistent downstream. SERVFAIL is
+// the code for "the name server was unable to process this query" (RFC 1035
+// §4.1.1 RCODE 2), which is what upstreamStage already answers when a configured
+// upstream is unreachable. EDE 20 (Not Authoritative, RFC 8914 §4.20) carries
+// the reason.
 func noUpstreamStage(h *integratedHandler) Stage {
 	return func(ctx context.Context, q *query, w server.ResponseWriter) (bool, error) {
-		h.logger.Debugf("No upstream configured, returning NXDOMAIN for %s", q.qname)
+		h.logger.Debugf("No upstream configured, returning SERVFAIL for %s", q.qname)
 		if h.metrics != nil {
-			h.metrics.RecordResponse(protocol.RcodeNameError)
+			h.metrics.RecordResponse(protocol.RcodeServerFailure)
 		}
-		sendErrorWithEDE(q.currentWriter, q.msg, protocol.RcodeNameError, protocol.EDENotAuthoritative, "no upstream configured")
+		sendErrorWithEDE(q.currentWriter, q.msg, protocol.RcodeServerFailure, protocol.EDENotAuthoritative, "no upstream configured")
 		return true, nil
 	}
 }

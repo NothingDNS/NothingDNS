@@ -26,6 +26,9 @@ func (r *RDataCAA) Type() uint16 { return TypeCAA }
 
 // Pack serializes the CAA record.
 func (r *RDataCAA) Pack(buf []byte, offset int) (int, error) {
+	if offset < 0 || offset > len(buf) {
+		return 0, ErrBufferTooSmall
+	}
 	if r == nil {
 		return 0, fmt.Errorf("nil CAA record")
 	}
@@ -143,6 +146,9 @@ func (r *RDataIPSECKEY) Type() uint16 { return TypeIPSECKEY }
 
 // Pack serializes the IPSECKEY record.
 func (r *RDataIPSECKEY) Pack(buf []byte, offset int) (int, error) {
+	if offset < 0 || offset > len(buf) {
+		return 0, ErrBufferTooSmall
+	}
 	if r == nil {
 		return 0, fmt.Errorf("nil IPSECKEY record")
 	}
@@ -336,6 +342,9 @@ func (r *RDataHIP) Type() uint16 { return TypeHIP }
 
 // Pack serializes the HIP record.
 func (r *RDataHIP) Pack(buf []byte, offset int) (int, error) {
+	if offset < 0 || offset > len(buf) {
+		return 0, ErrBufferTooSmall
+	}
 	if r == nil {
 		return 0, fmt.Errorf("nil HIP record")
 	}
@@ -501,6 +510,9 @@ func (r *RDataCERT) Type() uint16 { return TypeCERT }
 
 // Pack serializes the CERT record.
 func (r *RDataCERT) Pack(buf []byte, offset int) (int, error) {
+	if offset < 0 || offset > len(buf) {
+		return 0, ErrBufferTooSmall
+	}
 	if r == nil {
 		return 0, fmt.Errorf("nil CERT record")
 	}
@@ -593,6 +605,9 @@ func (r *RDataOPENPGPKEY) Type() uint16 { return TypeOPENPGPKEY }
 
 // Pack serializes the OPENPGPKEY record.
 func (r *RDataOPENPGPKEY) Pack(buf []byte, offset int) (int, error) {
+	if offset < 0 || offset > len(buf) {
+		return 0, ErrBufferTooSmall
+	}
 	if r == nil {
 		return 0, fmt.Errorf("nil OPENPGPKEY record")
 	}
@@ -656,6 +671,9 @@ func (r *RDataDHCID) Type() uint16 { return TypeDHCID }
 
 // Pack serializes the DHCID record.
 func (r *RDataDHCID) Pack(buf []byte, offset int) (int, error) {
+	if offset < 0 || offset > len(buf) {
+		return 0, ErrBufferTooSmall
+	}
 	if r == nil {
 		return 0, fmt.Errorf("nil DHCID record")
 	}
@@ -721,6 +739,9 @@ func (r *RDataSSHFP) Type() uint16 { return TypeSSHFP }
 
 // Pack serializes the SSHFP record.
 func (r *RDataSSHFP) Pack(buf []byte, offset int) (int, error) {
+	if offset < 0 || offset > len(buf) {
+		return 0, ErrBufferTooSmall
+	}
 	if r == nil {
 		return 0, fmt.Errorf("nil SSHFP record")
 	}
@@ -809,6 +830,9 @@ func (r *RDataTLSA) Type() uint16 { return TypeTLSA }
 
 // Pack serializes the TLSA record.
 func (r *RDataTLSA) Pack(buf []byte, offset int) (int, error) {
+	if offset < 0 || offset > len(buf) {
+		return 0, ErrBufferTooSmall
+	}
 	if r == nil {
 		return 0, fmt.Errorf("nil TLSA record")
 	}
