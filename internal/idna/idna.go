@@ -170,7 +170,7 @@ func ToUnicode(domain string) (string, error) {
 			return "", ErrEmptyLabel
 		}
 
-		if strings.HasPrefix(label, ACEPrefix) {
+		if len(label) >= len(ACEPrefix) && strings.EqualFold(label[:len(ACEPrefix)], ACEPrefix) {
 			// Punycode label
 			decoded, err := decodeLabel(label[len(ACEPrefix):])
 			if err != nil {
