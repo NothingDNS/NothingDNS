@@ -184,7 +184,7 @@ Subcommands:
 Subcommands:
   add <zone> <name> <type> <rdata>    Add a record
   remove <zone> <name> <type>         Remove records
-  update <zone> <name> <type> <rdata> Update a record`,
+  update <zone> <name> <type> <old_data> <new_data> [ttl] Update a record`,
 
 		"cache": `Usage: dnsctl cache <subcommand>
 
