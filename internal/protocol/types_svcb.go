@@ -210,7 +210,7 @@ func (r *RDataSVCB) Pack(buf []byte, offset int) (int, error) {
 	startOffset := offset
 
 	// SvcPriority (2 bytes)
-	if offset+2 > len(buf) {
+	if offset < 0 || offset > len(buf) || 2 > len(buf)-offset {
 		return 0, ErrBufferTooSmall
 	}
 	PutUint16(buf[offset:], r.Priority)
@@ -253,7 +253,7 @@ func (r *RDataSVCB) Unpack(buf []byte, offset int, rdlength uint16) (int, error)
 	startOffset := offset
 	endOffset := offset + int(rdlength)
 
-	if endOffset > len(buf) {
+	if offset < 0 || offset > len(buf) || int(rdlength) > len(buf)-offset {
 		return 0, ErrBufferTooSmall
 	}
 
