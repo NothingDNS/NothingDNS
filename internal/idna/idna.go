@@ -113,6 +113,10 @@ func ToASCII(domain string) (string, error) {
 			return "", ErrEmptyLabel
 		}
 
+		// Mapping may turn a Unicode label into plain ASCII.
+		if !isASCII(label) {
+			label = mapLabel(label)
+		}
 		// Try to encode the label
 		if isASCII(label) {
 			// ASCII label — enforce label-length cap. The pure-ASCII
