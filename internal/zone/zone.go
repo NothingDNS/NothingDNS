@@ -347,14 +347,36 @@ func (p *parser) parse() (*Zone, error) {
 			continue
 		}
 
-		// Check if this line opens a multi-line record
-		hasOpen := strings.Contains(line, "(")
-		hasClose := strings.Contains(line, ")")
-		if hasOpen && !hasClose {
+		// Only unquoted parentheses outside comments open a continuation.
+		depth := 0
+		inQuote, escaped := false, false
+		for _, ch := range stripZoneComment(line) {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == '"' {
+				inQuote = !inQuote
+				continue
+			}
+			if !inQuote {
+				switch ch {
+				case '(':
+					depth++
+				case ')':
+					depth--
+				}
+			}
+		}
+		if depth > 0 {
 			// Start accumulating a multi-line record. Capture whether the
 			// opening line was indented (owner inherited) now, before the
 			// scanner advances to the continuation/closing lines.
-			p.parenDepth = 1
+			p.parenDepth = depth
 			p.lineStart = p.lineNum
 			p.recordIndented = len(rawLine) > 0 && (rawLine[0] == ' ' || rawLine[0] == '\t')
 			// Strip comments from first line — quote-aware, same as the
