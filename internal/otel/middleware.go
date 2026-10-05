@@ -130,10 +130,14 @@ func (rw *responseWriter) Unwrap() http.ResponseWriter {
 }
 
 func (rw *responseWriter) FlushError() error {
-	if !rw.wroteHeader {
-		rw.WriteHeader(http.StatusOK)
+	err := http.NewResponseController(rw.ResponseWriter).Flush()
+	if err == nil && !rw.wroteHeader {
+		// A successful flush commits the underlying writer's default status.
+		// A failed flush must leave the handler free to write an error status.
+		rw.statusCode = http.StatusOK
+		rw.wroteHeader = true
 	}
-	return http.NewResponseController(rw.ResponseWriter).Flush()
+	return err
 }
 
 func (rw *responseWriter) WriteHeader(code int) {
