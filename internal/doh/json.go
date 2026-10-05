@@ -58,6 +58,9 @@ func EncodeJSON(msg *protocol.Message) ([]byte, error) {
 		AD:     msg.Header.Flags.AD,
 		CD:     msg.Header.Flags.CD,
 	}
+	if edns := protocol.ParseEDNS0Header(msg.GetOPT()); edns != nil {
+		resp.Status = int(edns.ExtendedRCODE)<<4 | int(msg.Header.Flags.RCODE&0x0F)
+	}
 
 	// Encode questions
 	for _, q := range msg.Questions {
