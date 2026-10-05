@@ -18,7 +18,7 @@ Error generating stack: `+e.message+`
             })));
           }
         }
-        
+
         if (${n}.value === undefined) {
           if (${o} in input) {
             newResult[${o}] = undefined;
@@ -26,7 +26,7 @@ Error generating stack: `+e.message+`
         } else {
           newResult[${o}] = ${n}.value;
         }
-        
+
       `):c?t.write(`
         if (${n}.issues.length) {
           payload.issues = payload.issues.concat(${n}.issues.map(iss => ({
@@ -34,7 +34,7 @@ Error generating stack: `+e.message+`
             path: iss.path ? [${o}, ...iss.path] : [${o}]
           })));
         }
-        
+
         if (${n}.value === undefined) {
           if (${o} in input) {
             newResult[${o}] = undefined;
@@ -42,7 +42,7 @@ Error generating stack: `+e.message+`
         } else {
           newResult[${o}] = ${n}.value;
         }
-        
+
       `):t.write(`
         const ${n}_present = ${o} in input;
         if (${n}.issues.length) {

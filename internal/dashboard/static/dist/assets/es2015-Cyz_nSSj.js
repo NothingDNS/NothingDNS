@@ -15,23 +15,23 @@ import{a as e,c as t,d as n,l as r}from"./dist-CsdpU__Z.js";import{r as i}from".
     margin-right: ${s}px ${r};
     `,n===`padding`&&`padding-right: ${s}px ${r};`].filter(Boolean).join(``)}
   }
-  
+
   .${L} {
     right: ${s}px ${r};
   }
-  
+
   .${R} {
     margin-right: ${s}px ${r};
   }
-  
+
   .${L} .${L} {
     right: 0 ${r};
   }
-  
+
   .${R} .${R} {
     margin-right: 0 ${r};
   }
-  
+
   body[${W}] {
     ${Oe}: ${s}px;
   }
