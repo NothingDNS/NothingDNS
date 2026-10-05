@@ -593,11 +593,9 @@ func (e *Engine) QNAMEPolicy(qname string) *Rule {
 		qname = strings.ToLower(qname)
 	}
 
-	// Exact match
-	if rule, ok := e.qnameRules[qname]; ok {
-		atomic.AddUint64(&e.matches, 1)
-		return rule
-	}
+	// Policy priority takes precedence over name specificity. On equal
+	// priorities, keep the exact match or closest wildcard encountered first.
+	best := e.qnameRules[qname]
 
 	// Wildcard/suffix matching: walk up domain labels
 	// e.g., for "www.ads.example.com", check:
@@ -610,13 +608,15 @@ func (e *Engine) QNAMEPolicy(qname string) *Rule {
 		qname = qname[dot+1:]
 		wildcard := "*." + qname
 
-		if rule, ok := e.qnameRules[wildcard]; ok {
-			atomic.AddUint64(&e.matches, 1)
-			return rule
+		if rule, ok := e.qnameRules[wildcard]; ok && (best == nil || rule.Priority < best.Priority) {
+			best = rule
 		}
 	}
 
-	return nil
+	if best != nil {
+		atomic.AddUint64(&e.matches, 1)
+	}
+	return best
 }
 
 // ClientIPPolicy evaluates RPZ policy based on client IP.
