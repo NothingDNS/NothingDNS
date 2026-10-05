@@ -12,6 +12,9 @@ function isIPv4(value: string): boolean {
 
 function isIPv6(value: string): boolean {
 	if (!/^[0-9a-fA-F:.]+$/.test(value) || !value.includes(':')) return false;
+	if (value.includes(':::')) return false;
+	if (value.startsWith(':') && !value.startsWith('::')) return false;
+	if (value.endsWith(':') && !value.endsWith('::')) return false;
 	const doubleColons = value.split('::').length - 1;
 	if (doubleColons > 1) return false;
 	let groups = value.split(':');

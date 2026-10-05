@@ -11,6 +11,6 @@ const roleOrder: Record<Role, number> = { viewer: 0, operator: 1, admin: 2 };
 // so unknown/missing roles fail open rather than bricking the UI (e.g. legacy
 // single-token sessions that carry no role).
 export function hasMinRole(role: string | null, min: Role): boolean {
-  if (role === null || !(role in roleOrder)) return true;
+  if (role === null || !Object.hasOwn(roleOrder, role)) return true;
   return roleOrder[role as Role] >= roleOrder[min];
 }
