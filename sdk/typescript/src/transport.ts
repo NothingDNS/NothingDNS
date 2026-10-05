@@ -140,49 +140,51 @@ export class Transport {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
 
-    let response: Response;
     try {
-      response = await this.fetchImpl(url, {
-        method,
-        headers: this.buildHeaders(),
-        body: options.body === undefined ? undefined : JSON.stringify(options.body),
-        signal: this.signal
-          ? AbortSignal.any([controller.signal, this.signal])
-          : controller.signal,
-      });
-    } catch (cause) {
-      if (cause instanceof Error && cause.name === 'AbortError') {
-        throw new NothingDNSConnectionError(
-          `NothingDNS request to ${url} timed out after ${this.timeoutMs} ms`,
+      let response: Response;
+      try {
+        response = await this.fetchImpl(url, {
+          method,
+          headers: this.buildHeaders(),
+          body: options.body === undefined ? undefined : JSON.stringify(options.body),
+          signal: this.signal
+            ? AbortSignal.any([controller.signal, this.signal])
+            : controller.signal,
+        });
+      } catch (cause) {
+        if (cause instanceof Error && cause.name === 'AbortError') {
+          throw new NothingDNSConnectionError(
+            `NothingDNS request to ${url} timed out after ${this.timeoutMs} ms`,
+            cause,
+          );
+        }
+        throw new NothingDNSConnectionError(`Could not reach NothingDNS at ${url}`, cause);
+      }
+
+      if (!response.ok) {
+        throw await apiErrorFrom(response);
+      }
+
+      if (options.raw) {
+        return (await response.text()) as unknown as T;
+      }
+      const text = await response.text();
+      if (!text) return undefined as unknown as T;
+      try {
+        return JSON.parse(text) as T;
+      } catch (cause) {
+        if (options.expectJson === false) {
+          // "Don't demand JSON": an unparseable acknowledgement body is
+          // tolerated and reported as absent.
+          return undefined as unknown as T;
+        }
+        throw new NothingDNSValidationError(
+          `NothingDNS returned a non-JSON body for ${method} ${url}: ${text.slice(0, 200)}`,
           cause,
         );
       }
-      throw new NothingDNSConnectionError(`Could not reach NothingDNS at ${url}`, cause);
     } finally {
       clearTimeout(timeout);
-    }
-
-    if (!response.ok) {
-      throw await apiErrorFrom(response);
-    }
-
-    if (options.raw) {
-      return (await response.text()) as unknown as T;
-    }
-    const text = await response.text();
-    if (!text) return undefined as unknown as T;
-    try {
-      return JSON.parse(text) as T;
-    } catch (cause) {
-      if (options.expectJson === false) {
-        // "Don't demand JSON": an unparseable acknowledgement body is
-        // tolerated and reported as absent.
-        return undefined as unknown as T;
-      }
-      throw new NothingDNSValidationError(
-        `NothingDNS returned a non-JSON body for ${method} ${url}: ${text.slice(0, 200)}`,
-        cause,
-      );
     }
   }
 
