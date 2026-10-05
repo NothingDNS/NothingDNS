@@ -34,6 +34,14 @@ func WriteZone(z *Zone) (string, error) {
 		if ttl == 0 {
 			ttl = z.DefaultTTL
 		}
+		// Parsed records retain explicit zero TTLs; the SOA-only fallback above
+		// remains for programmatically constructed zones without an apex record.
+		for _, rec := range z.Records[z.Origin] {
+			if strings.EqualFold(rec.Type, "SOA") {
+				ttl = rec.TTL
+				break
+			}
+		}
 		b.WriteString(fmt.Sprintf("@\t%d\tIN\tSOA\t%s %s (\n", ttl, z.SOA.MName, z.SOA.RName))
 		b.WriteString(fmt.Sprintf("\t\t%d\t; serial\n", z.SOA.Serial))
 		b.WriteString(fmt.Sprintf("\t\t%d\t; refresh\n", z.SOA.Refresh))

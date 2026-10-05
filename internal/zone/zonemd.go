@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
 )
@@ -111,6 +112,13 @@ func collectZoneRRsets(z *Zone) ([][]byte, error) {
 		soaTTL := z.SOA.TTL
 		if soaTTL == 0 {
 			soaTTL = z.DefaultTTL
+		}
+		// Use the stored SOA TTL verbatim, including an explicit zero.
+		for _, rec := range z.Records[z.Origin] {
+			if strings.EqualFold(rec.Type, "SOA") {
+				soaTTL = rec.TTL
+				break
+			}
 		}
 		rrset, err := buildCanonicalRRset(z.Origin, typeSOA, soaTTL, [][]byte{soaRdata})
 		if err != nil {
