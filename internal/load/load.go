@@ -96,6 +96,12 @@ func (r *Runner) Run(ctx context.Context) *Result {
 		}
 	}
 
+	// Each run reports its own workload, including when a Runner is reused.
+	atomic.StoreInt64(&r.success, 0)
+	atomic.StoreInt64(&r.errors, 0)
+	atomic.StoreInt64(&r.timeouts, 0)
+	r.latencies = r.latencies[:0]
+
 	start := time.Now()
 	var wg sync.WaitGroup
 
