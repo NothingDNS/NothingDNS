@@ -311,6 +311,15 @@ func (r *RDataDNSKEY) CalculateKeyTag() uint16 {
 // treat the RDATA (flags + protocol + algorithm + publickey) as a
 // sequence of 16-bit big-endian numbers, sum them with carry folding.
 func CalculateKeyTag(flags uint16, algorithm uint8, publicKey []byte) uint16 {
+	// Algorithm 1 uses the third- and second-to-last modulus octets,
+	// rather than the checksum (RFC 4034 Appendix B.1, erratum 193).
+	if algorithm == AlgorithmRSAMD5 {
+		if len(publicKey) < 3 {
+			return 0
+		}
+		return uint16(publicKey[len(publicKey)-3])<<8 | uint16(publicKey[len(publicKey)-2])
+	}
+
 	// Build wire-format RDATA
 	rdata := make([]byte, 4+len(publicKey))
 	PutUint16(rdata[0:], flags)
