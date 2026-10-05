@@ -112,11 +112,7 @@ func (c *Client) Transport() *Transport { return c.transport }
 // supplied this only closes idle connections on its transport; the caller
 // remains responsible for any client-specific cleanup.
 func (c *Client) Close() {
-	if t := c.transport.HTTPClient().Transport; t != nil {
-		if closer, ok := t.(interface{ CloseIdleConnections() }); ok {
-			closer.CloseIdleConnections()
-		}
-	}
+	c.transport.HTTPClient().CloseIdleConnections()
 }
 
 // Health calls GET /health — a health check that requires no authentication.
