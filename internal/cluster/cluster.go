@@ -635,13 +635,85 @@ func (c *Cluster) RemoveEventHandler(handler EventHandler) {
 	defer c.handlersMu.Unlock()
 
 	for i, h := range c.handlers {
-		// Use reflection to compare the underlying values since function fields
-		// are not comparable with ==
-		if reflect.ValueOf(h).Pointer() == reflect.ValueOf(handler).Pointer() {
+		if sameEventHandler(h, handler) {
 			c.handlers = append(c.handlers[:i], c.handlers[i+1:]...)
 			return
 		}
 	}
+}
+
+// sameEventHandler reports whether a and b designate the same handler.
+//
+// EventHandlerFunc is a struct whose four methods have VALUE receivers, so
+// EventHandlerFunc{...} satisfies EventHandler on its own and passing the
+// value is the idiomatic usage — AddEventHandler accepts it unchanged. A
+// struct carrying func fields is not ==-comparable (func values compare only
+// against nil), which is why this helper uses reflection at all.
+//
+// reflect.Value.Pointer is defined only for Chan, Func, Map, Ptr, Slice and
+// UnsafePointer. Calling it on a struct Value panics with "reflect: call of
+// reflect.Value.Pointer on struct Value", so the struct case is compared
+// field by field instead, using each func field's code pointer.
+func sameEventHandler(a, b EventHandler) bool {
+	av, bv := reflect.ValueOf(a), reflect.ValueOf(b)
+	if !av.IsValid() || !bv.IsValid() || av.Type() != bv.Type() {
+		return false
+	}
+
+	switch av.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Map, reflect.Ptr, reflect.Slice, reflect.UnsafePointer:
+		// Pointer-kind handlers (what every caller registered before) are
+		// identical iff they refer to the same address.
+		return av.Pointer() == bv.Pointer()
+
+	case reflect.Struct:
+		for i := 0; i < av.NumField(); i++ {
+			af, bf := av.Field(i), bv.Field(i)
+			if af.Kind() == reflect.Func {
+				// Two nil funcs both report 0 here, so nil==nil stays true.
+				if af.Pointer() != bf.Pointer() {
+					return false
+				}
+				continue
+			}
+			if !af.Comparable() || !bf.Comparable() {
+				return false
+			}
+			if af.Interface() != bf.Interface() {
+				return false
+			}
+		}
+		return true
+
+	default:
+		return false
+	}
+}
+
+// snapshotHandlers returns a copy of the registered handlers so callbacks can
+// be dispatched WITHOUT holding handlersMu.
+//
+// Handlers run arbitrary caller-supplied code. Dispatching them under RLock
+// made the lock effectively non-reentrant from a handler's point of view: a
+// handler that called AddEventHandler or RemoveEventHandler would request the
+// write lock while the same goroutine already held the read lock. sync.RWMutex
+// is not reentrant, so the goroutine blocks forever — and because these
+// callbacks run on the gossip receive path, a single such handler wedges the
+// whole node's event processing.
+//
+// Snapshotting first also means a handler may freely register or remove
+// handlers (including itself) from inside a callback without corrupting the
+// iteration: this dispatch sees the set that was registered when the event
+// arrived, and the change takes effect from the next event.
+func (c *Cluster) snapshotHandlers() []EventHandler {
+	c.handlersMu.RLock()
+	defer c.handlersMu.RUnlock()
+	if len(c.handlers) == 0 {
+		return nil
+	}
+	out := make([]EventHandler, len(c.handlers))
+	copy(out, c.handlers)
+	return out
 }
 
 // InvalidateCache broadcasts cache invalidation to all nodes.
@@ -866,10 +938,7 @@ func (c *Cluster) Stats() Stats {
 func (c *Cluster) handleNodeJoin(node *Node) {
 	c.logger.Infof("Node joined: %s (%s)", node.ID, node.Addr)
 
-	c.handlersMu.RLock()
-	defer c.handlersMu.RUnlock()
-
-	for _, handler := range c.handlers {
+	for _, handler := range c.snapshotHandlers() {
 		handler.OnNodeJoin(node)
 	}
 }
@@ -1007,10 +1076,7 @@ func (c *Cluster) LeaveCluster() error {
 func (c *Cluster) handleNodeLeave(node *Node) {
 	c.logger.Infof("Node left: %s (%s)", node.ID, node.Addr)
 
-	c.handlersMu.RLock()
-	defer c.handlersMu.RUnlock()
-
-	for _, handler := range c.handlers {
+	for _, handler := range c.snapshotHandlers() {
 		handler.OnNodeLeave(node)
 	}
 }
@@ -1019,10 +1085,7 @@ func (c *Cluster) handleNodeLeave(node *Node) {
 func (c *Cluster) handleNodeUpdate(node *Node) {
 	c.logger.Debugf("Node updated: %s (state: %s)", node.ID, node.State)
 
-	c.handlersMu.RLock()
-	defer c.handlersMu.RUnlock()
-
-	for _, handler := range c.handlers {
+	for _, handler := range c.snapshotHandlers() {
 		handler.OnNodeUpdate(node)
 	}
 }
@@ -1032,10 +1095,7 @@ func (c *Cluster) handleCacheInvalid(keys []string) {
 	c.logger.Debugf("Received cache invalidation for %d keys", len(keys))
 	c.InvalidateCacheLocal(keys)
 
-	c.handlersMu.RLock()
-	defer c.handlersMu.RUnlock()
-
-	for _, handler := range c.handlers {
+	for _, handler := range c.snapshotHandlers() {
 		handler.OnCacheInvalid(keys)
 	}
 }

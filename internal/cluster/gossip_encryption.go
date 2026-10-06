@@ -59,7 +59,17 @@ func (gp *GossipProtocol) decrypt(ciphertext []byte) ([]byte, error) {
 }
 
 // encryptWithAAD encrypts with additional authenticated data for replay/cross-peer protection.
+//
+// When gossip encryption is disabled (gp.aead == nil) it passes the plaintext
+// through unchanged, exactly like its encrypt/decrypt siblings. Callers cannot
+// distinguish an unencrypted frame by return value alone, so the peers must be
+// mutually authenticated for AAD binding to mean anything — see the AAD check
+// in gossip_handlers.decodeMessage. The guard also prevents a nil-interface
+// dereference on gp.aead.NonceSize() when encryption is off.
 func (gp *GossipProtocol) encryptWithAAD(plaintext []byte, aad []byte) ([]byte, error) {
+	if gp.aead == nil {
+		return plaintext, nil
+	}
 	nonce := make([]byte, gp.aead.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return nil, fmt.Errorf("gossip encrypt nonce: %w", err)

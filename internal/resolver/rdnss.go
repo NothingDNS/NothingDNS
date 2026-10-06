@@ -131,8 +131,19 @@ func cloneIPList(ips []net.IP) []net.IP {
 }
 
 func rdnssOptionLengthUnits(numAddrs int) int {
-	// Calculate length: 1 (type) + 1 (length) + 4 (lifetime) + (16 * num_addrs)
-	length := 1 + 1 + 4 + (16 * numAddrs)
+	// RFC 8106 §5.1: OPTION-LENGTH counts the option DATA — everything after
+	// OPTION-LENGTH itself — namely RESERVED (2) + LIFETIME (4), which is
+	// 6 octets and is padded with zeroes up to the next 8-byte boundary, then
+	// the validator addresses (16 octets each; Validate only admits IPv6).
+	// Since 16n is always a multiple of 8 the padding collapses to a fixed
+	// 8-octet header, so the encoded length is (8 + 16n)/8.
+	//
+	// The previous formula counted "1 (type) + 1 (length) + 4 (lifetime)":
+	// OPTION-CODE is 2 octets, and the RESERVED octets were dropped entirely,
+	// so every result was one 8-byte unit short and ParseRDNSSOption rejected
+	// conformant RAs (n=1 encodes Length=3, not 2). This matches the sibling
+	// dnsslOptionLengthUnits, which already pads its header to 8.
+	length := 8 + (16 * numAddrs)
 	return length / 8
 }
 

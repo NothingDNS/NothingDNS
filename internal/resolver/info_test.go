@@ -714,9 +714,13 @@ func TestRDNSSToTLV(t *testing.T) {
 	if tlv.Type != 31 {
 		t.Errorf("Type = %d, want 31", tlv.Type)
 	}
-	// Length = (1+4+(16*2))/8 = 38/8 = 4 (8-byte units, excludes type+length bytes)
-	if tlv.Length != 4 {
-		t.Errorf("Length = %d, want 4", tlv.Length)
+	// RFC 8106 §5.1: OPTION-LENGTH counts the option DATA — RESERVED (2) +
+	// LIFETIME (4) padded to the next 8-byte boundary, then the validator
+	// addresses (16 octets each). Length = (8 + 16*2)/8 = 40/8 = 5.
+	// (This previously expected 4, pinning a formula that dropped the RESERVED
+	// octets and so was one unit short for every address count.)
+	if tlv.Length != 5 {
+		t.Errorf("Length = %d, want 5", tlv.Length)
 	}
 	if len(tlv.Addresses) != 2 {
 		t.Errorf("Addresses len = %d, want 2", len(tlv.Addresses))

@@ -158,6 +158,17 @@ type Conn struct {
 	fragType   int        // message type (1=text, 2=binary) for fragmented message
 	fragAccum  []byte     // accumulated payload for fragmented message
 
+	// writeMu serializes whole-frame writes. A connection can have several
+	// writers — the dashboard runs a dedicated write goroutine (see
+	// ClientLoop) while the read loop auto-pongs from another goroutine — and
+	// util.WriteFull may emit a frame across several Write calls when a
+	// payload exceeds the socket buffer. RFC 6455 §5.2 requires each frame to
+	// reach the peer as one contiguous unit; without this lock the second
+	// writer's bytes land inside the first writer's frame and the peer sees a
+	// corrupt stream. Distinct from mu, which guards read-side fragmentation
+	// state and is deliberately released before any blocking I/O.
+	writeMu sync.Mutex
+
 	// Rate limiting
 	rateWindow time.Time
 	rateCount  int
@@ -416,6 +427,10 @@ func truncateCloseReason(reason string) string {
 }
 
 // WriteMessage writes a message to the connection.
+//
+// The whole frame is emitted under writeMu so concurrent writers (the caller's
+// own write loop and the read loop's auto-pong/auto-close echo) cannot
+// interleave on the wire.
 func (c *Conn) WriteMessage(messageType int, data []byte) error {
 	if err := validateServerMessageType(messageType, data); err != nil {
 		return err
@@ -442,6 +457,13 @@ func (c *Conn) WriteMessage(messageType int, data []byte) error {
 	}
 
 	buf = append(buf, data...)
+
+	// Emit the complete frame as one unit. A payload larger than the socket
+	// buffer makes util.WriteFull loop over several Write calls, so without
+	// this lock another writer's frame would be spliced into the middle of
+	// this one and the peer would see a corrupt stream.
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	return util.WriteFull(c.conn, buf)
 }
 

@@ -160,9 +160,22 @@ func (rrl *RRL) Allow(clientIP net.IP, qtype uint16, rcode uint8) (allowed, supp
 	// If suppressed, check if the window has elapsed.
 	if !b.suppressed.IsZero() {
 		if now.Sub(b.suppressed) < rrl.window {
+			// Still suppressed: refresh recency before returning.
+			// evictOldest orders on lastTime and drops the bucket, so the
+			// next response would be rebuilt at a full burst. A client that
+			// keeps sending traffic during its suppression window must stay
+			// warmer than an idle one; without this its timestamp froze and
+			// the very client RRL was throttling became the coldest entry —
+			// evicted first, its suppression cleared, which is the burst-reset
+			// bypass evictOldest exists to prevent. (ratelimit.go refreshes
+			// lastTime on every request for the same reason.)
+			b.lastTime = now
 			return false, true
 		}
-		// Window expired — clear suppression.
+		// Window expired — clear suppression. lastTime is deliberately left
+		// alone here: the refill below derives its token grant from the
+		// elapsed time since the last refill, and overwriting it now would
+		// zero that interval and re-suppress the client forever.
 		b.suppressed = time.Time{}
 	}
 

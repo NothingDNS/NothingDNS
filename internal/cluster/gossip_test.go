@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/json"
 	"io"
@@ -1293,6 +1294,76 @@ func TestGossipProtocol_DecodeMessage_AADBindingFailure(t *testing.T) {
 	// decryptWithAAD with wrong AAD should fail
 	if err == nil {
 		t.Error("Expected AAD verification to fail with wrong AAD, got nil")
+	}
+}
+
+// TestGossipProtocol_EncryptWithAAD_UnencryptedPassthrough covers the
+// gp.aead == nil branch. encryptWithAAD used to call gp.aead.NonceSize()
+// unconditionally, so calling it while gossip encryption is off panicked with a
+// nil-interface dereference. It now matches its encrypt/decrypt siblings and
+// passes the plaintext through untouched.
+//
+// This is also the semantics that matters operationally: with encryption off
+// there is no authentication at all, so the AAD simply cannot be checked — the
+// frame must still be emitted rather than dropped.
+func TestGossipProtocol_EncryptWithAAD_UnencryptedPassthrough(t *testing.T) {
+	self := &Node{ID: "self", State: NodeStateAlive, Addr: "127.0.0.1"}
+	nl := NewNodeList(self)
+	cfg := DefaultGossipConfig()
+	cfg.BindPort = 17986
+	// No EncryptionKey -> gp.aead stays nil. allowInsecure=true is required to
+	// construct the protocol at all in that state (VULN-062).
+	gp, err := NewGossipProtocol(cfg, nl, true)
+	if err != nil {
+		t.Fatalf("NewGossipProtocol: %v", err)
+	}
+	if gp.IsEncrypted() {
+		t.Fatal("test setup wrong: expected encryption disabled")
+	}
+
+	plaintext := []byte{9, 8, 7, 6}
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("encryptWithAAD panicked with encryption disabled: %v", r)
+		}
+	}()
+
+	out, err := gp.encryptWithAAD(plaintext, []byte("some-aad"))
+	if err != nil {
+		t.Fatalf("encryptWithAAD with encryption disabled: %v", err)
+	}
+	if !bytes.Equal(out, plaintext) {
+		t.Errorf("expected plaintext passthrough %v, got %v", plaintext, out)
+	}
+
+	// The nil-AEAD guard must not perturb the encrypted path: a protocol WITH a
+	// key must still produce a sealed frame that round-trips.
+	encSelf := &Node{ID: "self", State: NodeStateAlive, Addr: "127.0.0.1"}
+	encNL := NewNodeList(encSelf)
+	encCfg := DefaultGossipConfig()
+	encCfg.BindPort = 17987
+	encCfg.EncryptionKey = make([]byte, 32)
+	if _, err := rand.Read(encCfg.EncryptionKey); err != nil {
+		t.Fatalf("generating test key: %v", err)
+	}
+	encGp, err := NewGossipProtocol(encCfg, encNL, false)
+	if err != nil {
+		t.Fatalf("NewGossipProtocol (encrypted): %v", err)
+	}
+	if !encGp.IsEncrypted() {
+		t.Fatal("test setup wrong: expected encryption enabled")
+	}
+
+	sealed, err := encGp.encryptWithAAD(plaintext, []byte("some-aad"))
+	if err != nil {
+		t.Fatalf("encryptWithAAD with encryption enabled: %v", err)
+	}
+	if bytes.Equal(sealed, plaintext) {
+		t.Error("expected ciphertext when encryption is enabled, got plaintext")
+	}
+	if len(sealed) != len(plaintext)+12+16 {
+		t.Errorf("expected len %d (nonce+GCM tag), got %d", len(plaintext)+12+16, len(sealed))
 	}
 }
 

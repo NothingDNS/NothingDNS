@@ -454,9 +454,13 @@ func (r *Responder) handleQuery(data []byte, src *net.UDPAddr) {
 
 	// Service queries: match either the service type
 	// (e.g. "_http._tcp.local") or the full service instance name.
+	// The wire name for the type is ServiceTypeName() — the enumeration name
+	// built from ServiceType plus Domain (RFC 6763 §9.1). Matching the bare
+	// ServiceType instead compared against a non-resolvable "_http._tcp", so
+	// the standard service-type browse never matched anything.
 	r.servicesMu.RLock()
 	for _, svc := range r.services {
-		stype := strings.ToLower(strings.TrimSuffix(svc.ServiceType, "."))
+		stype := strings.ToLower(strings.TrimSuffix(svc.ServiceTypeName(), "."))
 		full := strings.ToLower(strings.TrimSuffix(svc.FullServiceName(), "."))
 		for _, qn := range qNames {
 			if qn == stype || qn == full {
