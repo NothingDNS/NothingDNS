@@ -18,7 +18,7 @@ go test ./internal/e2e/... -v                  # End-to-end tests
 ```bash
 staticcheck ./...
 errcheck -ignoretests -exclude .errcheck-excludes.txt ./...   # see note below
-go-errorlint -test=false ./...                                # production code only
+GOTOOLCHAIN=go1.26.6 go-errorlint -test=false ./...          # production code only; GOTOOLCHAIN required, see note
 govulncheck ./...                                             # Go stdlib + deps CVEs
 ```
 

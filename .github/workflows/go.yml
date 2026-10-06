@@ -313,7 +313,23 @@ jobs:
           errcheck -ignoretests -exclude .errcheck-excludes.txt ./...
           # errorlint enforces errors.Is/As on production code (was installed
           # but never invoked before).
-          go-errorlint -test=false ./...
+          #
+          # GOTOOLCHAIN pin: go-errorlint v1.8.0 loads type information via
+          # go/types + gcexportdata, which cannot decode the export data
+          # emitted by Go 1.27+. Under a newer toolchain it aborts with
+          # "internal error: package \"errors\" without types was imported
+          # from <some-package>" — naming whatever package it happened to
+          # reach first, so the message points at an innocent package and is
+          # not a defect in the tree. Verified on go1.27.1: a 4-line package
+          # whose only import is "errors" fails identically, and rebuilding
+          # the tool from source under go1.27.1 does NOT help (@latest still
+          # resolves to v1.8.0, so the parsing logic is unchanged).
+          #
+          # Pinning the runtime toolchain is the fix — it matches both the
+          # `go` directive in go.mod and the tool's own release. Remove this
+          # line once upstream ships a release that understands Go 1.27+
+          # export data.
+          GOTOOLCHAIN=go1.26.6 go-errorlint -test=false ./...
           go vet ./...
 
       - name: Initialize CodeQL
