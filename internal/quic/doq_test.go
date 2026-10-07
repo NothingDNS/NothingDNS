@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"net"
 	"testing"
@@ -488,5 +489,108 @@ func TestDoQServerEndToEnd(t *testing.T) {
 	stats := srv.Stats()
 	if stats.QueriesReceived != 1 {
 		t.Errorf("QueriesReceived = %d, want 1", stats.QueriesReceived)
+	}
+}
+
+// =================== Shutdown / Error-Code Regression Tests ===================
+
+func dialDoQTest(t *testing.T, addr string) *quic.Conn {
+	t.Helper()
+	c, err := quic.DialAddr(context.Background(), addr,
+		&tls.Config{InsecureSkipVerify: true, NextProtos: []string{"doq"}},
+		&quic.Config{MaxIdleTimeout: 20 * time.Second})
+	if err != nil {
+		t.Fatalf("DialAddr: %v", err)
+	}
+	t.Cleanup(func() { _ = c.CloseWithError(0, "") })
+	return c
+}
+
+// waitAppClose waits (bounded) for the client connection to be closed by the
+// peer and returns the DoQ application error code it carried.
+func waitAppClose(t *testing.T, c *quic.Conn) quic.ApplicationErrorCode {
+	t.Helper()
+	select {
+	case <-c.Context().Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("client connection was not closed by the server")
+	}
+	var ae *quic.ApplicationError
+	if !errors.As(context.Cause(c.Context()), &ae) {
+		t.Fatalf("close cause = %v, want *quic.ApplicationError", context.Cause(c.Context()))
+	}
+	return ae.ErrorCode
+}
+
+// F52: Stop must send CONNECTION_CLOSE (DOQ_NO_ERROR) on established
+// connections before closing the UDP socket; otherwise clients hang until
+// their idle timeout.
+func TestDoQServerStopClosesClientConnections(t *testing.T) {
+	handled := make(chan struct{}, 1)
+	srv := NewDoQServer("127.0.0.1:0", DoQHandlerFunc(func(s *Stream, q []byte) {
+		handled <- struct{}{}
+	}), generateTestTLS(t))
+	if err := srv.Listen(); err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- srv.Serve() }()
+
+	c := dialDoQTest(t, srv.Addr().String())
+	st, err := c.OpenStreamSync(context.Background())
+	if err != nil {
+		t.Fatalf("OpenStreamSync: %v", err)
+	}
+	if _, err := st.Write([]byte{0, 1, 0}); err != nil {
+		t.Fatalf("stream write: %v", err)
+	}
+	_ = st.Close()
+	<-handled // gate: the connection is registered server-side
+
+	if err := srv.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if code := waitAppClose(t, c); code != 0 {
+		t.Fatalf("close code = %#x, want DOQ_NO_ERROR", code)
+	}
+	if err := <-serveDone; err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	if got := srv.Stats().ActiveConnections; got != 0 {
+		t.Fatalf("ActiveConnections after Stop = %d, want 0", got)
+	}
+}
+
+// F53: Serve after Stop is a clean shutdown, not "server not listening".
+func TestDoQServerServeAfterStopReturnsNil(t *testing.T) {
+	srv := NewDoQServer("127.0.0.1:0", DoQHandlerFunc(func(s *Stream, q []byte) {}),
+		&tls.Config{NextProtos: []string{"doq"}})
+	if err := srv.Listen(); err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	if err := srv.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if err := srv.Serve(); err != nil {
+		t.Fatalf("Serve after Stop = %v, want nil", err)
+	}
+}
+
+// F54: connections refused by the connection limits carry
+// DOQ_EXCESSIVE_LOAD (0x4), not DOQ_UNSPECIFIED_ERROR (0x5).
+func TestDoQServerConnLimitUsesExcessiveLoad(t *testing.T) {
+	srv := NewDoQServer("127.0.0.1:0", DoQHandlerFunc(func(s *Stream, q []byte) {}), generateTestTLS(t))
+	if err := srv.Listen(); err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	go func() { _ = srv.Serve() }()
+	defer srv.Stop()
+
+	addr := srv.Addr().String()
+	for i := 0; i < DoQMaxConnectionsPerIP; i++ {
+		dialDoQTest(t, addr)
+	}
+	if code := waitAppClose(t, dialDoQTest(t, addr)); code != 0x4 {
+		t.Fatalf("over-limit close code = %#x, want 0x4 (DOQ_EXCESSIVE_LOAD)", code)
 	}
 }

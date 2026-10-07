@@ -31,7 +31,10 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"net"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
@@ -137,6 +140,10 @@ type odohResponseWriter struct {
 	// pooled responses at stage exit — so the target must not read or
 	// Release the message after ServeDNS returns.
 	packed []byte
+	// remote is the HTTP peer of the target request (normally the ODoH
+	// proxy). Reporting it lets client-IP-keyed policy (ACL, allow_recursion,
+	// RPZ client-IP, rate limiting) apply to ODoH-target queries (F427).
+	remote net.Addr
 }
 
 func (rw *odohResponseWriter) Write(msg *protocol.Message) (int, error) {
@@ -150,7 +157,28 @@ func (rw *odohResponseWriter) Write(msg *protocol.Message) (int, error) {
 }
 
 func (rw *odohResponseWriter) ClientInfo() *server.ClientInfo {
-	return &server.ClientInfo{Protocol: "odoh"}
+	return &server.ClientInfo{Addr: rw.remote, Protocol: "odoh"}
+}
+
+// odohPeerAddr converts an http.Request RemoteAddr ("ip:port", or
+// "[fe80::1%eth0]:port" for a zoned IPv6 peer) into a *net.TCPAddr. It
+// returns nil when the address cannot be parsed; the pipeline treats an
+// unknown client as matching no ACL rule (fail closed).
+func odohPeerAddr(remoteAddr string) net.Addr {
+	host, port, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host, port = remoteAddr, ""
+	}
+	zone := ""
+	if i := strings.LastIndexByte(host, '%'); i >= 0 {
+		host, zone = host[:i], host[i+1:]
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return nil
+	}
+	p, _ := strconv.ParseUint(port, 10, 16)
+	return &net.TCPAddr{IP: ip, Port: int(p), Zone: zone}
 }
 
 func (rw *odohResponseWriter) MaxSize() int {
@@ -563,7 +591,7 @@ func (t *ObliviousTarget) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer query.Release()
 
-	rw := &odohResponseWriter{}
+	rw := &odohResponseWriter{remote: odohPeerAddr(r.RemoteAddr)}
 	(&server.ServeDNSWithRecovery{Handler: t.handler}).ServeDNS(rw, query)
 	// The writer snapshotted the response wire at Write time; the inner
 	// handler/pipeline owns the response message's lifecycle (the pipeline

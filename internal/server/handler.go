@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"net"
+	"strings"
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
 	"github.com/nothingdns/nothingdns/internal/util"
@@ -79,10 +80,21 @@ func (c *ClientInfo) IP() net.IP {
 		// Try to parse from string
 		host, _, err := net.SplitHostPort(c.Addr.String())
 		if err != nil {
-			return net.ParseIP(c.Addr.String())
+			host = c.Addr.String()
 		}
-		return net.ParseIP(host)
+		return parseZonedIP(host)
 	}
+}
+
+// parseZonedIP parses an IP literal, ignoring an IPv6 "%zone" suffix
+// ("fe80::1%eth0"). net.ParseIP rejects zoned literals; returning nil for a
+// link-local peer would make every client-IP-keyed stage (ACL, recursion
+// policy, RPZ client-IP, rate limiting) see "no client" (F428).
+func parseZonedIP(host string) net.IP {
+	if i := strings.LastIndexByte(host, '%'); i >= 0 {
+		host = host[:i]
+	}
+	return net.ParseIP(host)
 }
 
 // ResponseWriter is used by handlers to write a DNS response.

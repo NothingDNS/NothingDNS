@@ -257,6 +257,11 @@ func parseConfigContents(b []byte) (hpkeSuite, *ecdh.PublicKey, error) {
 	if len(b) < 8+int(pkLen) {
 		return hpkeSuite{}, nil, errors.New("odoh: config truncated")
 	}
+	if len(b) != 8+int(pkLen) {
+		// key_id is derived over the whole buffer, so trailing bytes would
+		// yield a key_id the target can never match.
+		return hpkeSuite{}, nil, fmt.Errorf("odoh: %d trailing bytes after config public_key", len(b)-8-int(pkLen))
+	}
 	pk, err := ecdh.X25519().NewPublicKey(b[8 : 8+pkLen])
 	if err != nil {
 		return hpkeSuite{}, nil, fmt.Errorf("odoh: parse pk: %w", err)
@@ -307,15 +312,10 @@ func (kp *odohKeyPair) decryptQuery(msgBytes []byte) (dnsQuery []byte, respCtx *
 	}
 
 	// Parse the plaintext envelope:  u16 dns_len || dns || u16 pad_len || pad
-	if len(pt) < 4 {
-		return nil, nil, errors.New("odoh: plaintext too short")
+	dnsQuery, err = parsePlaintextEnvelope(pt)
+	if err != nil {
+		return nil, nil, err
 	}
-	dnsLen := binary.BigEndian.Uint16(pt[0:2])
-	if len(pt) < 2+int(dnsLen)+2 {
-		return nil, nil, errors.New("odoh: plaintext truncated")
-	}
-	dnsQuery = make([]byte, dnsLen)
-	copy(dnsQuery, pt[2:2+dnsLen])
 
 	// Capture the context needed to derive the response AEAD later
 	// (deriveResponseAEAD). Per RFC 9230 §6.2 the IKM is
@@ -427,12 +427,37 @@ func (qc *queryContext) decryptResponse(msgBytes []byte) ([]byte, error) {
 		return nil, fmt.Errorf("odoh: open response: %w", err)
 	}
 
-	if len(pt) < 4 {
-		return nil, errors.New("odoh: response plaintext too short")
+	dnsResponse, err := parsePlaintextEnvelope(pt)
+	if err != nil {
+		return nil, fmt.Errorf("odoh: response: %w", err)
 	}
-	dnsLen := binary.BigEndian.Uint16(pt[0:2])
-	if len(pt) < 2+int(dnsLen)+2 {
-		return nil, errors.New("odoh: response plaintext truncated")
+	return dnsResponse, nil
+}
+
+// parsePlaintextEnvelope parses an ObliviousDoHMessagePlaintext (RFC 9230
+// §4): u16 dns_len || dns_message<1..2^16-1> || u16 pad_len || padding.
+// The padding must be present in full and all zeros, and nothing may follow
+// it. Returns a copy of dns_message.
+func parsePlaintextEnvelope(pt []byte) ([]byte, error) {
+	if len(pt) < 4 {
+		return nil, errors.New("odoh: plaintext too short")
+	}
+	dnsLen := int(binary.BigEndian.Uint16(pt[0:2]))
+	if dnsLen == 0 {
+		return nil, errors.New("odoh: empty dns_message")
+	}
+	if len(pt) < 2+dnsLen+2 {
+		return nil, errors.New("odoh: plaintext truncated")
+	}
+	padLen := int(binary.BigEndian.Uint16(pt[2+dnsLen : 4+dnsLen]))
+	padding := pt[4+dnsLen:]
+	if len(padding) != padLen {
+		return nil, fmt.Errorf("odoh: padding length %d, have %d bytes", padLen, len(padding))
+	}
+	for _, b := range padding {
+		if b != 0 {
+			return nil, errors.New("odoh: non-zero padding")
+		}
 	}
 	return append([]byte(nil), pt[2:2+dnsLen]...), nil
 }

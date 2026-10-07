@@ -38,6 +38,16 @@ var ErrLastAdmin = errors.New("cannot delete the last admin user")
 // ErrUserExists is returned by CreateUser when the username is taken.
 var ErrUserExists = errors.New("user already exists")
 
+// ErrConfigUser is returned when a user defined in the server config would be
+// deleted or have its password or role changed at runtime. The config file is
+// the source of truth for those users: a runtime change would be lost (the
+// user resurrected with its config password) on the next restart (F437).
+var ErrConfigUser = errors.New("user is defined in the config file; change it there")
+
+// ErrUsersPersist wraps a failure to write the users file. The in-memory
+// change that triggered the write has been rolled back (F438).
+var ErrUsersPersist = errors.New("failed to persist users file")
+
 const maxAuthPersistFileSize = 16 << 20
 
 // User represents a user account.
@@ -67,6 +77,12 @@ type User struct {
 	// configured marks users defined in the server config. The config stays
 	// their source of truth, so they are never written to the users file.
 	configured bool
+}
+
+// ConfigDefined reports whether the user is defined in the server config.
+// Such users cannot be deleted or changed at runtime (ErrConfigUser).
+func (u *User) ConfigDefined() bool {
+	return u != nil && u.configured
 }
 
 // Token represents an active authentication token.
@@ -590,7 +606,10 @@ func (s *Store) CreateUser(username, password string, role Role) (*User, error) 
 		UpdatedAt: now,
 	}
 	s.users[username] = user
-	s.persistUsersLocked()
+	if err := s.persistUsersLocked(); err != nil {
+		delete(s.users, username)
+		return nil, err
+	}
 	return clonePublicUser(user), nil
 }
 
@@ -616,10 +635,14 @@ func (s *Store) UpdateUser(username, password string, role Role) (*User, error) 
 	if !ok {
 		return nil, fmt.Errorf("user not found")
 	}
+	if user.configured {
+		return nil, ErrConfigUser
+	}
 	if role != "" && user.Role == RoleAdmin && role != RoleAdmin && s.adminUserCountLocked() <= 1 {
 		return nil, ErrLastAdmin
 	}
 
+	prev := *user
 	if password != "" {
 		hash, err := HashPasswordWithError(password, nil)
 		if err != nil {
@@ -632,6 +655,10 @@ func (s *Store) UpdateUser(username, password string, role Role) (*User, error) 
 		user.Role = role
 	}
 	user.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	if err := s.persistUsersLocked(); err != nil {
+		*user = prev
+		return nil, err
+	}
 
 	// Revoke all tokens for this user (password or role changed) (LOW-013).
 	if password != "" || roleChanged {
@@ -643,7 +670,6 @@ func (s *Store) UpdateUser(username, password string, role Role) (*User, error) 
 		delete(s.activeSessions, username)
 	}
 
-	s.persistUsersLocked()
 	return clonePublicUser(user), nil
 }
 
@@ -671,10 +697,18 @@ func (s *Store) DeleteUserPreservingLastAdmin(username string) error {
 }
 
 func (s *Store) deleteUserLocked(username string) error {
-	if _, ok := s.users[username]; !ok {
+	user, ok := s.users[username]
+	if !ok {
 		return fmt.Errorf("user not found")
 	}
+	if user.configured {
+		return ErrConfigUser
+	}
 	delete(s.users, username)
+	if err := s.persistUsersLocked(); err != nil {
+		s.users[username] = user
+		return err
+	}
 
 	// Revoke all tokens for this user
 	for token, t := range s.tokens {
@@ -683,8 +717,53 @@ func (s *Store) deleteUserLocked(username string) error {
 		}
 	}
 	delete(s.activeSessions, username)
-	s.persistUsersLocked()
 	return nil
+}
+
+// ReplaceAutoCreatedAdmin atomically replaces the synthetic auto-created admin
+// with a real admin account (localhost bootstrap). Either both the removal and
+// the creation are applied and persisted, or neither is: deleting the
+// placeholder and then failing to create (or persist) the replacement would
+// leave a server with no users at all.
+func (s *Store) ReplaceAutoCreatedAdmin(username, password string) (*User, error) {
+	if err := ValidateUsername(username); err != nil {
+		return nil, err
+	}
+	if err := ValidatePassword(password); err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	placeholder, ok := s.users["admin"]
+	if !ok || !placeholder.IsAutoCreated {
+		return nil, fmt.Errorf("no auto-created admin to replace")
+	}
+	if _, exists := s.users[username]; exists && username != "admin" {
+		return nil, ErrUserExists
+	}
+	hash, err := HashPasswordWithError(password, nil)
+	if err != nil {
+		return nil, fmt.Errorf("hashing password: %w", err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	user := &User{Username: username, Hash: hash, Role: RoleAdmin, CreatedAt: now, UpdatedAt: now}
+
+	delete(s.users, "admin")
+	s.users[username] = user
+	if err := s.persistUsersLocked(); err != nil {
+		delete(s.users, username)
+		s.users["admin"] = placeholder
+		return nil, err
+	}
+	for token, t := range s.tokens {
+		if t.Username == "admin" {
+			delete(s.tokens, token)
+		}
+	}
+	delete(s.activeSessions, "admin")
+	return clonePublicUser(user), nil
 }
 
 func (s *Store) adminUserCountLocked() int {
@@ -731,6 +810,7 @@ func clonePublicUser(user *User) *User {
 		CreatedAt:     user.CreatedAt,
 		UpdatedAt:     user.UpdatedAt,
 		IsAutoCreated: user.IsAutoCreated,
+		configured:    user.configured,
 	}
 }
 
@@ -823,11 +903,12 @@ func (s *Store) EnableUsersFile(path string) (int, error) {
 
 // persistUsersLocked writes the runtime-managed users to the users file, if
 // one is enabled. Config-defined users and the auto-created admin are left
-// out. Must be called with s.mu held. A write failure is logged rather than
-// returned: the in-memory change has already been applied.
-func (s *Store) persistUsersLocked() {
+// out. Must be called with s.mu held. A write failure is returned wrapped in
+// ErrUsersPersist; the caller must roll back the in-memory change so memory
+// never diverges from what a restart restores (F438).
+func (s *Store) persistUsersLocked() error {
 	if s.usersFilePath == "" {
-		return
+		return nil
 	}
 	users := make(map[string]*User)
 	for name, u := range s.users {
@@ -842,7 +923,9 @@ func (s *Store) persistUsersLocked() {
 	}
 	if err != nil {
 		util.Warnf("auth: failed to persist users to %s: %v", s.usersFilePath, err)
+		return fmt.Errorf("%w: %w", ErrUsersPersist, err)
 	}
+	return nil
 }
 
 // Save persists users to a file.

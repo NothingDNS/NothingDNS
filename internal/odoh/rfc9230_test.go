@@ -4,6 +4,7 @@ package odoh
 
 import (
 	"bytes"
+	"crypto/rand"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -306,5 +307,82 @@ func TestRFC9230_ClientProxyTargetRoundTrip(t *testing.T) {
 	}
 	if a, ok := got.Answers[0].Data.(*protocol.RDataA); !ok || a.Address != [4]byte{1, 2, 3, 4} {
 		t.Errorf("answer A = %+v, want 1.2.3.4", got.Answers[0].Data)
+	}
+}
+
+// TestParsePlaintextEnvelope_RejectsMalformed is the F57 regression: an
+// ObliviousDoHMessagePlaintext (RFC 9230 §4) must carry a non-empty
+// dns_message, exactly pad_len padding bytes, all zero, and nothing after.
+func TestParsePlaintextEnvelope_RejectsMalformed(t *testing.T) {
+	dns := []byte{0x12, 0x34, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1}
+	env := func(d []byte, padLen uint16, pad, trailer []byte) []byte {
+		pt := append([]byte{}, u16BE(uint16(len(d)))...)
+		pt = append(pt, d...)
+		pt = append(pt, u16BE(padLen)...)
+		pt = append(pt, pad...)
+		return append(pt, trailer...)
+	}
+	cases := []struct {
+		name   string
+		pt     []byte
+		accept bool
+	}{
+		{"no padding", env(dns, 0, nil, nil), true},
+		{"zero padding", env(dns, 4, make([]byte, 4), nil), true},
+		{"padding_len without bytes", env(dns, 8, nil, nil), false},
+		{"non-zero padding", env(dns, 2, []byte{0, 1}, nil), false},
+		{"trailing bytes", env(dns, 0, nil, []byte{0}), false},
+		{"empty dns_message", env(nil, 0, nil, nil), false},
+	}
+	for _, c := range cases {
+		got, err := parsePlaintextEnvelope(c.pt)
+		if (err == nil) != c.accept {
+			t.Errorf("%s: accept=%v, err=%v", c.name, err == nil, err)
+			continue
+		}
+		if c.accept && !bytes.Equal(got, dns) {
+			t.Errorf("%s: dns_message = %x", c.name, got)
+		}
+	}
+
+	// End to end: the target must reject a malformed plaintext even when it
+	// is correctly HPKE-sealed by a peer holding the target's config.
+	kp, err := newODoHKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc, ctx, err := kp.suite.hpkeSetupSender(rand.Reader, kp.skR.PublicKey(), odohQueryLabel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aad := append([]byte{odohMsgTypeQuery}, u16BE(uint16(len(kp.keyID)))...)
+	aad = append(aad, kp.keyID...)
+	ct, _ := ctx.seal(aad, env(dns, 2, []byte{0xde, 0xad}, nil))
+	msg, err := marshalODoHMessage(&odohMessage{msgType: odohMsgTypeQuery, keyID: kp.keyID, encryptedMessage: append(enc, ct...)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := kp.decryptQuery(msg); err == nil {
+		t.Fatal("decryptQuery accepted non-zero padding")
+	}
+}
+
+// TestParseConfigContents_RejectsTrailingBytes is the F58 regression: bytes
+// after public_key would change the derived key_id, so the client must fail
+// at config parse time instead of sending queries the target cannot match.
+func TestParseConfigContents_RejectsTrailingBytes(t *testing.T) {
+	kp, err := newODoHKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := parseConfigContents(kp.configBytes); err != nil {
+		t.Fatalf("exact config rejected: %v", err)
+	}
+	cfg := append(append([]byte{}, kp.configBytes...), 0)
+	if _, _, err := parseConfigContents(cfg); err == nil {
+		t.Fatal("config with trailing byte accepted")
+	}
+	if _, _, err := encryptQueryRFC9230(cfg, []byte{0, 1}); err == nil {
+		t.Fatal("encryptQueryRFC9230 accepted config with trailing byte")
 	}
 }

@@ -154,27 +154,27 @@ func (s *TCPServer) Serve() error {
 		return errors.New("server not listening")
 	}
 
-	// Start connection handler workers
-	connChan := make(chan net.Conn, s.workers*2)
-
-	for i := 0; i < s.workers; i++ {
-		s.wg.Add(1)
-		go s.worker(connChan)
-	}
-
-	// Accept loop
+	// Accept loop. Each accepted connection gets its own goroutine (F72),
+	// bounded by connSem (TCPMaxConnections) and the per-IP cap. A fixed
+	// worker pool let `workers` idle connections starve every other client
+	// for up to TCPReadTimeout.
+	var retryDelay time.Duration
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
 			if s.ctx.Err() != nil {
 				// Shutting down
-				close(connChan)
 				s.wg.Wait()
 				return nil
 			}
 			atomic.AddUint64(&s.errors, 1)
+			// F73: back off on persistent Accept errors (e.g. EMFILE)
+			// instead of spinning a CPU core.
+			retryDelay = nextAcceptRetryDelay(retryDelay)
+			waitAcceptRetry(s.ctx, retryDelay)
 			continue
 		}
+		retryDelay = 0
 
 		// Check global connection limit
 		select {
@@ -200,26 +200,41 @@ func (s *TCPServer) Serve() error {
 		s.ipConnCount[ip]++
 		s.ipConnMu.Unlock()
 
-		// Send to worker, respecting shutdown
-		select {
-		case connChan <- conn:
-		case <-s.ctx.Done():
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			s.handleConnection(conn)
 			s.decrementIPConn(ip)
-			conn.Close()
-			<-s.connSem
-		}
+			<-s.connSem // Release slot
+		}()
 	}
 }
 
-// worker handles TCP connections.
-func (s *TCPServer) worker(connChan <-chan net.Conn) {
-	defer s.wg.Done()
+// Accept retry backoff bounds (F73), matching net/http's accept loop.
+const (
+	acceptRetryMinDelay = 5 * time.Millisecond
+	acceptRetryMaxDelay = time.Second
+)
 
-	for conn := range connChan {
-		ip := getIP(conn.RemoteAddr())
-		s.handleConnection(conn)
-		s.decrementIPConn(ip)
-		<-s.connSem // Release slot
+// nextAcceptRetryDelay doubles the previous Accept retry delay within
+// [acceptRetryMinDelay, acceptRetryMaxDelay].
+func nextAcceptRetryDelay(prev time.Duration) time.Duration {
+	if prev <= 0 {
+		return acceptRetryMinDelay
+	}
+	if next := prev * 2; next < acceptRetryMaxDelay {
+		return next
+	}
+	return acceptRetryMaxDelay
+}
+
+// waitAcceptRetry waits d, returning early when ctx is cancelled.
+func waitAcceptRetry(ctx context.Context, d time.Duration) {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+	case <-t.C:
 	}
 }
 

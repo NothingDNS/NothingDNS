@@ -177,7 +177,7 @@ func (rw *wsResponseWriter) ClientInfo() *server.ClientInfo {
 			Protocol: "wss",
 		}
 	}
-	ip := net.ParseIP(host)
+	ip, zone := parseRemoteHost(host)
 	if ip == nil {
 		ip = net.IPv4(0, 0, 0, 0)
 	}
@@ -186,6 +186,7 @@ func (rw *wsResponseWriter) ClientInfo() *server.ClientInfo {
 		Addr: &net.TCPAddr{
 			IP:   ip,
 			Port: parsePort(port),
+			Zone: zone,
 		},
 		Protocol: "wss",
 	}

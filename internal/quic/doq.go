@@ -48,6 +48,12 @@ const (
 	MinInitialConnIDLen = 8
 )
 
+// DoQ application error codes (RFC 9250 §4.3, §8.4).
+const (
+	doqNoError       quic.ApplicationErrorCode = 0x0
+	doqExcessiveLoad quic.ApplicationErrorCode = 0x4
+)
+
 // ConnectionID represents a QUIC Connection ID.
 type ConnectionID []byte
 
@@ -185,8 +191,10 @@ type DoQServer struct {
 	wg      sync.WaitGroup
 	closeMu sync.Mutex
 
-	// Connection limiting
+	// Connection limiting. conns tracks accepted connections so Stop can
+	// close them with CONNECTION_CLOSE before the UDP socket goes away.
 	activeConns   int
+	conns         map[*quic.Conn]struct{}
 	activeConnsMu sync.Mutex
 
 	// Per-IP connection counting
@@ -224,6 +232,7 @@ func NewDoQServerWithConfig(addr string, handler DoQHandler, tlsConfig *tls.Conf
 		tlsConfig: tlsConfig,
 		config:    config,
 		ipConns:   make(map[string]int),
+		conns:     make(map[*quic.Conn]struct{}),
 		ctx:       ctx,
 		cancel:    cancel,
 	}
@@ -276,13 +285,15 @@ func (s *DoQServer) Serve() error {
 	// Wait and prevents the listener from being cleared during the startup
 	// check.
 	s.closeMu.Lock()
-	if s.listener == nil {
-		s.closeMu.Unlock()
-		return errors.New("doq: server not listening")
-	}
+	// Check shutdown first: Stop clears s.listener, so Serve after Stop must
+	// report a clean shutdown rather than "not listening".
 	if s.ctx.Err() != nil {
 		s.closeMu.Unlock()
 		return nil
+	}
+	if s.listener == nil {
+		s.closeMu.Unlock()
+		return errors.New("doq: server not listening")
 	}
 	s.wg.Add(1)
 	s.closeMu.Unlock()
@@ -325,9 +336,16 @@ func (s *DoQServer) acceptLoop() {
 
 		// Check global connection limit
 		s.activeConnsMu.Lock()
+		// Stop snapshots s.conns under activeConnsMu after cancelling s.ctx,
+		// so a connection accepted during shutdown is closed here instead.
+		if s.ctx.Err() != nil {
+			s.activeConnsMu.Unlock()
+			_ = conn.CloseWithError(doqNoError, "server shutting down")
+			return
+		}
 		if s.activeConns >= DoQMaxConnections {
 			s.activeConnsMu.Unlock()
-			if err := conn.CloseWithError(0x05, "connection limit reached"); err != nil {
+			if err := conn.CloseWithError(doqExcessiveLoad, "connection limit reached"); err != nil {
 				atomic.AddUint64(&s.errors, 1)
 				util.Warnf("doq: failed to close over-limit connection: %v", err)
 			}
@@ -342,7 +360,7 @@ func (s *DoQServer) acceptLoop() {
 			s.ipConnsMu.Unlock()
 			s.activeConns--
 			s.activeConnsMu.Unlock()
-			if err := conn.CloseWithError(0x05, "per-IP connection limit reached"); err != nil {
+			if err := conn.CloseWithError(doqExcessiveLoad, "per-IP connection limit reached"); err != nil {
 				atomic.AddUint64(&s.errors, 1)
 				util.Warnf("doq: failed to close per-IP over-limit connection: %v", err)
 			}
@@ -350,6 +368,7 @@ func (s *DoQServer) acceptLoop() {
 		}
 		s.ipConns[ip]++
 		s.ipConnsMu.Unlock()
+		s.conns[conn] = struct{}{}
 		s.activeConnsMu.Unlock()
 
 		atomic.AddUint64(&s.connectionsAccepted, 1)
@@ -382,6 +401,7 @@ func (s *DoQServer) handleConnection(conn *quic.Conn, ip string) {
 	defer func() {
 		s.activeConnsMu.Lock()
 		s.activeConns--
+		delete(s.conns, conn)
 		s.activeConnsMu.Unlock()
 		s.ipConnsMu.Lock()
 		if s.ipConns[ip] <= 1 {
@@ -489,9 +509,26 @@ func (s *DoQServer) Stop() error {
 	s.cancel()
 	var err error
 	err = errors.Join(err, s.closeListener())
+	s.closeConns()
 	err = errors.Join(err, s.closePacketConn())
 	s.wg.Wait()
 	return err
+}
+
+// closeConns sends CONNECTION_CLOSE (DOQ_NO_ERROR) on every accepted
+// connection. It must run before the UDP socket is closed: closing the socket
+// first tears connections down locally without notifying clients, which then
+// hang until their idle timeout.
+func (s *DoQServer) closeConns() {
+	s.activeConnsMu.Lock()
+	conns := make([]*quic.Conn, 0, len(s.conns))
+	for c := range s.conns {
+		conns = append(conns, c)
+	}
+	s.activeConnsMu.Unlock()
+	for _, c := range conns {
+		_ = c.CloseWithError(doqNoError, "server shutting down")
+	}
 }
 
 func (s *DoQServer) closeListener() error {

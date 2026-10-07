@@ -558,7 +558,7 @@ func TestResponder_SendHostnameResponse_IPv4(t *testing.T) {
 	dst := &net.UDPAddr{IP: net.ParseIP("224.0.0.251"), Port: 5353}
 
 	// sendARecord is a no-op stub, so this just verifies no panic
-	r.sendHostnameResponse("test.local.", ip, dst)
+	r.sendHostnameResponse("test.local.", ip, dst, nil)
 }
 
 func TestResponder_SendHostnameResponse_IPv6Only(t *testing.T) {
@@ -569,7 +569,7 @@ func TestResponder_SendHostnameResponse_IPv6Only(t *testing.T) {
 	dst := &net.UDPAddr{IP: net.ParseIP("224.0.0.251"), Port: 5353}
 
 	// IPv6-only IP: To4() is nil, so sendARecord is never called
-	r.sendHostnameResponse("test.local.", ip, dst)
+	r.sendHostnameResponse("test.local.", ip, dst, nil)
 	// No panic = pass
 }
 
@@ -591,7 +591,7 @@ func TestResponder_SendServiceResponse(t *testing.T) {
 	}
 	dst := &net.UDPAddr{IP: net.ParseIP("224.0.0.251"), Port: 5353}
 
-	r.sendServiceResponse(svc, dst) // no-op stubs, verify no panic
+	r.sendServiceResponse(svc, dst, nil) // no-op stubs, verify no panic
 }
 
 // ---------------------------------------------------------------------------
@@ -1014,7 +1014,7 @@ func TestResponder_SendGoodbye(t *testing.T) {
 	logger := util.NewLogger(util.INFO, util.TextFormat, nil)
 	r := NewResponder(DefaultConfig(), logger)
 
-	r.sendGoodbye("service._http._tcp.local.")
+	r.sendGoodbye("service._http._tcp.local.", nil)
 	// No panic = pass
 }
 

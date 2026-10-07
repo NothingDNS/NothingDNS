@@ -24,6 +24,10 @@ const wsGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 // ErrNotWebSocket is returned when the request is not a valid WebSocket upgrade.
 var ErrNotWebSocket = errors.New("websocket: not a websocket request")
 
+// errCloseSent is returned by writes attempted after a Close frame has been
+// sent (RFC 6455 §5.5.1).
+var errCloseSent = errors.New("websocket: close frame already sent")
+
 // WebSocket rate limiting defaults.
 const (
 	// DefaultWSRateLimitWindow is the sliding window for per-connection rate limiting.
@@ -168,6 +172,10 @@ type Conn struct {
 	// corrupt stream. Distinct from mu, which guards read-side fragmentation
 	// state and is deliberately released before any blocking I/O.
 	writeMu sync.Mutex
+	// closeSent records that a Close frame was written (guarded by writeMu).
+	// RFC 6455 §5.5.1: no frame may follow it, and a received Close is echoed
+	// only when none was sent before.
+	closeSent bool
 
 	// Rate limiting
 	rateWindow time.Time
@@ -363,7 +371,7 @@ func (c *Conn) ReadMessage() (int, []byte, error) {
 			// response is written from the read loop, and a failed write
 			// surfaces to the caller exactly like a failed pong.
 			c.mu.Unlock()
-			if err := c.WriteMessage(0x8, payload); err != nil {
+			if err := c.WriteMessage(0x8, payload); err != nil && !errors.Is(err, errCloseSent) {
 				return 0, nil, err
 			}
 			return 8, payload, nil
@@ -372,7 +380,7 @@ func (c *Conn) ReadMessage() (int, []byte, error) {
 			// Note: WriteMessage will block, holding the lock
 			// This is intentional - we don't want concurrent writes
 			c.mu.Unlock() // Release before blocking write
-			if err := c.WriteMessage(0xA, payload); err != nil {
+			if err := c.WriteMessage(0xA, payload); err != nil && !errors.Is(err, errCloseSent) {
 				return 0, nil, err
 			}
 
@@ -404,6 +412,24 @@ func (c *Conn) writeClose(code int, reason string) error {
 	frame = append(frame, byte(0x80|0x8)) // FIN + close opcode
 	frame = append(frame, byte(len(buf)))
 	frame = append(frame, buf...)
+	if err := c.writeFrame(frame, true); err != nil && !errors.Is(err, errCloseSent) {
+		return err
+	}
+	return nil
+}
+
+// writeFrame emits one complete frame under writeMu so concurrent writers
+// (the caller's write loop and the read loop's pong/close replies) cannot
+// interleave on the wire, and refuses any frame after a Close was sent.
+func (c *Conn) writeFrame(frame []byte, isClose bool) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if c.closeSent {
+		return errCloseSent
+	}
+	if isClose {
+		c.closeSent = true
+	}
 	return util.WriteFull(c.conn, frame)
 }
 
@@ -460,11 +486,9 @@ func (c *Conn) WriteMessage(messageType int, data []byte) error {
 
 	// Emit the complete frame as one unit. A payload larger than the socket
 	// buffer makes util.WriteFull loop over several Write calls, so without
-	// this lock another writer's frame would be spliced into the middle of
+	// writeMu another writer's frame would be spliced into the middle of
 	// this one and the peer would see a corrupt stream.
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	return util.WriteFull(c.conn, buf)
+	return c.writeFrame(buf, messageType == 0x8)
 }
 
 func validateServerMessageType(messageType int, payload []byte) error {

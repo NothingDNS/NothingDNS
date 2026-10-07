@@ -272,11 +272,12 @@ func (r *Responder) RegisterService(svc *Service) error {
 // UnregisterService removes a service from advertisement.
 func (r *Responder) UnregisterService(fullName string) {
 	r.servicesMu.Lock()
+	svc := r.services[fullName]
 	delete(r.services, fullName)
 	r.servicesMu.Unlock()
 
 	// Send goodbye packet (TTL=0)
-	r.sendGoodbye(fullName)
+	r.sendGoodbye(fullName, svc)
 
 	if r.logger != nil {
 		r.logger.Infof("mDNS: unregistered service %s", fullName)
@@ -439,13 +440,21 @@ func (r *Responder) handleQuery(data []byte, src *net.UDPAddr) {
 		return
 	}
 
+	// RFC 6762 §6.7: a query whose source port is not the mDNS port comes
+	// from a legacy (one-shot) resolver, which matches the reply by ID and
+	// Question. Such replies MUST echo the query ID and repeat the Question.
+	var lq *legacyQuery
+	if src != nil && src.Port != r.config.Port {
+		lq = &legacyQuery{id: msg.Header.ID, questions: msg.Questions}
+	}
+
 	// Hostname queries: exact match on (lower-case, no trailing dot).
 	r.hostnamesMu.RLock()
 	for hostname, ip := range r.hostnames {
 		host := strings.ToLower(strings.TrimSuffix(hostname, "."))
 		for _, qn := range qNames {
 			if qn == host {
-				r.sendHostnameResponse(hostname, ip, src)
+				r.sendHostnameResponse(hostname, ip, src, lq)
 				break
 			}
 		}
@@ -464,7 +473,7 @@ func (r *Responder) handleQuery(data []byte, src *net.UDPAddr) {
 		full := strings.ToLower(strings.TrimSuffix(svc.FullServiceName(), "."))
 		for _, qn := range qNames {
 			if qn == stype || qn == full {
-				r.sendServiceResponse(svc, src)
+				r.sendServiceResponse(svc, src, lq)
 				break
 			}
 		}
@@ -493,26 +502,77 @@ func (r *Responder) handleResponse(data []byte, src *net.UDPAddr) {
 // matches and could be spoofed by an off-link attacker who knew the
 // hostname/service string. Keep no shim — call sites have been updated.
 
+// legacyQuery carries what a legacy unicast reply must echo (RFC 6762 §6.7).
+// nil means an ordinary mDNS response or announcement.
+type legacyQuery struct {
+	id        uint16
+	questions []*protocol.Question
+}
+
+// sendReply sends msg to dst, first echoing the legacy query's ID and
+// Question section when lq is non-nil (RFC 6762 §6.7).
+func (r *Responder) sendReply(msg *protocol.Message, dst *net.UDPAddr, lq *legacyQuery) {
+	if lq != nil {
+		msg.Header.ID = lq.id
+		for _, q := range lq.questions {
+			if q != nil && q.Name != nil {
+				msg.Questions = append(msg.Questions, q)
+			}
+		}
+		msg.Header.QDCount = uint16(len(msg.Questions))
+	}
+	r.sendMulticast(msg, dst)
+}
+
 // sendHostnameResponse sends an A/AAAA record response for a hostname query.
-func (r *Responder) sendHostnameResponse(hostname string, ip net.IP, dst *net.UDPAddr) {
+func (r *Responder) sendHostnameResponse(hostname string, ip net.IP, dst *net.UDPAddr, lq *legacyQuery) {
 	// For IPv4, send A record
 	if ip4 := ip.To4(); ip4 != nil {
-		r.sendARecord(hostname, ip4, dst)
+		r.sendARecord(hostname, ip4, dst, lq)
 	} else {
 		// For IPv6, send AAAA record
-		r.sendAAAARecord(hostname, ip, dst)
+		r.sendAAAARecord(hostname, ip, dst, lq)
 	}
 }
 
 // sendServiceResponse sends SRV, TXT, and PTR records for a service.
-func (r *Responder) sendServiceResponse(svc *Service, dst *net.UDPAddr) {
-	// Send service response with SRV and TXT
-	r.sendSRVRecord(svc, dst)
-	r.sendTXTRecord(svc, dst)
+func (r *Responder) sendServiceResponse(svc *Service, dst *net.UDPAddr, lq *legacyQuery) {
+	// The PTR (<type>.<domain> -> instance) is what a DNS-SD browse asks
+	// for (RFC 6763 §4.1); SRV and TXT then resolve the instance.
+	r.sendPTRRecord(svc, dst, lq)
+	r.sendSRVRecord(svc, dst, lq)
+	r.sendTXTRecord(svc, dst, lq)
+}
+
+// sendPTRRecord sends the service-type PTR record for a service instance.
+func (r *Responder) sendPTRRecord(svc *Service, dst *net.UDPAddr, lq *legacyQuery) {
+	rr, err := servicePTRRecord(svc, svc.TTL)
+	if err != nil {
+		return
+	}
+	msg := protocol.NewMessage(protocol.Header{
+		ID:      r.generateTransactionID(),
+		Flags:   protocol.NewResponseFlags(protocol.RcodeSuccess),
+		QDCount: 0,
+		ANCount: 1,
+	})
+	msg.Header.Flags.AA = true // RFC 6762 §18.4: mDNS responses MUST set AA
+	msg.Answers = append(msg.Answers, rr)
+	r.sendReply(msg, dst, lq)
+}
+
+// servicePTRRecord builds "<type>.<domain>. PTR <instance full name>".
+func servicePTRRecord(svc *Service, ttl uint32) (*protocol.ResourceRecord, error) {
+	target, err := protocol.ParseName(svc.FullServiceName())
+	if err != nil {
+		return nil, err
+	}
+	return protocol.NewResourceRecord(svc.ServiceTypeName(), protocol.TypePTR, protocol.ClassIN, ttl,
+		&protocol.RDataPTR{PtrDName: target})
 }
 
 // sendARecord sends an A record response.
-func (r *Responder) sendARecord(name string, ip net.IP, dst *net.UDPAddr) {
+func (r *Responder) sendARecord(name string, ip net.IP, dst *net.UDPAddr, lq *legacyQuery) {
 	// Build DNS response message
 	msg := protocol.NewMessage(protocol.Header{
 		ID:      r.generateTransactionID(),
@@ -540,11 +600,11 @@ func (r *Responder) sendARecord(name string, ip net.IP, dst *net.UDPAddr) {
 	msg.Answers = append(msg.Answers, rr)
 
 	// Send the response
-	r.sendMulticast(msg, dst)
+	r.sendReply(msg, dst, lq)
 }
 
 // sendAAAARecord sends an AAAA record response.
-func (r *Responder) sendAAAARecord(name string, ip net.IP, dst *net.UDPAddr) {
+func (r *Responder) sendAAAARecord(name string, ip net.IP, dst *net.UDPAddr, lq *legacyQuery) {
 	// Build DNS response message
 	msg := protocol.NewMessage(protocol.Header{
 		ID:      r.generateTransactionID(),
@@ -566,11 +626,11 @@ func (r *Responder) sendAAAARecord(name string, ip net.IP, dst *net.UDPAddr) {
 	msg.Answers = append(msg.Answers, rr)
 
 	// Send the response
-	r.sendMulticast(msg, dst)
+	r.sendReply(msg, dst, lq)
 }
 
 // sendSRVRecord sends an SRV record response.
-func (r *Responder) sendSRVRecord(svc *Service, dst *net.UDPAddr) {
+func (r *Responder) sendSRVRecord(svc *Service, dst *net.UDPAddr, lq *legacyQuery) {
 	// Build DNS response message
 	msg := protocol.NewMessage(protocol.Header{
 		ID:      r.generateTransactionID(),
@@ -600,11 +660,11 @@ func (r *Responder) sendSRVRecord(svc *Service, dst *net.UDPAddr) {
 	msg.Answers = append(msg.Answers, rr)
 
 	// Send the response
-	r.sendMulticast(msg, dst)
+	r.sendReply(msg, dst, lq)
 }
 
 // sendTXTRecord sends a TXT record response.
-func (r *Responder) sendTXTRecord(svc *Service, dst *net.UDPAddr) {
+func (r *Responder) sendTXTRecord(svc *Service, dst *net.UDPAddr, lq *legacyQuery) {
 	// Build DNS response message
 	msg := protocol.NewMessage(protocol.Header{
 		ID:      r.generateTransactionID(),
@@ -632,7 +692,7 @@ func (r *Responder) sendTXTRecord(svc *Service, dst *net.UDPAddr) {
 	msg.Answers = append(msg.Answers, rr)
 
 	// Send the response
-	r.sendMulticast(msg, dst)
+	r.sendReply(msg, dst, lq)
 }
 
 // sendQuery sends an mDNS query.
@@ -661,8 +721,9 @@ func (r *Responder) sendQuery(name string, qtype uint16) {
 	r.sendMulticast(msg, multicastAddr)
 }
 
-// sendGoodbye sends a goodbye packet (TTL=0) for a service.
-func (r *Responder) sendGoodbye(fullName string) {
+// sendGoodbye sends a goodbye packet (TTL=0) for a service. svc, when known,
+// adds the TTL=0 PTR that DNS-SD browsers key their instance lists on.
+func (r *Responder) sendGoodbye(fullName string, svc *Service) {
 	// Build DNS response message with TTL=0 to indicate removal
 	msg := protocol.NewMessage(protocol.Header{
 		ID:      r.generateTransactionID(),
@@ -688,6 +749,14 @@ func (r *Responder) sendGoodbye(fullName string) {
 	if err == nil {
 		msg.Answers = append(msg.Answers, txtRR)
 	}
+
+	// Add PTR record with TTL=0 so browsers drop the instance (RFC 6762 §10.1)
+	if svc != nil {
+		if ptrRR, err := servicePTRRecord(svc, 0); err == nil {
+			msg.Answers = append(msg.Answers, ptrRR)
+		}
+	}
+	msg.Header.ANCount = uint16(len(msg.Answers))
 
 	// Send to multicast address
 	multicastAddr := &net.UDPAddr{
@@ -753,7 +822,7 @@ func (r *Responder) announceService(svc *Service) {
 		IP:   net.ParseIP(r.config.MulticastIP),
 		Port: r.config.Port,
 	}
-	r.sendServiceResponse(svc, multicastAddr)
+	r.sendServiceResponse(svc, multicastAddr, nil)
 }
 
 // announceHostname sends hostname announcement.
@@ -762,7 +831,7 @@ func (r *Responder) announceHostname(hostname string, ip net.IP) {
 		IP:   net.ParseIP(r.config.MulticastIP),
 		Port: r.config.Port,
 	}
-	r.sendHostnameResponse(hostname, ip, multicastAddr)
+	r.sendHostnameResponse(hostname, ip, multicastAddr, nil)
 }
 
 // probeHostname probes for hostname conflicts (RFC 6762 Section 8.1).

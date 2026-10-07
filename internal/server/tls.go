@@ -310,27 +310,26 @@ func (s *TLSServer) Serve() error {
 		return errors.New("server not listening")
 	}
 
-	// Start connection handler workers
-	connChan := make(chan net.Conn, s.workers*2)
-
-	for i := 0; i < s.workers; i++ {
-		s.wg.Add(1)
-		go s.worker(connChan)
-	}
-
-	// Accept loop
+	// Accept loop. Each accepted connection gets its own goroutine (F72),
+	// bounded by connSem (TLSMaxConnections) and the per-IP cap. A fixed
+	// worker pool let `workers` idle or never-handshaking connections
+	// starve every other DoT client for up to TLSReadTimeout.
+	var retryDelay time.Duration
 	for {
 		conn, err := s.listener.Accept()
 		if err != nil {
 			if s.ctx.Err() != nil {
 				// Shutting down
-				close(connChan)
 				s.wg.Wait()
 				return nil
 			}
 			atomic.AddUint64(&s.errors, 1)
+			// F73: back off on persistent Accept errors (e.g. EMFILE).
+			retryDelay = nextAcceptRetryDelay(retryDelay)
+			waitAcceptRetry(s.ctx, retryDelay)
 			continue
 		}
+		retryDelay = 0
 
 		// Check global connection limit
 		select {
@@ -357,40 +356,13 @@ func (s *TLSServer) Serve() error {
 		s.ipConnCount[ip]++
 		s.ipConnMu.Unlock()
 
-		// Send to worker, respecting shutdown.
-		// Decrement the per-IP counter on every exit path — exactly once —
-		// so the counter stays correct whether the connection is accepted,
-		// rejected by the limit check, or dropped during shutdown.
-		connSent := false
-		select {
-		case connChan <- conn:
-			connSent = true
-		case <-s.ctx.Done():
-		}
-		if !connSent {
-			// Shutdown path: connection not accepted by worker.
-			// Decrement counter, close conn, release semaphore slot.
-			// Call decrementIPConn directly: it takes ipConnMu itself, and
-			// ipConnMu is a non-reentrant sync.Mutex, so an extra Lock/Unlock
-			// wrapped around the call here self-deadlocked the accept loop
-			// (it held the mutex, then decrementIPConn tried to re-acquire it),
-			// wedging Serve and every worker that later calls decrementIPConn.
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			s.handleConnection(conn)
 			s.decrementIPConn(ip)
-			conn.Close()
-			<-s.connSem
-		}
-	}
-}
-
-// worker handles TLS connections.
-func (s *TLSServer) worker(connChan <-chan net.Conn) {
-	defer s.wg.Done()
-
-	for conn := range connChan {
-		ip := getIP(conn.RemoteAddr())
-		s.handleConnection(conn)
-		s.decrementIPConn(ip)
-		<-s.connSem // Release slot
+			<-s.connSem // Release slot
+		}()
 	}
 }
 

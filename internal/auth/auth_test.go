@@ -325,12 +325,27 @@ func TestCreateUser(t *testing.T) {
 	}
 }
 
+// newRuntimeUserStore builds a store whose users were created at runtime
+// (not config-defined), so they can be updated and deleted (F437).
+func newRuntimeUserStore(t *testing.T, users ...User) *Store {
+	t.Helper()
+	store, err := NewStore(&Config{Secret: "test-secret", TokenExpiry: Duration{Duration: 24 * time.Hour}})
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	if err := store.DeleteUser("admin"); err != nil { // auto-created placeholder
+		t.Fatalf("DeleteUser(placeholder): %v", err)
+	}
+	for _, u := range users {
+		if _, err := store.CreateUser(u.Username, u.Password, u.Role); err != nil {
+			t.Fatalf("CreateUser(%s): %v", u.Username, err)
+		}
+	}
+	return store
+}
+
 func TestUpdateUser(t *testing.T) {
-	store, _ := NewStore(&Config{
-		Secret:      "test-secret",
-		Users:       []User{{Username: "admin", Password: "adminpassword", Role: RoleAdmin}},
-		TokenExpiry: Duration{Duration: 24 * time.Hour},
-	})
+	store := newRuntimeUserStore(t, User{Username: "admin", Password: "adminpassword", Role: RoleAdmin})
 
 	// Update password only
 	user, err := store.UpdateUser("admin", "newpassword", "")
@@ -377,17 +392,10 @@ func TestUpdateUser(t *testing.T) {
 }
 
 func TestUpdateUserAllowsAdminDemotionWhenAnotherAdminRemains(t *testing.T) {
-	store, err := NewStore(&Config{
-		Secret: "test-secret",
-		Users: []User{
-			{Username: "admin", Password: "adminpassword", Role: RoleAdmin},
-			{Username: "otheradmin", Password: "otheradminpassword", Role: RoleAdmin},
-		},
-		TokenExpiry: Duration{Duration: 24 * time.Hour},
-	})
-	if err != nil {
-		t.Fatalf("NewStore: %v", err)
-	}
+	store := newRuntimeUserStore(t,
+		User{Username: "admin", Password: "adminpassword", Role: RoleAdmin},
+		User{Username: "otheradmin", Password: "otheradminpassword", Role: RoleAdmin},
+	)
 
 	user, err := store.UpdateUser("otheradmin", "", RoleOperator)
 	if err != nil {
@@ -428,14 +436,10 @@ func TestUpdateUserRejectsInvalidRole(t *testing.T) {
 }
 
 func TestDeleteUser(t *testing.T) {
-	store, _ := NewStore(&Config{
-		Secret: "test-secret",
-		Users: []User{
-			{Username: "admin", Password: "password", Role: RoleAdmin},
-			{Username: "todelete", Password: "password", Role: RoleViewer},
-		},
-		TokenExpiry: Duration{Duration: 24 * time.Hour},
-	})
+	store := newRuntimeUserStore(t,
+		User{Username: "admin", Password: "password", Role: RoleAdmin},
+		User{Username: "todelete", Password: "password", Role: RoleViewer},
+	)
 
 	// Delete existing user
 	err := store.DeleteUser("todelete")
@@ -479,17 +483,10 @@ func TestDeleteUserPreservingLastAdminRejectsLastAdmin(t *testing.T) {
 }
 
 func TestDeleteUserPreservingLastAdminAllowsAdminWhenAnotherRemains(t *testing.T) {
-	store, err := NewStore(&Config{
-		Secret: "test-secret",
-		Users: []User{
-			{Username: "admin", Password: "password", Role: RoleAdmin},
-			{Username: "otheradmin", Password: "password", Role: RoleAdmin},
-		},
-		TokenExpiry: Duration{Duration: 24 * time.Hour},
-	})
-	if err != nil {
-		t.Fatalf("NewStore: %v", err)
-	}
+	store := newRuntimeUserStore(t,
+		User{Username: "admin", Password: "password", Role: RoleAdmin},
+		User{Username: "otheradmin", Password: "password", Role: RoleAdmin},
+	)
 
 	if err := store.DeleteUserPreservingLastAdmin("otheradmin"); err != nil {
 		t.Fatalf("DeleteUserPreservingLastAdmin: %v", err)
@@ -1394,11 +1391,7 @@ func TestUsernameEdgeCases(t *testing.T) {
 
 // TestPasswordEdgeCases tests password validation edge cases
 func TestPasswordEdgeCases(t *testing.T) {
-	store, _ := NewStore(&Config{
-		Secret:      "test-secret",
-		Users:       []User{{Username: "testuser", Password: "originalpassword", Role: RoleViewer}},
-		TokenExpiry: Duration{Duration: 24 * time.Hour},
-	})
+	store := newRuntimeUserStore(t, User{Username: "testuser", Password: "originalpassword", Role: RoleViewer})
 
 	tests := []struct {
 		name     string
@@ -1450,11 +1443,7 @@ func TestPasswordEdgeCases(t *testing.T) {
 
 // TestEmptyPassword specifically tests empty password behavior
 func TestEmptyPassword(t *testing.T) {
-	store, _ := NewStore(&Config{
-		Secret:      "test-secret",
-		Users:       []User{{Username: "testuser", Password: "originalpassword", Role: RoleViewer}},
-		TokenExpiry: Duration{Duration: 24 * time.Hour},
-	})
+	store := newRuntimeUserStore(t, User{Username: "testuser", Password: "originalpassword", Role: RoleViewer})
 
 	// Update to empty password
 	user, err := store.UpdateUser("testuser", "", "")

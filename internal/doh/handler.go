@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
 	"github.com/nothingdns/nothingdns/internal/server"
@@ -198,6 +199,7 @@ func (h *Handler) serveJSON(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", ContentTypeDNSJSON)
+	w.Header().Set("Cache-Control", cacheControlFor(jrw.response))
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write(jsonData); err != nil {
 		util.Warnf("doh: failed to write JSON response: %v", err)
@@ -234,7 +236,7 @@ func (rw *jsonResponseWriter) ClientInfo() *server.ClientInfo {
 			Protocol: "https",
 		}
 	}
-	ip := net.ParseIP(host)
+	ip, zone := parseRemoteHost(host)
 	if ip == nil {
 		ip = net.IPv4(0, 0, 0, 0)
 	}
@@ -243,6 +245,7 @@ func (rw *jsonResponseWriter) ClientInfo() *server.ClientInfo {
 		Addr: &net.TCPAddr{
 			IP:   ip,
 			Port: parsePort(port),
+			Zone: zone,
 		},
 		Protocol: "https",
 	}
@@ -398,6 +401,7 @@ func (rw *dohResponseWriter) Write(msg *protocol.Message) (int, error) {
 
 	// Write HTTP response
 	rw.w.Header().Set("Content-Type", ContentTypeDNSMessage)
+	rw.w.Header().Set("Cache-Control", cacheControlFor(msg))
 	rw.w.WriteHeader(http.StatusOK)
 	return rw.w.Write(buf[:n])
 }
@@ -410,7 +414,7 @@ func (rw *dohResponseWriter) ClientInfo() *server.ClientInfo {
 			Protocol: "https",
 		}
 	}
-	ip := net.ParseIP(host)
+	ip, zone := parseRemoteHost(host)
 	if ip == nil {
 		ip = net.IPv4(0, 0, 0, 0)
 	}
@@ -419,6 +423,7 @@ func (rw *dohResponseWriter) ClientInfo() *server.ClientInfo {
 		Addr: &net.TCPAddr{
 			IP:   ip,
 			Port: parsePort(port),
+			Zone: zone,
 		},
 		Protocol: "https",
 	}
@@ -427,6 +432,56 @@ func (rw *dohResponseWriter) ClientInfo() *server.ClientInfo {
 // MaxSize returns the maximum response size for DoH.
 func (rw *dohResponseWriter) MaxSize() int {
 	return MaxDNSMessageSize
+}
+
+// cacheControlFor returns an explicit HTTP freshness lifetime for a DNS
+// response (RFC 8484 §5.1): the smallest Answer TTL, or for an answer-less
+// response the smallest SOA TTL/MINIMUM in the Authority section (RFC 2308
+// §5), otherwise 0. Without it a shared HTTP cache may apply heuristic
+// freshness and serve DNS data past its TTL (F293).
+func cacheControlFor(msg *protocol.Message) string {
+	var maxAge uint32
+	found := false
+	lower := func(v uint32) {
+		if !found || v < maxAge {
+			maxAge, found = v, true
+		}
+	}
+	if msg != nil {
+		for _, rr := range msg.Answers {
+			if rr != nil {
+				lower(rr.TTL)
+			}
+		}
+		if !found {
+			for _, rr := range msg.Authorities {
+				if rr == nil || rr.Type != protocol.TypeSOA {
+					continue
+				}
+				lower(rr.TTL)
+				if soa, ok := rr.Data.(*protocol.RDataSOA); ok {
+					lower(soa.Minimum)
+				}
+			}
+		}
+	}
+	return "max-age=" + strconv.FormatUint(uint64(maxAge), 10)
+}
+
+// parseRemoteHost parses the host part of http.Request.RemoteAddr. A
+// link-local IPv6 peer arrives zoned ("fe80::1%eth0"), which net.ParseIP
+// rejects; dropping the zone keeps the real address so ACL, recursion and
+// rate-limit policy see the client instead of a 0.0.0.0 placeholder (F292).
+func parseRemoteHost(host string) (net.IP, string) {
+	zone := ""
+	if i := strings.LastIndexByte(host, '%'); i >= 0 {
+		host, zone = host[:i], host[i+1:]
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return nil, ""
+	}
+	return ip, zone
 }
 
 // parsePort parses a port string to int.
