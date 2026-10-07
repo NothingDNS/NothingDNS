@@ -22,13 +22,16 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check IP-based rate limit
+	// Check IP-based rate limit and reserve the IP's single in-flight
+	// credential check (F272).
 	ip := s.clientIP(r)
-	if rejected, delay := s.loginLimiter.checkRateLimit(ip); rejected {
+	rejected, delay, done := s.loginLimiter.beginAttempt(ip)
+	if rejected {
 		w.Header().Set("Retry-After", retryAfterSeconds(delay))
 		s.writeError(w, http.StatusTooManyRequests, "Too many requests, try again later")
 		return
 	}
+	defer done()
 
 	var req LoginRequest
 	if !s.decode(w, r, &req) {
@@ -92,6 +95,41 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Role:     string(user.Role),
 		Expires:  token.ExpiresAt.Format(time.RFC3339),
 	})
+}
+
+// beginAttempt applies the per-IP login rate limit and admits at most one
+// in-flight credential check per IP. checkRateLimit alone is a check-then-act:
+// the failure is recorded only after the (slow) password verification, so N
+// parallel guesses all passed the check before any failure was recorded and
+// the per-IP progressive delay was bypassed (F272). When not rejected, the
+// caller must call done once its credential check has completed and been
+// recorded.
+func (l *loginRateLimiter) beginAttempt(ip string) (bool, time.Duration, func()) {
+	l.mu.Lock()
+	if l.inFlight == nil {
+		l.inFlight = make(map[string]int)
+	}
+	if l.inFlight[ip] > 0 {
+		l.mu.Unlock()
+		return true, time.Second, func() {}
+	}
+	l.inFlight[ip]++
+	l.mu.Unlock()
+
+	done := func() {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		if l.inFlight[ip] <= 1 {
+			delete(l.inFlight, ip)
+		} else {
+			l.inFlight[ip]--
+		}
+	}
+	if rejected, delay := l.checkRateLimit(ip); rejected {
+		done()
+		return true, delay, func() {}
+	}
+	return false, 0, done
 }
 
 // handleBootstrap creates the first admin user when no users exist.
@@ -182,17 +220,13 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusBadRequest, sanitizeError(err, "Invalid password"))
 			return
 		}
-		// Remove the synthetic admin and create the operator's chosen
-		// account fresh. Using CreateUser (not UpdateUser) means the
-		// new account loses the IsAutoCreated marker and behaves like
-		// any normally-provisioned user from here on out.
-		if err := authStore.DeleteUser("admin"); err != nil {
-			s.writeError(w, http.StatusInternalServerError, sanitizeError(err, "Failed to remove default admin"))
-			return
-		}
-		user, err = authStore.CreateUser(req.Username, req.Password, auth.RoleAdmin)
+		// Replace the synthetic admin with the operator's chosen account
+		// in one step: the new account is created fresh (no IsAutoCreated
+		// marker), and if it cannot be created or persisted the placeholder
+		// stays, instead of leaving a server with zero users (F438).
+		user, err = authStore.ReplaceAutoCreatedAdmin(req.Username, req.Password)
 		if err != nil {
-			s.writeError(w, userWriteErrorStatus(err), sanitizeError(err, "Operation failed"))
+			s.writeUserStoreError(w, err)
 			return
 		}
 	} else if len(users) > 0 {
@@ -201,20 +235,34 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusBadRequest, "Old password required")
 			return
 		}
+		// The OldPassword check is a credential oracle: throttle it with
+		// the same limiter as /auth/login (F273).
+		rejected, delay, done := s.loginLimiter.beginAttempt(ip)
+		if !rejected {
+			defer done()
+			rejected, delay = s.loginLimiter.checkUserRateLimit(ip, req.Username)
+		}
+		if rejected {
+			w.Header().Set("Retry-After", retryAfterSeconds(delay))
+			s.writeError(w, http.StatusTooManyRequests, "Too many requests, try again later")
+			return
+		}
 		if !authStore.VerifyUserPassword(req.Username, req.OldPassword) {
+			s.loginLimiter.recordFailedAttempt(ip, req.Username)
 			s.writeError(w, http.StatusUnauthorized, "Invalid old password")
 			return
 		}
+		s.loginLimiter.recordSuccess(ip, req.Username)
 		user, err = authStore.UpdateUser(req.Username, req.Password, "")
 		if err != nil {
-			s.writeError(w, userWriteErrorStatus(err), sanitizeError(err, "Operation failed"))
+			s.writeUserStoreError(w, err)
 			return
 		}
 	} else {
 		// No users - create the first admin user
 		user, err = authStore.CreateUser(req.Username, req.Password, auth.RoleAdmin)
 		if err != nil {
-			s.writeError(w, userWriteErrorStatus(err), sanitizeError(err, "Operation failed"))
+			s.writeUserStoreError(w, err)
 			return
 		}
 	}
@@ -348,13 +396,16 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		users := authStore.ListUsers()
-		resp := make([]UserResponse, 0, len(users))
+		resp := make([]userListEntry, 0, len(users))
 		for _, u := range users {
-			resp = append(resp, UserResponse{
-				Username: u.Username,
-				Role:     string(u.Role),
-				Created:  u.CreatedAt,
-				Updated:  u.UpdatedAt,
+			resp = append(resp, userListEntry{
+				UserResponse: UserResponse{
+					Username: u.Username,
+					Role:     string(u.Role),
+					Created:  u.CreatedAt,
+					Updated:  u.UpdatedAt,
+				},
+				ConfigDefined: u.ConfigDefined(),
 			})
 		}
 		s.writeJSON(w, http.StatusOK, resp)
@@ -396,7 +447,7 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 
 		user, err := authStore.CreateUser(req.Username, req.Password, role)
 		if err != nil {
-			s.writeError(w, userWriteErrorStatus(err), sanitizeError(err, "Operation failed"))
+			s.writeUserStoreError(w, err)
 			return
 		}
 
@@ -426,6 +477,9 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := authStore.DeleteUserPreservingLastAdmin(username); errors.Is(err, auth.ErrLastAdmin) {
 			s.writeError(w, http.StatusBadRequest, "Cannot delete the last admin user")
+			return
+		} else if errors.Is(err, auth.ErrConfigUser) || errors.Is(err, auth.ErrUsersPersist) {
+			s.writeUserStoreError(w, err)
 			return
 		} else if err != nil {
 			s.writeError(w, http.StatusNotFound, sanitizeError(err, "Not found"))
@@ -488,14 +542,36 @@ func (s *Server) handleRoles(w http.ResponseWriter, r *http.Request) {
 
 // hasRole checks if the current user has at least the required role.
 
+// userListEntry is one element of GET /api/v1/auth/users. ConfigDefined marks
+// users defined in the server config file: they cannot be deleted or changed
+// through the API (409), so the dashboard can disable those actions.
+type userListEntry struct {
+	UserResponse
+	ConfigDefined bool `json:"config_defined"`
+}
+
+// writeUserStoreError writes the response for an auth store error from a
+// user create/update/delete. A users-file write failure is a 500 with a
+// fixed message (the wrapped error carries a filesystem path).
+func (s *Server) writeUserStoreError(w http.ResponseWriter, err error) {
+	if errors.Is(err, auth.ErrUsersPersist) {
+		s.writeError(w, http.StatusInternalServerError, "Failed to save users file; change not applied")
+		return
+	}
+	s.writeError(w, userWriteErrorStatus(err), sanitizeError(err, "Operation failed"))
+}
+
 // userWriteErrorStatus maps auth store errors from creating or updating a
-// user to an HTTP status: 409 for a taken username or a last-admin conflict,
+// user to an HTTP status: 409 for a taken username, a last-admin conflict or a
+// config-defined user (F437), 500 for a users-file write failure (F438),
 // 404 for an unknown user, 400 for input that fails validation (for example
 // a password shorter than 8 characters).
 func userWriteErrorStatus(err error) int {
 	switch {
-	case errors.Is(err, auth.ErrUserExists), errors.Is(err, auth.ErrLastAdmin):
+	case errors.Is(err, auth.ErrUserExists), errors.Is(err, auth.ErrLastAdmin), errors.Is(err, auth.ErrConfigUser):
 		return http.StatusConflict
+	case errors.Is(err, auth.ErrUsersPersist):
+		return http.StatusInternalServerError
 	case strings.Contains(err.Error(), "user not found"):
 		return http.StatusNotFound
 	case strings.HasPrefix(err.Error(), "hashing password"):

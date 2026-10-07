@@ -1059,7 +1059,13 @@ func TestHandleSlaveZones_PendingZoneV2(t *testing.T) {
 		t.Fatalf("AddSlaveZone: %v", err)
 	}
 
-	// Explicitly nil out the zone to simulate pending state
+	// Explicitly nil out the zone to simulate pending state. AddSlaveZone
+	// started a transfer goroutine that reads sz.Zone (completeTransfer), so
+	// stop the manager first: Stop waits for that goroutine, ordering the
+	// bare field write below after it. Without this the write raced the
+	// transfer and -race failed the test intermittently (F482). UpdateZone
+	// is not used because it would also stamp LastTransfer.
+	sm.Stop()
 	zones := sm.GetAllSlaveZones()
 	for _, sz := range zones {
 		sz.Zone = nil

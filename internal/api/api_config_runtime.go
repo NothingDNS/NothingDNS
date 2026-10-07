@@ -6,7 +6,9 @@ package api
 // instead of silently reverting to the config-file value.
 
 import (
+	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/config"
@@ -34,6 +36,22 @@ func (s *Server) persistAndApplyOverrides(patch *config.RuntimeOverrides) error 
 	configGetter := s.configGetter
 	s.runtimeMu.RUnlock()
 
+	// F277: refuse a patch the loader would reject. At start/SIGHUP main.go
+	// applies each persisted section and drops it whole when Config.Validate
+	// fails, so persisting e.g. min_ttl > max_ttl would later silently discard
+	// every other stored field of that section too. Checked under overridesMu
+	// against the merged live config, so two individually valid PUTs cannot
+	// combine into an invalid section. The same holds for the upstream list
+	// (F283): an empty list or a malformed address would make main.go drop
+	// the whole upstream_servers section, reverting every API add/remove.
+	if configGetter != nil {
+		if cfg := configGetter(); cfg != nil {
+			if err := validateOverridePatch(cfg, patch); err != nil {
+				return err
+			}
+		}
+	}
+
 	if file != "" {
 		existing, err := config.LoadRuntimeOverrides(file)
 		if err != nil {
@@ -58,6 +76,47 @@ func (s *Server) persistAndApplyOverrides(patch *config.RuntimeOverrides) error 
 	return nil
 }
 
+// invalidOverrideError reports a runtime override the config loader would
+// reject; handlers answer it with 400 rather than 500.
+type invalidOverrideError struct{ problems []string }
+
+func (e *invalidOverrideError) Error() string {
+	return "invalid configuration: " + strings.Join(e.problems, "; ")
+}
+
+// validateOverridePatch applies patch to a copy of cfg and reports the
+// validation problems the patch introduces (problems cfg already had are not
+// the patch's fault and are ignored).
+func validateOverridePatch(cfg *config.Config, patch *config.RuntimeOverrides) error {
+	candidate := *cfg
+	config.ApplyRuntimeOverrides(&candidate, patch)
+	existing := make(map[string]bool)
+	for _, p := range cfg.Validate() {
+		existing[p] = true
+	}
+	var introduced []string
+	for _, p := range candidate.Validate() {
+		if !existing[p] {
+			introduced = append(introduced, p)
+		}
+	}
+	if len(introduced) > 0 {
+		return &invalidOverrideError{problems: introduced}
+	}
+	return nil
+}
+
+// writeOverridesError answers a persistAndApplyOverrides failure: 400 for a
+// rejected value, 500 for a storage failure.
+func (s *Server) writeOverridesError(w http.ResponseWriter, err error) {
+	var invalid *invalidOverrideError
+	if errors.As(err, &invalid) {
+		s.writeError(w, http.StatusBadRequest, sanitizeError(err, "Invalid configuration value"))
+		return
+	}
+	s.writeError(w, http.StatusInternalServerError, sanitizeError(err, "Failed to save runtime overrides"))
+}
+
 // currentConfig returns the live config, or nil when no getter is registered.
 func (s *Server) currentConfig() *config.Config {
 	s.runtimeMu.RLock()
@@ -75,8 +134,10 @@ func (s *Server) currentConfig() *config.Config {
 // authoritative_only takes effect on the very next query (the pipeline reads it
 // per request). The resolver-construction fields (recursive, max_depth,
 // timeout, edns0_buffer_size, qname_minimization, use_0x20) are read when the
-// iterative resolver is built, so they take effect on the next reload or
-// restart — persisting them is what makes that reload keep the new value.
+// iterative resolver is built: every reload (SIGHUP or POST
+// /api/v1/config/reload) rebuilds it from the config with these persisted
+// overrides applied on top, so they take effect on the next reload or
+// restart. Persisting them is what makes that reload use the new value.
 // resolution.root_hints is deliberately not settable here: a file path must be
 // validated at startup.
 //
@@ -131,7 +192,7 @@ func (s *Server) handleConfigResolution(w http.ResponseWriter, r *http.Request) 
 	}}
 	if err := s.persistAndApplyOverrides(patch); err != nil {
 		util.Warnf("api: failed to persist resolution overrides: %v", err)
-		s.writeError(w, http.StatusInternalServerError, sanitizeError(err, "Failed to save runtime overrides"))
+		s.writeOverridesError(w, err)
 		return
 	}
 
@@ -184,7 +245,7 @@ func (s *Server) handleConfigDNS64(w http.ResponseWriter, r *http.Request) {
 		// Leave the running server matching what is persisted.
 		synth.SetEnabled(previous)
 		util.Warnf("api: failed to persist dns64 override: %v", err)
-		s.writeError(w, http.StatusInternalServerError, sanitizeError(err, "Failed to save runtime overrides"))
+		s.writeOverridesError(w, err)
 		return
 	}
 
@@ -240,7 +301,7 @@ func (s *Server) handleConfigCookie(w http.ResponseWriter, r *http.Request) {
 			util.Warnf("api: failed to restore DNS cookie state after a persist failure: %v", rbErr)
 		}
 		util.Warnf("api: failed to persist cookie override: %v", err)
-		s.writeError(w, http.StatusInternalServerError, sanitizeError(err, "Failed to save runtime overrides"))
+		s.writeOverridesError(w, err)
 		return
 	}
 

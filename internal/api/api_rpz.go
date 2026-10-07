@@ -2,9 +2,13 @@ package api
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/nothingdns/nothingdns/internal/protocol"
+	"github.com/nothingdns/nothingdns/internal/rpz"
 )
 
 func (s *Server) handleRPZ(w http.ResponseWriter, r *http.Request) {
@@ -119,6 +123,22 @@ func (s *Server) handleRPZRules(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		action := parseAction(req.Action)
+		// F282: CNAME and OVERRIDE rules are useless without valid data. The
+		// DNS handler answers a CNAME rule with protocol.ParseName(data) (an
+		// empty value becomes a CNAME to the root) and silently skips an
+		// OVERRIDE rule whose data is not an IP, letting the query through.
+		switch action {
+		case rpz.ActionCNAME:
+			if target, err := protocol.ParseName(req.OverrideData); err != nil || target.IsRoot() {
+				s.writeError(w, http.StatusBadRequest, "override_data must be a domain name for a CNAME rule")
+				return
+			}
+		case rpz.ActionOverride:
+			if net.ParseIP(req.OverrideData) == nil {
+				s.writeError(w, http.StatusBadRequest, "override_data must be an IP address for an OVERRIDE rule")
+				return
+			}
+		}
 		rpzEngine.AddQNAMERule(req.Pattern, action, req.OverrideData)
 		s.writeJSON(w, http.StatusCreated, &MessageResponse{Message: "Rule added"})
 	case http.MethodDelete:

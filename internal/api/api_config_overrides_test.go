@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -440,5 +441,84 @@ func TestPersistAndApplyOverrides_CorruptFileIsReported(t *testing.T) {
 	// The live log level must be rolled back so it matches what is persisted.
 	if util.GetDefaultLogger().Level() == util.DEBUG {
 		t.Error("log level was left changed after the persist failure")
+	}
+}
+
+// F277: a value Config.Validate rejects must be refused up front. Persisted, it
+// would make the loader drop the whole section (and its valid fields) at the
+// next start or SIGHUP.
+func TestRuntimeConfigPUT_RejectsValuesTheLoaderWouldDrop(t *testing.T) {
+	for _, tc := range []struct {
+		name, path, body string
+		resolution       bool
+	}{
+		{"cache min_ttl above max_ttl", "/api/v1/config/cache", `{"size":4242,"min_ttl":90000}`, false},
+		{"cache max_ttl below default_ttl", "/api/v1/config/cache", `{"size":4242,"max_ttl":10}`, false},
+		{"resolution negative timeout", "/api/v1/config/resolution", `{"recursive":true,"timeout":"-5s"}`, true},
+		{"resolution zero timeout", "/api/v1/config/resolution", `{"timeout":"0s"}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newOverridesFixture(t)
+			handler := f.server.handleConfigCache
+			if tc.resolution {
+				handler = f.server.handleConfigResolution
+			}
+			capBefore := f.server.cache.GetConfig().Capacity
+			rec := f.put(t, handler, f.admin, tc.path, tc.body)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+			}
+			if o, err := config.LoadRuntimeOverrides(f.file); err != nil || o != nil {
+				t.Errorf("rejected value was persisted: %+v (err %v)", o, err)
+			}
+			if got := f.server.cache.GetConfig().Capacity; got != capBefore {
+				t.Errorf("live cache capacity = %d, want unchanged %d", got, capBefore)
+			}
+			if f.cfg.Resolution.Timeout != "5s" || f.cfg.Resolution.Recursive {
+				t.Errorf("live resolution config changed: %+v", f.cfg.Resolution)
+			}
+		})
+	}
+
+	// Two individually valid PUTs must not combine into an invalid section.
+	f := newOverridesFixture(t)
+	if rec := f.put(t, f.server.handleConfigCache, f.admin, "/api/v1/config/cache", `{"min_ttl":200}`); rec.Code != http.StatusOK {
+		t.Fatalf("first PUT: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if rec := f.put(t, f.server.handleConfigCache, f.admin, "/api/v1/config/cache", `{"max_ttl":100}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("combining PUT: expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// F278: when the override cannot be saved the handler answers 500, so the
+// running cache and rate limiter must not have been changed either.
+func TestRuntimeConfigPUT_PersistFailureLeavesLiveStateUnchanged(t *testing.T) {
+	f := newOverridesFixture(t)
+	rl := filter.NewRateLimiter(config.RRLConfig{Rate: 5, Burst: 20})
+	t.Cleanup(rl.Stop)
+	rl.SetEnabled(false)
+	f.server.WithRateLimiter(rl)
+	if err := os.WriteFile(f.file, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	before := f.server.cache.GetConfig()
+	if rec := f.put(t, f.server.handleConfigCache, f.admin, "/api/v1/config/cache", `{"size":5555}`); rec.Code != http.StatusInternalServerError {
+		t.Fatalf("cache: expected 500, got %d", rec.Code)
+	}
+	if after := f.server.cache.GetConfig(); after != before {
+		t.Errorf("cache config changed despite the failed save: capacity %d -> %d", before.Capacity, after.Capacity)
+	}
+
+	if rec := f.put(t, f.server.handleConfigRRL, f.admin, "/api/v1/config/rrl", `{"enabled":true}`); rec.Code != http.StatusInternalServerError {
+		t.Fatalf("rrl: expected 500, got %d", rec.Code)
+	}
+	// Disabled limiter allows everything; an enabled one with burst 20 would
+	// refuse the 21st query from one client.
+	ip := net.ParseIP("192.0.2.1")
+	for i := 0; i < 25; i++ {
+		if !rl.Allow(ip) {
+			t.Fatalf("rate limiter was enabled despite the failed save (refused query %d)", i+1)
+		}
 	}
 }

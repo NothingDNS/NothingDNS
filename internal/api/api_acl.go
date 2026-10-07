@@ -51,6 +51,12 @@ func (s *Server) handleACL(w http.ResponseWriter, r *http.Request) {
 		if !s.decode(w, r, &req) {
 			return
 		}
+		// F284: a body without "rules" (or "rules": null) must not wipe the
+		// whole ACL; [] is the explicit way to remove every rule.
+		if req.Rules == nil {
+			s.writeError(w, http.StatusBadRequest, "rules is required (use [] to remove every rule)")
+			return
+		}
 
 		// Convert to config rules
 		configRules := make([]config.ACLRule, 0, len(req.Rules))

@@ -324,6 +324,25 @@ func (s *Server) handleAddRecord(w http.ResponseWriter, r *http.Request, zoneNam
 		s.writeError(w, http.StatusBadRequest, "name, type, and data are required")
 		return
 	}
+	// F267: store the canonical type spelling and refuse a record the zone
+	// file parser cannot read back.
+	req.Type = strings.ToUpper(strings.TrimSpace(req.Type))
+	if err := validateRecordRoundTrip(req.Type, req.Data); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// F268: the SOA is owned by the zone (its serial is bumped on every
+	// change); a second or replaced SOA record was never reflected in it.
+	if req.Type == "SOA" {
+		s.writeError(w, http.StatusBadRequest, soaManagedMessage)
+		return
+	}
+	// F270: CNAME exclusivity (RFC 1034 §3.6.2, RFC 2181 §10.1) and no
+	// duplicate RRs in an RRset (RFC 2181 §5).
+	if status, msg := s.checkRecordAddConflict(zoneName, req.Name, req.Type, req.Data); status != 0 {
+		s.writeError(w, status, msg)
+		return
+	}
 
 	ttl := req.TTL
 	if ttl == 0 {
@@ -381,6 +400,23 @@ func (s *Server) handleUpdateRecord(w http.ResponseWriter, r *http.Request, zone
 
 	if req.Name == "" || req.Type == "" || req.OldData == "" || req.Data == "" {
 		s.writeError(w, http.StatusBadRequest, "name, type, old_data, and data are required")
+		return
+	}
+	req.Type = strings.ToUpper(strings.TrimSpace(req.Type))
+	if err := validateRecordRoundTrip(req.Type, req.Data); err != nil { // F267
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// F268: an SOA edit was answered 200 and then silently reverted by the
+	// serial bump, which rewrites the SOA record from the zone's SOA state.
+	if req.Type == "SOA" {
+		s.writeError(w, http.StatusBadRequest, soaManagedMessage)
+		return
+	}
+	// F270: changing the data to that of another record in the RRset would
+	// leave a duplicate RR.
+	if req.Data != req.OldData && s.recordExists(zoneName, req.Name, req.Type, req.Data) {
+		s.writeError(w, http.StatusConflict, fmt.Sprintf("record already exists: %s %s %s", req.Name, req.Type, req.Data))
 		return
 	}
 
@@ -445,6 +481,11 @@ func (s *Server) handleDeleteRecord(w http.ResponseWriter, r *http.Request, zone
 	var req struct {
 		Name string `json:"name"`
 		Type string `json:"type"`
+		// Data optionally names the single record to delete (the dashboard
+		// sends it for single delete, bulk delete and rename). F419: with
+		// data only that RR is removed (never widened to the RRset, F269);
+		// without data the whole RRset is removed.
+		Data string `json:"data"`
 	}
 	if !s.decode(w, r, &req) {
 		return
@@ -454,8 +495,44 @@ func (s *Server) handleDeleteRecord(w http.ResponseWriter, r *http.Request, zone
 		s.writeError(w, http.StatusBadRequest, "name and type are required")
 		return
 	}
-
-	if routed, ok := s.proposeZoneWrite(w, func() error {
+	req.Type = strings.ToUpper(strings.TrimSpace(req.Type))
+	existing, _ := s.zoneManager.GetRecords(zoneName, req.Name)
+	// F268: deleting the SOA, or the whole apex NS RRset, removed it from the
+	// live zone while the zone file kept writing it from the zone's SOA/NS
+	// state — the server answered without SOA/NS until the next restart
+	// silently brought them back.
+	if req.Type == "SOA" {
+		s.writeError(w, http.StatusBadRequest, soaManagedMessage)
+		return
+	}
+	if req.Type == "NS" && recordsHaveType(existing, "SOA") {
+		s.writeError(w, http.StatusBadRequest, "the zone apex NS RRset cannot be deleted; update the NS record instead")
+		return
+	}
+	if strings.TrimSpace(req.Data) != "" {
+		matched := false
+		for _, rec := range existing {
+			if strings.EqualFold(rec.Type, req.Type) && zone.RDataEqual(req.Type, rec.RData, req.Data) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			s.writeError(w, http.StatusNotFound, fmt.Sprintf("record not found: %s %s %s", req.Name, req.Type, req.Data))
+			return
+		}
+		// F419: delete exactly this RR; its siblings in the RRset stay.
+		if routed, ok := s.proposeZoneWrite(w, func() error {
+			return s.cluster.ProposeDeleteRecordData(zoneName, req.Name, req.Type, req.Data)
+		}); routed {
+			if !ok {
+				return
+			}
+		} else if err := s.zoneManager.DeleteRecordData(zoneName, req.Name, req.Type, req.Data); err != nil {
+			s.writeError(w, http.StatusNotFound, sanitizeError(err, "Not found"))
+			return
+		}
+	} else if routed, ok := s.proposeZoneWrite(w, func() error {
 		return s.cluster.ProposeDeleteRecord(zoneName, req.Name, req.Type)
 	}); routed {
 		if !ok {
@@ -469,6 +546,84 @@ func (s *Server) handleDeleteRecord(w http.ResponseWriter, r *http.Request, zone
 	s.writeJSON(w, http.StatusOK, &MessageResponse{
 		Message: "Record deleted",
 	})
+}
+
+const soaManagedMessage = "the SOA record is managed by the server (its serial is bumped on every change) and cannot be added, edited, or deleted through the records API"
+
+// validateRecordRoundTrip rejects a record type/data pair that the zone file
+// parser cannot read back. Every API mutation is written to the zone file in
+// zone_dir, and startup aborts on any zone-file parse error, so a record the
+// parser rejects (e.g. an unknown type) made the server fail to start (F267).
+func validateRecordRoundTrip(rtype, data string) error {
+	if rtype == "" || strings.ContainsAny(rtype, " \t\r\n;") {
+		return fmt.Errorf("invalid record type %q", rtype)
+	}
+	if strings.ContainsAny(data, "\r\n\x00") {
+		return fmt.Errorf("record data contains a control character")
+	}
+	z, err := zone.ParseFile("record", strings.NewReader("$ORIGIN validate.invalid.\n@ 0 IN "+rtype+" "+data+"\n"))
+	if err != nil {
+		return fmt.Errorf("unsupported record type or data: %s %s", rtype, data)
+	}
+	n := 0
+	for _, recs := range z.Records {
+		for _, rec := range recs {
+			if !strings.EqualFold(rec.Type, rtype) {
+				return fmt.Errorf("unsupported record type %q", rtype)
+			}
+			n++
+		}
+	}
+	if n != 1 {
+		return fmt.Errorf("unsupported record type or data: %s %s", rtype, data)
+	}
+	return nil
+}
+
+func recordsHaveType(records []zone.Record, rtype string) bool {
+	for _, rec := range records {
+		if strings.EqualFold(rec.Type, rtype) {
+			return true
+		}
+	}
+	return false
+}
+
+// recordExists reports whether the RRset name/rtype already holds data.
+func (s *Server) recordExists(zoneName, name, rtype, data string) bool {
+	records, _ := s.zoneManager.GetRecords(zoneName, name)
+	for _, rec := range records {
+		if strings.EqualFold(rec.Type, rtype) && strings.TrimSpace(rec.RData) == strings.TrimSpace(data) {
+			return true
+		}
+	}
+	return false
+}
+
+// checkRecordAddConflict enforces, for a record about to be added, that a
+// CNAME owner holds no other data (RFC 1034 §3.6.2, RFC 2181 §10.1; RRSIG and
+// NSEC may accompany it, RFC 4035 §2.5), that a CNAME RRset is a singleton,
+// and that an RRset holds no duplicate RR (RFC 2181 §5). It returns a zero
+// status when the add may proceed (F270).
+func (s *Server) checkRecordAddConflict(zoneName, name, rtype, data string) (int, string) {
+	existing, _ := s.zoneManager.GetRecords(zoneName, name)
+	cnameCompatible := func(t string) bool {
+		t = strings.ToUpper(t)
+		return t == "RRSIG" || t == "NSEC"
+	}
+	for _, rec := range existing {
+		recType := strings.ToUpper(rec.Type)
+		if recType == rtype && strings.TrimSpace(rec.RData) == strings.TrimSpace(data) {
+			return http.StatusConflict, fmt.Sprintf("record already exists: %s %s %s", name, rtype, data)
+		}
+		if rtype == "CNAME" && !cnameCompatible(recType) {
+			return http.StatusConflict, fmt.Sprintf("%s already has %s data; a CNAME cannot coexist with other records", name, recType)
+		}
+		if recType == "CNAME" && !cnameCompatible(rtype) {
+			return http.StatusConflict, fmt.Sprintf("%s is a CNAME; other records cannot be added at that name", name)
+		}
+	}
+	return 0, ""
 }
 
 // handleExportZone returns a zone in BIND format.

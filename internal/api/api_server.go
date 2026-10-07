@@ -95,15 +95,19 @@ func (s *Server) handleSlaveZones(w http.ResponseWriter, r *http.Request) {
 			status := "pending"
 			serial := sz.GetLastSerial()
 			records := 0
-			if sz.Zone != nil {
+			// GetZone reads the pointer under the slave zone's lock: a
+			// completing transfer replaces it concurrently (F483).
+			if z := sz.GetZone(); z != nil {
 				status = "synced"
-				for _, recs := range sz.Zone.Records {
+				z.RLock()
+				for _, recs := range z.Records {
 					records += len(recs)
 				}
+				z.RUnlock()
 			}
 			lastTransfer := ""
-			if !sz.LastTransfer.IsZero() {
-				lastTransfer = sz.LastTransfer.Format(time.RFC3339)
+			if t := sz.GetLastTransfer(); !t.IsZero() {
+				lastTransfer = t.Format(time.RFC3339)
 			}
 			resp.SlaveZones = append(resp.SlaveZones, SlaveZoneResponse{
 				Zone:         sz.Config.ZoneName,

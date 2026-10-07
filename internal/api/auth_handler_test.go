@@ -390,8 +390,20 @@ func TestHandleBootstrap_ShortPassword(t *testing.T) {
 func TestHandleBootstrap_CreatesFirstAdmin(t *testing.T) {
 	// Create a store that has users (so it won't auto-create a default admin)
 	// but the user we're bootstrapping is different.
-	store := newAuthStoreWithUser(t, "existing", "existingpass123", auth.RoleAdmin)
-	// Remove the user to simulate no-users scenario
+	// Config-defined users cannot be deleted (F437): use a runtime user.
+	cfg, err := auth.DefaultConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := auth.NewStore(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateUser("existing", "existingpass123", auth.RoleAdmin); err != nil {
+		t.Fatal(err)
+	}
+	// Remove both users to simulate no-users scenario
+	store.DeleteUser("admin")
 	store.DeleteUser("existing")
 
 	s := newServerWithAuth(store)

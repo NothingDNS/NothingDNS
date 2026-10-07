@@ -176,7 +176,7 @@ func (s *Server) handleConfigLogging(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		util.GetDefaultLogger().SetLevel(previous)
 		util.Warnf("api: failed to persist logging override: %v", err)
-		s.writeError(w, http.StatusInternalServerError, sanitizeError(err, "Failed to save runtime overrides"))
+		s.writeOverridesError(w, err)
 		return
 	}
 	s.writeJSON(w, http.StatusOK, &MessageResponse{Message: "Logging level updated"})
@@ -225,6 +225,23 @@ func (s *Server) handleConfigRRL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	patch := &config.RuntimeOverrides{RRL: &config.RRLOverride{Enabled: req.Enabled, MaxBuckets: req.MaxBuckets}}
+	// Mirror the setters below: a non-positive rate/burst is ignored, so it
+	// must not be persisted either.
+	if req.Rate != nil && *req.Rate > 0 {
+		patch.RRL.Rate = req.Rate
+	}
+	if req.Burst != nil && *req.Burst > 0 {
+		patch.RRL.Burst = req.Burst
+	}
+	// Persist first (F278): the setters cannot fail, so a failed save leaves
+	// the live limiter untouched instead of changed behind a 500.
+	if err := s.persistAndApplyOverrides(patch); err != nil {
+		util.Warnf("api: failed to persist rrl overrides: %v", err)
+		s.writeOverridesError(w, err)
+		return
+	}
+
 	if req.Enabled != nil {
 		rateLimiter.SetEnabled(*req.Enabled)
 	}
@@ -236,40 +253,18 @@ func (s *Server) handleConfigRRL(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.MaxBuckets != nil {
 		// The bucket cap has no dedicated setter; Reload is the only way in.
-		// It rewrites rate, burst and enabled too, so feed it the merged
-		// values — the current config plus whatever this request changed —
-		// instead of letting it reset them from a bare config struct.
+		// Reload also stores enabled, so feed it the merged value — the current
+		// config plus whatever this request changed. Rate and burst stay zero,
+		// which Reload ignores (F279): the config holds the rate as an int, so
+		// passing it would truncate a fractional live rate set via SetRate.
 		merged := config.RRLConfig{MaxBuckets: *req.MaxBuckets}
 		if cfg := s.currentConfig(); cfg != nil {
 			merged.Enabled = cfg.RRL.Enabled
-			merged.Rate = cfg.RRL.Rate
-			merged.Burst = cfg.RRL.Burst
 		}
 		if req.Enabled != nil {
 			merged.Enabled = *req.Enabled
 		}
-		if req.Rate != nil && *req.Rate > 0 {
-			merged.Rate = int(*req.Rate)
-		}
-		if req.Burst != nil && *req.Burst > 0 {
-			merged.Burst = *req.Burst
-		}
 		rateLimiter.Reload(merged)
-	}
-
-	patch := &config.RuntimeOverrides{RRL: &config.RRLOverride{Enabled: req.Enabled, MaxBuckets: req.MaxBuckets}}
-	// Mirror the setters above: a non-positive rate/burst is ignored, so it
-	// must not be persisted either.
-	if req.Rate != nil && *req.Rate > 0 {
-		patch.RRL.Rate = req.Rate
-	}
-	if req.Burst != nil && *req.Burst > 0 {
-		patch.RRL.Burst = req.Burst
-	}
-	if err := s.persistAndApplyOverrides(patch); err != nil {
-		util.Warnf("api: failed to persist rrl overrides: %v", err)
-		s.writeError(w, http.StatusInternalServerError, sanitizeError(err, "Failed to save runtime overrides"))
-		return
 	}
 
 	s.writeJSON(w, http.StatusOK, &MessageResponse{Message: "RRL configuration updated"})
@@ -367,10 +362,10 @@ func (s *Server) handleConfigCache(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.cache.UpdateConfig(cfg)
-
 	// The request body already speaks the config file's units (entries and
 	// seconds), so it maps straight onto the override — no duration round-trip.
+	// Persisted before the live update (F278), so a rejected or unsaved change
+	// never reaches the running cache.
 	if err := s.persistAndApplyOverrides(&config.RuntimeOverrides{Cache: &config.CacheOverride{
 		Size:              req.Size,
 		DefaultTTL:        req.DefaultTTL,
@@ -383,9 +378,10 @@ func (s *Server) handleConfigCache(w http.ResponseWriter, r *http.Request) {
 		StaleGraceSecs:    req.StaleGraceSecs,
 	}}); err != nil {
 		util.Warnf("api: failed to persist cache overrides: %v", err)
-		s.writeError(w, http.StatusInternalServerError, sanitizeError(err, "Failed to save runtime overrides"))
+		s.writeOverridesError(w, err)
 		return
 	}
+	s.cache.UpdateConfig(cfg)
 
 	s.writeJSON(w, http.StatusOK, &MessageResponse{Message: "Cache configuration updated"})
 }

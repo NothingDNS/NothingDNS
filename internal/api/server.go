@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -44,6 +45,7 @@ type Server struct {
 	config           config.HTTPConfig
 	runtimeMu        sync.RWMutex
 	httpServer       *http.Server
+	tlsCerts         atomic.Pointer[server.CertReloader] // HTTPS certificate; ReloadTLS re-reads it (F610)
 	zoneManager      *zone.Manager
 	cache            *cache.Cache
 	cacheService     *CacheService
@@ -117,6 +119,7 @@ type loginRateLimiter struct {
 	mu           sync.Mutex
 	ipAttempts   map[string]*loginAttempt // IP-based tracking
 	userAttempts map[string]*loginAttempt // (IP, username) pair tracking — prevents username lockout DoS from other IPs
+	inFlight     map[string]int           // IP -> credential checks in progress (F272); see beginAttempt
 }
 
 // loginAttempt tracks failed attempts for a single IP or (IP, username) pair.
@@ -336,15 +339,7 @@ func (r *apiRateLimiter) checkRateLimit(ip string) bool {
 	if !exists {
 		// Enforce max entries to prevent unbounded memory growth
 		if len(r.requests) >= apiRateLimitMaxEntries {
-			var oldestIP string
-			var oldestTime time.Time
-			for k, v := range r.requests {
-				if len(v) > 0 && (oldestIP == "" || v[0].Before(oldestTime)) {
-					oldestIP = k
-					oldestTime = v[0]
-				}
-			}
-			delete(r.requests, oldestIP)
+			r.evictOldestLocked(windowStart)
 		}
 		reqs = []time.Time{}
 	}
@@ -367,6 +362,36 @@ func (r *apiRateLimiter) checkRateLimit(ip string) bool {
 	validReqs = append(validReqs, now)
 	r.requests[ip] = validReqs
 	return false
+}
+
+// evictOldestLocked makes room in a full limiter. F263: it used to scan the
+// whole map for a single victim on every request from a new IP, so a client
+// rotating addresses (an IPv6 /64) made each request O(apiRateLimitMaxEntries)
+// under r.mu. Now one scan drops every entry with no request in the window
+// and, if that frees too little, the oldest tenth by first in-window request,
+// so the scan is amortized over at least apiRateLimitMaxEntries/10 inserts.
+// Caller holds r.mu.
+func (r *apiRateLimiter) evictOldestLocked(windowStart time.Time) {
+	type entry struct {
+		ip    string
+		first time.Time
+	}
+	live := make([]entry, 0, len(r.requests))
+	for k, v := range r.requests {
+		if len(v) == 0 || !v[len(v)-1].After(windowStart) {
+			delete(r.requests, k)
+			continue
+		}
+		live = append(live, entry{k, v[0]})
+	}
+	target := apiRateLimitMaxEntries - apiRateLimitMaxEntries/10
+	if len(live) <= target {
+		return
+	}
+	sort.Slice(live, func(i, j int) bool { return live[i].first.Before(live[j].first) })
+	for _, e := range live[:len(live)-target] {
+		delete(r.requests, e.ip)
+	}
 }
 
 // getResetTime returns when the rate limit will reset for an IP
@@ -856,12 +881,17 @@ func (s *Server) Start() error {
 		return fmt.Errorf("listen API %s: %w", s.config.Bind, err)
 	}
 	if s.config.TLSCertFile != "" && s.config.TLSKeyFile != "" {
-		if _, err := tls.LoadX509KeyPair(s.config.TLSCertFile, s.config.TLSKeyFile); err != nil {
+		certs, err := server.NewCertReloader(s.config.TLSCertFile, s.config.TLSKeyFile)
+		if err != nil {
 			if closeErr := ln.Close(); closeErr != nil {
 				util.Warnf("failed to close API listener after TLS load error: %v", closeErr)
 			}
 			return fmt.Errorf("load API TLS certificate: %w", err)
 		}
+		// Every handshake takes the certificate from the reloadable holder
+		// (F610); ServeTLS is called without file names so it uses it.
+		s.tlsCerts.Store(certs)
+		s.httpServer.TLSConfig = &tls.Config{GetCertificate: certs.GetCertificate} /* #nosec G402 -- MinVersion defaults to TLS 1.2 for servers, as before */
 	}
 
 	// Start rate limiter cleanup after listener setup succeeds, so failed
@@ -874,7 +904,7 @@ func (s *Server) Start() error {
 		// Use TLS if cert and key files are configured
 		if s.config.TLSCertFile != "" && s.config.TLSKeyFile != "" {
 			util.Infof("API server starting with TLS on %s", s.config.Bind)
-			if err := s.httpServer.ServeTLS(ln, s.config.TLSCertFile, s.config.TLSKeyFile); err != nil && err != http.ErrServerClosed {
+			if err := s.httpServer.ServeTLS(ln, "", ""); err != nil && err != http.ErrServerClosed {
 				util.Warnf("API server TLS error: %v", err)
 			}
 		} else {
@@ -893,6 +923,18 @@ func (s *Server) Start() error {
 	}()
 
 	return nil
+}
+
+// ReloadTLS re-reads the HTTPS certificate and key files (F610). New TLS
+// handshakes use the reloaded pair; established connections keep theirs.
+// On error the previous certificate stays in use. It is a no-op when the
+// API is not serving TLS.
+func (s *Server) ReloadTLS() error {
+	certs := s.tlsCerts.Load()
+	if certs == nil {
+		return nil
+	}
+	return certs.Reload()
 }
 
 // SetGoroutineBaseline captures the current goroutine count as the baseline.
@@ -1554,7 +1596,11 @@ func (s *Server) clientIP(r *http.Request) string {
 
 	// X-Forwarded-For: client, proxy1, proxy2, ... (left to right). Walk from
 	// the right, skipping trusted proxies, to find the first untrusted address.
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+	// F262: a proxy may record the client in its own field line (HAProxy
+	// `option forwardfor`) after a client-supplied one; per RFC 9110 §5.3 all
+	// lines form one list, so join them — Header.Get would return only the
+	// first, client-controlled line.
+	if xff := strings.Join(r.Header.Values("X-Forwarded-For"), ","); xff != "" {
 		parts := strings.Split(xff, ",")
 		for i := len(parts) - 1; i >= 0; i-- {
 			cand := strings.TrimSpace(parts[i])

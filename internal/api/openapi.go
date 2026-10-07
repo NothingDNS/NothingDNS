@@ -302,7 +302,8 @@ const OpenAPISpec = `{
           },
           "type": {
             "type": "string",
-            "example": "A"
+            "example": "A",
+            "description": "Record type; case-insensitive, stored upper-case. SOA is refused."
           },
           "ttl": {
             "type": "integer",
@@ -337,7 +338,7 @@ const OpenAPISpec = `{
           },
           "ttl": {
             "type": "integer",
-            "description": "New TTL. Omitted or 0 stores TTL 0; always send it."
+            "description": "New TTL. Omitted keeps the record's current TTL; an explicit 0 stores TTL 0."
           }
         },
         "required": [
@@ -355,13 +356,17 @@ const OpenAPISpec = `{
           },
           "type": {
             "type": "string"
+          },
+          "data": {
+            "type": "string",
+            "description": "Optional RDATA of the single record to delete. Omit to delete the whole RRset."
           }
         },
         "required": [
           "name",
           "type"
         ],
-        "description": "Deletes every record of this type at this owner name."
+        "description": "Deletes one record (data given) or every record of this type at this owner name (data omitted)."
       },
       "BulkPTRRequest": {
         "type": "object",
@@ -1145,6 +1150,34 @@ const OpenAPISpec = `{
           }
         }
       },
+      "UserListEntry": {
+        "type": "object",
+        "properties": {
+          "username": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "admin",
+              "operator",
+              "viewer"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "config_defined": {
+            "type": "boolean",
+            "description": "True for users defined in the server config file; they cannot be deleted or changed through the API (409)."
+          }
+        }
+      },
       "CreateUserRequest": {
         "type": "object",
         "properties": {
@@ -1285,7 +1318,8 @@ const OpenAPISpec = `{
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/ACLRule"
-            }
+            },
+            "description": "Complete new rule list in evaluation order. Required: an empty list [] removes every rule; a missing or null value is refused with 400."
           }
         },
         "required": [
@@ -1439,7 +1473,8 @@ const OpenAPISpec = `{
             "description": "Case-insensitive. Unknown values fall back to NXDOMAIN."
           },
           "override_data": {
-            "type": "string"
+            "type": "string",
+            "description": "Required for CNAME (a non-root domain name) and OVERRIDE (an IPv4 or IPv6 address); the rule is refused with 400 otherwise. Ignored for the other actions."
           }
         },
         "required": [
@@ -1506,7 +1541,8 @@ const OpenAPISpec = `{
           },
           "server": {
             "type": "string",
-            "example": "9.9.9.9:53"
+            "example": "9.9.9.9:53",
+            "description": "host:port (IPv6 as [addr]:port); port 1-65535 is required when adding"
           }
         },
         "required": [
@@ -1751,7 +1787,7 @@ const OpenAPISpec = `{
           "Auth"
         ],
         "summary": "Log in",
-        "description": "No authentication. Returns an opaque bearer token (24 h) and sets the HttpOnly ndns_token cookie. Revokes every earlier token of the user. After a failed attempt the client IP must wait 30 s; 5 failures lock the IP (and the IP+username pair) for 5 minutes.",
+        "description": "No authentication. Returns an opaque bearer token (24 h) and sets the HttpOnly ndns_token cookie. Revokes every earlier token of the user. After a failed attempt the client IP must wait 30 s; 5 failures lock the IP (and the IP+username pair) for 5 minutes. Only one credential check per client IP runs at a time: a concurrent attempt from the same IP is answered 429 with Retry-After: 1 (clients behind one NAT should retry).",
         "security": [],
         "requestBody": {
           "required": true,
@@ -1795,7 +1831,7 @@ const OpenAPISpec = `{
             }
           },
           "429": {
-            "description": "Login throttled; see Retry-After",
+            "description": "Login throttled (failure delay, lockout, or another attempt from the same IP in flight); see Retry-After",
             "content": {
               "application/json": {
                 "schema": {
@@ -1813,7 +1849,7 @@ const OpenAPISpec = `{
           "Auth"
         ],
         "summary": "Create the first admin or reset a password",
-        "description": "No authentication; accepted only from 127.0.0.1 or ::1 (as seen through trusted_proxies). Replaces the auto-created default admin with the given account; when real users exist it resets the password of the named user and requires old_password.",
+        "description": "No authentication; accepted only from 127.0.0.1 or ::1 (as seen through trusted_proxies). Replaces the auto-created default admin with the given account; when real users exist it resets the password of the named user and requires old_password. The old_password check is throttled like /auth/login (429 with Retry-After). Users defined in the config file cannot be reset here (409); change them in the config file.",
         "security": [],
         "requestBody": {
           "required": true,
@@ -1867,7 +1903,7 @@ const OpenAPISpec = `{
             }
           },
           "409": {
-            "description": "User could not be created or updated",
+            "description": "User could not be created or updated, or the user is defined in the config file",
             "content": {
               "application/json": {
                 "schema": {
@@ -1877,7 +1913,17 @@ const OpenAPISpec = `{
             }
           },
           "429": {
-            "description": "API rate limit exceeded (per client IP; see server.http.api_rate_limit)",
+            "description": "Rate limited: API rate limit, or old_password guesses throttled like /auth/login; see Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Failed to save users file; change not applied",
             "content": {
               "application/json": {
                 "schema": {
@@ -2042,7 +2088,7 @@ const OpenAPISpec = `{
         ],
         "summary": "List users",
         "x-required-role": "operator",
-        "description": "Requires the operator role.",
+        "description": "Requires the operator role. config_defined marks users from the config file, which cannot be deleted or changed through the API.",
         "responses": {
           "200": {
             "description": "Users",
@@ -2051,7 +2097,7 @@ const OpenAPISpec = `{
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/User"
+                    "$ref": "#/components/schemas/UserListEntry"
                   }
                 }
               }
@@ -2166,6 +2212,16 @@ const OpenAPISpec = `{
                 }
               }
             }
+          },
+          "500": {
+            "description": "Failed to save users file; change not applied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       },
@@ -2175,7 +2231,7 @@ const OpenAPISpec = `{
         ],
         "summary": "Delete a user (query form)",
         "x-required-role": "admin",
-        "description": "Requires the admin role.",
+        "description": "Requires the admin role. Users defined in the config file cannot be deleted (409).",
         "parameters": [
           {
             "name": "username",
@@ -2238,8 +2294,28 @@ const OpenAPISpec = `{
               }
             }
           },
+          "409": {
+            "description": "User is defined in the config file; change it there",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "429": {
             "description": "API rate limit exceeded (per client IP; see server.http.api_rate_limit)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Failed to save users file; change not applied",
             "content": {
               "application/json": {
                 "schema": {
@@ -2258,7 +2334,7 @@ const OpenAPISpec = `{
         ],
         "summary": "Delete a user",
         "x-required-role": "admin",
-        "description": "Requires the admin role. Other methods on this path return 405.",
+        "description": "Requires the admin role. Other methods on this path return 405. Users defined in the config file cannot be deleted (409).",
         "parameters": [
           {
             "name": "username",
@@ -2321,8 +2397,28 @@ const OpenAPISpec = `{
               }
             }
           },
+          "409": {
+            "description": "User is defined in the config file; change it there",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "429": {
             "description": "API rate limit exceeded (per client IP; see server.http.api_rate_limit)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Failed to save users file; change not applied",
             "content": {
               "application/json": {
                 "schema": {
@@ -2970,7 +3066,7 @@ const OpenAPISpec = `{
         ],
         "summary": "Add a record",
         "x-required-role": "operator",
-        "description": "Requires the operator role. Class is always IN. RDATA is not validated against the type.",
+        "description": "Requires the operator role. Class is always IN. The type is upper-cased and the record must read back as a zone-file line of that type (unknown types and unparseable RDATA are refused). SOA records are managed by the server and cannot be added. A CNAME cannot share its owner name with other data (RRSIG/NSEC excepted), a CNAME RRset holds one record, and an exact duplicate RR is refused.",
         "parameters": [
           {
             "name": "zone",
@@ -3005,7 +3101,7 @@ const OpenAPISpec = `{
             }
           },
           "400": {
-            "description": "Missing fields",
+            "description": "Missing fields, unknown type or RDATA that does not parse for the type, or an SOA record",
             "content": {
               "application/json": {
                 "schema": {
@@ -3044,6 +3140,16 @@ const OpenAPISpec = `{
               }
             }
           },
+          "409": {
+            "description": "Record already exists, or CNAME conflict (CNAME next to other data, a second CNAME, or other data next to a CNAME)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "421": {
             "description": "Not the Raft leader",
             "content": {
@@ -3072,7 +3178,7 @@ const OpenAPISpec = `{
         ],
         "summary": "Replace a record",
         "x-required-role": "operator",
-        "description": "Requires the operator role. Replaces the first record matching name, type and old_data.",
+        "description": "Requires the operator role. Replaces the first record matching name, type and old_data. The new data must parse for the type; SOA records cannot be edited (the server manages the SOA and bumps its serial).",
         "parameters": [
           {
             "name": "zone",
@@ -3107,7 +3213,7 @@ const OpenAPISpec = `{
             }
           },
           "400": {
-            "description": "Missing fields",
+            "description": "Missing fields, data that does not parse for the type, or an SOA record",
             "content": {
               "application/json": {
                 "schema": {
@@ -3146,6 +3252,16 @@ const OpenAPISpec = `{
               }
             }
           },
+          "409": {
+            "description": "The new data duplicates another record of the RRset",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "421": {
             "description": "Not the Raft leader",
             "content": {
@@ -3174,7 +3290,7 @@ const OpenAPISpec = `{
         ],
         "summary": "Delete records",
         "x-required-role": "operator",
-        "description": "Requires the operator role. Deletes every record of the type at the owner name.",
+        "description": "Requires the operator role. With data, deletes only the record of that type at the owner name whose RDATA equals data (compared in canonical form; other records of the RRset stay) and answers 404 when no record matches. Without data, deletes every record of the type at the owner name. SOA records and the zone apex NS RRset cannot be deleted. In a Raft cluster every node must run a version that understands single-record deletes; older nodes apply them as a whole-RRset delete.",
         "parameters": [
           {
             "name": "zone",
@@ -3209,7 +3325,7 @@ const OpenAPISpec = `{
             }
           },
           "400": {
-            "description": "Missing fields",
+            "description": "Missing fields, an SOA record, or the zone apex NS RRset",
             "content": {
               "application/json": {
                 "schema": {
@@ -3239,7 +3355,7 @@ const OpenAPISpec = `{
             }
           },
           "404": {
-            "description": "Zone or records not found",
+            "description": "Zone not found, no records of the type at the name, or no record matching data",
             "content": {
               "application/json": {
                 "schema": {
@@ -3809,7 +3925,7 @@ const OpenAPISpec = `{
             }
           },
           "400": {
-            "description": "Invalid log level",
+            "description": "Invalid log level; or a value the config loader would reject together with the current settings (nothing is applied or persisted)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3847,6 +3963,16 @@ const OpenAPISpec = `{
                 }
               }
             }
+          },
+          "500": {
+            "description": "Failed to save runtime overrides (nothing is applied)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -3858,7 +3984,7 @@ const OpenAPISpec = `{
         ],
         "summary": "Change the per-client DNS rate limiter at runtime",
         "x-required-role": "admin",
-        "description": "Requires the admin role. Applies immediately and is persisted to <storage.data_dir>/runtime_overrides.json, which is re-applied over the config file on reload.",
+        "description": "Requires the admin role. Persisted to <storage.data_dir>/runtime_overrides.json first, then applied to the live limiter; re-applied over the config file on reload.",
         "requestBody": {
           "required": true,
           "content": {
@@ -3880,6 +4006,16 @@ const OpenAPISpec = `{
               }
             }
           },
+          "400": {
+            "description": "Invalid value, or a value the config loader would reject together with the current settings (nothing is applied or persisted)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "401": {
             "description": "Missing, invalid or expired token",
             "content": {
@@ -3902,6 +4038,16 @@ const OpenAPISpec = `{
           },
           "429": {
             "description": "API rate limit exceeded (per client IP; see server.http.api_rate_limit)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Failed to save runtime overrides (nothing is applied)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3930,7 +4076,7 @@ const OpenAPISpec = `{
         ],
         "summary": "Change cache settings at runtime",
         "x-required-role": "admin",
-        "description": "Requires the admin role. Applies immediately and is persisted to <storage.data_dir>/runtime_overrides.json, which is re-applied over the config file on reload.",
+        "description": "Requires the admin role. Persisted to <storage.data_dir>/runtime_overrides.json first, then applied to the live cache; re-applied over the config file on reload. min_ttl/max_ttl/negative_ttl must stay valid together (e.g. min_ttl <= max_ttl <= 86400).",
         "requestBody": {
           "required": true,
           "content": {
@@ -3953,7 +4099,7 @@ const OpenAPISpec = `{
             }
           },
           "400": {
-            "description": "Invalid value or attempt to disable",
+            "description": "Invalid value or attempt to disable; or a value the config loader would reject together with the current settings (nothing is applied or persisted)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3984,6 +4130,16 @@ const OpenAPISpec = `{
           },
           "429": {
             "description": "API rate limit exceeded (per client IP; see server.http.api_rate_limit)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Failed to save runtime overrides (nothing is applied)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4035,7 +4191,7 @@ const OpenAPISpec = `{
             }
           },
           "400": {
-            "description": "Invalid value",
+            "description": "Invalid value; or a value the config loader would reject together with the current settings (nothing is applied or persisted)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4075,7 +4231,7 @@ const OpenAPISpec = `{
             }
           },
           "500": {
-            "description": "Failed to save runtime overrides",
+            "description": "Failed to save runtime overrides (nothing is applied)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4117,7 +4273,7 @@ const OpenAPISpec = `{
             }
           },
           "400": {
-            "description": "enabled missing, or DNS64 not configured at startup",
+            "description": "enabled missing, or DNS64 not configured at startup; or a value the config loader would reject together with the current settings (nothing is applied or persisted)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4157,7 +4313,7 @@ const OpenAPISpec = `{
             }
           },
           "500": {
-            "description": "Failed to save runtime overrides",
+            "description": "Failed to save runtime overrides (nothing is applied)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4199,7 +4355,7 @@ const OpenAPISpec = `{
             }
           },
           "400": {
-            "description": "enabled missing",
+            "description": "enabled missing; or a value the config loader would reject together with the current settings (nothing is applied or persisted)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4239,7 +4395,7 @@ const OpenAPISpec = `{
             }
           },
           "500": {
-            "description": "Failed to save runtime overrides",
+            "description": "Failed to save runtime overrides (nothing is applied)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4341,7 +4497,7 @@ const OpenAPISpec = `{
             }
           },
           "400": {
-            "description": "Invalid rule",
+            "description": "rules missing or null (send [] to remove every rule), or an invalid rule",
             "content": {
               "application/json": {
                 "schema": {
@@ -5093,7 +5249,7 @@ const OpenAPISpec = `{
             }
           },
           "400": {
-            "description": "pattern missing",
+            "description": "pattern missing, or override_data missing or invalid for a CNAME/OVERRIDE rule",
             "content": {
               "application/json": {
                 "schema": {
@@ -5449,7 +5605,7 @@ const OpenAPISpec = `{
         ],
         "summary": "Add or remove one upstream server",
         "x-required-role": "admin",
-        "description": "Requires the admin role. Private and internal addresses are rejected; host names are resolved and pinned to the first public IP. Runtime only.",
+        "description": "Requires the admin role. server must be host:port with a port from 1 to 65535. Private and internal addresses are rejected; host names are resolved and pinned to the first public IP. The resulting server list is persisted to <storage.data_dir>/runtime_overrides.json and re-applied over the config file on reload; a change the config loader would reject (for example removing the last server) is refused with 400 and nothing is changed.",
         "requestBody": {
           "required": true,
           "content": {
@@ -5472,7 +5628,7 @@ const OpenAPISpec = `{
             }
           },
           "400": {
-            "description": "Invalid action or address",
+            "description": "Invalid action, address without a valid port, private address, or a resulting server list the loader would reject (e.g. removing the last server)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5523,6 +5679,16 @@ const OpenAPISpec = `{
           },
           "429": {
             "description": "API rate limit exceeded (per client IP; see server.http.api_rate_limit)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Failed to save runtime overrides; the change was rolled back",
             "content": {
               "application/json": {
                 "schema": {

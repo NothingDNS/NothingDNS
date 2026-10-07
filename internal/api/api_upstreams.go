@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/nothingdns/nothingdns/internal/config"
@@ -77,6 +78,12 @@ func (s *Server) handleUpstreams(w http.ResponseWriter, r *http.Request) {
 				s.writeError(w, http.StatusBadRequest, "Server address required")
 				return
 			}
+			// F283: the pool dials the address as-is, and the persisted list
+			// is dropped at load time when an entry has a bad port.
+			if err := requireUpstreamPort(req.Server); err != nil {
+				s.writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
 			// Validate upstream server is not a private/internal IP (SSRF protection)
 			// and pin the resolved IP to prevent DNS rebinding TOCTOU.
 			pinnedAddr, err := validateAndPinUpstream(req.Server)
@@ -101,7 +108,7 @@ func (s *Server) handleUpstreams(w http.ResponseWriter, r *http.Request) {
 				if rbErr := upstreamClient.RemoveServer(pinnedAddr); rbErr != nil {
 					util.Warnf("api: failed to roll back upstream %s after a persist failure: %v", pinnedAddr, rbErr)
 				}
-				s.writeError(w, http.StatusInternalServerError, sanitizeError(err, "Failed to save runtime overrides"))
+				s.writeOverridesError(w, err)
 				return
 			}
 			s.writeJSON(w, http.StatusOK, &MessageResponse{Message: "Server added: " + pinnedAddr + " (resolved from " + req.Server + ")"})
@@ -136,7 +143,7 @@ func (s *Server) handleUpstreams(w http.ResponseWriter, r *http.Request) {
 				if rbErr := upstreamClient.AddServer(pinnedAddr); rbErr != nil {
 					util.Warnf("api: failed to restore upstream %s after a persist failure: %v", pinnedAddr, rbErr)
 				}
-				s.writeError(w, http.StatusInternalServerError, sanitizeError(err, "Failed to save runtime overrides"))
+				s.writeOverridesError(w, err)
 				return
 			}
 			s.writeJSON(w, http.StatusOK, &MessageResponse{Message: "Server removed: " + pinnedAddr + " (resolved from " + req.Server + ")"})
@@ -161,6 +168,19 @@ func (s *Server) persistUpstreamServers(client *upstream.Client) error {
 		addresses = append(addresses, srv.Address)
 	}
 	return s.persistAndApplyOverrides(&config.RuntimeOverrides{UpstreamServers: &addresses})
+}
+
+// requireUpstreamPort checks that addr is host:port with a port in 1-65535,
+// the form the upstream client dials and the config loader accepts (F283).
+func requireUpstreamPort(addr string) error {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("upstream server must be host:port")
+	}
+	if p, err := strconv.Atoi(port); err != nil || p < 1 || p > 65535 {
+		return fmt.Errorf("upstream server port must be between 1 and 65535")
+	}
+	return nil
 }
 
 // validateAndPinUpstream validates that an upstream server address does not
