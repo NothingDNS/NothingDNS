@@ -250,13 +250,17 @@ TOKEN=$(curl -s -X POST http://127.0.0.1:8080/api/v1/auth/login \
 |---|---|---|
 | 400 | `Invalid request body` | Malformed JSON |
 | 401 | `Invalid credentials` | Unknown user or wrong password |
-| 429 | `Too many requests, try again later` | The client IP failed a login less than 30 s ago, or has 5 failed attempts (locked for 5 minutes). `Retry-After` is set. |
+| 429 | `Too many requests, try again later` | The client IP failed a login less than 30 s ago, has 5 failed attempts (locked for 5 minutes), or another login from the same IP is still being checked (`Retry-After: 1`). `Retry-After` is set. |
 | 429 | `Account locked due to too many failed attempts` | 5 failures for this IP and username pair (5 minutes). `Retry-After` is set. |
 | 503 | `Auth not configured` | No auth store |
 
 Login throttling in practice: **after one wrong password, every login from
 that client IP is refused for 30 seconds**, whatever the username. A
-successful login clears the counters for that IP and username.
+successful login clears the counters for that IP and username. Only one
+credential check per client IP runs at a time: a second, simultaneous login
+from the same IP (for example several users behind one NAT, or a script
+logging in in parallel) is answered `429` with `Retry-After: 1` and should
+simply be retried.
 
 ### GET /api/v1/auth/session
 
@@ -287,7 +291,7 @@ bootstrap endpoint turns that state into a usable account:
 | Current state | Effect |
 |---|---|
 | Only the placeholder `admin` exists | The placeholder is removed and `username` is created with role `admin`. `old_password` is ignored. |
-| Real users exist | Password reset for `username` (any role). `old_password` is required and must match. The user's existing tokens are revoked. |
+| Real users exist | Password reset for `username` (any role). `old_password` is required and must match; wrong guesses are throttled exactly like `/api/v1/auth/login`. The user's existing tokens are revoked. Users defined in the config file cannot be reset here (`409`); change them in the config file. |
 
 Request:
 
@@ -316,6 +320,9 @@ Response `200`, plus `Set-Cookie: ndns_token=...`:
 | 403 | `Bootstrap is only allowed from localhost...` | Not a loopback client |
 | 400 | validation error from the user store | Invalid username or password |
 | 409 | `user already exists` | Username taken |
+| 409 | `user is defined in the config file; change it there` | Reset of a config-defined user (after `old_password` was verified) |
+| 429 | `Too many requests, try again later` | `old_password` guesses throttled like login, or the API rate limit. `Retry-After` is set. |
+| 500 | `Failed to save users file; change not applied` | The users file could not be written; nothing changed (the placeholder admin stays) |
 
 Created accounts are written to the users file (see [Persistence of users](#persistence-of-users)).
 
@@ -364,12 +371,15 @@ curl -s http://127.0.0.1:8080/api/v1/auth/users -H "Authorization: Bearer $TOKEN
 
 ```json
 [
-  {"username":"admin","role":"admin","created_at":"2026-09-16T17:06:19Z","updated_at":"2026-09-16T17:06:19Z"},
-  {"username":"ops","role":"operator","created_at":"2026-09-16T17:07:00Z","updated_at":"2026-09-16T17:07:00Z"}
+  {"username":"admin","role":"admin","created_at":"2026-09-16T17:06:19Z","updated_at":"2026-09-16T17:06:19Z","config_defined":true},
+  {"username":"ops","role":"operator","created_at":"2026-09-16T17:07:00Z","updated_at":"2026-09-16T17:07:00Z","config_defined":false}
 ]
 ```
 
-Order is not stable.
+Order is not stable. `config_defined` is `true` for users defined under
+`server.http.users` in the config file: they cannot be deleted or have their
+password reset through the API (`409`), because the config would restore them
+at the next start; change them in the config file instead.
 
 ### POST /api/v1/auth/users
 
@@ -398,6 +408,7 @@ Response `201`:
 | 400 | `Username and password required` / `Invalid role` | Validation |
 | 409 | `user already exists` | Duplicate |
 | 400 | `password must be at least 8 characters` (or the 128-byte limit) | Weak or oversized password |
+| 500 | `Failed to save users file; change not applied` | The users file could not be written; the user was not created |
 
 There is no endpoint to change a user's role or password other than the
 localhost bootstrap reset. `PUT /api/v1/auth/users` returns 405.
@@ -421,6 +432,8 @@ curl -s -X DELETE http://127.0.0.1:8080/api/v1/auth/users/ops -H "Authorization:
 | 400 | `Cannot delete current user` | Deleting yourself |
 | 400 | `Cannot delete the last admin user` | Would leave no admin |
 | 404 | `user not found` | Unknown user |
+| 409 | `user is defined in the config file; change it there` | `config_defined` user |
+| 500 | `Failed to save users file; change not applied` | The users file could not be written; the user still exists |
 
 Any method other than `DELETE` on `/api/v1/auth/users/{username}` returns 405.
 
@@ -440,11 +453,14 @@ Role: operator.
 
 - Users defined under `server.http.users` in the config file are loaded at
   start and are never written anywhere else. A config user wins over a
-  same-named user in the users file.
+  same-named user in the users file. They are read-only through the API
+  (`config_defined: true`; delete and bootstrap reset answer `409`).
 - Users created or changed at runtime (bootstrap, `POST /api/v1/auth/users`,
   deletions) are saved to `server.http.users_file`, which defaults to
   `<storage.data_dir>/users.json` (mode 0600). The file stores password hashes
-  only.
+  only. If the file cannot be written the request fails with `500` and the
+  in-memory change is rolled back, so what the server runs always matches
+  what a restart restores.
 - With neither `users_file` nor `storage.data_dir`, runtime users are lost on
   restart (the server logs a warning at start).
 
@@ -556,7 +572,7 @@ Full request/response details, examples and error tables are in
 | GET | `/api/v1/zones/{zone}/records?name=` | operator | List records (exact owner filter; max 5000) |
 | POST | `/api/v1/zones/{zone}/records` | operator | Add `{"name","type","ttl","data"}` |
 | PUT | `/api/v1/zones/{zone}/records` | operator | Replace `{"name","type","old_data","data","ttl"}` |
-| DELETE | `/api/v1/zones/{zone}/records` | operator | Delete all records of `{"name","type"}` |
+| DELETE | `/api/v1/zones/{zone}/records` | operator | `{"name","type","data"}` deletes the one record with that RDATA (`404` if none); without `data`, every record of `{"name","type"}` |
 | GET | `/api/v1/zones/{zone}/export` | operator | BIND zone file (`text/plain`, attachment) |
 | POST | `/api/v1/zones/{zone}/ptr-bulk` | operator | Generate PTR (and A) records for an IPv4 CIDR |
 | GET | `/api/v1/zones/{zone}/ptr6-lookup?ip=` | operator | Find the PTR of an IPv6 address |
@@ -569,6 +585,17 @@ Full request/response details, examples and error tables are in
   `storage.data_dir` (reloaded at start) and, when `zone_dir` is set, written
   to zone files. In a Raft cluster the write is replicated first; a follower
   answers `421` with the leader to retry against.
+- Record writes are validated before anything is stored: the type is
+  upper-cased and the record must parse as a zone-file line of that type
+  (`400` otherwise); SOA records cannot be added, edited or deleted, and the
+  zone apex NS RRset cannot be deleted (`400`); a CNAME cannot share its owner
+  name with other data (RRSIG/NSEC excepted), a CNAME RRset holds one record,
+  and an exact duplicate RR is refused (`409`, also for a `PUT` whose new
+  `data` duplicates another record of the RRset).
+- `DELETE` with `data` removes only the matching record (RDATA compared in
+  canonical form: names case-insensitively, TXT exactly) and leaves the rest
+  of the RRset. In a Raft cluster, upgrade every node before relying on it:
+  an older node applies the replicated delete to the whole RRset.
 - Viewers have no access to zone endpoints.
 
 ```bash
@@ -680,6 +707,18 @@ Without `storage.data_dir` there is no file: the change applies to the running
 server, the request still succeeds, and the value is lost on restart (the same
 contract as the ACL without an access policy file).
 
+Every `PUT /api/v1/config/*` (and `PUT /api/v1/upstreams`) checks the merged
+result before anything changes: the request's values are applied to a copy of
+the running configuration and validated exactly as the config loader would at
+the next start or reload. A value that would make the loader drop the section
+— for example `min_ttl` above `max_ttl` or above 86400, a non-positive
+resolution `timeout`, or a combination of two individually valid requests that
+is invalid together — is refused with `400` and neither applied nor persisted.
+Problems the running configuration already had are not blamed on the request.
+The file is written **before** the live value changes; if the write fails the
+request answers `500 {"error":"Failed to save runtime overrides"}` and the
+running server is left unchanged.
+
 The file is validated section by section when it is loaded. A section that
 would produce an invalid configuration is logged and skipped, and the config
 file value is used for it; the remaining sections still apply. A corrupt file is
@@ -710,7 +749,7 @@ curl -s -X PUT http://127.0.0.1:8080/api/v1/config/logging \
 ```
 
 `400 {"error":"Invalid log level"}` for anything else. There is no `format`
-field.
+field. `500` when the overrides file cannot be written (nothing changes).
 
 ### PUT /api/v1/config/rrl
 
@@ -737,7 +776,9 @@ curl -s -X PUT http://127.0.0.1:8080/api/v1/config/rrl \
 {"message":"RRL configuration updated"}
 ```
 
-`400 {"error":"max_buckets must be at least 1"}` for a non-positive bucket cap.
+`400 {"error":"max_buckets must be at least 1"}` for a non-positive bucket cap,
+or `400` for a merged value the config loader would reject. `500` when the
+overrides file cannot be written (the live limiter is left unchanged).
 `503 {"error":"Rate limiter not available"}` when `rrl.enabled` was false at
 start or at the last reload. A `rate` or `burst` of 0 is ignored by the live
 limiter and is not persisted either.
@@ -772,6 +813,8 @@ curl -s -X PUT http://127.0.0.1:8080/api/v1/config/cache \
 |---|---|
 | 400 | `size must be at least 1`, `<field> cannot be negative`, `<field> is too large` |
 | 400 | `cache cannot be disabled at runtime; set cache.enabled=false in the config file and reload` |
+| 400 | the loader's validation error, e.g. `min_ttl (90000) cannot be greater than max_ttl (86400)` — the merged TTLs must stay consistent (`min_ttl` <= `max_ttl` <= 86400) |
+| 500 | `Failed to save runtime overrides` (the live cache is left unchanged) |
 | 503 | `Cache not available` |
 
 ### PUT /api/v1/config/resolution
@@ -804,8 +847,10 @@ curl -s -X PUT http://127.0.0.1:8080/api/v1/config/resolution \
 {"message":"Resolution configuration updated"}
 ```
 
-`400` for a negative `max_depth`, an `edns0_buffer_size` outside 0-65535, or a
-`timeout` that is not a duration.
+`400` for a negative `max_depth`, an `edns0_buffer_size` outside 0-65535, a
+`timeout` that is not a duration or is not positive, or any other merged value
+the config loader would reject. `500` when the overrides file cannot be
+written.
 
 ### PUT /api/v1/config/dns64
 
@@ -830,6 +875,7 @@ curl -s -X PUT http://127.0.0.1:8080/api/v1/config/dns64 \
 |---|---|
 | 400 | `enabled is required` |
 | 400 | `dns64 not configured at startup; set dns64 in the config file and reload` |
+| 500 | `Failed to save runtime overrides` (the live setting is rolled back) |
 
 The second error means no synthesizer exists, because there is no prefix to
 synthesize from — the prefix is read at start-up and cannot be set at runtime.
@@ -857,6 +903,7 @@ curl -s -X PUT http://127.0.0.1:8080/api/v1/config/cookie \
 | Status | Body |
 |---|---|
 | 400 | `enabled is required` |
+| 500 | `Failed to update DNS cookies`, or `Failed to save runtime overrides` (the live setting is rolled back) |
 | 503 | `Cookie control not available` |
 
 ---
@@ -881,6 +928,11 @@ loopback and private networks (`127.0.0.0/8`, `::1/128`, `10.0.0.0/8`,
 `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`, `fe80::/10`), or for every client
 the ACL admits when ACL rules exist or `acl_allow_unrestricted_recursion` is
 true.
+
+**ODoH.** Queries that arrive through Oblivious DoH (RFC 9230) are matched
+against both lists (and RPZ client-IP rules and rate limits) using the address
+of the ODoH **proxy** that connected — the target never sees the end client.
+Allow your proxies' addresses explicitly once any ACL rule exists.
 
 **Persistence.** Changes made with `PUT /api/v1/acl` or
 `PUT /api/v1/acl/recursion` are written (both lists together, mode 0600) to
@@ -925,7 +977,7 @@ Role: admin. Replaces the whole rule list.
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `rules` | array | yes | `[]` removes all rules (everyone may query) |
+| `rules` | array | yes | `[]` removes all rules (everyone may query). A missing or `null` `rules` (for example a typo such as `"rule"`) is refused with `400` instead of clearing the ACL. |
 | `rules[].name` | string | recommended | Used in error messages |
 | `rules[].networks` | string[] | yes | CIDR notation only; a bare IP such as `10.0.0.1` is rejected, use `10.0.0.1/32` |
 | `rules[].action` | string | yes | `allow`, `deny` or `redirect` (case-insensitive) |
@@ -948,6 +1000,7 @@ curl -s -X PUT http://127.0.0.1:8080/api/v1/acl \
 
 | Status | Example body |
 |---|---|
+| 400 | `rules is required (use [] to remove every rule)` |
 | 400 | `ACL rule "bad": invalid CIDR "10.0.0.1": invalid CIDR address: 10.0.0.1` |
 | 400 | `ACL rule "bad": unknown action "block" (expected allow, deny, or redirect)` |
 | 400 | `ACL rule "bad": action "redirect" requires a non-empty redirect target` |
@@ -1180,7 +1233,7 @@ restart.
 |---|---|---|---|
 | `pattern` | string | yes | Domain; lowercased and stored without the trailing dot (`bad.example.` and `bad.example` are the same rule). Wildcards such as `*.example.com` follow RPZ file syntax. |
 | `action` | string | no | `NXDOMAIN`, `NODATA`, `CNAME`, `OVERRIDE`, `DROP`, `PASSTHROUGH`, `TCPONLY` (case-insensitive). **Missing or unknown values become `NXDOMAIN`.** |
-| `override_data` | string | no | Target for `CNAME`/`OVERRIDE` |
+| `override_data` | string | for `CNAME`/`OVERRIDE` | `CNAME`: a non-root domain name; `OVERRIDE`: an IPv4 or IPv6 address. Required for those two actions (`400` otherwise); ignored for the others. |
 
 ```bash
 curl -s -X POST http://127.0.0.1:8080/api/v1/rpz/rules \
@@ -1194,7 +1247,11 @@ Response `201`:
 {"message":"Rule added"}
 ```
 
-`400 {"error":"pattern is required"}`.
+| Status | Body |
+|---|---|
+| 400 | `pattern is required` |
+| 400 | `override_data must be a domain name for a CNAME rule` |
+| 400 | `override_data must be an IP address for an OVERRIDE rule` |
 
 ### DELETE /api/v1/rpz/rules?pattern=
 
@@ -1283,12 +1340,16 @@ trip, 0 before the first one.
 
 ### PUT /api/v1/upstreams
 
-Role: admin. Adds or removes one server of the upstream client. Runtime only.
+Role: admin. Adds or removes one server of the upstream client. The resulting
+server list is persisted to the [runtime overrides file](#runtime-overrides-file)
+and re-applied over the config file on reload; a list the config loader would
+reject (for example an empty one after removing the last server) is refused
+with `400` and nothing changes.
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `action` | string | yes | `add` or `remove` |
-| `server` | string | yes | `host:port`. On `add`, private and internal addresses are rejected; a host name must resolve only to public IPs and is replaced by the first resolved IP. |
+| `server` | string | yes | `host:port` (IPv6 as `[addr]:port`). On `add`, the port is required and must be 1-65535, private and internal addresses are rejected, and a host name must resolve only to public IPs and is replaced by the first resolved IP. |
 
 ```bash
 curl -s -X PUT http://127.0.0.1:8080/api/v1/upstreams \
@@ -1309,9 +1370,12 @@ Remove with the same address that was added (the pinned IP form):
 | Status | Body |
 |---|---|
 | 400 | `Server address required`, `Invalid action: must be 'add' or 'remove'` |
+| 400 | `upstream server must be host:port`, `upstream server port must be between 1 and 65535` |
 | 400 | `Invalid upstream address` (private IP) or a resolution error |
+| 400 | the loader's validation error for the resulting list, e.g. removing the last server |
 | 404 | `server 9.9.9.9:53 not found` |
 | 409 | `server 9.9.9.9:53 already exists` |
+| 500 | `Failed to save runtime overrides` (the change is rolled back) |
 | 503 | `Upstream client not configured` |
 
 ---
@@ -1651,6 +1715,10 @@ and resolves queries itself.
 The config document is JSON, not the binary `ObliviousDoHConfigs` structure
 from RFC 9230.
 
+As a target, the server applies `acl`, `allow_recursion`, RPZ client-IP rules
+and rate limits to the address of the proxy that sent the HTTP request (see
+[ACL and recursion](#9-acl-and-recursion)).
+
 ---
 
 ## 20. Errors, limits and cross-cutting behaviour
@@ -1668,10 +1736,10 @@ from RFC 9230.
 | 403 | Role too low, bootstrap from a non-loopback address, or CORS preflight from a disallowed origin (`origin not allowed`) |
 | 404 | Unknown resource, or an unknown sub-path under a prefix route |
 | 405 | Method not supported (usually with an `Allow` header) |
-| 409 | Conflict (zone or user exists, duplicate upstream) |
+| 409 | Conflict (zone or user exists, duplicate upstream, duplicate record or CNAME conflict, change to a user defined in the config file) |
 | 421 | Zone write sent to a Raft follower; the message names the leader when known |
-| 429 | Rate limited; see `Retry-After` |
-| 500 | Server-side failure (reload failed, file write failed) |
+| 429 | Rate limited, or a login while another login from the same client IP is in flight; see `Retry-After` |
+| 500 | Server-side failure (reload failed, file write failed). A failed write of the users, access-policy or runtime-overrides file leaves the running server unchanged |
 | 503 | The subsystem is disabled or not wired (cache, blocklist, RPZ, cluster, metrics, recursion policy) |
 
 Error messages that contain a `/` or the word `panic` are replaced by a generic
@@ -1698,7 +1766,10 @@ counted by the API limiter.
 The client IP used for rate limiting, login lockout and the bootstrap
 loopback check is the TCP peer address. `X-Forwarded-For` (rightmost address
 that is not itself a trusted proxy) and `X-Real-IP` are honoured only when the
-peer is listed in `server.http.trusted_proxies` (CIDRs or IPs). The same rule
+peer is listed in `server.http.trusted_proxies` (CIDRs or IPs). Multiple
+`X-Forwarded-For` header lines are read as one comma-separated list (RFC 9110
+§5.3), so a proxy that appends its own header line (HAProxy `option
+forwardfor`) is handled the same as one that appends to the existing line. The same rule
 applies to `X-Forwarded-Proto: https`, which sets the cookie's `Secure` flag.
 
 Behind a reverse proxy without `trusted_proxies`, every request appears to

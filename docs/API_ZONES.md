@@ -325,15 +325,20 @@ curl -s -X POST http://127.0.0.1:8080/api/v1/zones/example.com./records \
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | **Yes** | Owner name, relative or absolute. Must not contain `;`, space, tab, `"`, `(`, `)` or control characters. |
-| `type` | string | **Yes** | Record type |
-| `data` | string | **Yes** | RDATA in presentation form. Must not contain newlines or NUL. |
+| `type` | string | **Yes** | Record type (case-insensitive; stored upper-case). `SOA` is refused. |
+| `data` | string | **Yes** | RDATA in presentation form. Must not contain CR, LF or NUL. |
 | `ttl` | uint32 | No | `0` or omitted: the zone's default TTL, or 3600 |
 
 The class is always `IN`. Adding a record does not replace existing records
 with the same name and type; it appends another one.
 
-> RDATA is **not** validated against the record type. `{"type":"A","data":"not-an-ip"}`
-> is accepted and written to the zone file. Validate input on the client side.
+**Validation.** The type and RDATA must be readable by the zone-file parser
+(the record is written to the zone file, and an unreadable zone file would stop
+the server from starting): unknown types, `TYPEnnn` and malformed RDATA such as
+`{"type":"A","data":"not-an-ip"}` are rejected with `400`. A record that would
+duplicate an existing one, a CNAME next to other data (RRSIG/NSEC excepted) or
+other data next to a CNAME is rejected with `409` (RFC 1034 §3.6.2,
+RFC 2181 §5/§10.1).
 
 ### Common data formats
 
@@ -366,6 +371,10 @@ Use absolute names with a trailing dot inside RDATA.
 |--------|-------|-------|
 | `400` | `name, type, and data are required` | Missing field |
 | `400` | `Invalid request body` | Malformed JSON |
+| `400` | `unsupported record type or data: ...` / `unsupported record type "..."` / `invalid record type "..."` / `record data contains a control character` | Type or RDATA the zone-file parser cannot read back |
+| `400` | `the SOA record is managed by the server ...` | `type` is `SOA` (the SOA is owned by the zone; its serial is bumped on every change) |
+| `409` | `record already exists: www A 192.0.2.10` | Duplicate RR |
+| `409` | `www already has A data; a CNAME cannot coexist with other records` / `www is a CNAME; other records cannot be added at that name` | CNAME exclusivity |
 | `404` | `zone example.com. not found` | Unknown zone |
 | `404` | `Not found` / name validation message | Forbidden characters in `name` or `data` (reported as 404) |
 | `421` | `not the Raft leader; ...` | Raft follower |
@@ -410,6 +419,9 @@ curl -s -X PUT http://127.0.0.1:8080/api/v1/zones/example.com./records \
 | Status | Error | Cause |
 |--------|-------|-------|
 | `400` | `name, type, old_data, and data are required` | Missing field |
+| `400` | `unsupported record type or data: ...` (and the other validation messages of `POST`) | New RDATA the zone-file parser cannot read back |
+| `400` | `the SOA record is managed by the server ...` | `type` is `SOA` |
+| `409` | `record already exists: www A 192.0.2.11` | `data` equals another record of the same RRset |
 | `404` | `record not found: ...` | No record matches `name`, `type` and `old_data` |
 | `404` | `zone example.com. not found` | Unknown zone |
 | `404` | `no records found for www.example.com.` | No records at that name |
@@ -420,16 +432,24 @@ curl -s -X PUT http://127.0.0.1:8080/api/v1/zones/example.com./records \
 
 ## DELETE /zones/{zone}/records
 
-Delete **all** records of one type at one owner name. To remove a single value
-from a set (for example one of several A records), delete the set and add back
-the values to keep, or use `PUT` to change a value.
+Delete one record, or all records of one type at one owner name:
+
+- With `data`: only the record whose RDATA equals `data` is removed (compared in
+  canonical form: domain names in RDATA case-insensitively, TXT exactly); the
+  other records of the RRset stay. No match → `404`.
+- Without `data`: the whole RRset (every record of `type` at `name`) is removed.
+
+The SOA record and the zone-apex NS RRset cannot be deleted (`400`); change
+the apex NS records with `PUT`. In a Raft cluster a single-record delete must
+not be used until every node runs a release that supports it — an older node
+deletes the whole RRset instead.
 
 ### Request
 
 ```bash
 curl -s -X DELETE http://127.0.0.1:8080/api/v1/zones/example.com./records \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"name": "www", "type": "A"}'
+  -d '{"name": "www", "type": "A", "data": "192.0.2.10"}'
 ```
 
 ### Request fields
@@ -438,6 +458,7 @@ curl -s -X DELETE http://127.0.0.1:8080/api/v1/zones/example.com./records \
 |-------|------|----------|-------------|
 | `name` | string | **Yes** | Owner name, relative or absolute |
 | `type` | string | **Yes** | Record type (case-insensitive) |
+| `data` | string | No | RDATA of the single record to delete. Omit (or leave blank) to delete the whole RRset. |
 
 ### Response
 
@@ -453,6 +474,9 @@ curl -s -X DELETE http://127.0.0.1:8080/api/v1/zones/example.com./records \
 | Status | Error | Cause |
 |--------|-------|-------|
 | `400` | `name and type are required` | Missing field |
+| `400` | `the SOA record is managed by the server ...` | `type` is `SOA` |
+| `400` | `the zone apex NS RRset cannot be deleted; update the NS record instead` | `type` is `NS` at the zone apex (with or without `data`) |
+| `404` | `record not found: www A 192.0.2.99` | `data` given but no record of the RRset matches it |
 | `404` | `zone example.com. not found` | Unknown zone |
 | `404` | `no records found for www.example.com.` | No records at that name |
 | `404` | `no A record found for www.example.com.` | No record of that type |
@@ -743,7 +767,7 @@ All errors are JSON:
 | `403` | Role too low |
 | `404` | Zone, record or sub-path not found |
 | `405` | Method not allowed |
-| `409` | Conflict (zone already exists, invalid zone name) |
+| `409` | Conflict (zone already exists, invalid zone name, duplicate record, CNAME exclusivity) |
 | `421` | Write sent to a Raft follower |
 | `429` | API rate limit (100 requests per minute per client IP) |
 | `500` | Internal error (reload failure, partial bulk PTR failure) |
@@ -760,7 +784,9 @@ Error texts that contain `/` are replaced by a generic message such as
   isolation.
 - **Input hygiene.** Owner names containing zone-file syntax characters and
   RDATA containing newlines or NUL are rejected, so a request cannot inject
-  lines into a zone file. RDATA is otherwise not validated.
+  lines into a zone file. Record type and RDATA must also parse as a zone-file
+  record (`400` otherwise), so an API write cannot make the zone file
+  unloadable.
 - **Export file names** are sanitised.
 - **Body limit.** Request bodies are limited to 64 KiB.
 - **Logging.** The API logs one line per request (method, path, status,
@@ -830,6 +856,12 @@ curl -s http://127.0.0.1:8080/api/v1/zones/example.org./export \
 ### 6. Delete records
 
 ```bash
+# one record of the RRset
+curl -s -X DELETE http://127.0.0.1:8080/api/v1/zones/example.org./records \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name": "www", "type": "A", "data": "192.0.2.10"}'
+
+# the whole RRset
 curl -s -X DELETE http://127.0.0.1:8080/api/v1/zones/example.org./records \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"name": "www", "type": "A"}'

@@ -49,7 +49,7 @@ sed -i \
   -e "s/\${NOTHINGDNS_ADMIN_PASSWORD}/AdminPassword-1234567890-ABCDE/g" \
   -e "s/\${NOTHINGDNS_METRICS_AUTH_TOKEN}/MetricsToken-1234567890-ABCDEFGHIJKLMNOPQRSTUVWXYZ/g" \
   -e "s/\${NOTHINGDNS_STORAGE_ENCRYPTION_KEY}/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/g" \
-  -e "s/\${NOTHINGDNS_CLUSTER_ENCRYPTION_KEY}/ClusterKey-1234567890-ABCDEFGHIJKLMNOPQRSTUVWXYZ/g" \
+  -e "s/\${NOTHINGDNS_CLUSTER_ENCRYPTION_KEY}/3f9a1c7e5b2d8046f1a3c5e7092b4d6f8a1c3e5079b2d4f6081a3c5e7f9b2d40/g" \
   -e "s/\${NOTHINGDNS_CLUSTER_SNAPSHOT_ENCRYPTION_KEY}/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/g" \
   -e "s/\${POD_NAME}/nothingdns-0/g" \
   -e "s/\${POD_IP}/127.0.0.1/g" \
@@ -63,7 +63,7 @@ NOTHINGDNS_OPERATOR_PASSWORD='OperatorPassword-1234567890-ABCDE' \
 NOTHINGDNS_VIEWER_PASSWORD='ViewerPassword-1234567890-ABCDE' \
 NOTHINGDNS_METRICS_AUTH_TOKEN='MetricsToken-1234567890-ABCDEFGHIJKLMNOPQRSTUVWXYZ' \
 NOTHINGDNS_STORAGE_ENCRYPTION_KEY='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' \
-NOTHINGDNS_CLUSTER_ENCRYPTION_KEY='ClusterKey-1234567890-ABCDEFGHIJKLMNOPQRSTUVWXYZ' \
+NOTHINGDNS_CLUSTER_ENCRYPTION_KEY='3f9a1c7e5b2d8046f1a3c5e7092b4d6f8a1c3e5079b2d4f6081a3c5e7f9b2d40' \
 NOTHINGDNS_CLUSTER_SNAPSHOT_ENCRYPTION_KEY='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
 go run ./cmd/nothingdns -config deploy/production.yaml -validate-production-config
 ```
@@ -96,7 +96,16 @@ scripts/production-smoke.sh
 ### Security Behavior
 
 - Metrics endpoints support auth token wiring in deployment manifests.
-- Zone transfer is deny-by-default through `transfer.allow_list`; the same list also authorizes RFC 1996 NOTIFY (a master permitted for AXFR/IXFR may send NOTIFY, others are refused). AXFR serving no longer depends on stale doc-only `allow-transfer` wording.
+- Zone transfer is deny-by-default through `transfer.allow_list`. AXFR serving no longer depends on stale doc-only `allow-transfer` wording.
+- RFC 1996 NOTIFY for a zone configured under `slave_zones` is accepted only from that zone's `masters` (the host of each `host:port` entry; host names are resolved when the NOTIFY arrives); every other source is answered REFUSED and logged (RFC 1996 §3.10). `transfer.allow_list` does **not** authorize NOTIFY for secondary zones — it still governs NOTIFY for zones that are not configured as `slave_zones`.
+- XoT (zone transfer over TLS, RFC 9103) always negotiates TLS 1.3 and offers ALPN `dot`; `server.xot.min_tls_version` values below 13 have no effect. Secondaries that only speak TLS 1.2, or that offer only other ALPN protocols, fail the handshake.
+- Raft-mode Dynamic DNS: followers answer UPDATE with REFUSED unless `cluster.forward_updates: true`. When forwarding is enabled, the leader receives the UPDATE from the **follower's** address, so `transfer.tsig_keys[].allowed_cidrs` and ACL rules on the leader must include every follower's address (or clients must send UPDATEs straight to the leader). Unsigned UPDATEs are never forwarded. Forwarding needs an advertisable DNS address (`cluster.dns_advertise_addr` or a concrete `server.tcp_bind`/`bind`); config validation rejects `forward_updates: true` without one.
+- A primary with `transfer.also_notify` sends one NOTIFY per zone to every target right after startup (once its DNS listeners are up), in addition to the NOTIFY on every serial change, so secondaries pick up edits made while it was down. Expect that burst after each restart; unanswered NOTIFYs are retried up to 5 times, 5 s apart, without delaying startup.
+- The DNSSEC validator's per-response work limits are fixed (not configurable): a response needing more than 128 signature checks, 512 NSEC3 hashes or 64 zone-cut DS lookups, or relying on NSEC3 with more than 150 iterations, is answered SERVFAIL (EDE 6). See `docs/SPECIFICATION.md` §6.2.1.
+- Mixed-version Raft clusters can diverge: upgrade every node before using per-record API deletes, Raft-mode Dynamic DNS, SOA-prerequisite UPDATEs or `forward_updates`, and before snapshots grow past 4 MiB (`docs/SPECIFICATION.md` §10.4).
+- ODoH target queries (RFC 9230) are evaluated against `acl`, `allow_recursion`, RPZ client-IP rules and rate limits using the address of the ODoH proxy that connected, not the end client (which the target never sees). Deployments with ACL rules must allow their ODoH proxies' addresses.
+- The management API derives the client IP from the whole `X-Forwarded-For` list (every header line) when the peer is in `server.http.trusted_proxies`, so a client-supplied first header line can no longer pose as `127.0.0.1` for `/api/v1/auth/bootstrap` or evade per-IP limits.
+- `/api/v1/auth/login` runs one credential check per client IP at a time; a concurrent attempt from the same IP gets 429 with `Retry-After: 1`. The `old_password` check of `/api/v1/auth/bootstrap` is throttled the same way. Users defined in the config file cannot be deleted or reset through the API (409).
 - Cluster startup no longer fails open. If `cluster.enabled=true` and cluster init/start fails, the daemon startup fails instead of silently running standalone.
 - DSO session IDs now fail closed if `crypto/rand` is unavailable instead of falling back to predictable sequential IDs.
 - DNSSEC `RRSIGForRRSet` now canonicalizes RRSet ordering and propagates RDATA packing errors.
@@ -141,7 +150,7 @@ Recommended generation:
 ```bash
 openssl rand -base64 32  # auth/user/metrics secrets
 openssl rand -hex 32     # persistent zone DB encryption key
-openssl rand -base64 32  # cluster gossip encryption key
+openssl rand -hex 32     # cluster encryption key (gossip + Raft RPC; must be 64 hex chars)
 openssl rand -hex 32     # cluster snapshot encryption key
 ```
 

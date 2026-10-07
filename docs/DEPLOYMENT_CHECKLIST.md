@@ -14,8 +14,8 @@
 | Port | Protocol | Purpose | Required |
 |------|----------|---------|----------|
 | 53 | UDP/TCP | DNS queries | Yes |
-| 53 | TCP | DNS TCP fallback; AXFR/IXFR and RFC 1996 NOTIFY only when `transfer.allow_list` permits it | Yes |
-| 853 | TCP | DNS over TLS (DoT) | Optional |
+| 53 | TCP | DNS TCP fallback; AXFR/IXFR only when `transfer.allow_list` permits it. RFC 1996 NOTIFY for a `slave_zones` zone is accepted only from that zone's `masters`; `allow_list` governs NOTIFY for other zones | Yes |
+| 853 | TCP | DNS over TLS (DoT); XoT zone transfers (TLS 1.3 only, ALPN `dot`) when `server.xot` is enabled | Optional |
 | 8080 | TCP | HTTP API + Dashboard + DoH by default | Yes |
 | 443 | TCP | External HTTPS/DoH load balancer or ingress | Optional |
 | 7946 | UDP/TCP | Cluster gossip | Cluster only |
@@ -192,6 +192,12 @@ acl:
 Both lists can also be managed on the dashboard's ACL page; changes are saved
 to `<storage.data_dir>/access_policy.json`, which then overrides the config.
 
+If ODoH is enabled (`server.http.odoh_enabled`), the ACL, `allow_recursion`,
+RPZ client-IP rules and rate limits see the address of the **ODoH proxy** that
+relays the query, never the end client. Add each proxy's address to an `allow`
+rule (and to `allow_recursion` if the proxy's clients need recursion), or their
+queries are refused once any ACL rule exists.
+
 ### 4. Tune Runtime RRL
 
 ```bash
@@ -209,6 +215,32 @@ dnssec:
   # Empty uses the built-in IANA root trust anchor.
   trust_anchor: ""
 ```
+
+### 6. Zone Transfers and NOTIFY
+
+- **Primary**: list each secondary in `transfer.allow_list` (TSIG recommended);
+  AXFR/IXFR from any other address is refused.
+- **Secondary** (`slave_zones`): NOTIFY for a zone is accepted only from an
+  address in that zone's `masters` list (host names are resolved when the
+  NOTIFY arrives). If the primary sends NOTIFY from a different address than
+  the one you list (for example a separate outbound IP), add that address to
+  `masters` — `transfer.allow_list` does not authorize NOTIFY for secondary
+  zones. Refused NOTIFYs are logged as warnings.
+- **Outgoing NOTIFY** (`transfer.also_notify`): besides a NOTIFY on every
+  serial change, the primary notifies every target once per zone right after
+  startup (when its listeners are up). Make sure each secondary accepts
+  NOTIFY from the primary's source address, and expect that burst after
+  every restart. `also_notify`, `notify_key` and `tsig_keys` changes apply on
+  SIGHUP; `allow_list` and `require_tsig` need a restart.
+- **TLS certificate renewal** (DoT, DoQ, XoT incl. `ca_file`, HTTPS API):
+  send SIGHUP after replacing the files (e.g. from a certbot deploy hook);
+  new handshakes get the new certificate, open connections keep theirs. Check
+  the log — a file that fails to load keeps the old certificate (error
+  logged). Changing a file *path* needs a restart.
+- **XoT** (`server.xot`): the listener accepts TLS 1.3 only and offers ALPN
+  `dot` (RFC 9103); `min_tls_version` below 13 has no effect. Confirm every
+  secondary that pulls over XoT supports TLS 1.3, and either offers ALPN `dot`
+  or none — a client offering only other ALPN protocols fails the handshake.
 
 ## Monitoring Setup
 
@@ -278,7 +310,7 @@ export NOTHINGDNS_OPERATOR_PASSWORD="$(openssl rand -base64 32)"
 export NOTHINGDNS_VIEWER_PASSWORD="$(openssl rand -base64 32)"
 export NOTHINGDNS_METRICS_AUTH_TOKEN="$(openssl rand -base64 32)"
 export NOTHINGDNS_STORAGE_ENCRYPTION_KEY="$(openssl rand -hex 32)"
-export NOTHINGDNS_CLUSTER_ENCRYPTION_KEY="$(openssl rand -base64 32)"
+export NOTHINGDNS_CLUSTER_ENCRYPTION_KEY="$(openssl rand -hex 32)"
 export NOTHINGDNS_CLUSTER_SNAPSHOT_ENCRYPTION_KEY="$(openssl rand -hex 32)"
 
 ./nothingdns -validate-production-config -config /etc/nothingdns/nothingdns.yaml
@@ -296,7 +328,8 @@ dig @localhost example.com +dnssec
 # Test TCP
 dig @localhost example.com +tcp
 
-# Test zone transfer only after transfer.allow_list permits this client (the list also authorizes NOTIFY)
+# Test zone transfer only after transfer.allow_list permits this client
+# (NOTIFY for slave_zones is authorized by each zone's masters, not by allow_list)
 dig @localhost example.com AXFR +tcp
 ```
 
@@ -441,12 +474,35 @@ cluster:
       addr: "10.0.0.1:7946"
 ```
 
+### Dynamic DNS in a Raft cluster
+
+- Only the leader applies RFC 2136 UPDATEs. By default followers answer
+  REFUSED; point DDNS clients at the leader, or set
+  `cluster.forward_updates: true` on every node.
+- With forwarding, each node must advertise a reachable DNS address:
+  `cluster.dns_advertise_addr: "10.0.0.1:53"` (required when DNS binds only
+  to `0.0.0.0` / `::`; changing it needs a restart).
+- **Caveat**: the leader sees a forwarded UPDATE as coming from the
+  follower. Add every node's address to `transfer.tsig_keys[].allowed_cidrs`
+  and to ACL rules that must admit UPDATEs, or forwarded UPDATEs fail with
+  NOTAUTH / REFUSED.
+
 ### 3. Verify Cluster
 
 ```bash
 curl http://localhost:8080/api/v1/cluster/status
 curl http://localhost:8080/api/v1/cluster/nodes
 ```
+
+### Upgrading a cluster
+
+Upgrade **all** nodes to the new release before using per-record API
+deletes, Raft-mode Dynamic DNS, UPDATEs with SOA prerequisites or
+`forward_updates`, and before Raft snapshots exceed 4 MiB; an older node
+silently diverges until it installs a newer snapshot. Upgrade primaries and
+secondaries together when they use TSIG-signed AXFR/IXFR. Details:
+`docs/SPECIFICATION.md` §10.4. Rolling back one node to an older release
+re-creates the same mixed-version risk.
 
 ## Rollback Plan
 

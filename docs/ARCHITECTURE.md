@@ -320,7 +320,7 @@ type UDPServer struct {
 ### TLS Server (DoT)
 
 - **RFC 8310 TLS profiles**: Opportunistic, Strict, Privacy
-- **Dynamic certificate reload** via `GetCertificate` callback
+- **Certificate reload on SIGHUP**: `server.CertReloader` served via `GetCertificate` for every handshake (with or without SNI)
 - **ALPN**: `dot` for strict, `dot`, `dns` for opportunistic
 - **TLS 1.3 only** (minimum version)
 - **Cipher suites per RFC 7525**
