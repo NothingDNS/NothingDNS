@@ -1,6 +1,7 @@
 package config
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -301,3 +302,37 @@ func strPtr(s string) *string     { return &s }
 func intPtr(i int) *int           { return &i }
 func boolPtr(b bool) *bool        { return &b }
 func floatPtr(f float64) *float64 { return &f }
+
+// F362: a positive persisted RRL rate (the API accepts any rate > 0) must
+// re-apply as a positive rrl.rate. rrl.rate <= 0 makes the rate limiters fall
+// back to their built-in default, so a sub-1 rate truncated to 0, or a huge one
+// overflowing the int conversion, silently replaced the operator's limit.
+func TestApplyRuntimeOverrides_RRLRateStaysPositive(t *testing.T) {
+	for _, tc := range []struct {
+		rate float64
+		want int
+	}{
+		{0.5, 1},
+		{0.999, 1},
+		{1e300, math.MaxInt},
+		{7, 7},
+		{2.5, 2},
+	} {
+		path := filepath.Join(t.TempDir(), "runtime_overrides.json")
+		rate := tc.rate
+		if err := SaveRuntimeOverrides(path, MergeRuntimeOverridePatch(nil,
+			&RuntimeOverrides{RRL: &RRLOverride{Rate: &rate}})); err != nil {
+			t.Fatalf("save rate=%v: %v", tc.rate, err)
+		}
+		o, err := LoadRuntimeOverrides(path)
+		if err != nil {
+			t.Fatalf("load rate=%v: %v", tc.rate, err)
+		}
+		cfg := DefaultConfig()
+		cfg.RRL.Rate = 100
+		ApplyRuntimeOverrides(cfg, o)
+		if cfg.RRL.Rate != tc.want {
+			t.Errorf("rate %v re-applied as rrl.rate=%d, want %d", tc.rate, cfg.RRL.Rate, tc.want)
+		}
+	}
+}

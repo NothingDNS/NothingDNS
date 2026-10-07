@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 )
@@ -321,20 +322,20 @@ func unmarshalServer(node *Node, cfg *ServerConfig) error {
 		if cfg.HTTP.ODoHAEAD == 0 {
 			cfg.HTTP.ODoHAEAD = 1 // AES-128-GCM
 		}
-		if usersNode := httpNode.Get("users"); usersNode != nil && usersNode.Type == NodeSequence {
-			for _, userNode := range usersNode.Children {
-				if userNode.Type == NodeMapping {
-					cfg.HTTP.Users = append(cfg.HTTP.Users, AuthUserConfig{
-						Username: userNode.GetString("username"),
-						Password: userNode.GetString("password"),
-						Role:     userNode.GetString("role"),
-					})
-					// SECURITY: Zero out password from YAML node after loading
-					// The password is hashed by auth.Store, clear the plaintext
-					if passNode := userNode.Get("password"); passNode != nil {
-						passNode.Value = strings.Repeat("\x00", len(passNode.Value))
-					}
-				}
+		userItems, err := listItems(httpNode, "users", reflect.TypeOf(AuthUserConfig{}))
+		if err != nil {
+			return fmt.Errorf("http: %w", err)
+		}
+		for _, userNode := range userItems {
+			cfg.HTTP.Users = append(cfg.HTTP.Users, AuthUserConfig{
+				Username: userNode.GetString("username"),
+				Password: userNode.GetString("password"),
+				Role:     userNode.GetString("role"),
+			})
+			// SECURITY: Zero out password from YAML node after loading
+			// The password is hashed by auth.Store, clear the plaintext
+			if passNode := userNode.Get("password"); passNode != nil {
+				passNode.Value = strings.Repeat("\x00", len(passNode.Value))
 			}
 		}
 	}

@@ -926,8 +926,10 @@ func TestIsValidQueryType(t *testing.T) {
 		{"CNAME", true},
 		{"TXT", true},
 		{"SRV", true},
-		{"a", true}, // case insensitive
-		{"TYPE123", true},
+		{"a", true},        // case insensitive
+		{"AXFR", true},     // F188: runtime ACL compiler accepts it
+		{"HTTPS", true},    // F188
+		{"TYPE123", false}, // F188: runtime ACL compiler rejects TYPEnnn
 		{"INVALID", false},
 		{"", false},
 	}
@@ -1637,7 +1639,7 @@ func productionReadyTestConfig() *Config {
 	c.Cluster.Enabled = true
 	c.Cluster.ConsensusMode = "raft"
 	c.Cluster.DataDir = "/var/lib/nothingdns/raft"
-	c.Cluster.EncryptionKey = "abcdefghij1234567890ABCDEFGHIJKL"
+	c.Cluster.EncryptionKey = "3f9a1c7e5b2d8046f1a3c5e7092b4d6f8a1c3e5079b2d4f6081a3c5e7f9b2d40"
 	c.Cluster.AllowInsecureCluster = false
 	c.Metrics.Enabled = true
 	c.Metrics.Bind = "127.0.0.1:9153"

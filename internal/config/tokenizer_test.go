@@ -338,14 +338,18 @@ func TestTokenizerQuotedStringEscapeQuote(t *testing.T) {
 }
 
 func TestTokenizerQuotedStringEscapeUnknown(t *testing.T) {
-	// Test unknown escape sequence (keeps the character)
+	// \a is the YAML 1.2 BEL escape; an escape outside the YAML set is an
+	// error rather than silently dropping the backslash (F185).
 	tokenizer := NewTokenizer(`"hello\aworld"`)
 	tok := tokenizer.Next()
 	if tok.Type != TokenString {
 		t.Errorf("expected STRING, got %v", tok.Type)
 	}
-	if tok.Value != "helloaworld" {
-		t.Errorf("expected 'helloaworld', got %q", tok.Value)
+	if tok.Value != "hello\aworld" {
+		t.Errorf("expected \"hello\\aworld\", got %q", tok.Value)
+	}
+	if tok := NewTokenizer(`"hello\qworld"`).Next(); tok.Type != TokenError {
+		t.Errorf("expected ERROR for unknown escape \\q, got %v %q", tok.Type, tok.Value)
 	}
 }
 

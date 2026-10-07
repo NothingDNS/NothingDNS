@@ -281,6 +281,13 @@ func unmarshalToConfig(node *Node, cfg *Config) error {
 	// field for is dropped silently, and a dropped `server.bind` typo turns a
 	// loopback-only deployment into an open resolver.
 	warnUnknownNestedKeys(node, reflect.TypeOf(Config{}))
+	// F192: getBool falls back to the default for a value it does not
+	// recognise, so `require_tsig: ture` silently left TSIG off while the same
+	// typo in an integer key is a load error. Reject it here, once, for every
+	// boolean field.
+	if err := checkBoolValues(node, reflect.TypeOf(Config{}), ""); err != nil {
+		return err
+	}
 	defer cfg.warnACLAllowOnlyANY() // after the ACL section below is populated
 
 	// Server config
@@ -339,9 +346,17 @@ func unmarshalToConfig(node *Node, cfg *Config) error {
 		}
 	}
 
-	// Zones list
-	if zonesNode := node.Get("zones"); zonesNode != nil && zonesNode.Type == NodeSequence {
-		cfg.Zones = zonesNode.getStringSlice()
+	// Zones list. A single scalar is one zone file, as for every other string
+	// list (F193: it used to be dropped silently).
+	if zonesNode := node.Get("zones"); zonesNode != nil {
+		switch {
+		case zonesNode.Type == NodeSequence:
+			cfg.Zones = zonesNode.getStringSlice()
+		case zonesNode.Type == NodeScalar && zonesNode.Value != "":
+			cfg.Zones = []string{zonesNode.Value}
+		case zonesNode.Type == NodeMapping && len(zonesNode.Children) > 0:
+			return fmt.Errorf("zones: expected a list of zone files, got a mapping")
+		}
 	}
 
 	// Zone directory
@@ -365,22 +380,22 @@ func unmarshalToConfig(node *Node, cfg *Config) error {
 	}
 
 	// ACL rules
-	if aclNode := node.Get("acl"); aclNode != nil && aclNode.Type == NodeSequence {
-		for _, ruleNode := range aclNode.Children {
-			if ruleNode.Type == NodeMapping {
-				var rule ACLRule
-				rule.Name = ruleNode.GetString("name")
-				rule.Action = ruleNode.GetString("action")
-				rule.Redirect = ruleNode.GetString("redirect")
-				if networksNode := ruleNode.Get("networks"); networksNode != nil && networksNode.Type == NodeSequence {
-					rule.Networks = networksNode.getStringSlice()
-				}
-				if typesNode := ruleNode.Get("types"); typesNode != nil && typesNode.Type == NodeSequence {
-					rule.Types = typesNode.getStringSlice()
-				}
-				cfg.ACL = append(cfg.ACL, rule)
-			}
+	aclItems, err := listItems(node, "acl", reflect.TypeOf(ACLRule{}))
+	if err != nil {
+		return err
+	}
+	for _, ruleNode := range aclItems {
+		var rule ACLRule
+		rule.Name = ruleNode.GetString("name")
+		rule.Action = ruleNode.GetString("action")
+		rule.Redirect = ruleNode.GetString("redirect")
+		if networksNode := ruleNode.Get("networks"); networksNode != nil && networksNode.Type == NodeSequence {
+			rule.Networks = networksNode.getStringSlice()
 		}
+		if typesNode := ruleNode.Get("types"); typesNode != nil && typesNode.Type == NodeSequence {
+			rule.Types = typesNode.getStringSlice()
+		}
+		cfg.ACL = append(cfg.ACL, rule)
 	}
 
 	// Recursion allow list
@@ -445,42 +460,41 @@ func unmarshalToConfig(node *Node, cfg *Config) error {
 	}
 
 	// Slave zones config
-	if slaveZonesNode := node.Get("slave_zones"); slaveZonesNode != nil && slaveZonesNode.Type == NodeSequence {
-		for _, slaveNode := range slaveZonesNode.Children {
-			if slaveNode.Type == NodeMapping {
-				var slave SlaveZoneConfig
-				slave.ZoneName = slaveNode.GetString("zone_name")
-				slave.TransferType = slaveNode.GetString("transfer_type")
-				if slave.TransferType == "" {
-					slave.TransferType = "ixfr"
-				}
-				slave.TSIGKeyName = slaveNode.GetString("tsig_key_name")
-				slave.TSIGSecret = slaveNode.GetString("tsig_secret")
-				slave.Timeout = slaveNode.GetString("timeout")
-				if slave.Timeout == "" {
-					slave.Timeout = "30s"
-				}
-				slave.RetryInterval = slaveNode.GetString("retry_interval")
-				if slave.RetryInterval == "" {
-					slave.RetryInterval = "5m"
-				}
-				var err error
-				if slave.MaxRetries, err = getRequiredInt(slaveNode, "max_retries", 0); err != nil {
-					return fmt.Errorf("slave_zones: %w", err)
-				}
+	slaveItems, err := listItems(node, "slave_zones", reflect.TypeOf(SlaveZoneConfig{}))
+	if err != nil {
+		return err
+	}
+	for _, slaveNode := range slaveItems {
+		var slave SlaveZoneConfig
+		slave.ZoneName = slaveNode.GetString("zone_name")
+		slave.TransferType = slaveNode.GetString("transfer_type")
+		if slave.TransferType == "" {
+			slave.TransferType = "ixfr"
+		}
+		slave.TSIGKeyName = slaveNode.GetString("tsig_key_name")
+		slave.TSIGSecret = slaveNode.GetString("tsig_secret")
+		slave.Timeout = slaveNode.GetString("timeout")
+		if slave.Timeout == "" {
+			slave.Timeout = "30s"
+		}
+		slave.RetryInterval = slaveNode.GetString("retry_interval")
+		if slave.RetryInterval == "" {
+			slave.RetryInterval = "5m"
+		}
+		if slave.MaxRetries, err = getRequiredInt(slaveNode, "max_retries", 0); err != nil {
+			return fmt.Errorf("slave_zones: %w", err)
+		}
 
-				// Parse masters
-				if mastersNode := slaveNode.Get("masters"); mastersNode != nil {
-					if mastersNode.Type == NodeSequence {
-						slave.Masters = mastersNode.getStringSlice()
-					} else if mastersNode.Type == NodeScalar {
-						slave.Masters = []string{mastersNode.Value}
-					}
-				}
-
-				cfg.SlaveZones = append(cfg.SlaveZones, slave)
+		// Parse masters
+		if mastersNode := slaveNode.Get("masters"); mastersNode != nil {
+			if mastersNode.Type == NodeSequence {
+				slave.Masters = mastersNode.getStringSlice()
+			} else if mastersNode.Type == NodeScalar {
+				slave.Masters = []string{mastersNode.Value}
 			}
 		}
+
+		cfg.SlaveZones = append(cfg.SlaveZones, slave)
 	}
 
 	// Transfer serving config
@@ -488,6 +502,25 @@ func unmarshalToConfig(node *Node, cfg *Config) error {
 		cfg.Transfer.AllowList = getStringSlice(transferNode, "allow_list", cfg.Transfer.AllowList)
 		cfg.Transfer.RequireTSIG = getBool(transferNode, "require_tsig", cfg.Transfer.RequireTSIG)
 		cfg.Transfer.JournalDir = transferNode.GetString("journal_dir")
+		cfg.Transfer.AlsoNotify = getStringSlice(transferNode, "also_notify", cfg.Transfer.AlsoNotify)
+		cfg.Transfer.NotifyKey = transferNode.GetString("notify_key")
+		keyItems, err := listItems(transferNode, "tsig_keys", reflect.TypeOf(TransferTSIGKeyConfig{}))
+		if err != nil {
+			return fmt.Errorf("transfer: %w", err)
+		}
+		for _, keyNode := range keyItems {
+			key := TransferTSIGKeyConfig{
+				Name:         keyNode.GetString("name"),
+				Algorithm:    keyNode.GetString("algorithm"),
+				Secret:       keyNode.GetString("secret"),
+				AllowedCIDRs: getStringSlice(keyNode, "allowed_cidrs", nil),
+				AllowUpdate:  getStringSlice(keyNode, "allow_update", nil),
+			}
+			if key.Algorithm == "" {
+				key.Algorithm = "hmac-sha256"
+			}
+			cfg.Transfer.TSIGKeys = append(cfg.Transfer.TSIGKeys, key)
+		}
 	}
 
 	// IDNA config
@@ -562,22 +595,113 @@ func unmarshalToConfig(node *Node, cfg *Config) error {
 	}
 
 	// Parse views (split-horizon)
-	if viewsNode := node.Get("views"); viewsNode != nil && viewsNode.Type == NodeSequence {
-		for _, viewNode := range viewsNode.Children {
-			if viewNode.Type == NodeMapping {
-				var view ViewConfig
-				view.Name = viewNode.GetString("name")
-				view.MatchClients = getStringSlice(viewNode, "match_clients", nil)
-				view.ZoneFiles = getStringSlice(viewNode, "zone_files", nil)
-				cfg.Views = append(cfg.Views, view)
-			}
-		}
+	viewItems, err := listItems(node, "views", reflect.TypeOf(ViewConfig{}))
+	if err != nil {
+		return err
+	}
+	for _, viewNode := range viewItems {
+		var view ViewConfig
+		view.Name = viewNode.GetString("name")
+		view.MatchClients = getStringSlice(viewNode, "match_clients", nil)
+		view.ZoneFiles = getStringSlice(viewNode, "zone_files", nil)
+		cfg.Views = append(cfg.Views, view)
 	}
 
 	return nil
 }
 
 // Helper functions for unmarshaling
+
+// listItems returns the mapping items of a list-of-mappings key (acl, views,
+// slave_zones, http.users, dnssec.signing.keys) whose items are of type elem.
+// An absent or empty value yields no items. A scalar, a non-mapping item, or a
+// mapping that carries the item's own keys is an error (F193): a rule written
+// without its "- " marker parses as a mapping, and dropping it silently removed
+// e.g. an ACL deny rule while the config still validated. A mapping with only
+// foreign keys (e.g. `acl: {rules: []}`) is already reported as unknown keys
+// by warnUnknownNestedKeys and still yields no items.
+func listItems(node *Node, key string, elem reflect.Type) ([]*Node, error) {
+	child := node.Get(key)
+	if child == nil || isEmptyNode(child) {
+		return nil, nil
+	}
+	if child.Type == NodeMapping {
+		fields := yamlFields(elem)
+		for _, k := range child.Keys() {
+			if _, ok := fields[k]; ok {
+				return nil, fmt.Errorf("%s: expected a list of \"- key: value\" items, got a mapping (missing \"- \" before %q?)", key, k)
+			}
+		}
+		return nil, nil
+	}
+	if child.Type != NodeSequence {
+		return nil, fmt.Errorf("%s: expected a list of \"- key: value\" items, got a %s", key, strings.ToLower(child.Type.String()))
+	}
+	items := make([]*Node, 0, len(child.Children))
+	for i, item := range child.Children {
+		if item == nil || isEmptyNode(item) {
+			continue
+		}
+		if item.Type != NodeMapping {
+			return nil, fmt.Errorf("%s[%d]: expected a mapping, got %s %q", key, i, strings.ToLower(item.Type.String()), item.Value)
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+// isEmptyNode reports an empty value: `key:` with nothing after it, or {}.
+func isEmptyNode(n *Node) bool {
+	return (n.Type == NodeScalar && n.Value == "") || (n.Type == NodeMapping && len(n.Children) == 0)
+}
+
+// checkBoolValues rejects a boolean field whose value getBool would not
+// recognise. An empty value (e.g. an unset ${VAR}) still means the default.
+func checkBoolValues(node *Node, t reflect.Type, path string) error {
+	t = derefType(t)
+	if node == nil || node.Type != NodeMapping || t.Kind() != reflect.Struct {
+		return nil
+	}
+	fields := yamlFields(t)
+	for _, key := range node.Keys() {
+		ft, ok := fields[key]
+		if !ok {
+			continue
+		}
+		child := node.Get(key)
+		if child == nil {
+			continue
+		}
+		p := key
+		if path != "" {
+			p = path + "." + key
+		}
+		if ft.Kind() == reflect.Bool {
+			if child.Type != NodeScalar {
+				return fmt.Errorf("%s: expected a boolean (true/false), got a %s", p, strings.ToLower(child.Type.String()))
+			}
+			switch strings.ToLower(child.Value) {
+			case "", "true", "yes", "on", "1", "false", "no", "off", "0":
+			default:
+				return fmt.Errorf("%s: invalid boolean %q (use true or false)", p, child.Value)
+			}
+			continue
+		}
+		switch child.Type {
+		case NodeMapping:
+			if err := checkBoolValues(child, ft, p); err != nil {
+				return err
+			}
+		case NodeSequence:
+			for _, item := range child.Children {
+				if err := checkBoolValues(item, ft, p); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
 
 func getString(node *Node, key string, defaultValue string) string {
 	if child := node.Get(key); child != nil && child.Type == NodeScalar {

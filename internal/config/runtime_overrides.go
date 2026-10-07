@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 )
@@ -192,7 +193,7 @@ func ApplyRuntimeOverrides(cfg *Config, o *RuntimeOverrides) {
 	if r := o.RRL; r != nil {
 		assignBool(&cfg.RRL.Enabled, r.Enabled)
 		if r.Rate != nil {
-			cfg.RRL.Rate = int(*r.Rate)
+			cfg.RRL.Rate = rrlOverrideRate(*r.Rate)
 		}
 		assignInt(&cfg.RRL.Burst, r.Burst)
 		assignInt(&cfg.RRL.MaxBuckets, r.MaxBuckets)
@@ -231,6 +232,25 @@ func ApplyRuntimeOverrides(cfg *Config, o *RuntimeOverrides) {
 	if o.UpstreamServers != nil {
 		cfg.Upstream.Servers = copyStrings(*o.UpstreamServers)
 	}
+}
+
+// rrlOverrideRate converts a persisted (float) RRL rate to the integer
+// rrl.rate. A positive rate must stay positive: rrl.rate <= 0 means "use the
+// built-in default" to the rate limiters, so a sub-1 rate truncated to 0, or a
+// huge one overflowing the int conversion, would silently replace the
+// operator's limit with the default (F362).
+func rrlOverrideRate(rate float64) int {
+	switch {
+	case math.IsNaN(rate):
+		return 0
+	case rate >= math.MaxInt:
+		return math.MaxInt
+	case rate < math.MinInt:
+		return math.MinInt
+	case rate > 0 && rate < 1:
+		return 1
+	}
+	return int(rate)
 }
 
 // MergeRuntimeOverridePatch deep-merges patch over existing and returns the

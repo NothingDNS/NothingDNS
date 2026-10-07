@@ -56,7 +56,10 @@ server:
     doh_enabled: false
     doh_path: /dns-query
 
-  # DNS over TLS (DoT)
+  # Zone transfer over TLS (XoT, RFC 9103) — not DoT (DoT is server.tls).
+  # XoT always uses TLS 1.3 only with ALPN "dot"; min_tls_version below 13
+  # has no effect. bind must differ from server.tls.bind when DoT is enabled
+  # (both default to :853).
   # xot:
   #   enabled: true
   #   cert_file: /etc/nothingdns/tls/server.crt
@@ -114,6 +117,24 @@ cluster:
   #     addr: "10.0.0.2:7946"
   #   - node_id: "node-3"
   #     addr: "10.0.0.3:7946"
+
+  # DNS TCP address (host:port) this node advertises to the cluster. In raft
+  # mode a follower with forward_updates forwards TSIG-signed RFC 2136 UPDATEs
+  # to the leader's advertised address (the leader verifies TSIG and
+  # allow_update). Empty = use the first concrete server.tcp_bind/bind
+  # address; with a wildcard bind (0.0.0.0 / ::) nothing is advertised unless
+  # this is set, and forwarding followers answer UPDATEs with SERVFAIL while
+  # this node leads.
+  # dns_advertise_addr: "10.0.0.1:53"
+
+  # Forward TSIG-signed RFC 2136 UPDATEs received by a raft follower to the
+  # leader (RFC 2136 §6). Default false: followers answer REFUSED and clients
+  # must send UPDATEs to the leader. CAVEAT: the leader sees the follower's
+  # address for forwarded UPDATEs, so tsig_keys[].allowed_cidrs and ACLs on
+  # the leader must include the follower addresses. When true (raft mode) this
+  # node must advertise a DNS address (dns_advertise_addr or a concrete
+  # server.tcp_bind/bind), otherwise the config is rejected. Hot-reloadable.
+  # forward_updates: false
 
   # Encryption key (REQUIRED for multi-node, 32 bytes, hex encoded).
   # Required for BOTH swim (with seed_nodes) AND raft consensus: it encrypts and
@@ -266,8 +287,8 @@ dnssec:
   signing:
     enabled: false
 
-    # Signature validity
-    signature_validity: 7d
+    # Signature validity (Go duration: s/m/h only, no "d" unit; 168h = 7 days)
+    signature_validity: 168h
 
     # Signing keys
     keys:
@@ -275,11 +296,13 @@ dnssec:
       #   type: zsk
       #   algorithm: 13
 
-    # NSEC3 configuration (more private than NSEC)
+    # NSEC3 configuration (more private than NSEC). With this block present,
+    # online-signed negative answers use NSEC3 and NSEC3PARAM is served at the
+    # apex; remove the block to use NSEC.
     nsec3:
-      iterations: 10
+      iterations: 0              # RFC 9276: 0 recommended; values above 150 are rejected
       salt: ""
-      opt_out: true              # Allow opt-out for large delegations
+      opt_out: true              # Leave unsigned (no-DS) delegations out of the chain
 
 # =============================================================================
 # SECURITY SETTINGS
@@ -409,23 +432,48 @@ transfer:
   # allow_list:
   #   - 192.0.2.0/24
   #   - 2001:db8::/32
+  # TSIG keys (RFC 8945). Once any key is configured every AXFR/IXFR must be
+  # signed with one of them. A key's allow_update lists the zones (exact zone
+  # origins) it may change with RFC 2136 Dynamic DNS UPDATE; without it the key
+  # has no update rights. Unsigned UPDATEs are always refused. Key names are
+  # compared case-insensitively, trailing dot optional. Generate a
+  # secret with: tsig-keygen -a hmac-sha256 <name> (or openssl rand -base64 32).
+  # tsig_keys:
+  #   - name: xfr-key.example.
+  #     algorithm: hmac-sha256
+  #     secret: "<base64 secret>"
+  #     allowed_cidrs:
+  #       - 192.0.2.0/24
+  #   - name: ddns-key.example.
+  #     algorithm: hmac-sha256
+  #     secret: "<base64 secret>"
+  #     allow_update:
+  #       - example.com.
+  # Outgoing NOTIFY (RFC 1996): secondaries (literal IP:port) told about every
+  # SOA serial change of a zone this server serves for transfer (API/cluster
+  # edits, Dynamic DNS, SIGHUP reload). Empty (default) = no NOTIFY is sent.
+  # Every zone is also announced once after startup (notify on load).
+  # notify_key optionally names a tsig_keys entry to sign NOTIFY with.
+  # A SIGHUP applies changes to both: added targets are notified from the
+  # next serial change, removed targets get no further NOTIFY.
+  # also_notify:
+  #   - 192.0.2.2:53
+  #   - "[2001:db8::2]:53"
+  # notify_key: xfr-key.example.
 
-# Zone transfer receivers are configured with top-level slave_zones:
-# slave_zones:
-#   - zone_name: example.com.
-#     masters:
-#       - 192.0.2.53:53
-#     transfer_type: ixfr
-#     timeout: 30s
-#     retry_interval: 5m
-#     max_retries: 3
-#
+# Zone transfer receivers are configured with top-level slave_zones (see the
+# SLAVE ZONES section at the end of this file).
 # XoT server settings live under server.xot.
 
 # =============================================================================
 # DYNAMIC DNS UPDATES (RFC 2136)
 # =============================================================================
-# Dynamic DNS update settings are not parsed from this config file yet.
+# UPDATE is authorized per TSIG key: see transfer.tsig_keys[].allow_update
+# above. Unsigned UPDATEs are refused. In Raft cluster mode one UPDATE is one
+# atomic Raft entry, only the leader applies UPDATEs (followers answer
+# REFUSED, or forward signed UPDATEs to the leader with
+# cluster.forward_updates: true), and an UPDATE with more than 1024 record
+# changes is REFUSED.
 
 # =============================================================================
 # AUTHENTICATION & AUTHORIZATION
@@ -532,6 +580,11 @@ logging:
 # =============================================================================
 # SLAVE ZONES (AXFR/IXFR)
 # =============================================================================
+# The SOA REFRESH/RETRY/EXPIRE of the transferred zone drive refreshes once it
+# has loaded; retry_interval applies only until the first successful transfer.
+# max_retries: a never-loaded zone stops retrying; a loaded zone defers to
+# REFRESH. A zone past EXPIRE is not served until a refresh succeeds. NOTIFY
+# for a slave zone is accepted only from its masters.
 slave_zones: []
 # Example:
 # - zone_name: example.com.

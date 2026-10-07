@@ -90,6 +90,23 @@ type ClusterConfig struct {
 	// reachable host:port RPC address. Required for multi-node Raft.
 	Peers []ClusterPeerConfig `yaml:"peers"`
 
+	// DNSAdvertiseAddr is the DNS TCP host:port this node advertises to
+	// the cluster (Raft: carried in the leader's AppendEntries) so followers
+	// can forward RFC 2136 UPDATEs to the leader. Empty = derive it from the
+	// first concrete server.tcp_bind/bind address; a wildcard-only bind
+	// (0.0.0.0 / ::) advertises nothing unless this is set. Must be a
+	// concrete host:port that the other nodes can reach.
+	DNSAdvertiseAddr string `yaml:"dns_advertise_addr"`
+
+	// ForwardUpdates makes a Raft follower forward TSIG-signed RFC 2136
+	// UPDATEs for zones it serves to the leader (RFC 2136 §6) instead of
+	// answering REFUSED. Default false (BIND also keeps update forwarding
+	// off): address-based policy on the leader (tsig_keys allowed_cidrs,
+	// ACLs) sees the follower's IP for forwarded UPDATEs, not the client's.
+	// In Raft mode, true requires an advertisable DNS address
+	// (dns_advertise_addr or a concrete server.tcp_bind/bind address).
+	ForwardUpdates bool `yaml:"forward_updates"`
+
 	// RPC TLS configuration for Raft consensus traffic.
 	// When TLSCertFile/TLSKeyFile are set, Raft RPC uses TLS.
 	RPC RPCConfig `yaml:"rpc"`
@@ -141,6 +158,8 @@ func unmarshalCluster(node *Node, cfg *ClusterConfig) error {
 	cfg.EncryptionKey = node.GetString("encryption_key")
 	cfg.SnapshotEncryptionKey = node.GetString("snapshot_encryption_key")
 	cfg.AllowInsecureCluster = getBool(node, "allow_insecure", cfg.AllowInsecureCluster)
+	cfg.DNSAdvertiseAddr = node.GetString("dns_advertise_addr")
+	cfg.ForwardUpdates = getBool(node, "forward_updates", cfg.ForwardUpdates)
 
 	// Parse consensus mode (default: raft)
 	cfg.ConsensusMode = getString(node, "consensus_mode", "raft")

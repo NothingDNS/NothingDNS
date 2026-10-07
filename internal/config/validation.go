@@ -1,6 +1,8 @@
 package config
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"net"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/auth"
+	"github.com/nothingdns/nothingdns/internal/protocol"
 	"github.com/nothingdns/nothingdns/internal/util"
 )
 
@@ -47,6 +50,27 @@ func appendDurationValidation(errors []string, prefix, field, value string) []st
 	return errors
 }
 
+// appendPositiveDurationValidation is appendDurationValidation for fields
+// whose runtime consumer breaks on a zero or negative value instead of
+// falling back to a default (F187): a negative resolution.timeout expires
+// every iterative query's context up front (all recursion SERVFAILs), a
+// non-positive signature_validity signs RRSIGs that are already expired, and
+// a non-positive cookie secret_rotation rotates the secret on every reply so
+// issued server cookies stop validating.
+func appendPositiveDurationValidation(errors []string, prefix, field, value string) []string {
+	if value == "" {
+		return errors
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil {
+		return append(errors, fmt.Sprintf("%s: invalid %s %q: %v", prefix, field, value, err))
+	}
+	if d <= 0 {
+		return append(errors, fmt.Sprintf("%s: invalid %s %q: must be positive", prefix, field, value))
+	}
+	return errors
+}
+
 // secretHasMinEntropy returns an error if the secret is below 32 bytes or
 // appears to be low-entropy (detectable via Shannon entropy heuristic).
 // validateHex32 checks that name's value is exactly 64 hex chars
@@ -59,6 +83,22 @@ func validateHex32(name, value string) error {
 	}
 	if len(raw) != 32 {
 		return fmt.Errorf("%s must decode to 32 bytes (got %d)", name, len(raw))
+	}
+	return nil
+}
+
+// validateClusterEncryptionKey applies the cluster runtime's key rules:
+// the raw value must hex-decode (upper or lower case, no whitespace or
+// other characters) to exactly 32 bytes, i.e. 64 hex characters.
+func validateClusterEncryptionKey(value string) error {
+	const want = "cluster.encryption_key must be exactly 64 hex characters (32 bytes; generate with `openssl rand -hex 32`)"
+	// The decode error is not echoed: it quotes a character of the secret.
+	raw, err := hex.DecodeString(value)
+	if err != nil {
+		return fmt.Errorf("%s: value is not hex-only or has an odd length (%d characters)", want, len(value))
+	}
+	if len(raw) != 32 {
+		return fmt.Errorf("%s: decodes to %d bytes", want, len(raw))
 	}
 	return nil
 }
@@ -157,9 +197,16 @@ func (c *Config) validateSecrets() []string {
 		}
 	}
 
-	// Validate cluster encryption key entropy
+	// Validate cluster encryption key format and entropy. The gossip
+	// (internal/cluster/cluster.go initGossip) and Raft RPC
+	// (raft.NewClusterIntegration) runtimes hex.DecodeString the value
+	// exactly as configured (no trimming) and require 32 bytes, so validate
+	// the untrimmed value with the same rules (F602): a base64 or
+	// wrong-length key must fail -validate-config, not node start.
 	if c.Cluster.Enabled && c.Cluster.EncryptionKey != "" {
-		if err := secretHasMinEntropy("cluster.encryption_key", c.Cluster.EncryptionKey); err != nil {
+		if err := validateClusterEncryptionKey(c.Cluster.EncryptionKey); err != nil {
+			errors = append(errors, err.Error())
+		} else if err := secretHasMinEntropy("cluster.encryption_key", c.Cluster.EncryptionKey); err != nil {
 			errors = append(errors, err.Error())
 		}
 	}
@@ -343,7 +390,7 @@ func effectiveXoTCertificate(c *Config) (string, string) {
 func (c *Config) validateCookie() []string {
 	var errors []string
 
-	errors = appendDurationValidation(errors, "cookie", "secret_rotation", c.Cookie.SecretRotation)
+	errors = appendPositiveDurationValidation(errors, "cookie", "secret_rotation", c.Cookie.SecretRotation)
 
 	return errors
 }
@@ -449,7 +496,7 @@ func (c *Config) validateResolution() []string {
 	if c.Resolution.EDNS0BufferSize < 0 || c.Resolution.EDNS0BufferSize > 65535 {
 		errors = append(errors, fmt.Sprintf("resolution: edns0_buffer_size %d must be between 0-65535", c.Resolution.EDNS0BufferSize))
 	}
-	errors = appendDurationValidation(errors, "resolution", "timeout", c.Resolution.Timeout)
+	errors = appendPositiveDurationValidation(errors, "resolution", "timeout", c.Resolution.Timeout)
 	if c.Resolution.Recursive && c.Resolution.RootHints != "" {
 		if _, err := os.Stat(c.Resolution.RootHints); err != nil {
 			errors = append(errors, fmt.Sprintf("resolution: root_hints %q is not accessible: %v", c.Resolution.RootHints, err))
@@ -655,7 +702,15 @@ func (c *Config) validateDNSSEC() []string {
 		// validity on error — Go durations reject the natural "30d" idiom,
 		// so the typo would change DNSSEC signature lifetimes without any
 		// warning. Gate it here, at load.
-		errors = appendDurationValidation(errors, "dnssec.signing", "signature_validity", c.DNSSEC.Signing.SignatureValidity)
+		errors = appendPositiveDurationValidation(errors, "dnssec.signing", "signature_validity", c.DNSSEC.Signing.SignatureValidity)
+
+		// F516: RFC 9276 §3.1/§3.2 — validators may treat NSEC3 with more
+		// than 150 iterations as insecure or bogus, and the server's online
+		// NSEC3 hashing refuses them, so every negative answer would go out
+		// without a proof. 0 is the recommended value.
+		if n := c.DNSSEC.Signing.NSEC3; n != nil && n.Iterations > MaxNSEC3Iterations {
+			errors = append(errors, fmt.Sprintf("dnssec.signing.nsec3.iterations: %d exceeds the maximum of %d (RFC 9276; 0 is recommended)", n.Iterations, MaxNSEC3Iterations))
+		}
 	}
 
 	return errors
@@ -883,6 +938,18 @@ func (c *Config) validateCluster() []string {
 		}
 	}
 
+	if a := c.Cluster.DNSAdvertiseAddr; a != "" {
+		if err := ValidateDNSAdvertiseAddr(a); err != nil {
+			errors = append(errors, fmt.Sprintf("cluster: invalid dns_advertise_addr '%s': %v", a, err))
+		}
+	}
+
+	// forward_updates (F569): followers forward UPDATEs to the leader's
+	// advertised DNS address, so a node that enables it must advertise one.
+	if c.Cluster.ForwardUpdates && (c.Cluster.ConsensusMode == "" || c.Cluster.ConsensusMode == "raft") && !c.hasAdvertisableDNSAddr() {
+		errors = append(errors, "cluster: forward_updates requires an advertised DNS address: set cluster.dns_advertise_addr (server.tcp_bind/bind has no concrete, non-wildcard address)")
+	}
+
 	// Validate seed nodes format
 	for _, seed := range c.Cluster.SeedNodes {
 		if seed == "" {
@@ -908,6 +975,7 @@ func (c *Config) validateCluster() []string {
 
 func (c *Config) validateSlaveZones() []string {
 	var errors []string
+	slaveSecrets := make(map[string][]byte)
 
 	for i, slave := range c.SlaveZones {
 		prefix := fmt.Sprintf("slave_zones[%d]", i)
@@ -938,6 +1006,29 @@ func (c *Config) validateSlaveZones() []string {
 		}
 		errors = appendDurationValidation(errors, prefix, "timeout", slave.Timeout)
 		errors = appendDurationValidation(errors, prefix, "retry_interval", slave.RetryInterval)
+
+		if (slave.TSIGKeyName == "") != (slave.TSIGSecret == "") {
+			errors = append(errors, fmt.Sprintf("%s: tsig_key_name and tsig_secret must be set together", prefix))
+		} else if slave.TSIGSecret != "" {
+			secret, err := base64.StdEncoding.DecodeString(slave.TSIGSecret)
+			if err != nil {
+				errors = append(errors, fmt.Sprintf("%s.tsig_secret is not valid base64: %v", prefix, err))
+			}
+			// F503: key names are compared in canonical form; the slave key
+			// store holds one secret per name, so a name reused with a
+			// different secret would leave the later zone signing with the
+			// wrong secret.
+			if !validTSIGKeyName(slave.TSIGKeyName) {
+				errors = append(errors, fmt.Sprintf("%s: invalid tsig_key_name '%s'", prefix, slave.TSIGKeyName))
+			} else if err == nil {
+				canon := canonicalTSIGKeyName(slave.TSIGKeyName)
+				if prev, ok := slaveSecrets[canon]; ok && !bytes.Equal(prev, secret) {
+					errors = append(errors, fmt.Sprintf("%s: tsig_key_name '%s' is configured with a different tsig_secret in another slave zone", prefix, slave.TSIGKeyName))
+				} else if !ok {
+					slaveSecrets[canon] = secret
+				}
+			}
+		}
 	}
 
 	return errors
@@ -952,7 +1043,135 @@ func (c *Config) validateTransfer() []string {
 		}
 	}
 
+	seen := make(map[string]bool)
+	for i, key := range c.Transfer.TSIGKeys {
+		prefix := fmt.Sprintf("transfer.tsig_keys[%d]", i)
+		name := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(key.Name), "."))
+		if name == "" {
+			errors = append(errors, prefix+": name is required")
+		} else if !validTSIGKeyName(key.Name) {
+			errors = append(errors, fmt.Sprintf("%s: invalid key name '%s'", prefix, key.Name))
+		} else if seen[name] {
+			errors = append(errors, fmt.Sprintf("%s: duplicate key name %q", prefix, key.Name))
+		}
+		seen[name] = true
+		if !isTransferTSIGAlgorithm(key.Algorithm) {
+			errors = append(errors, fmt.Sprintf("%s: unsupported algorithm %q (use hmac-sha1, hmac-sha224, hmac-sha256, hmac-sha384 or hmac-sha512)", prefix, key.Algorithm))
+		}
+		if err := validateTSIGSecret(prefix+".secret", key.Secret); err != nil {
+			errors = append(errors, err.Error())
+		}
+		for _, cidr := range key.AllowedCIDRs {
+			if !isValidCIDR(cidr) {
+				errors = append(errors, fmt.Sprintf("%s.allowed_cidrs: invalid CIDR '%s'", prefix, cidr))
+			}
+		}
+		// F452: allow_update entries are exact zone origins.
+		seenZone := make(map[string]bool)
+		for _, z := range key.AllowUpdate {
+			zn := strings.ToLower(strings.TrimSpace(z))
+			if zn == "" {
+				errors = append(errors, prefix+".allow_update: empty zone name")
+				continue
+			}
+			if strings.HasPrefix(zn, "*") {
+				errors = append(errors, fmt.Sprintf("%s.allow_update: '%s' must be an exact zone name, not a wildcard", prefix, z))
+				continue
+			}
+			if _, err := protocol.ParseName(zn); err != nil || strings.Contains(strings.TrimSuffix(zn, "."), "..") || strings.ContainsAny(zn, " \t/@") {
+				errors = append(errors, fmt.Sprintf("%s.allow_update: invalid zone name '%s'", prefix, z))
+				continue
+			}
+			if !strings.HasSuffix(zn, ".") {
+				zn += "."
+			}
+			if seenZone[zn] {
+				errors = append(errors, fmt.Sprintf("%s.allow_update: duplicate zone '%s'", prefix, z))
+			}
+			seenZone[zn] = true
+		}
+	}
+
+	// F547: NOTIFY targets are literal IP:port endpoints (no name
+	// resolution on the zone-change path); notify_key must name a key.
+	seenTarget := make(map[string]bool)
+	for _, target := range c.Transfer.AlsoNotify {
+		host, port, err := net.SplitHostPort(strings.TrimSpace(target))
+		if err != nil || net.ParseIP(host) == nil {
+			errors = append(errors, fmt.Sprintf("transfer.also_notify: '%s' must be IP:port (e.g. 192.0.2.2:53 or [2001:db8::2]:53)", target))
+			continue
+		}
+		if p, err := strconv.Atoi(port); err != nil || p < 1 || p > 65535 {
+			errors = append(errors, fmt.Sprintf("transfer.also_notify: '%s' has an invalid port", target))
+			continue
+		}
+		norm := net.JoinHostPort(net.ParseIP(host).String(), port)
+		if seenTarget[norm] {
+			errors = append(errors, fmt.Sprintf("transfer.also_notify: duplicate target '%s'", target))
+		}
+		seenTarget[norm] = true
+	}
+	if c.Transfer.NotifyKey != "" {
+		want := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(c.Transfer.NotifyKey), "."))
+		found := false
+		for _, key := range c.Transfer.TSIGKeys {
+			if strings.ToLower(strings.TrimSuffix(strings.TrimSpace(key.Name), ".")) == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			errors = append(errors, fmt.Sprintf("transfer.notify_key: '%s' does not name a transfer.tsig_keys entry", c.Transfer.NotifyKey))
+		}
+	}
+
 	return errors
+}
+
+// canonicalTSIGKeyName is the canonical TSIG key name (lower-case,
+// absolute), the form internal/transfer's KeyStore matches on (F503).
+func canonicalTSIGKeyName(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if !strings.HasSuffix(name, ".") {
+		name += "."
+	}
+	return name
+}
+
+// validTSIGKeyName reports whether name can be put on the wire as a TSIG
+// key name: a non-root domain name without empty labels or whitespace.
+func validTSIGKeyName(name string) bool {
+	n := strings.TrimSpace(name)
+	if n == "" || n == "." || strings.ContainsAny(n, " \t/@") || strings.Contains(strings.TrimSuffix(n, "."), "..") || strings.HasPrefix(n, ".") {
+		return false
+	}
+	_, err := protocol.ParseName(n)
+	return err == nil
+}
+
+// isTransferTSIGAlgorithm reports a TSIG algorithm internal/transfer supports.
+func isTransferTSIGAlgorithm(alg string) bool {
+	switch strings.ToLower(strings.TrimSuffix(alg, ".")) {
+	case "hmac-sha1", "hmac-sha224", "hmac-sha256", "hmac-sha384", "hmac-sha512":
+		return true
+	}
+	return false
+}
+
+// validateTSIGSecret checks a base64 TSIG secret (BIND/tsig-keygen format),
+// the encoding the transfer manager decodes.
+func validateTSIGSecret(name, secret string) error {
+	if token := looksLikePlaceholderSecret(secret); token != "" {
+		return fmt.Errorf("%s still contains placeholder %q", name, token)
+	}
+	raw, err := base64.StdEncoding.DecodeString(secret)
+	if err != nil {
+		return fmt.Errorf("%s is not valid base64: %w", name, err)
+	}
+	if len(raw) < 16 {
+		return fmt.Errorf("%s must decode to at least 16 bytes (got %d)", name, len(raw))
+	}
+	return nil
 }
 
 func (c *Config) validateProduction() []string {
@@ -1016,6 +1235,9 @@ func (c *Config) validateProduction() []string {
 
 	if len(c.Transfer.AllowList) > 0 && !c.Transfer.RequireTSIG {
 		errors = append(errors, "production: transfer.require_tsig must be true when transfer.allow_list is non-empty")
+	}
+	if c.Transfer.RequireTSIG && len(c.Transfer.AllowList) > 0 && len(c.Transfer.TSIGKeys) == 0 {
+		errors = append(errors, "production: transfer.require_tsig needs at least one transfer.tsig_keys entry, otherwise every zone transfer is refused")
 	}
 
 	return errors
@@ -1223,33 +1445,69 @@ func isValidCIDR(s string) bool {
 	return err == nil
 }
 
-// isValidQueryType checks if a string is a valid DNS query type.
+// isValidQueryType reports whether s is a query type the runtime ACL compiler
+// (filter.compileACLRules) accepts. It must use the same table,
+// protocol.StringToType, or Validate rejects runtime-valid types such as AXFR
+// and HTTPS and accepts ones the compiler then refuses (F188).
 func isValidQueryType(s string) bool {
-	// Common query types
-	validTypes := map[string]bool{
-		"A": true, "AAAA": true, "CNAME": true, "MX": true, "NS": true,
-		"PTR": true, "SOA": true, "SRV": true, "TXT": true, "ANY": true,
-		"DNSKEY": true, "DS": true, "NSEC": true, "NSEC3": true, "RRSIG": true,
-		"AFSDB": true, "APL": true, "CAA": true, "CDNSKEY": true, "CDS": true,
-		"CERT": true, "DHCID": true, "DLV": true, "DNAME": true, "HINFO": true,
-		"HIP": true, "IPSECKEY": true, "KEY": true, "KX": true, "LOC": true,
-		"NAPTR": true, "NSEC3PARAM": true, "OPENPGPKEY": true, "RP": true,
-		"SIG": true, "SSHFP": true, "TA": true, "TKEY": true, "TLSA": true,
-		"TSIG": true, "URI": true, "ZONEMD": true,
-	}
+	_, ok := protocol.StringToType[strings.ToUpper(strings.TrimSpace(s))]
+	return ok
+}
 
-	// Check uppercase
-	if validTypes[strings.ToUpper(s)] {
+// hasAdvertisableDNSAddr reports whether this node advertises a DNS address
+// to the cluster: cluster.dns_advertise_addr, else a concrete (non-wildcard,
+// non-zero-port) server.tcp_bind/bind entry, where a wildcard entry hides
+// concrete entries on the same port (they share its listener). It mirrors
+// clusterDNSAdvertiseAddr in cmd/nothingdns (F569).
+func (c *Config) hasAdvertisableDNSAddr() bool {
+	if c.Cluster.DNSAdvertiseAddr != "" {
 		return true
 	}
-
-	// Also accept numeric type values (TYPE12345)
-	if strings.HasPrefix(strings.ToUpper(s), "TYPE") {
-		numStr := s[4:]
-		if _, err := strconv.Atoi(numStr); err == nil {
+	entries := c.Server.TCPBind
+	if len(entries) == 0 {
+		entries = c.Server.Bind
+	}
+	type hp struct{ host, port string }
+	addrs := make([]hp, 0, len(entries))
+	wildcardPorts := make(map[string]bool)
+	for _, e := range entries {
+		host, port, err := net.SplitHostPort(e)
+		if err != nil {
+			host, port = strings.TrimSuffix(strings.TrimPrefix(e, "["), "]"), strconv.Itoa(c.Server.Port)
+		}
+		ip := net.ParseIP(host)
+		wild := host == "" || (ip != nil && ip.IsUnspecified())
+		if wild {
+			wildcardPorts[port] = true
+		}
+		addrs = append(addrs, hp{host: host, port: port})
+	}
+	for _, a := range addrs {
+		ip := net.ParseIP(a.host)
+		wild := a.host == "" || (ip != nil && ip.IsUnspecified())
+		if !wild && !wildcardPorts[a.port] && a.port != "0" {
 			return true
 		}
 	}
-
 	return false
+}
+
+// ValidateDNSAdvertiseAddr checks a cluster.dns_advertise_addr value: a
+// host:port with a non-empty, non-wildcard host (other nodes dial it) and a
+// port in 1-65535.
+func ValidateDNSAdvertiseAddr(addr string) error {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("expected host:port")
+	}
+	if host == "" {
+		return fmt.Errorf("empty host")
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
+		return fmt.Errorf("wildcard host %s is not reachable; use a concrete address", host)
+	}
+	if p, err := strconv.Atoi(port); err != nil || p < 1 || p > 65535 {
+		return fmt.Errorf("port must be 1-65535")
+	}
+	return nil
 }

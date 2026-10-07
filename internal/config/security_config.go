@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"reflect"
 	"strconv"
 )
 
@@ -50,9 +51,14 @@ type KeyConfig struct {
 	Algorithm uint8 `yaml:"algorithm"`
 }
 
+// MaxNSEC3Iterations is the largest accepted dnssec.signing.nsec3.iterations
+// (RFC 9276 §3.2; validators may treat higher counts as insecure or bogus).
+const MaxNSEC3Iterations = 150
+
 // NSEC3Config holds NSEC3 parameters for zone signing.
 type NSEC3Config struct {
-	// Number of hash iterations
+	// Number of hash iterations (at most MaxNSEC3Iterations; RFC 9276
+	// recommends 0)
 	Iterations uint16 `yaml:"iterations"`
 
 	// Salt (hex string, optional)
@@ -112,20 +118,20 @@ func unmarshalDNSSEC(node *Node, cfg *DNSSECConfig) error {
 		cfg.Signing.SignatureValidity = signingNode.GetString("signature_validity")
 
 		// Parse keys
-		if keysNode := signingNode.Get("keys"); keysNode != nil && keysNode.Type == NodeSequence {
-			for _, keyNode := range keysNode.Children {
-				if keyNode.Type == NodeMapping {
-					var key KeyConfig
-					key.PrivateKey = keyNode.GetString("private_key")
-					key.Type = keyNode.GetString("type")
-					algorithm, err := getUint(keyNode, "algorithm", 0, 8)
-					if err != nil {
-						return err
-					}
-					key.Algorithm = uint8(algorithm)
-					cfg.Signing.Keys = append(cfg.Signing.Keys, key)
-				}
+		keyItems, err := listItems(signingNode, "keys", reflect.TypeOf(KeyConfig{}))
+		if err != nil {
+			return fmt.Errorf("signing: %w", err)
+		}
+		for _, keyNode := range keyItems {
+			var key KeyConfig
+			key.PrivateKey = keyNode.GetString("private_key")
+			key.Type = keyNode.GetString("type")
+			algorithm, err := getUint(keyNode, "algorithm", 0, 8)
+			if err != nil {
+				return err
 			}
+			key.Algorithm = uint8(algorithm)
+			cfg.Signing.Keys = append(cfg.Signing.Keys, key)
 		}
 
 		// Parse NSEC3 configuration

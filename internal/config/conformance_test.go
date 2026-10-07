@@ -160,11 +160,16 @@ func TestParser_EmptyInput(t *testing.T) {
 }
 
 func TestParser_OnlyWhitespace(t *testing.T) {
-	// Whitespace-only input is treated as empty by the parser
+	// Whitespace-only input is treated as empty by the parser, whether the
+	// blank lines hold spaces or tabs (F183: a tab used to make the blank
+	// line count as content at a bogus indentation and fail).
 	p := NewParser("   \t\n  \n  ")
-	_, err := p.ParseMapping()
-	if err == nil {
-		t.Error("expected error for whitespace-only input")
+	node, err := p.ParseMapping()
+	if err != nil {
+		t.Fatalf("unexpected error for whitespace-only input: %v", err)
+	}
+	if node == nil || node.Type != NodeMapping || len(node.Children) != 0 {
+		t.Errorf("expected empty mapping, got %+v", node)
 	}
 }
 

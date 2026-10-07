@@ -2,8 +2,10 @@ package config
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // Tokenizer converts YAML input into a stream of tokens.
@@ -17,6 +19,14 @@ type Tokenizer struct {
 	indentStack   []int
 	atLineStart   bool
 	pendingTokens []Token // buffered DEDENT tokens for multi-level dedents
+
+	// itemContentIndent maps the indentation of the most recent open line
+	// that starts with a block-sequence dash to the indentation of the content
+	// after that dash ("    - k: v" → 4 → 6). The item's later keys sit at
+	// the content indentation, which never became an indent-stack level when
+	// the item's first key had a nested block value (F184).
+	itemContentIndent map[int]int
+	lineIndent        int // indentation of the current line
 
 	// Max string size limit
 	maxStringSize int
@@ -82,7 +92,8 @@ func (t *Tokenizer) Next() Token {
 	case ':':
 		// A colon is the mapping indicator only when followed by whitespace,
 		// end of line, or a flow indicator; otherwise it starts a plain
-		// scalar such as the IPv6 address "::1/128" (YAML 1.2 §7.3.3).
+		// scalar such as the IPv6 address "::1/128" (YAML 1.2 §7.3.3) or
+		// "::" (readScalar keeps a colon run whole, F577).
 		if next := t.peekNext(); !strings.ContainsRune(" \t\n\r,[]{}", rune(next)) && next != 0 {
 			return t.readScalar()
 		}
@@ -100,6 +111,7 @@ func (t *Tokenizer) Next() Token {
 		if next := t.peekNext(); next != 0 && !isSpaceByte(next) {
 			return t.readScalar()
 		}
+		t.recordItemContentIndent()
 		return t.emitChar(TokenDash)
 	case ',':
 		return t.emitChar(TokenComma)
@@ -237,10 +249,31 @@ func (t *Tokenizer) checkIndent() Token {
 		t.next()
 	}
 
+	// A tab in the leading white space does not count as indentation. On a
+	// blank or comment-only line it is harmless separation (F183); on a
+	// content line YAML forbids it, and counting it as nothing silently
+	// re-nested the line under the wrong parent (F182).
+	tabbed := false
+	for t.peek() == ' ' || t.peek() == '\t' {
+		if t.peek() == '\t' {
+			tabbed = true
+		}
+		t.next()
+	}
+
 	// Skip blank lines
 	if t.peek() == '\n' || t.peek() == '\r' || t.peek() == '#' || t.peek() == 0 {
 		return t.emit(TokenEOF, "") // Signal to continue
 	}
+
+	if tabbed {
+		return t.emit(TokenError, fmt.Sprintf("tab character in indentation at line %d; indent with spaces", t.line))
+	}
+
+	// This line replaces whatever line last opened this indentation; a dash
+	// on it re-records the item content indentation.
+	t.lineIndent = indent
+	delete(t.itemContentIndent, indent)
 
 	currentIndent := t.indentStack[len(t.indentStack)-1]
 
@@ -255,8 +288,14 @@ func (t *Tokenizer) checkIndent() Token {
 			t.indentStack = t.indentStack[:len(t.indentStack)-1]
 			popCount++
 		}
-		if indent != t.indentStack[len(t.indentStack)-1] {
-			return t.emit(TokenError, fmt.Sprintf("inconsistent indentation at line %d", t.line))
+		if top := t.indentStack[len(t.indentStack)-1]; indent != top {
+			// Returning to the content column of the sequence item opened
+			// at the new top level ("- k:" + nested block + "  m: v") is a
+			// valid level that was never pushed: push it now (F184).
+			if c, ok := t.itemContentIndent[top]; !ok || c != indent {
+				return t.emit(TokenError, fmt.Sprintf("inconsistent indentation at line %d", t.line))
+			}
+			t.indentStack = append(t.indentStack, indent)
 		}
 		// Buffer extra DEDENTs beyond the first
 		for i := 1; i < popCount; i++ {
@@ -266,6 +305,25 @@ func (t *Tokenizer) checkIndent() Token {
 	}
 
 	return t.emit(TokenEOF, "") // No change, signal to continue
+}
+
+// recordItemContentIndent remembers, for a block-sequence dash that is the
+// first token of its line, the indentation of the content following it.
+func (t *Tokenizer) recordItemContentIndent() {
+	if t.col-1 != t.lineIndent {
+		return // not the line's first token (e.g. a compact nested dash)
+	}
+	pos := t.pos + 1
+	for pos < len(t.input) && (t.input[pos] == ' ' || t.input[pos] == '\t') {
+		pos++
+	}
+	if pos >= len(t.input) || strings.ContainsRune("\n\r#", rune(t.input[pos])) {
+		return // no content on the dash line
+	}
+	if t.itemContentIndent == nil {
+		t.itemContentIndent = make(map[int]int)
+	}
+	t.itemContentIndent[t.lineIndent] = t.lineIndent + (pos - t.pos)
 }
 
 // readComment reads a comment until end of line.
@@ -323,20 +381,8 @@ func (t *Tokenizer) readQuotedString() Token {
 
 		if ch == '\\' && quote == '"' {
 			t.next()
-			esch := t.next()
-			switch esch {
-			case 'n':
-				value.WriteByte('\n')
-			case 't':
-				value.WriteByte('\t')
-			case 'r':
-				value.WriteByte('\r')
-			case '\\':
-				value.WriteByte('\\')
-			case '"':
-				value.WriteByte('"')
-			default:
-				value.WriteByte(esch)
+			if err := t.readEscape(&value); err != "" {
+				return Token{Type: TokenError, Value: err, Line: t.line, Col: t.col}
 			}
 		} else {
 			value.WriteByte(t.next())
@@ -344,6 +390,77 @@ func (t *Tokenizer) readQuotedString() Token {
 	}
 
 	return Token{Type: TokenString, Value: value.String(), Line: startLine, Col: startCol}
+}
+
+// readEscape decodes one YAML 1.2 double-quoted escape sequence (§5.7), the
+// backslash already consumed, into value. Escapes outside the YAML set are
+// an error: silently dropping the backslash corrupted values such as
+// "C:\data" into "C:data", and \x / \u / \U were decoded as literal
+// letters (F185).
+func (t *Tokenizer) readEscape(value *strings.Builder) string {
+	esch := t.next()
+	switch esch {
+	case '0':
+		value.WriteByte(0)
+	case 'a':
+		value.WriteByte('\a')
+	case 'b':
+		value.WriteByte('\b')
+	case 't', '\t':
+		value.WriteByte('\t')
+	case 'n':
+		value.WriteByte('\n')
+	case 'v':
+		value.WriteByte('\v')
+	case 'f':
+		value.WriteByte('\f')
+	case 'r':
+		value.WriteByte('\r')
+	case 'e':
+		value.WriteByte(0x1b)
+	case ' ', '"', '/', '\\':
+		value.WriteByte(esch)
+	case 'N':
+		value.WriteRune('\u0085')
+	case '_':
+		value.WriteRune('\u00a0')
+	case 'L':
+		value.WriteRune('\u2028')
+	case 'P':
+		value.WriteRune('\u2029')
+	case 'x', 'u', 'U':
+		n := map[byte]int{'x': 2, 'u': 4, 'U': 8}[esch]
+		if t.pos+n > len(t.input) {
+			return fmt.Sprintf("invalid escape \\%c in double-quoted string at line %d", esch, t.line)
+		}
+		code, err := strconv.ParseUint(t.input[t.pos:t.pos+n], 16, 32)
+		if err != nil || !utf8.ValidRune(rune(code)) {
+			return fmt.Sprintf("invalid escape \\%c%s in double-quoted string at line %d", esch, t.input[t.pos:t.pos+n], t.line)
+		}
+		for i := 0; i < n; i++ {
+			t.next()
+		}
+		value.WriteRune(rune(code))
+	case '\r', '\n':
+		// Escaped line break: the break and the next line's leading white
+		// space are dropped.
+		if esch == '\r' {
+			if t.peek() == '\n' {
+				t.next()
+			} else {
+				t.line++ // next() only counts '\n'
+				t.col = 1
+			}
+		}
+		for t.peek() == ' ' || t.peek() == '\t' {
+			t.next()
+		}
+	case 0:
+		return "unterminated string"
+	default:
+		return fmt.Sprintf("invalid escape \\%c in double-quoted string at line %d", esch, t.line)
+	}
+	return ""
 }
 
 // isNumberStart checks if current position starts a number.
@@ -419,6 +536,11 @@ func (t *Tokenizer) isNumberStart() bool {
 					return false
 				}
 			}
+		} else if (ch == '+' || ch == '-') && t.input[pos-1] != 'e' && t.input[pos-1] != 'E' {
+			// A sign is numeric only as an exponent sign ("5e-3"); inside a
+			// digit run it makes a plain scalar ("2024-01-15", "10-20") that
+			// readNumber would otherwise split into several NUMBER tokens (F186).
+			return false
 		} else if !unicode.IsDigit(rune(ch)) && ch != 'e' && ch != 'E' && ch != '+' && ch != '-' {
 			// Non-numeric character (other than exponent), not a simple number
 			return false
@@ -509,8 +631,12 @@ func (t *Tokenizer) readScalar() Token {
 		if ch == ',' || ch == '[' || ch == ']' || ch == '{' || ch == '}' {
 			break
 		}
-		// Stop at colon only if followed by whitespace (key separator)
-		if ch == ':' {
+		// Stop at colon only if followed by whitespace (key separator).
+		// Deliberate deviation from strict YAML (F577): a colon that directly
+		// follows another colon is never a mapping indicator, so an IPv6
+		// address ending in "::" ("::", "fe80::", "2001:db8::") stays one
+		// scalar instead of becoming the mapping {"<addr>:": null}.
+		if ch == ':' && (t.pos == start || t.input[t.pos-1] != ':') {
 			next := t.peekNext()
 			if next == ' ' || next == '\t' || next == '\n' || next == '\r' || next == 0 {
 				break

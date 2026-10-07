@@ -372,7 +372,12 @@ func (p *Parser) parseBlockSequence(indent int) (*Node, error) {
 			if p.current.Type == TokenIndent {
 				p.advance()
 			}
-			if p.current.Type == TokenDash {
+			if p.current.Type == TokenDash && p.current.Col <= sequenceDashCol {
+				// F181: `-` alone, then the next item of this (or an
+				// enclosing) sequence: the item is empty, not a nested
+				// sequence.
+				value = &Node{Type: NodeScalar, Value: ""}
+			} else if p.current.Type == TokenDash {
 				// Nested sequence
 				value, err = p.parseBlockSequence(indent + 1)
 			} else if p.current.Type == TokenString {
@@ -401,14 +406,14 @@ func (p *Parser) parseBlockSequence(indent int) (*Node, error) {
 						if p.current.Type == TokenIndent {
 							p.advance()
 						}
-						if p.current.Type == TokenDash {
+						if !p.startsNestedValue(savedKey.Col) {
+							// F178: empty value; the next line is a sibling.
+							valNode = &Node{Type: NodeScalar, Value: ""}
+						} else if p.current.Type == TokenDash {
 							valNode, err = p.parseBlockSequence(indent + 1)
 						} else if p.current.Type == TokenString {
 							// Check if nested mapping
-							next2 := p.peek()
-							if next2.Type == TokenColon {
-								p.hasPeek = false
-								p.current = next2
+							if p.peek().Type == TokenColon {
 								valNode, err = p.parseMapping(indent + 1)
 							} else {
 								valNode = &Node{Type: NodeScalar, Value: p.current.Value}
@@ -473,6 +478,16 @@ func (p *Parser) parseBlockSequence(indent int) (*Node, error) {
 						if p.current.Type != TokenString {
 							break
 						}
+						// F177: a key at or left of this sequence's dash closes
+						// the item (a nested mapping may already have absorbed the
+						// dedents); leave it for the enclosing parser. Any other
+						// key of the item must sit at the item's key column.
+						if p.current.Col <= sequenceDashCol {
+							break
+						}
+						if p.current.Col != itemCol {
+							return nil, fmt.Errorf("mapping key %q at line %d is not aligned with the sequence item's keys (column %d, expected %d)", p.current.Value, p.current.Line, p.current.Col, itemCol)
+						}
 						k := &Node{
 							Type:  NodeScalar,
 							Value: p.current.Value,
@@ -481,7 +496,8 @@ func (p *Parser) parseBlockSequence(indent int) (*Node, error) {
 						}
 						p.advance()
 						if p.current.Type != TokenColon {
-							break
+							// F179: never drop a line silently.
+							return nil, fmt.Errorf("expected ':' after key but got %s at line %d", p.current.Type, p.current.Line)
 						}
 						p.advance()
 						var v *Node
@@ -494,7 +510,10 @@ func (p *Parser) parseBlockSequence(indent int) (*Node, error) {
 							if p.current.Type == TokenIndent {
 								p.advance()
 							}
-							if p.current.Type == TokenDash {
+							if !p.startsNestedValue(k.Col) {
+								// F178: empty value; the next line is a sibling.
+								v = &Node{Type: NodeScalar, Value: ""}
+							} else if p.current.Type == TokenDash {
 								v, err = p.parseBlockSequence(indent + 1)
 							} else if p.current.Type == TokenString && p.peek().Type == TokenColon {
 								v, err = p.parseMapping(indent + 1)
@@ -555,13 +574,13 @@ func (p *Parser) parseBlockSequence(indent int) (*Node, error) {
 					if p.current.Type == TokenIndent {
 						p.advance()
 					}
-					if p.current.Type == TokenDash {
+					if !p.startsNestedValue(savedKey.Col) {
+						// F178: empty value; the next line is a sibling.
+						valNode = &Node{Type: NodeScalar, Value: ""}
+					} else if p.current.Type == TokenDash {
 						valNode, err = p.parseBlockSequence(indent + 1)
 					} else if p.current.Type == TokenString {
-						next2 := p.peek()
-						if next2.Type == TokenColon {
-							p.hasPeek = false
-							p.current = next2
+						if p.peek().Type == TokenColon {
 							valNode, err = p.parseMapping(indent + 1)
 						} else {
 							valNode = &Node{Type: NodeScalar, Value: p.current.Value}
@@ -619,6 +638,16 @@ func (p *Parser) parseBlockSequence(indent int) (*Node, error) {
 					if p.current.Type != TokenString {
 						break
 					}
+					// F177: a key at or left of this sequence's dash closes
+					// the item (a nested mapping may already have absorbed the
+					// dedents); leave it for the enclosing parser. Any other
+					// key of the item must sit at the item's key column.
+					if p.current.Col <= sequenceDashCol {
+						break
+					}
+					if p.current.Col != itemCol {
+						return nil, fmt.Errorf("mapping key %q at line %d is not aligned with the sequence item's keys (column %d, expected %d)", p.current.Value, p.current.Line, p.current.Col, itemCol)
+					}
 					k := &Node{
 						Type:  NodeScalar,
 						Value: p.current.Value,
@@ -627,7 +656,8 @@ func (p *Parser) parseBlockSequence(indent int) (*Node, error) {
 					}
 					p.advance()
 					if p.current.Type != TokenColon {
-						break
+						// F179: never drop a line silently.
+						return nil, fmt.Errorf("expected ':' after key but got %s at line %d", p.current.Type, p.current.Line)
 					}
 					p.advance()
 					var v *Node
@@ -640,7 +670,10 @@ func (p *Parser) parseBlockSequence(indent int) (*Node, error) {
 						if p.current.Type == TokenIndent {
 							p.advance()
 						}
-						if p.current.Type == TokenDash {
+						if !p.startsNestedValue(k.Col) {
+							// F178: empty value; the next line is a sibling.
+							v = &Node{Type: NodeScalar, Value: ""}
+						} else if p.current.Type == TokenDash {
 							v, err = p.parseBlockSequence(indent + 1)
 						} else if p.current.Type == TokenString && p.peek().Type == TokenColon {
 							v, err = p.parseMapping(indent + 1)
@@ -715,13 +748,32 @@ func (p *Parser) parseBlockSequence(indent int) (*Node, error) {
 			break
 		}
 
-		// Continue if we see another dash at same level
-		if p.current.Type != TokenDash {
+		// Continue if we see another dash at same level. A nested mapping
+		// may already have absorbed the dedents, so check the column too: a
+		// dash left of ours is an enclosing sequence's next item (F180).
+		if p.current.Type != TokenDash || p.current.Col != sequenceDashCol {
 			break
 		}
 	}
 
 	return node, nil
+}
+
+// startsNestedValue reports whether the current token — the first one on the
+// line after `key:` — begins that key's value. A key at or left of keyCol is a
+// sibling (or belongs to an enclosing mapping) and a dash left of keyCol is an
+// enclosing sequence item, so the key's value is empty (F178). A dash at
+// keyCol is YAML's compact form of a sequence value.
+func (p *Parser) startsNestedValue(keyCol int) bool {
+	switch p.current.Type {
+	case TokenString:
+		return p.current.Col > keyCol
+	case TokenDash:
+		return p.current.Col >= keyCol
+	case TokenDedent, TokenEOF, TokenNewline:
+		return false
+	}
+	return true
 }
 
 // parseFlowMapping parses a flow mapping {key: value, ...}.
