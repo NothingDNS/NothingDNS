@@ -51,6 +51,7 @@ func TestHandleUpdate_UpdateChannelSend_Observable(t *testing.T) {
 		Secret:    secret,
 	})
 	handler.SetKeyStore(ks)
+	handler.AllowKeyUpdate("testkey.", "example.com.") // F452: update rights are granted per key and zone
 
 	// Build a valid UPDATE request with TSIG
 	name, _ := protocol.ParseName("example.com.")
@@ -120,6 +121,7 @@ func TestHandleUpdate_UpdateChannelFull_Observable(t *testing.T) {
 		Secret:    secret,
 	})
 	handler.SetKeyStore(ks)
+	handler.AllowKeyUpdate("testkey.", "example.com.") // F452: update rights are granted per key and zone
 
 	// Fill the channel
 	for i := 0; i < 100; i++ {
@@ -1624,6 +1626,14 @@ func TestApplyUpdate_PreconditionExistsValue_Success_Extra5(t *testing.T) {
 				Type:      protocol.TypeA,
 				Condition: PrecondExistsValue,
 				RData:     "192.0.2.1", // Exists in test zone
+			},
+			// RFC 2136 §3.2.3 (F84): the prerequisite RRset must match the
+			// zone RRset exactly, so list both www A records.
+			{
+				Name:      "www.example.com.",
+				Type:      protocol.TypeA,
+				Condition: PrecondExistsValue,
+				RData:     "192.0.2.2",
 			},
 		},
 		Updates: []UpdateOperation{},

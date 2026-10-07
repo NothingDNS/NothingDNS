@@ -737,6 +737,7 @@ func TestHandleUpdate_Success_WithACLAndTSIG(t *testing.T) {
 	}
 	ks.AddKey(key)
 	handler.SetKeyStore(ks)
+	handler.AllowKeyUpdate("key.example.com.", "example.com.") // F452: update rights are granted per key and zone
 
 	// Allow the client IP
 	_, network, _ := net.ParseCIDR("127.0.0.0/8")
@@ -895,6 +896,7 @@ func TestHandleUpdate_PrerequisiteFailure(t *testing.T) {
 	}
 	ks.AddKey(key)
 	handler.SetKeyStore(ks)
+	handler.AllowKeyUpdate("key.example.com.", "example.com.") // F452: update rights are granted per key and zone
 
 	name, _ := protocol.ParseName("example.com.")
 	prereqName, _ := protocol.ParseName("absent.example.com.")
@@ -948,6 +950,7 @@ func TestHandleUpdate_EmptyPrerequisites(t *testing.T) {
 	}
 	ks.AddKey(key)
 	handler.SetKeyStore(ks)
+	handler.AllowKeyUpdate("key.example.com.", "example.com.") // F452: update rights are granted per key and zone
 
 	name, _ := protocol.ParseName("example.com.")
 	req := &protocol.Message{

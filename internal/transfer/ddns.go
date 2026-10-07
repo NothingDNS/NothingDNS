@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sort"
 	"strings"
 	"sync"
 
@@ -84,12 +85,16 @@ type UpdateResponse struct {
 // DynamicDNSHandler handles Dynamic DNS UPDATE requests
 // RFC 2136 - Dynamic Updates in the Domain Name System
 type DynamicDNSHandler struct {
-	zones      map[string]*zone.Zone
-	zonesMu    *sync.RWMutex
-	keyStore   *KeyStore
-	acl        map[string][]*net.IPNet // zone -> allowed networks
-	aclMu      sync.RWMutex
-	updateChan chan *UpdateRequest
+	zones    map[string]*zone.Zone
+	zonesMu  *sync.RWMutex
+	keyStore *KeyStore
+	acl      map[string][]*net.IPNet // zone -> allowed networks
+	aclMu    sync.RWMutex
+	// updateGrants maps a TSIG key name to the zones it may update (F452).
+	// A verified key with no grant for the zone is REFUSED: update rights
+	// are never implied by holding a key. Guarded by aclMu.
+	updateGrants map[string]map[string]bool
+	updateChan   chan *UpdateRequest
 	// closeMu ensures Close runs once; the closed signal IS the channel
 	// being closed (range/recv stops). No separate bool needed.
 	closeMu sync.Once
@@ -98,13 +103,57 @@ type DynamicDNSHandler struct {
 // NewDynamicDNSHandler creates a new Dynamic DNS handler
 func NewDynamicDNSHandler(zones map[string]*zone.Zone) *DynamicDNSHandler {
 	return &DynamicDNSHandler{
-		zones:      zones,
-		zonesMu:    &sync.RWMutex{},
-		keyStore:   NewKeyStore(),
-		acl:        make(map[string][]*net.IPNet),
-		updateChan: make(chan *UpdateRequest, 100),
+		zones:        zones,
+		zonesMu:      &sync.RWMutex{},
+		keyStore:     NewKeyStore(),
+		acl:          make(map[string][]*net.IPNet),
+		updateGrants: make(map[string]map[string]bool),
+		updateChan:   make(chan *UpdateRequest, 100),
 	}
 }
+
+// ddnsCanonicalName lower-cases name and makes it absolute, the form zone
+// map keys and TSIG key names take on the wire.
+func ddnsCanonicalName(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if !strings.HasSuffix(name, ".") {
+		name += "."
+	}
+	return name
+}
+
+// AllowKeyUpdate grants the TSIG key keyName the right to update zoneName
+// (exact zone origin). Without a grant, an UPDATE signed with a valid key is
+// REFUSED (F452).
+func (h *DynamicDNSHandler) AllowKeyUpdate(keyName, zoneName string) {
+	keyName, zoneName = ddnsCanonicalName(keyName), ddnsCanonicalName(zoneName)
+	h.aclMu.Lock()
+	defer h.aclMu.Unlock()
+	if h.updateGrants == nil {
+		h.updateGrants = make(map[string]map[string]bool)
+	}
+	if h.updateGrants[keyName] == nil {
+		h.updateGrants[keyName] = make(map[string]bool)
+	}
+	h.updateGrants[keyName][zoneName] = true
+}
+
+// KeyMayUpdate reports whether keyName was granted update rights to zoneName.
+func (h *DynamicDNSHandler) KeyMayUpdate(keyName, zoneName string) bool {
+	h.aclMu.RLock()
+	defer h.aclMu.RUnlock()
+	return h.updateGrants[ddnsCanonicalName(keyName)][ddnsCanonicalName(zoneName)]
+}
+
+// UpdateCommitFunc applies an authorized, parsed UPDATE to z in place of the
+// local ApplyUpdate — e.g. by replicating it through cluster consensus. It
+// must return ErrPrereqFailed / ErrNotZone / ErrUpdateRefused (wrapped is
+// fine) for those outcomes; any other error is answered SERVFAIL.
+type UpdateCommitFunc func(z *zone.Zone, req *UpdateRequest) error
+
+// ErrUpdateRefused is returned by an UpdateCommitFunc that declines an
+// otherwise authorized update (answered REFUSED).
+var ErrUpdateRefused = errors.New("ddns: update refused")
 
 // SetZonesMu sets an external mutex to protect the zones map.
 // Use this when multiple components share the same zones map.
@@ -156,20 +205,42 @@ func (h *DynamicDNSHandler) GetUpdateChannel() <-chan *UpdateRequest {
 	return h.updateChan
 }
 
-// HandleUpdate processes a Dynamic DNS UPDATE request
+// HandleUpdate processes a Dynamic DNS UPDATE request and applies an
+// accepted update to the local zone. The response is not TSIG-signed; use
+// HandleUpdateRequest to sign it.
 func (h *DynamicDNSHandler) HandleUpdate(req *protocol.Message, clientIP net.IP) (*protocol.Message, error) {
-	if req == nil {
-		return nil, fmt.Errorf("nil UPDATE request")
-	}
+	resp, _, err := h.HandleUpdateRequest(req, clientIP, nil)
+	return resp, err
+}
 
+// HandleUpdateRequest processes a Dynamic DNS UPDATE request. An UPDATE is
+// accepted only when it is TSIG-signed with a key in the key store that the
+// client address may use (the key's AllowedCIDRs) and that was granted the
+// zone with AllowKeyUpdate (F452). key is the verified request key, or nil
+// when the request was not authenticated; the caller must TSIG-sign the
+// response with it (RFC 8945 §5.3). commit, when non-nil, applies the
+// update instead of the local ApplyUpdate, and the post-apply update event
+// is then not sent (the commit path owns the side effects).
+func (h *DynamicDNSHandler) HandleUpdateRequest(req *protocol.Message, clientIP net.IP, commit UpdateCommitFunc) (resp *protocol.Message, key *TSIGKey, err error) {
+	if req == nil {
+		return nil, nil, fmt.Errorf("nil UPDATE request")
+	}
+	resp, key, err = h.handleUpdate(req, clientIP, commit)
+	if err != nil {
+		return nil, nil, err
+	}
+	return resp, key, nil
+}
+
+func (h *DynamicDNSHandler) handleUpdate(req *protocol.Message, clientIP net.IP, commit UpdateCommitFunc) (*protocol.Message, *TSIGKey, error) {
 	// Verify this is an UPDATE request
 	if req.Header.Flags.Opcode != protocol.OpcodeUpdate {
-		return nil, fmt.Errorf("not an UPDATE request")
+		return nil, nil, fmt.Errorf("not an UPDATE request")
 	}
 
 	// Must have exactly one zone section
 	if len(req.Questions) != 1 || req.Questions[0] == nil || req.Questions[0].Name == nil {
-		return h.createUpdateResponse(req, protocol.RcodeFormatError), nil
+		return h.createUpdateResponse(req, protocol.RcodeFormatError), nil, nil
 	}
 
 	zoneQuestion := req.Questions[0]
@@ -180,36 +251,38 @@ func (h *DynamicDNSHandler) HandleUpdate(req *protocol.Message, clientIP net.IP)
 	z, ok := h.zones[zoneName]
 	h.zonesMu.RUnlock()
 	if !ok {
-		return h.createUpdateResponse(req, protocol.RcodeNotZone), nil
+		return h.createUpdateResponse(req, protocol.RcodeNotZone), nil, nil
 	}
 
 	// Check if client is allowed by ACL
 	if !h.IsAllowed(zoneName, clientIP) {
-		return h.createUpdateResponse(req, protocol.RcodeRefused), nil
+		return h.createUpdateResponse(req, protocol.RcodeRefused), nil, nil
 	}
 
-	// Verify TSIG if present (required for security)
-	if h.keyStore != nil && hasTSIG(req) {
-		keyName, err := getTSIGKeyName(req)
-		if err != nil {
-			return h.createUpdateResponse(req, protocol.RcodeFormatError), nil
-		}
+	// TSIG is required for Dynamic DNS: unsigned updates are refused.
+	if h.keyStore == nil || !hasTSIG(req) {
+		return h.createUpdateResponse(req, protocol.RcodeRefused), nil, nil
+	}
+	keyName, err := getTSIGKeyName(req)
+	if err != nil {
+		return h.createUpdateResponse(req, protocol.RcodeFormatError), nil, nil
+	}
+	key, ok := h.keyStore.GetKey(keyName)
+	if !ok {
+		return h.createUpdateResponse(req, protocol.RcodeNotAuth), nil, nil
+	}
+	if err := h.keyStore.ValidateKeySource(keyName, clientIP); err != nil {
+		return h.createUpdateResponse(req, protocol.RcodeNotAuth), nil, nil
+	}
+	if err := VerifyMessage(req, key, nil); err != nil {
+		return h.createUpdateResponse(req, protocol.RcodeNotAuth), nil, nil
+	}
+	// From here on the request is authenticated with key, so every
+	// response is signed with it by the caller.
 
-		key, ok := h.keyStore.GetKey(keyName)
-		if !ok {
-			return h.createUpdateResponse(req, protocol.RcodeNotAuth), nil
-		}
-
-		if err := h.keyStore.ValidateKeySource(keyName, clientIP); err != nil {
-			return h.createUpdateResponse(req, protocol.RcodeNotAuth), nil
-		}
-
-		if err := VerifyMessage(req, key, nil); err != nil {
-			return h.createUpdateResponse(req, protocol.RcodeNotAuth), nil
-		}
-	} else {
-		// TSIG required for Dynamic DNS
-		return h.createUpdateResponse(req, protocol.RcodeRefused), nil
+	// F452: the key must have been granted update rights to this zone.
+	if !h.KeyMayUpdate(keyName, zoneName) {
+		return h.createUpdateResponse(req, protocol.RcodeRefused), key, nil
 	}
 
 	// Parse the wire RRs into typed update + prerequisite structs.
@@ -218,25 +291,28 @@ func (h *DynamicDNSHandler) HandleUpdate(req *protocol.Message, clientIP net.IP)
 	// raced concurrent updates AND read z.Records without z.RLock().
 	updates, err := h.parseUpdates(req.Authorities)
 	if err != nil {
-		return h.createUpdateResponse(req, protocol.RcodeFormatError), nil
+		return h.createUpdateResponse(req, protocol.RcodeFormatError), key, nil
 	}
 
-	// Send update request to channel for processing
 	updateReq := &UpdateRequest{
 		ZoneName:      zoneName,
 		ClientIP:      clientIP,
 		Prerequisites: h.parsePrerequisites(req.Answers),
 		Updates:       updates,
+		TSIGKeyName:   keyName,
 	}
 	if err := validateUpdateWithinZone(z, updateReq); err != nil {
-		return h.createUpdateResponse(req, protocol.RcodeNotZone), nil
+		return h.createUpdateResponse(req, protocol.RcodeNotZone), key, nil
 	}
 
-	// Get TSIG key name if present
-	if h.keyStore != nil && hasTSIG(req) {
-		if keyName, err := getTSIGKeyName(req); err == nil {
-			updateReq.TSIGKeyName = keyName
+	if commit != nil {
+		// The commit path (e.g. Raft) applies the update and owns its
+		// side effects; it must not hold zonesMu, which its apply path
+		// may need.
+		if err := commit(z, updateReq); err != nil {
+			return h.createUpdateResponse(req, updateErrorRcode(err)), key, nil
 		}
+		return h.createUpdateResponse(req, protocol.RcodeSuccess), key, nil
 	}
 
 	// SECURITY (V-06 fix + M-6): Apply update synchronously to prevent
@@ -261,13 +337,7 @@ func (h *DynamicDNSHandler) HandleUpdate(req *protocol.Message, clientIP net.IP)
 	}
 	h.zonesMu.Unlock()
 	if err != nil {
-		if errors.Is(err, ErrPrereqFailed) {
-			return h.createUpdateResponse(req, protocol.RcodeNXRRSet), nil
-		}
-		if errors.Is(err, ErrNotZone) {
-			return h.createUpdateResponse(req, protocol.RcodeNotZone), nil
-		}
-		return h.createUpdateResponse(req, protocol.RcodeServerFailure), nil
+		return h.createUpdateResponse(req, updateErrorRcode(err)), key, nil
 	}
 
 	// Notify update channel for post-apply side effects (IXFR journal,
@@ -279,7 +349,109 @@ func (h *DynamicDNSHandler) HandleUpdate(req *protocol.Message, clientIP net.IP)
 	}
 
 	// Return success response
-	return h.createUpdateResponse(req, protocol.RcodeSuccess), nil
+	return h.createUpdateResponse(req, protocol.RcodeSuccess), key, nil
+}
+
+// updateErrorRcode maps an apply/commit error to the UPDATE RCODE.
+func updateErrorRcode(err error) uint8 {
+	switch {
+	case errors.Is(err, ErrPrereqFailed):
+		return protocol.RcodeNXRRSet
+	case errors.Is(err, ErrNotZone):
+		return protocol.RcodeNotZone
+	case errors.Is(err, ErrUpdateRefused):
+		return protocol.RcodeRefused
+	default:
+		return protocol.RcodeServerFailure
+	}
+}
+
+// PlanUpdate evaluates update against a private copy of z with the exact
+// RFC 2136 semantics of ApplyUpdate (prerequisites, apex SOA/NS protection,
+// CNAME and duplicate rules) and returns the resulting record-level change:
+// the records to remove and the records to add, SOA excluded (the SOA serial
+// is maintained by whoever applies the change). z itself is not modified.
+// soaChanged reports that the update carries an SOA add (RFC 2136 §3.4.2.2
+// SOA replacement), which has no record-level equivalent. Used to
+// replicate an UPDATE through cluster consensus as primitive record writes.
+func PlanUpdate(z *zone.Zone, update *UpdateRequest) (removed, added []zone.Record, soaChanged bool, err error) {
+	if z == nil {
+		return nil, nil, false, fmt.Errorf("ddns: nil zone")
+	}
+	if update == nil {
+		return nil, nil, false, fmt.Errorf("ddns: nil update request")
+	}
+	z.RLock()
+	shadow := zone.NewZone(z.Origin)
+	shadow.Origin = z.Origin
+	shadow.DefaultTTL = z.DefaultTTL
+	if z.SOA != nil {
+		soa := *z.SOA
+		shadow.SOA = &soa
+	}
+	for name, recs := range z.Records {
+		shadow.Records[name] = append([]zone.Record(nil), recs...)
+	}
+	before := make(map[string][]zone.Record, len(z.Records))
+	for name, recs := range z.Records {
+		before[name] = append([]zone.Record(nil), recs...)
+	}
+	z.RUnlock()
+
+	if err := ApplyUpdate(shadow, update); err != nil {
+		return nil, nil, false, err
+	}
+
+	recKey := func(r zone.Record) string {
+		class := strings.ToUpper(r.Class)
+		if class == "" {
+			class = "IN"
+		}
+		return fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%s", strings.ToLower(r.Name), strings.ToUpper(r.Type), class, r.TTL, r.RData)
+	}
+	count := func(recs map[string][]zone.Record) map[string]int {
+		m := make(map[string]int)
+		for _, rs := range recs {
+			for _, r := range rs {
+				if !strings.EqualFold(r.Type, "SOA") {
+					m[recKey(r)]++
+				}
+			}
+		}
+		return m
+	}
+	oldCount, newCount := count(before), count(shadow.Records)
+	diff := func(from map[string][]zone.Record, other map[string]int) []zone.Record {
+		var out []zone.Record
+		names := make([]string, 0, len(from))
+		for name := range from {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			for _, r := range from[name] {
+				if strings.EqualFold(r.Type, "SOA") {
+					continue
+				}
+				k := recKey(r)
+				if other[k] > 0 {
+					other[k]--
+					continue
+				}
+				out = append(out, r)
+			}
+		}
+		return out
+	}
+	removed = diff(before, newCount)
+	added = diff(shadow.Records, oldCount)
+
+	for _, op := range update.Updates {
+		if op.Operation == UpdateOpAdd && op.Type == protocol.TypeSOA {
+			soaChanged = true
+		}
+	}
+	return removed, added, soaChanged, nil
 }
 
 // checkPrerequisites verifies all prerequisites are met
@@ -477,6 +649,9 @@ func ApplyUpdate(z *zone.Zone, update *UpdateRequest) error {
 			return fmt.Errorf("%w: %w", ErrPrereqFailed, err)
 		}
 	}
+	if err := checkValuePrereqRRsetsExact(z, update.Prerequisites); err != nil {
+		return fmt.Errorf("%w: %w", ErrPrereqFailed, err)
+	}
 
 	// RFC 2136 §3.4.2 requires the update to be atomic: all operations
 	// apply or none do. Validate every add up front so a mid-sequence
@@ -571,8 +746,82 @@ func checkPrerequisiteOnZone(z *zone.Zone, precond UpdatePrerequisite) error {
 	return nil
 }
 
+// checkValuePrereqRRsetsExact enforces RFC 2136 §3.2.3/§3.2.5 (F84):
+// value-dependent prerequisite RRs are grouped into RRsets by NAME and TYPE,
+// and each zone RRset must match its prerequisite RRset exactly — a zone RR
+// absent from the prerequisite set fails it, not only a missing prereq RR
+// (which checkPrerequisiteOnZone already rejects). Caller holds z.Lock().
+func checkValuePrereqRRsetsExact(z *zone.Zone, prereqs []UpdatePrerequisite) error {
+	type rrsetKey struct {
+		name   string
+		rrType uint16
+	}
+	sets := make(map[rrsetKey][]string)
+	var order []rrsetKey
+	for _, p := range prereqs {
+		if p.Condition != PrecondExistsValue || p.RData == "" {
+			continue
+		}
+		k := rrsetKey{normalizeZoneOwner(p.Name, z.Origin), p.Type}
+		if _, seen := sets[k]; !seen {
+			order = append(order, k)
+		}
+		sets[k] = append(sets[k], p.RData)
+	}
+	for _, k := range order {
+		typeStr := protocol.TypeString(k.rrType)
+		for _, r := range z.Records[k.name] {
+			if r.Type != typeStr {
+				continue
+			}
+			found := false
+			for _, v := range sets[k] {
+				if updateRDataEqual(k.rrType, r.RData, v) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("prerequisite failed: RRset %s %s has RR %q not in prerequisite RRset", k.name, typeStr, r.RData)
+			}
+		}
+	}
+	return nil
+}
+
+// zoneApexName returns the zone origin in the lower-case absolute form used
+// as the z.Records key for the apex.
+func zoneApexName(z *zone.Zone) string {
+	apex := strings.ToLower(strings.TrimSpace(z.Origin))
+	if !strings.HasSuffix(apex, ".") {
+		apex += "."
+	}
+	return apex
+}
+
 // applyOperationToZone applies a single update operation
 func applyOperationToZone(z *zone.Zone, op UpdateOperation) error {
+	// RFC 2136 §3.4.2.3/§3.4.2.4 (F82): deletes never remove the apex SOA,
+	// never remove the apex NS RRset, and never remove the last apex NS.
+	if op.Operation != UpdateOpAdd && normalizeZoneOwner(op.Name, z.Origin) == zoneApexName(z) {
+		switch op.Operation {
+		case UpdateOpDeleteName:
+			zoneDeleteApexNonSOANS(z)
+			return nil
+		case UpdateOpDeleteRRSet:
+			if op.Type == protocol.TypeSOA || op.Type == protocol.TypeNS {
+				return nil
+			}
+		case UpdateOpDelete:
+			if op.Type == protocol.TypeSOA {
+				return nil
+			}
+			if op.Type == protocol.TypeNS && zoneTypeCount(z, zoneApexName(z), "NS") <= 1 {
+				return nil
+			}
+		}
+	}
+
 	switch op.Operation {
 	case UpdateOpAdd:
 		name := normalizeZoneOwner(op.Name, z.Origin)
@@ -792,6 +1041,34 @@ func zoneDeleteRRSet(z *zone.Zone, name string, rrType uint16) {
 		delete(z.Records, name)
 	} else {
 		z.Records[name] = newRecords
+	}
+}
+
+// zoneTypeCount counts records of typeStr at the normalized owner name.
+func zoneTypeCount(z *zone.Zone, name, typeStr string) int {
+	n := 0
+	for _, r := range z.Records[name] {
+		if r.Type == typeStr {
+			n++
+		}
+	}
+	return n
+}
+
+// zoneDeleteApexNonSOANS implements an ANY/ANY delete at the apex: every
+// RRset except SOA and NS is removed (RFC 2136 §3.4.2.3).
+func zoneDeleteApexNonSOANS(z *zone.Zone) {
+	apex := zoneApexName(z)
+	var kept []zone.Record
+	for _, r := range z.Records[apex] {
+		if r.Type == "SOA" || r.Type == "NS" {
+			kept = append(kept, r)
+		}
+	}
+	if len(kept) == 0 {
+		delete(z.Records, apex)
+	} else {
+		z.Records[apex] = kept
 	}
 }
 

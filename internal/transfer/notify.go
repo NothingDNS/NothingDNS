@@ -1,6 +1,7 @@
 package transfer
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -19,6 +20,10 @@ type NOTIFYRequest struct {
 	ZoneName string
 	Serial   uint32 // SOA serial of the zone
 	ClientIP net.IP
+	// SerialUnknown is set when the NOTIFY carried no SOA serial hint
+	// (RFC 1996 §3.7): Serial is then meaningless and the slave must check
+	// its master as if the refresh timer had expired (§3.11) (F208).
+	SerialUnknown bool
 }
 
 // NOTIFYResponse represents the result of a NOTIFY request
@@ -31,14 +36,24 @@ type NOTIFYResponse struct {
 // NOTIFYSender sends NOTIFY messages to slave servers
 type NOTIFYSender struct {
 	serverAddr string        // Address to send from (usually ":53")
-	timeout    time.Duration // Response timeout
+	timeout    time.Duration // Response timeout per transmission
+	// retransmits is how many times an unanswered UDP NOTIFY is resent
+	// (RFC 1996 §3.6), each waiting timeout (F209).
+	retransmits int
+	// tsigKey, when set, signs every outgoing NOTIFY (RFC 8945) (F547).
+	tsigKey *TSIGKey
 }
+
+// notifyDefaultRetransmits is RFC 1996 §3.6's suggested maximum of 5
+// retransmissions.
+const notifyDefaultRetransmits = 5
 
 // NewNOTIFYSender creates a new NOTIFY sender
 func NewNOTIFYSender(serverAddr string) *NOTIFYSender {
 	return &NOTIFYSender{
-		serverAddr: serverAddr,
-		timeout:    5 * time.Second,
+		serverAddr:  serverAddr,
+		timeout:     5 * time.Second,
+		retransmits: notifyDefaultRetransmits,
 	}
 }
 
@@ -47,21 +62,45 @@ func (s *NOTIFYSender) SetTimeout(timeout time.Duration) {
 	s.timeout = timeout
 }
 
+// SetTSIGKey makes the sender TSIG-sign every NOTIFY with key (nil: unsigned).
+func (s *NOTIFYSender) SetTSIGKey(key *TSIGKey) {
+	s.tsigKey = key
+}
+
 // SendNOTIFY sends a NOTIFY message to a slave server
 // The slave should respond with a matching NOTIFY response
 func (s *NOTIFYSender) SendNOTIFY(zoneName string, serial uint32, slaveAddr string) error {
+	return s.SendNOTIFYContext(context.Background(), zoneName, serial, slaveAddr)
+}
+
+// SendNOTIFYContext is SendNOTIFY with cancellation: when ctx is done the
+// socket is closed, any pending wait ends and ctx.Err() is returned (F547).
+func (s *NOTIFYSender) SendNOTIFYContext(ctx context.Context, zoneName string, serial uint32, slaveAddr string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	// Build NOTIFY request message
 	req, err := s.buildNOTIFYRequest(zoneName, serial)
 	if err != nil {
 		return fmt.Errorf("building NOTIFY request: %w", err)
 	}
+	if s.tsigKey != nil {
+		tsigRR, err := SignMessage(req, s.tsigKey, 300)
+		if err != nil {
+			return fmt.Errorf("signing NOTIFY: %w", err)
+		}
+		req.Additionals = append(req.Additionals, tsigRR)
+	}
 
 	// Send UDP message (NOTIFY uses UDP by default, TCP for large messages)
-	conn, err := net.DialTimeout("udp", slaveAddr, s.timeout)
+	dialer := net.Dialer{Timeout: s.timeout}
+	conn, err := dialer.DialContext(ctx, "udp", slaveAddr)
 	if err != nil {
 		return fmt.Errorf("connecting to slave: %w", err)
 	}
 	defer conn.Close()
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
 
 	// Pack and send message
 	buf := make([]byte, 65535)
@@ -70,38 +109,75 @@ func (s *NOTIFYSender) SendNOTIFY(zoneName string, serial uint32, slaveAddr stri
 		return fmt.Errorf("packing NOTIFY request: %w", err)
 	}
 
-	if _, err := writePacket(conn, buf[:n]); err != nil {
-		return fmt.Errorf("sending NOTIFY: %w", err)
+	// RFC 1996 §3.6: retransmit the same message until it is answered or
+	// the retransmissions are exhausted (F209).
+	var lastErr error
+	for attempt := 0; attempt <= s.retransmits; attempt++ {
+		if _, err := writePacket(conn, buf[:n]); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			return fmt.Errorf("sending NOTIFY: %w", err)
+		}
+		if err := conn.SetReadDeadline(time.Now().Add(s.timeout)); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			return fmt.Errorf("setting read deadline: %w", err)
+		}
+		done, err := awaitNOTIFYResponse(conn, req.Header.ID)
+		if done {
+			return err
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		lastErr = err
 	}
+	return lastErr
+}
 
-	// Wait for response
-	if err := conn.SetReadDeadline(time.Now().Add(s.timeout)); err != nil {
-		return fmt.Errorf("setting read deadline: %w", err)
-	}
+// awaitNOTIFYResponse reads until the read deadline. Datagrams that are not
+// a reply to this request (unparseable or a different ID, e.g. a stale or
+// spoofed reply) are discarded and reading continues (F210). It returns
+// done=false with the read error when no matching reply arrived in time.
+func awaitNOTIFYResponse(conn net.Conn, id uint16) (bool, error) {
 	respBuf := make([]byte, 65535)
-	n, err = conn.Read(respBuf)
-	if err != nil {
-		return fmt.Errorf("reading NOTIFY response: %w", err)
-	}
+	var discarded error
+	for {
+		n, err := conn.Read(respBuf)
+		if err != nil {
+			if discarded != nil {
+				return false, fmt.Errorf("reading NOTIFY response: %w (discarded: %w)", err, discarded)
+			}
+			return false, fmt.Errorf("reading NOTIFY response: %w", err)
+		}
 
-	// Parse response
-	resp, err := protocol.UnpackMessage(respBuf[:n])
-	if err != nil {
-		return fmt.Errorf("unpacking NOTIFY response: %w", err)
-	}
-	defer resp.Release()
+		resp, err := protocol.UnpackMessage(respBuf[:n])
+		if err != nil {
+			discarded = fmt.Errorf("unpacking NOTIFY response: %w", err)
+			continue
+		}
 
-	// Check response
+		// The request uses a random transaction ID (RFC 1996 §3.2.2 /
+		// RFC 1035 §4.1.1) so a response can be bound to its request; a
+		// mismatched ID is not our reply and must neither succeed nor
+		// fail this NOTIFY.
+		if resp.Header.ID != id {
+			discarded = fmt.Errorf("NOTIFY response ID mismatch: got %d, want %d", resp.Header.ID, id)
+			resp.Release()
+			continue
+		}
+		err = checkNOTIFYResponse(resp)
+		resp.Release()
+		return true, err
+	}
+}
+
+// checkNOTIFYResponse validates a reply whose ID matches the request.
+func checkNOTIFYResponse(resp *protocol.Message) error {
 	if resp.Header.Flags.RCODE != protocol.RcodeSuccess {
 		return fmt.Errorf("NOTIFY failed with rcode: %d", resp.Header.Flags.RCODE)
-	}
-
-	// Verify the response ID matches the request ID. The request uses a
-	// random transaction ID (RFC 1996 §3.2.2 / RFC 1035 §4.1.1) precisely
-	// so a response can be bound to its request; without this check a
-	// spoofed or stale reply (mismatched ID) is accepted as success.
-	if resp.Header.ID != req.Header.ID {
-		return fmt.Errorf("NOTIFY response ID mismatch: got %d, want %d", resp.Header.ID, req.Header.ID)
 	}
 
 	// Verify it's a NOTIFY response (QR=1, Opcode=NOTIFY)
@@ -336,8 +412,10 @@ func (h *NOTIFYSlaveHandler) HandleNOTIFY(req *protocol.Message, clientIP net.IP
 		return h.createNOTIFYResponse(req, protocol.RcodeNotAuth), nil
 	}
 
-	// Extract serial from Answer section
+	// Extract serial from Answer section. Serial 0 is a valid RFC 1982
+	// serial, so presence is tracked separately (F207).
 	var receivedSerial uint32
+	haveSerial := false
 	for _, rr := range req.Answers {
 		if rr == nil {
 			continue
@@ -345,13 +423,14 @@ func (h *NOTIFYSlaveHandler) HandleNOTIFY(req *protocol.Message, clientIP net.IP
 		if rr.Type == protocol.TypeSOA {
 			if soaData, ok := rr.Data.(*protocol.RDataSOA); ok {
 				receivedSerial = soaData.Serial
+				haveSerial = true
 				break
 			}
 		}
 	}
 
 	// If no serial in Answer section, check Authority section (older implementations)
-	if receivedSerial == 0 {
+	if !haveSerial {
 		for _, rr := range req.Authorities {
 			if rr == nil {
 				continue
@@ -359,20 +438,20 @@ func (h *NOTIFYSlaveHandler) HandleNOTIFY(req *protocol.Message, clientIP net.IP
 			if rr.Type == protocol.TypeSOA {
 				if soaData, ok := rr.Data.(*protocol.RDataSOA); ok {
 					receivedSerial = soaData.Serial
+					haveSerial = true
 					break
 				}
 			}
 		}
 	}
 
-	// If we still don't have a serial, check our local zone
-	if receivedSerial == 0 && z.SOA != nil {
-		receivedSerial = z.SOA.Serial
-	}
-
-	// Check if this is a new serial
+	// Check if this is a new serial. Without a serial hint the NOTIFY is
+	// still a change signal (RFC 1996 §3.11): forward it as SerialUnknown
+	// instead of comparing the local serial with itself (F208).
 	needsUpdate := true
-	if h.serialCheck != nil {
+	if !haveSerial {
+		needsUpdate = true
+	} else if h.serialCheck != nil {
 		needsUpdate = h.serialCheck(zoneName, receivedSerial)
 	} else if z.SOA != nil && !serialIsNewer(receivedSerial, z.SOA.Serial) {
 		// If the received serial is not strictly newer per RFC 1982, no update
@@ -384,9 +463,10 @@ func (h *NOTIFYSlaveHandler) HandleNOTIFY(req *protocol.Message, clientIP net.IP
 	if needsUpdate {
 		select {
 		case h.notifyChan <- &NOTIFYRequest{
-			ZoneName: zoneName,
-			Serial:   receivedSerial,
-			ClientIP: clientIP,
+			ZoneName:      zoneName,
+			Serial:        receivedSerial,
+			ClientIP:      clientIP,
+			SerialUnknown: !haveSerial,
 		}:
 		default:
 			// Channel full, log but don't block

@@ -5,24 +5,31 @@ package transfer
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
+	"github.com/nothingdns/nothingdns/internal/server"
 	"github.com/nothingdns/nothingdns/internal/util"
 	"github.com/nothingdns/nothingdns/internal/zone"
 )
 
 // XoTServer handles DNS Zone Transfer over TLS (XoT) as specified in RFC 9103.
-// XoT uses TLS 1.3 (preferred) or TLS 1.2 to encrypt zone transfer communications.
+// XoT requires TLS 1.3 (RFC 9103 §5.1) and offers the "dot" ALPN token.
 type XoTServer struct {
 	tlsConfig *tls.Config
+	// tls holds the reloadable certificate and client-CA pool behind
+	// tlsConfig (ReloadTLS).
+	tls       *xotTLS
 	listener  net.Listener
 	zones     map[string]*zone.Zone
 	zonesMu   *sync.RWMutex
@@ -40,6 +47,9 @@ type XoTServer struct {
 
 	stopCh chan struct{}  // closed to signal AcceptLoop stop
 	wg     sync.WaitGroup // waits for AcceptLoop and active connections
+	// conns holds the live accepted connections (guarded by mu) so Close can
+	// tear them down instead of waiting for idle clients (F226).
+	conns map[net.Conn]struct{}
 }
 
 // TLSAUsage specifies how TLSA records should be used for XoT validation.
@@ -53,7 +63,9 @@ const (
 
 const maxXoTCAFileSize = 1 << 20
 
-// XoTConfig contains XoT-specific configuration.
+// XoTConfig contains XoT-specific configuration. MinTLSVersion is kept for
+// compatibility only: XoT always requires TLS 1.3 (RFC 9103 §5.1), so values
+// below 13 have no effect.
 type XoTConfig struct {
 	CertFile        string
 	KeyFile         string
@@ -110,13 +122,15 @@ func NewXoTServer(zones map[string]*zone.Zone, config *XoTConfig, logger *util.L
 		config = &XoTConfig{}
 	}
 
-	tlsConfig, err := buildXoTTLSConfig(config)
+	xt, err := newXoTTLS(config)
 	if err != nil {
 		return nil, fmt.Errorf("building TLS config: %w", err)
 	}
+	tlsConfig := xt.listener
 
 	server := &XoTServer{
 		tlsConfig: tlsConfig,
+		tls:       xt,
 		zones:     zones,
 		zonesMu:   &sync.RWMutex{},
 		port:      config.ListenPort,
@@ -154,37 +168,78 @@ func NewXoTServer(zones map[string]*zone.Zone, config *XoTConfig, logger *util.L
 	return server, nil
 }
 
+// SetZonesMu makes the server lock the zones map with mu, the lock its owner
+// (the query handler) holds while mutating that shared map. Without it the
+// server's private lock does not exclude the owner's writes (F414). A nil mu
+// is ignored.
+func (s *XoTServer) SetZonesMu(mu *sync.RWMutex) {
+	if mu == nil {
+		return
+	}
+	s.mu.Lock()
+	s.zonesMu = mu
+	s.mu.Unlock()
+}
+
+// zonesLock returns the lock guarding the zones map.
+func (s *XoTServer) zonesLock() *sync.RWMutex {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.zonesMu
+}
+
 // SetJournalStore sets the persistent journal store for IXFR incremental transfers.
 func (s *XoTServer) SetJournalStore(store JournalStore) {
 	s.journalStore = store
 }
 
-// buildXoTTLSConfig creates a TLS configuration for XoT.
-func buildXoTTLSConfig(config *XoTConfig) (*tls.Config, error) {
-	tlsConfig := &tls.Config{
-		MinVersion: tls.VersionTLS12,
-		MaxVersion: tls.VersionTLS13,
-	}
+// xotALPN is the ALPN token XoT shares with DNS over TLS (RFC 9103 §7.1).
+const xotALPN = "dot"
 
-	if config.MinTLSVersion >= 13 {
-		tlsConfig.MinVersion = tls.VersionTLS13
+// xotTLS is the reloadable TLS state of an XoT listener: the server
+// certificate (served through GetCertificate for every handshake) and, with
+// mTLS, the client-CA pool. The pool is published as a complete per-handshake
+// tls.Config through GetConfigForClient so a reload swaps it atomically.
+type xotTLS struct {
+	listener *tls.Config
+	certs    *server.CertReloader // nil when no certificate is configured
+	caFile   string
+	// client is the config handed to each handshake when caFile is set: the
+	// listener settings plus the current ClientCAs. crypto/tls re-checks a
+	// resumed session's verified chains against these ClientCAs, so a CA
+	// removed by a reload is refused on resumption too.
+	client atomic.Pointer[tls.Config]
+}
+
+// buildXoTTLSConfig creates a TLS configuration for XoT. RFC 9103 §5.1
+// requires TLS 1.3 for XoT, so TLS 1.3 is the floor whatever
+// MinTLSVersion says (a lower setting cannot weaken it), and the "dot" ALPN
+// token is offered (F415).
+func buildXoTTLSConfig(config *XoTConfig) (*tls.Config, error) {
+	xt, err := newXoTTLS(config)
+	if err != nil {
+		return nil, err
 	}
+	return xt.listener, nil
+}
+
+func newXoTTLS(config *XoTConfig) (*xotTLS, error) {
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS13,
+		MaxVersion: tls.VersionTLS13,
+		NextProtos: []string{xotALPN},
+	}
+	xt := &xotTLS{listener: tlsConfig}
 
 	if config.CertFile != "" && config.KeyFile != "" {
-		cert, err := tls.LoadX509KeyPair(config.CertFile, config.KeyFile)
+		certs, err := server.NewCertReloader(config.CertFile, config.KeyFile)
 		if err != nil {
 			return nil, fmt.Errorf("loading certificate: %w", err)
 		}
-		tlsConfig.Certificates = []tls.Certificate{cert}
-	}
-
-	if config.CAFile != "" {
-		caCert, err := readCAFile(config.CAFile)
-		if err != nil {
-			return nil, fmt.Errorf("reading CA file: %w", err)
-		}
-		tlsConfig.ClientCAs = caCert
-		tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
+		xt.certs = certs
+		// Certificates stays empty so GetCertificate serves every
+		// handshake, with or without SNI (F609).
+		tlsConfig.GetCertificate = certs.GetCertificate
 	}
 
 	tlsConfig.CurvePreferences = []tls.CurveID{
@@ -193,7 +248,60 @@ func buildXoTTLSConfig(config *XoTConfig) (*tls.Config, error) {
 		tls.CurveP384,
 	}
 
-	return tlsConfig, nil
+	if config.CAFile != "" {
+		caCert, err := readCAFile(config.CAFile)
+		if err != nil {
+			return nil, fmt.Errorf("reading CA file: %w", err)
+		}
+		xt.caFile = config.CAFile
+		tlsConfig.ClientCAs = caCert
+		tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
+		xt.publishClientCAs(caCert)
+		tlsConfig.GetConfigForClient = func(*tls.ClientHelloInfo) (*tls.Config, error) {
+			return xt.client.Load(), nil
+		}
+	}
+
+	return xt, nil
+}
+
+// publishClientCAs installs pool as the client-CA pool for new handshakes.
+func (x *xotTLS) publishClientCAs(pool *x509.CertPool) {
+	c := x.listener.Clone()
+	c.GetConfigForClient = nil
+	c.ClientCAs = pool
+	c.ClientAuth = tls.RequireAndVerifyClientCert
+	x.client.Store(c)
+}
+
+// reload re-reads the certificate/key and the CA file. A part that fails to
+// load keeps its previous value; the errors are returned joined.
+func (x *xotTLS) reload() error {
+	var errs []error
+	if x.certs != nil {
+		if err := x.certs.Reload(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if x.caFile != "" {
+		if pool, err := readCAFile(x.caFile); err != nil {
+			errs = append(errs, err)
+		} else {
+			x.publishClientCAs(pool)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// ReloadTLS re-reads the XoT certificate, key and (with mTLS) CA file
+// (F609). New handshakes use the reloaded files; established connections
+// are unaffected. When a file fails to load, the previous certificate or CA
+// pool stays in use and the error is returned.
+func (s *XoTServer) ReloadTLS() error {
+	if s == nil || s.tls == nil {
+		return nil
+	}
+	return s.tls.reload()
 }
 
 // readCAFile reads a PEM CA bundle from filename into a fresh cert pool. This
@@ -239,13 +347,23 @@ func (s *XoTServer) Serve(addr string) error {
 		return fmt.Errorf("server is closed")
 	}
 
-	listener, err := tls.Listen("tcp", fmt.Sprintf("%s:%d", addr, s.port), s.tlsConfig)
+	// addr is either a bare host (the port comes from XoTConfig.ListenPort) or
+	// a full listen address such as server.xot.bind's ":853" (F224).
+	listenAddr := addr
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		listenAddr = net.JoinHostPort(addr, strconv.Itoa(s.port))
+	}
+	listener, err := tls.Listen("tcp", listenAddr, s.tlsConfig)
 	if err != nil {
 		s.mu.Unlock()
 		return fmt.Errorf("creating TLS listener: %w", err)
 	}
 	s.listener = listener
 	s.address = addr
+	if tcpAddr, ok := listener.Addr().(*net.TCPAddr); ok {
+		s.address = tcpAddr.IP.String()
+		s.port = tcpAddr.Port
+	}
 	s.mu.Unlock()
 	return nil
 }
@@ -289,10 +407,19 @@ func (s *XoTServer) AcceptLoop() {
 			s.closeConn(conn, "accepted connection after shutdown")
 			return
 		}
+		if s.conns == nil {
+			s.conns = make(map[net.Conn]struct{})
+		}
+		s.conns[conn] = struct{}{}
 		s.wg.Add(1)
 		s.mu.Unlock()
 		go func() {
 			defer s.wg.Done()
+			defer func() {
+				s.mu.Lock()
+				delete(s.conns, conn)
+				s.mu.Unlock()
+			}()
 			s.handleConnection(conn)
 		}()
 	}
@@ -410,9 +537,10 @@ func (s *XoTServer) handleAXFRRequest(conn net.Conn, req *protocol.Message, clie
 	zoneName := req.Questions[0].Name.String()
 
 	// Get the zone
-	s.zonesMu.RLock()
+	zonesMu := s.zonesLock()
+	zonesMu.RLock()
 	z, ok := s.zones[strings.ToLower(zoneName)]
-	s.zonesMu.RUnlock()
+	zonesMu.RUnlock()
 	if !ok {
 		if err := s.sendErrorResponse(conn, req, protocol.RcodeNameError); err != nil {
 			return
@@ -457,9 +585,10 @@ func (s *XoTServer) handleIXFRRequest(conn net.Conn, req *protocol.Message, clie
 	zoneName := req.Questions[0].Name.String()
 
 	// Get zone
-	s.zonesMu.RLock()
+	zonesMu := s.zonesLock()
+	zonesMu.RLock()
 	z, ok := s.zones[strings.ToLower(zoneName)]
-	s.zonesMu.RUnlock()
+	zonesMu.RUnlock()
 	if !ok {
 		if err := s.sendErrorResponse(conn, req, protocol.RcodeNameError); err != nil {
 			return
@@ -542,11 +671,22 @@ func (s *XoTServer) isAllowed(clientIP net.IP) bool {
 	return false
 }
 
-// generateAXFRRecords generates AXFR response records for a zone.
+// generateAXFRRecords generates AXFR response records for a zone. The framing
+// SOA and the record walk come from one zone state: the zone read lock is held
+// across both, so a concurrent update cannot pair the old serial with the new
+// data (F222, mirrors AXFRServer.generateAXFRRecords / F219).
 func (s *XoTServer) generateAXFRRecords(z *zone.Zone) ([]*protocol.ResourceRecord, error) {
 	if z == nil {
 		return nil, fmt.Errorf("zone is nil")
 	}
+	z.RLock()
+	defer z.RUnlock()
+	return s.generateAXFRRecordsLocked(z)
+}
+
+// generateAXFRRecordsLocked is generateAXFRRecords for a caller that already
+// holds z's read lock (zone RWMutex read locks must not be taken recursively).
+func (s *XoTServer) generateAXFRRecordsLocked(z *zone.Zone) ([]*protocol.ResourceRecord, error) {
 	if z.SOA == nil {
 		return nil, fmt.Errorf("zone has no SOA record")
 	}
@@ -591,7 +731,6 @@ func (s *XoTServer) generateAXFRRecords(z *zone.Zone) ([]*protocol.ResourceRecor
 	// record after it, truncating the zone (mirrors
 	// AXFRServer.generateAXFRRecords).
 	var zoneRecords []*protocol.ResourceRecord
-	z.RLock()
 	for name, recs := range z.Records {
 		for _, rec := range recs {
 			if protocol.RecordTypeFromText(rec.Type) == protocol.TypeSOA {
@@ -604,7 +743,6 @@ func (s *XoTServer) generateAXFRRecords(z *zone.Zone) ([]*protocol.ResourceRecor
 			zoneRecords = append(zoneRecords, rr)
 		}
 	}
-	z.RUnlock()
 
 	// Sort records canonically (RFC 4034 Section 6.1)
 	s.sortRecordsCanonically(zoneRecords)
@@ -625,6 +763,9 @@ func (s *XoTServer) generateIXFRRecords(z *zone.Zone, clientSerial uint32) ([]*p
 	if z == nil {
 		return nil, fmt.Errorf("zone is nil")
 	}
+	// One zone state for the serial decision, the SOAs and any AXFR fallback (F222).
+	z.RLock()
+	defer z.RUnlock()
 	if z.SOA == nil {
 		return nil, fmt.Errorf("zone has no SOA record")
 	}
@@ -675,7 +816,7 @@ func (s *XoTServer) generateIXFRRecords(z *zone.Zone, clientSerial uint32) ([]*p
 	}
 
 	// Fall back to full AXFR
-	return s.generateAXFRRecords(z)
+	return s.generateAXFRRecordsLocked(z)
 }
 
 // buildIncrementalIXFR builds an incremental IXFR response from journal entries.
@@ -692,7 +833,7 @@ func (s *XoTServer) buildIncrementalIXFR(entries []*IXFRJournalEntry, z *zone.Zo
 
 	if startIdx == -1 {
 		// No entries newer than client serial — fall back to AXFR
-		return s.generateAXFRRecords(z)
+		return s.generateAXFRRecordsLocked(z)
 	}
 
 	// A journal entry is only a usable next version for the client when the
@@ -721,9 +862,17 @@ func (s *XoTServer) buildIncrementalIXFR(entries []*IXFRJournalEntry, z *zone.Zo
 	default:
 		uncovered = entries[0].OldSerial != clientSerial
 	}
+	// The delta must also END at the serial the response announces. A zone
+	// change that was not journalled (API record edit, zone-file reload)
+	// leaves the journal tail behind z.SOA.Serial; a delta stopping at the
+	// tail but framed with the current SOA would mark the secondary as current
+	// while it lacks those changes (F225).
+	if !uncovered && entries[len(entries)-1].Serial != z.SOA.Serial {
+		uncovered = true
+	}
 	if uncovered {
 		// Gap in journal — fall back to AXFR
-		return s.generateAXFRRecords(z)
+		return s.generateAXFRRecordsLocked(z)
 	}
 
 	var records []*protocol.ResourceRecord
@@ -921,18 +1070,27 @@ func (s *XoTServer) sendAXFRResponse(conn net.Conn, records []*protocol.Resource
 		return nil
 	}
 
-	// Split records into messages (target ~16KB per message for efficiency)
+	// Split records into messages: at most 50 records, and never more than
+	// fits the 16-bit XoT length prefix (WireLength is the bound Pack
+	// enforces). A fixed record count alone overflowed 65535 bytes for zones
+	// with large records and aborted the transfer (F223).
 	const maxRecordsPerMessage = 50
-	chunkSize := maxRecordsPerMessage
+	const maxMessageSize = 65535
 
 	if err := conn.SetWriteDeadline(time.Now().Add(60 * time.Second)); err != nil {
 		return err
 	}
 
-	for i := 0; i < len(records); i += chunkSize {
-		end := i + chunkSize
-		if end > len(records) {
-			end = len(records)
+	for i := 0; i < len(records); {
+		end := i
+		size := protocol.HeaderLen
+		for end < len(records) && end-i < maxRecordsPerMessage {
+			rrLen := records[end].WireLength()
+			if end > i && size+rrLen > maxMessageSize {
+				break
+			}
+			size += rrLen
+			end++
 		}
 
 		msg := &protocol.Message{
@@ -953,6 +1111,7 @@ func (s *XoTServer) sendAXFRResponse(conn net.Conn, records []*protocol.Resource
 		if err := writeXoTFrame(conn, buf[:2+n], n); err != nil {
 			return err
 		}
+		i = end
 	}
 	return nil
 }
@@ -974,7 +1133,7 @@ func writeXoTFrame(conn net.Conn, frame []byte, payloadLen int) error {
 }
 
 func (s *XoTServer) closeConn(conn net.Conn, label string) {
-	if err := closeXoTConn(conn); err != nil {
+	if err := closeXoTConn(conn); err != nil && !errors.Is(err, net.ErrClosed) {
 		if s.logger != nil {
 			s.logger.Warnf("XoT: failed to close %s: %v", label, err)
 		} else {
@@ -1002,11 +1161,27 @@ func (s *XoTServer) Close() error {
 		close(s.stopCh)
 	}
 	listener := s.listener
+	conns := make([]net.Conn, 0, len(s.conns))
+	for c := range s.conns {
+		conns = append(conns, c)
+	}
 	s.mu.Unlock()
 
 	var err error
 	if listener != nil {
 		err = listener.Close()
+	}
+	// Tear down live connections so shutdown neither waits on idle or
+	// slow clients nor keeps serving zone data after Close (F226). Closing
+	// the raw TCP conn unblocks a handshake, read or write in progress
+	// without waiting on the TLS write lock; the handler's own deferred
+	// Close then reports net.ErrClosed, which closeConn ignores.
+	for _, c := range conns {
+		raw := c
+		if tc, ok := c.(*tls.Conn); ok {
+			raw = tc.NetConn()
+		}
+		_ = raw.Close()
 	}
 	s.wg.Wait()
 	return err
@@ -1014,5 +1189,5 @@ func (s *XoTServer) Close() error {
 
 // Addr returns the listening address of the server.
 func (s *XoTServer) Addr() string {
-	return fmt.Sprintf("%s:%d", s.address, s.port)
+	return net.JoinHostPort(s.address, strconv.Itoa(s.port))
 }

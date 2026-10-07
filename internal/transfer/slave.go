@@ -2,6 +2,7 @@ package transfer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -36,10 +37,13 @@ type SlaveZoneConfig struct {
 	// Transfer timeout
 	Timeout time.Duration
 
-	// Retry interval on transfer failure
+	// Retry interval on transfer failure while the zone has no transferred
+	// SOA yet; once a SOA is held its RETRY field governs (F412).
 	RetryInterval time.Duration
 
-	// Maximum retry attempts (0 = unlimited)
+	// Maximum consecutive retry attempts (0 = unlimited). For a zone that
+	// has never loaded, retries stop after this many failures; for a loaded
+	// zone the next attempt is deferred to the SOA REFRESH interval instead.
 	MaxRetries int
 }
 
@@ -97,7 +101,46 @@ type SlaveZone struct {
 	// master would receive a steady hammer of zone-transfer attempts
 	// for the lifetime of the process.
 	retries int
-	mu      sync.RWMutex
+	// transferring is true while one goroutine owns this zone's transfer;
+	// refreshPending records a NOTIFY/retry that arrived meanwhile, so it
+	// is served by one follow-up run instead of a concurrent transfer.
+	// retryScheduled is true while a scheduleRetry wait is pending, so
+	// failures never fork a second retry chain (F204).
+	transferring   bool
+	refreshPending bool
+	retryScheduled bool
+	// SOA timer state (RFC 1035 §4.3.5, F412). stopTimer cancels the zone's
+	// single pending refresh-or-retry timer (retryScheduled says which);
+	// timerGen invalidates a timer callback that fired after it was replaced
+	// or cancelled. expireAt ends the EXPIRE window that began at the last
+	// successful refresh (zero: no window known, never expires); now is the
+	// manager's clock.
+	stopTimer func() bool
+	timerGen  uint64
+	expireAt  time.Time
+	now       func() time.Time
+	mu        sync.RWMutex
+}
+
+// claimTransfer makes the caller the zone's single transfer owner. If a
+// transfer is already running it records a pending refresh and returns false.
+func (sz *SlaveZone) claimTransfer() bool {
+	sz.mu.Lock()
+	defer sz.mu.Unlock()
+	if sz.transferring {
+		sz.refreshPending = true
+		return false
+	}
+	sz.transferring = true
+	return true
+}
+
+// releaseTransfer drops ownership and any pending refresh (manager stopping).
+func (sz *SlaveZone) releaseTransfer() {
+	sz.mu.Lock()
+	defer sz.mu.Unlock()
+	sz.transferring = false
+	sz.refreshPending = false
 }
 
 // NewSlaveZone creates a new slave zone.
@@ -142,6 +185,14 @@ func (sz *SlaveZone) GetLastSerial() uint32 {
 	return sz.LastSerial
 }
 
+// GetLastTransfer returns when the last successful transfer completed, or
+// the zero time if none has (thread-safe; UpdateZone writes it, F537).
+func (sz *SlaveZone) GetLastTransfer() time.Time {
+	sz.mu.RLock()
+	defer sz.mu.RUnlock()
+	return sz.LastTransfer
+}
+
 // SlaveManager manages slave zones and handles automatic zone transfers.
 // It listens for NOTIFY messages and initiates zone transfers when needed.
 type SlaveManager struct {
@@ -153,6 +204,11 @@ type SlaveManager struct {
 	keyStore   *KeyStore
 	mu         sync.RWMutex
 	wg         sync.WaitGroup
+	// stopped is set (under mu) by Stop; no timer is armed and no transfer
+	// is started afterwards. now/afterFunc are the SOA timer clock (F412).
+	stopped   bool
+	now       func() time.Time
+	afterFunc func(d time.Duration, f func()) (stop func() bool)
 }
 
 // NewSlaveManager creates a new slave zone manager.
@@ -163,6 +219,8 @@ func NewSlaveManager(keyStore *KeyStore) *SlaveManager {
 		notifyChan: make(chan *NOTIFYRequest, 100),
 		stopChan:   make(chan struct{}),
 		keyStore:   keyStore,
+		now:        time.Now,
+		afterFunc:  realAfterFunc,
 	}
 }
 
@@ -177,6 +235,9 @@ func (sm *SlaveManager) AddSlaveZone(config SlaveZoneConfig) error {
 		zoneName += "."
 	}
 
+	if sm.stopped {
+		return fmt.Errorf("slave manager stopped")
+	}
 	if _, exists := sm.slaveZones[zoneName]; exists {
 		return fmt.Errorf("slave zone %s already exists", zoneName)
 	}
@@ -186,6 +247,26 @@ func (sm *SlaveManager) AddSlaveZone(config SlaveZoneConfig) error {
 		return err
 	}
 
+	// A configured tsig_secret must be usable for the transfers that name its
+	// key (F202): register it unless the key store already holds that key.
+	// The secret is base64 (as in BIND key statements); HMAC-SHA256.
+	if config.TSIGKeyName != "" && config.TSIGSecret != "" {
+		if sm.keyStore == nil {
+			return fmt.Errorf("slave zone %s: tsig_secret configured but no TSIG key store", zoneName)
+		}
+		if _, ok := sm.keyStore.GetKey(config.TSIGKeyName); !ok {
+			key, err := ParseTSIGKey(config.TSIGKeyName, HmacSHA256, config.TSIGSecret)
+			if err != nil {
+				return fmt.Errorf("slave zone %s: invalid tsig_secret (base64 expected): %w", zoneName, err)
+			}
+			if len(key.Secret) == 0 {
+				return fmt.Errorf("slave zone %s: tsig_secret decodes to an empty key", zoneName)
+			}
+			sm.keyStore.AddKey(key)
+		}
+	}
+
+	slaveZone.now = sm.now
 	sm.slaveZones[zoneName] = slaveZone
 
 	// Create IXFR client for this zone
@@ -204,16 +285,7 @@ func (sm *SlaveManager) AddSlaveZone(config SlaveZoneConfig) error {
 	sm.clients[zoneName] = client
 
 	// Perform initial zone transfer
-	sm.wg.Add(1)
-	go func() {
-		defer sm.wg.Done()
-		defer func() {
-			if r := recover(); r != nil {
-				util.Errorf("panic in performZoneTransfer for %s: %v", zoneName, r)
-			}
-		}()
-		sm.performZoneTransfer(zoneName)
-	}()
+	sm.startZoneTransfer(zoneName, slaveZone)
 
 	return nil
 }
@@ -228,6 +300,11 @@ func (sm *SlaveManager) RemoveSlaveZone(zoneName string) {
 		zoneName += "."
 	}
 
+	if sz, ok := sm.slaveZones[zoneName]; ok {
+		sz.mu.Lock()
+		sz.cancelTimerLocked()
+		sz.mu.Unlock()
+	}
 	delete(sm.slaveZones, zoneName)
 	delete(sm.clients, zoneName)
 }
@@ -263,11 +340,21 @@ func (sm *SlaveManager) Start() {
 	go sm.notifyListener()
 }
 
-// Stop stops the slave manager. Idempotent.
+// Stop stops the slave manager: it cancels every zone's SOA refresh/retry
+// timer, keeps new ones from being armed, and waits for in-flight transfers.
+// Idempotent.
 func (sm *SlaveManager) Stop() {
 	closed := false
 	sm.stopOnce.Do(func() {
+		sm.mu.Lock()
+		sm.stopped = true
 		close(sm.stopChan)
+		for _, sz := range sm.slaveZones {
+			sz.mu.Lock()
+			sz.cancelTimerLocked()
+			sz.mu.Unlock()
+		}
+		sm.mu.Unlock()
 		closed = true
 	})
 	if !closed {
@@ -316,38 +403,106 @@ func (sm *SlaveManager) handleNotify(req *NOTIFYRequest) {
 		return
 	}
 
-	// Check if serial is newer using RFC 1982 serial number arithmetic
+	// Check if serial is newer using RFC 1982 serial number arithmetic. A
+	// NOTIFY without a serial hint always triggers a check (F208).
 	lastSerial := slaveZone.GetLastSerial()
-	if !serialIsNewer(req.Serial, lastSerial) {
+	if !req.SerialUnknown && !serialIsNewer(req.Serial, lastSerial) {
 		// Zone is up to date
 		return
 	}
 
-	// Perform zone transfer
+	// Perform zone transfer (coalesced with one already in flight, F204)
+	sm.startZoneTransfer(zoneName, slaveZone)
+}
+
+// startZoneTransfer claims the zone's transfer synchronously and runs it in a
+// wg-tracked goroutine. If a transfer is already in flight the request is
+// folded into one follow-up run of that transfer instead (F204).
+func (sm *SlaveManager) startZoneTransfer(zoneName string, slaveZone *SlaveZone) {
+	if !slaveZone.claimTransfer() {
+		return
+	}
 	sm.wg.Add(1)
 	go func() {
 		defer sm.wg.Done()
 		defer func() {
 			if r := recover(); r != nil {
+				slaveZone.releaseTransfer()
 				util.Errorf("panic in zone transfer for %s: %v", zoneName, r)
 			}
 		}()
-		sm.performZoneTransfer(zoneName)
+		sm.runZoneTransfer(zoneName, slaveZone)
 	}()
 }
 
-// performZoneTransfer performs a zone transfer for the specified slave zone.
+// performZoneTransfer performs a zone transfer for the specified slave zone,
+// unless one is already in flight (then it only requests a follow-up run).
 // Callers should wrap this in a goroutine with wg tracking.
 func (sm *SlaveManager) performZoneTransfer(zoneName string) {
 	sm.mu.RLock()
 	slaveZone, exists := sm.slaveZones[zoneName]
+	sm.mu.RUnlock()
+
+	if !exists || !slaveZone.claimTransfer() {
+		return
+	}
+	sm.runZoneTransfer(zoneName, slaveZone)
+}
+
+// runZoneTransfer runs the transfer for a zone whose ownership the caller
+// claimed, re-running once for refreshes requested meanwhile, then arms the
+// zone's next SOA timer: REFRESH after success, one RETRY wait after failure
+// (completeTransfer).
+func (sm *SlaveManager) runZoneTransfer(zoneName string, slaveZone *SlaveZone) {
+	for {
+		err := sm.transferOnce(zoneName, slaveZone)
+		if errors.Is(err, errSlaveZoneRemoved) {
+			slaveZone.releaseTransfer()
+			return
+		}
+		if !sm.completeTransfer(zoneName, slaveZone, err) {
+			return
+		}
+		select {
+		case <-sm.stopChan:
+			slaveZone.releaseTransfer()
+			return
+		default:
+		}
+	}
+}
+
+var errSlaveZoneRemoved = errors.New("slave zone removed")
+
+// transferOnce fetches and applies the zone, trying each configured master in
+// order until one succeeds (F203). It returns the last master's error.
+func (sm *SlaveManager) transferOnce(zoneName string, slaveZone *SlaveZone) error {
+	sm.mu.RLock()
+	current, exists := sm.slaveZones[zoneName]
 	client, clientExists := sm.clients[zoneName]
 	sm.mu.RUnlock()
 
-	if !exists || !clientExists {
-		return
+	if !exists || !clientExists || current != slaveZone {
+		return errSlaveZoneRemoved
 	}
 
+	var lastErr error
+	for i, master := range slaveZone.Config.Masters {
+		// The stored client is bound to Masters[0]; other masters get their own.
+		var masterClient *IXFRClient
+		if i == 0 {
+			masterClient = client
+		}
+		if lastErr = sm.transferFromMaster(slaveZone, masterClient, master); lastErr == nil {
+			return nil
+		}
+	}
+	return lastErr
+}
+
+// transferFromMaster fetches the zone from one master (IXFR with AXFR
+// fallback, or AXFR) and applies it.
+func (sm *SlaveManager) transferFromMaster(slaveZone *SlaveZone, client *IXFRClient, master string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), slaveZone.Config.Timeout)
 	defer cancel()
 
@@ -356,51 +511,30 @@ func (sm *SlaveManager) performZoneTransfer(zoneName string) {
 	var err error
 
 	if slaveZone.Config.TransferType == "ixfr" && slaveZone.GetLastSerial() > 0 {
-		records, err = sm.performIXFR(ctx, client, slaveZone)
+		records, err = sm.performIXFRFrom(ctx, client, slaveZone, master)
 		if err != nil {
 			// Fall back to AXFR
-			records, err = sm.performAXFR(ctx, slaveZone)
+			records, err = sm.performAXFRFrom(ctx, slaveZone, master)
 		}
 	} else {
 		// Perform full AXFR
-		records, err = sm.performAXFR(ctx, slaveZone)
+		records, err = sm.performAXFRFrom(ctx, slaveZone, master)
 	}
-
 	if err != nil {
-		// Schedule retry
-		sm.wg.Add(1)
-		go func() {
-			defer sm.wg.Done()
-			defer func() {
-				if r := recover(); r != nil {
-					util.Errorf("panic in scheduleRetry for %s: %v", zoneName, r)
-				}
-			}()
-			sm.scheduleRetry(zoneName)
-		}()
-		return
+		return err
 	}
 
 	// Apply the transferred zone
-	if err := sm.applyTransferredZone(slaveZone, records); err != nil {
-		sm.wg.Add(1)
-		go func() {
-			defer sm.wg.Done()
-			defer func() {
-				if r := recover(); r != nil {
-					util.Errorf("panic in applyTransferredZone retry for %s: %v", zoneName, r)
-				}
-			}()
-			sm.scheduleRetry(zoneName)
-		}()
-		return
-	}
+	return sm.applyTransferredZone(slaveZone, records)
 }
 
-// performIXFR performs an incremental zone transfer.
+// performIXFR performs an incremental zone transfer from the first master.
 func (sm *SlaveManager) performIXFR(ctx context.Context, client *IXFRClient, slaveZone *SlaveZone) ([]*protocol.ResourceRecord, error) {
-	master := slaveZone.Config.Masters[0]
+	return sm.performIXFRFrom(ctx, client, slaveZone, slaveZone.Config.Masters[0])
+}
 
+// performIXFRFrom performs an incremental zone transfer from master.
+func (sm *SlaveManager) performIXFRFrom(ctx context.Context, client *IXFRClient, slaveZone *SlaveZone, master string) ([]*protocol.ResourceRecord, error) {
 	// Create IXFR client if not provided
 	if client == nil {
 		client = NewIXFRClient(master, WithIXFRTimeout(slaveZone.Config.Timeout))
@@ -431,11 +565,14 @@ func (sm *SlaveManager) performIXFR(ctx context.Context, client *IXFRClient, sla
 	return records, nil
 }
 
-// performAXFR performs a full zone transfer.
+// performAXFR performs a full zone transfer from the first master.
 func (sm *SlaveManager) performAXFR(ctx context.Context, slaveZone *SlaveZone) ([]*protocol.ResourceRecord, error) {
-	// Create AXFR client
-	master := slaveZone.Config.Masters[0]
+	return sm.performAXFRFrom(ctx, slaveZone, slaveZone.Config.Masters[0])
+}
 
+// performAXFRFrom performs a full zone transfer from master.
+func (sm *SlaveManager) performAXFRFrom(ctx context.Context, slaveZone *SlaveZone, master string) ([]*protocol.ResourceRecord, error) {
+	// Create AXFR client
 	axfrClient := NewAXFRClient(master, WithAXFRTimeout(slaveZone.Config.Timeout))
 	if slaveZone.Config.TSIGKeyName != "" && sm.keyStore != nil {
 		axfrClient = NewAXFRClient(master, WithAXFRTimeout(slaveZone.Config.Timeout), WithAXFRKeyStore(sm.keyStore))
@@ -519,7 +656,7 @@ func (sm *SlaveManager) applyFullZone(slaveZone *SlaveZone, records []*protocol.
 		if rr.Type == protocol.TypeSOA {
 			if soaData, ok := rr.Data.(*protocol.RDataSOA); ok && !haveSOA {
 				soaSerial = soaData.Serial
-				newZone.SOA = soaFromRData(soaData, rr.TTL)
+				setSlaveZoneSOA(newZone, rr, soaData)
 				haveSOA = true
 			}
 			continue
@@ -616,15 +753,35 @@ func (sm *SlaveManager) applyIncrementalIXFR(slaveZone *SlaveZone, base *zone.Zo
 		}
 	}
 
-	// The trailing SOA carries the target serial.
-	if newZone.SOA == nil {
-		newZone.SOA = soaFromRData(targetSOA, records[0].TTL)
-	} else {
-		newZone.SOA.Serial = targetSOA.Serial
-	}
+	// The leading SOA is the zone's new SOA (RFC 1995 §4) — every field, not
+	// only the serial: a master that changed REFRESH/MINIMUM/MNAME or the SOA
+	// TTL in the same edit must not leave the slave on the old values (F588).
+	setSlaveZoneSOA(newZone, records[0], targetSOA)
 
 	slaveZone.UpdateZone(newZone, targetSOA.Serial)
 	return nil
+}
+
+// setSlaveZoneSOA installs soa (carried by rr) as z's SOA, keeping the two
+// places the zone model holds it in step, as the zone-file parser does: z.SOA
+// (serial, timers, negative TTL) and the apex SOA RR in z.Records, which the
+// authoritative lookup answers from. Before F587 a transferred zone had only
+// z.SOA, so `<zone> SOA` was answered as NODATA (SOA in the authority section
+// instead of the answer). Any SOA RR already at the apex (an IXFR base) is
+// replaced; z.SOA.Serial and the apex RR always carry the same serial.
+func setSlaveZoneSOA(z *zone.Zone, rr *protocol.ResourceRecord, soa *protocol.RDataSOA) {
+	z.SOA = soaFromRData(soa, rr.TTL)
+	z.SOA.Name = z.Origin
+	rec := recordFromRR(rr)
+	rec.Name = z.Origin
+	apex := make([]zone.Record, 0, len(z.Records[z.Origin])+1)
+	apex = append(apex, rec)
+	for _, r := range z.Records[z.Origin] {
+		if !strings.EqualFold(r.Type, "SOA") {
+			apex = append(apex, r)
+		}
+	}
+	z.Records[z.Origin] = apex
 }
 
 // recordFromRR converts a wire RR into a zone.Record, normalizing the owner
@@ -670,45 +827,5 @@ func removeZoneRecord(z *zone.Zone, rec zone.Record) {
 			}
 			return
 		}
-	}
-}
-
-// scheduleRetry schedules a retry of the zone transfer.
-// Honors SlaveZoneConfig.MaxRetries — when > 0, the chain stops after
-// that many consecutive failures (since the last successful transfer).
-// MaxRetries == 0 retains the legacy "retry forever" behavior, matching
-// the field-doc comment ("0 = unlimited"). Either way scheduleRetry
-// only ever waits one RetryInterval; the chain is performZoneTransfer →
-// (on failure) scheduleRetry → performZoneTransfer → … and termination
-// happens either at MaxRetries or at sm.stopChan.
-func (sm *SlaveManager) scheduleRetry(zoneName string) {
-	sm.mu.RLock()
-	slaveZone, exists := sm.slaveZones[zoneName]
-	sm.mu.RUnlock()
-
-	if !exists {
-		return
-	}
-
-	slaveZone.mu.Lock()
-	slaveZone.retries++
-	count := slaveZone.retries
-	slaveZone.mu.Unlock()
-
-	if max := slaveZone.Config.MaxRetries; max > 0 && count > max {
-		util.Warnf("slave: giving up on %s after %d consecutive transfer failures (MaxRetries=%d)",
-			zoneName, count-1, max)
-		return
-	}
-
-	timer := time.NewTimer(slaveZone.Config.RetryInterval)
-	defer timer.Stop()
-
-	select {
-	case <-timer.C:
-		// Already running inside a wg-tracked goroutine, so call directly
-		sm.performZoneTransfer(zoneName)
-	case <-sm.stopChan:
-		// Manager is stopping, abort retry
 	}
 }

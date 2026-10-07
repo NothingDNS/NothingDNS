@@ -407,7 +407,13 @@ func TestAXFRClient_Transfer_WithTSIG_TCPServer(t *testing.T) {
 			Answers: []*protocol.ResourceRecord{soaRR, soaRR},
 		}
 
-		tsigRR, err := SignMessage(respMsg, key, 300)
+		// R53 F314: the response is bound to the request MAC (RFC 8945 §4.3.3).
+		requestMAC, err := TSIGRequestMAC(reqMsg)
+		if err != nil {
+			t.Errorf("Server: TSIGRequestMAC failed: %v", err)
+			return
+		}
+		tsigRR, err := NewTSIGStreamSigner(key, requestMAC, 300).Sign(respMsg)
 		if err != nil {
 			t.Errorf("Server: SignMessage failed: %v", err)
 			return
@@ -508,7 +514,7 @@ func TestIXFRClient_buildIXFRRequest_InvalidName(t *testing.T) {
 func TestIXFRClient_receiveIXFRResponse_InvalidLength_Coverage(t *testing.T) {
 	client := NewIXFRClient("ns1.example.com:53")
 	conn := &mockConn{readData: []byte{0x00, 0x00}}
-	_, err := client.receiveIXFRResponse(conn, 0x1234, nil)
+	_, err := client.receiveIXFRResponse(conn, 0x1234, nil, 0)
 	if err == nil {
 		t.Error("Expected error for zero message length")
 	}
@@ -517,7 +523,7 @@ func TestIXFRClient_receiveIXFRResponse_InvalidLength_Coverage(t *testing.T) {
 func TestIXFRClient_receiveIXFRResponse_ReadError_Coverage(t *testing.T) {
 	client := NewIXFRClient("ns1.example.com:53")
 	conn := &mockConn{readErr: fmt.Errorf("connection reset")}
-	_, err := client.receiveIXFRResponse(conn, 0x1234, nil)
+	_, err := client.receiveIXFRResponse(conn, 0x1234, nil, 0)
 	if err == nil {
 		t.Error("Expected error for read failure")
 	}
@@ -528,7 +534,7 @@ func TestIXFRClient_receiveIXFRResponse_UnpackError_Coverage(t *testing.T) {
 	data := []byte{0x00, 0x10}
 	data = append(data, make([]byte, 16)...)
 	conn := &mockConn{readData: data}
-	_, err := client.receiveIXFRResponse(conn, 0x1234, nil)
+	_, err := client.receiveIXFRResponse(conn, 0x1234, nil, 0)
 	if err == nil {
 		t.Error("Expected error for unpack failure")
 	}
@@ -556,7 +562,7 @@ func TestIXFRClient_receiveIXFRResponse_ErrorResponse(t *testing.T) {
 	copy(data[2:], buf[:n])
 
 	conn := &mockConn{readData: data}
-	_, err := client.receiveIXFRResponse(conn, 0x1234, nil)
+	_, err := client.receiveIXFRResponse(conn, 0x1234, nil, 0)
 	if err == nil {
 		t.Error("Expected error for error response")
 	}
@@ -596,7 +602,7 @@ func TestIXFRClient_receiveIXFRResponse_Success_Coverage(t *testing.T) {
 	allData = append(allData, buf[:n]...)
 
 	conn := &mockConn{readData: allData}
-	records, err := client.receiveIXFRResponse(conn, 0x1234, nil)
+	records, err := client.receiveIXFRResponse(conn, 0x1234, nil, 0)
 	if err != nil {
 		t.Fatalf("receiveIXFRResponse() error = %v", err)
 	}
@@ -644,7 +650,7 @@ func TestIXFRClient_receiveIXFRResponse_WithMiddleRecords(t *testing.T) {
 	allData = append(allData, buf[:n]...)
 
 	conn := &mockConn{readData: allData}
-	records, err := client.receiveIXFRResponse(conn, 0x1234, nil)
+	records, err := client.receiveIXFRResponse(conn, 0x1234, nil, 0)
 	if err != nil {
 		t.Fatalf("receiveIXFRResponse() error = %v", err)
 	}
@@ -1243,6 +1249,7 @@ func TestHandleUpdate_DeleteNameAuthority(t *testing.T) {
 	}
 	ks.AddKey(key)
 	handler.SetKeyStore(ks)
+	handler.AllowKeyUpdate("key.example.com.", "example.com.") // F452: update rights are granted per key and zone
 
 	name, _ := protocol.ParseName("example.com.")
 	req := &protocol.Message{
@@ -1468,7 +1475,7 @@ func TestIXFRClient_sendMessage_WriteBodyError(t *testing.T) {
 func TestIXFRClient_receiveIXFRResponse_ReadBodyError(t *testing.T) {
 	client := NewIXFRClient("ns1.example.com:53")
 	conn := &mockConn{readData: []byte{0x00, 0x20}}
-	_, err := client.receiveIXFRResponse(conn, 0x1234, nil)
+	_, err := client.receiveIXFRResponse(conn, 0x1234, nil, 0)
 	if err == nil {
 		t.Error("Expected error for body read failure")
 	}
@@ -2145,7 +2152,7 @@ func TestIXFRClient_receiveIXFRResponse_TSIGBadVerification(t *testing.T) {
 	allData = append(allData, buf[:n]...)
 
 	conn := &mockConn{readData: allData}
-	_, err = client.receiveIXFRResponse(conn, 0, key)
+	_, err = client.receiveIXFRResponse(conn, 0, key, 0)
 	if err == nil {
 		t.Error("Expected error for TSIG verification failure in IXFR")
 	}

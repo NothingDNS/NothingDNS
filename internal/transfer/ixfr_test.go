@@ -1233,7 +1233,7 @@ func TestIXFRClient_receiveIXFRResponse_SingleSOA(t *testing.T) {
 		}
 	}()
 
-	records, err := client.receiveIXFRResponse(clientConn, 0x1234, nil)
+	records, err := client.receiveIXFRResponse(clientConn, 0x1234, nil, 2024010101)
 	if err != nil {
 		t.Fatalf("receiveIXFRResponse returned error: %v", err)
 	}
@@ -1273,7 +1273,7 @@ func TestIXFRClient_receiveIXFRResponse_ServerError(t *testing.T) {
 		}
 	}()
 
-	_, err := client.receiveIXFRResponse(clientConn, 0x1234, nil)
+	_, err := client.receiveIXFRResponse(clientConn, 0x1234, nil, 0)
 	if err == nil {
 		t.Fatal("Expected error for server refusal")
 	}
@@ -1299,7 +1299,7 @@ func TestIXFRClient_receiveIXFRResponse_ReadError(t *testing.T) {
 
 	serverConn.Close()
 
-	_, err := client.receiveIXFRResponse(clientConn, 0x1234, nil)
+	_, err := client.receiveIXFRResponse(clientConn, 0x1234, nil, 0)
 	if err == nil {
 		t.Error("Expected error for closed connection")
 	}
@@ -1321,7 +1321,7 @@ func TestIXFRClient_receiveIXFRResponse_InvalidLength(t *testing.T) {
 		serverConn.Close()
 	}()
 
-	_, err := client.receiveIXFRResponse(clientConn, 0x1234, nil)
+	_, err := client.receiveIXFRResponse(clientConn, 0x1234, nil, 0)
 	if err == nil {
 		t.Error("Expected error for zero message length")
 	}
@@ -1344,7 +1344,7 @@ func TestIXFRClient_receiveIXFRResponse_UnpackError(t *testing.T) {
 		serverConn.Close()
 	}()
 
-	_, err := client.receiveIXFRResponse(clientConn, 0x1234, nil)
+	_, err := client.receiveIXFRResponse(clientConn, 0x1234, nil, 0)
 	if err == nil {
 		t.Error("Expected error for garbage data")
 	}
@@ -1488,7 +1488,7 @@ func TestIXFRClient_receiveIXFRResponse_TooLarge(t *testing.T) {
 		}
 	}()
 
-	_, err := client.receiveIXFRResponse(clientConn, 0x1234, nil)
+	_, err := client.receiveIXFRResponse(clientConn, 0x1234, nil, 0)
 	if err == nil {
 		t.Error("Expected error for too large response")
 	}

@@ -258,6 +258,18 @@ func (s *AXFRServer) generateAXFRRecords(z *zone.Zone) ([]*protocol.ResourceReco
 	if z == nil {
 		return nil, fmt.Errorf("zone is nil")
 	}
+	// One read lock covers SOA, records and ZONEMD so the stream is a
+	// single consistent snapshot of the zone, never an old SOA serial
+	// framing data from a concurrent update (F219).
+	z.RLock()
+	defer z.RUnlock()
+	return s.generateAXFRRecordsLocked(z)
+}
+
+// generateAXFRRecordsLocked is generateAXFRRecords for a caller that already
+// holds z's read lock (IXFR's AXFR fallbacks decide under the same lock,
+// F413). z must be non-nil.
+func (s *AXFRServer) generateAXFRRecordsLocked(z *zone.Zone) ([]*protocol.ResourceRecord, error) {
 	if z.SOA == nil {
 		return nil, fmt.Errorf("zone has no SOA record")
 	}
@@ -280,7 +292,6 @@ func (s *AXFRServer) generateAXFRRecords(z *zone.Zone) ([]*protocol.ResourceReco
 	// secondaries treat the second SOA as end-of-transfer and discard every
 	// record after it, truncating the zone to just the apex records.
 	var zoneRecords []*protocol.ResourceRecord
-	z.RLock()
 	for name, zoneRecordsList := range z.Records {
 		for _, rec := range zoneRecordsList {
 			if protocol.RecordTypeFromText(rec.Type) == protocol.TypeSOA {
@@ -294,7 +305,6 @@ func (s *AXFRServer) generateAXFRRecords(z *zone.Zone) ([]*protocol.ResourceReco
 			zoneRecords = append(zoneRecords, rr)
 		}
 	}
-	z.RUnlock()
 
 	// Sort zone records canonically (RFC 4034 Section 6.1)
 	// Note: We sort only zone records, not the SOA, because AXFR format
@@ -528,13 +538,44 @@ func (c *AXFRClient) Transfer(zoneName string, key *TSIGKey) ([]*protocol.Resour
 	}
 	defer req.Release()
 
-	// Receive response records
-	records, err := c.receiveAXFRResponse(conn, req.Header.ID, key)
+	// Receive response records. With a key, the response stream is bound to
+	// this request's TSIG MAC (RFC 8945 §4.3.3, F314).
+	var requestMAC []byte
+	if key != nil {
+		if requestMAC, err = TSIGRequestMAC(req); err != nil {
+			return nil, fmt.Errorf("reading AXFR request MAC: %w", err)
+		}
+	}
+	records, err := c.receiveAXFRResponseForRequest(conn, req.Header.ID, key, requestMAC)
 	if err != nil {
+		return nil, fmt.Errorf("receiving AXFR response: %w", err)
+	}
+	// A master is authoritative only for the requested zone (F217).
+	if err := checkTransferInZone(req.Questions[0].Name, records); err != nil {
 		return nil, fmt.Errorf("receiving AXFR response: %w", err)
 	}
 
 	return records, nil
+}
+
+// checkTransferInZone rejects a transfer whose opening SOA is not the zone
+// apex or that carries any record whose owner is not the apex or a name below it (RFC 5936 §3.5 out-of-zone data):
+// a master may only supply data for the zone it was asked for, never for
+// unrelated names the slave would then hold and re-serve (F217).
+func checkTransferInZone(origin *protocol.Name, records []*protocol.ResourceRecord) error {
+	for _, rr := range records {
+		if rr == nil || rr.Name == nil || !protocol.IsSubdomain(rr.Name, origin) {
+			name := "<nil>"
+			if rr != nil && rr.Name != nil {
+				name = rr.Name.String()
+			}
+			return fmt.Errorf("out-of-zone record %s in transfer of %s", name, origin.String())
+		}
+	}
+	if len(records) > 0 && !records[0].Name.Equal(origin) {
+		return fmt.Errorf("transfer of %s opens with an SOA for %s", origin.String(), records[0].Name.String())
+	}
+	return nil
 }
 
 // buildAXFRRequest builds an AXFR request message
@@ -591,12 +632,20 @@ func (c *AXFRClient) sendMessage(conn net.Conn, msg *protocol.Message) error {
 	return err
 }
 
-// receiveAXFRResponse receives AXFR response records over TCP
+// receiveAXFRResponse receives AXFR response records over TCP for a request
+// that carried no TSIG MAC.
 func (c *AXFRClient) receiveAXFRResponse(conn net.Conn, expectedTXID uint16, key *TSIGKey) ([]*protocol.ResourceRecord, error) {
+	return c.receiveAXFRResponseForRequest(conn, expectedTXID, key, nil)
+}
+
+// receiveAXFRResponseForRequest receives AXFR response records over TCP. With
+// a key, the stream is verified as one RFC 8945 §5.3.1 TSIG chain starting
+// from requestMAC, the MAC of the signed request.
+func (c *AXFRClient) receiveAXFRResponseForRequest(conn net.Conn, expectedTXID uint16, key *TSIGKey, requestMAC []byte) ([]*protocol.ResourceRecord, error) {
 	var records []*protocol.ResourceRecord
 	var soaCount int
 	var totalBytes int
-	previousMAC := []byte{}
+	tsigChain := newTSIGStreamVerifier(key, requestMAC)
 
 	for {
 		// Set read timeout
@@ -658,26 +707,33 @@ func (c *AXFRClient) receiveAXFRResponse(conn net.Conn, expectedTXID uint16, key
 			return nil, fmt.Errorf("AXFR first response is missing TSIG")
 		}
 
-		// Verify TSIG if present
-		if key != nil && hasTSIG(msg) {
-			if err := VerifyMessage(msg, key, previousMAC); err != nil {
+		// Verify the TSIG chain (F314): signed messages against the request
+		// MAC / previous MAC, unsigned ones digested into the next signature.
+		if key != nil {
+			if err := tsigChain.verify(msg); err != nil {
 				return nil, fmt.Errorf("TSIG verification failed: %w", err)
 			}
-			// Extract MAC for next message verification
-			mac, err := extractMAC(msg)
-			if err != nil {
-				return nil, fmt.Errorf("failed to extract TSIG MAC: %w", err)
-			}
-			previousMAC = mac
 		}
 
-		// Process answer records
+		// Process answer records. RFC 5936 §2.2: the stream opens with the
+		// zone's SOA and ends with that same SOA; nothing may follow it (F218).
 		for _, rr := range msg.Answers {
-			records = append(records, rr)
-
+			if soaCount >= 2 {
+				return nil, fmt.Errorf("AXFR response has records after the closing SOA")
+			}
+			if rr == nil || rr.Name == nil {
+				return nil, fmt.Errorf("AXFR response has an invalid record")
+			}
+			if len(records) == 0 && rr.Type != protocol.TypeSOA {
+				return nil, fmt.Errorf("AXFR response does not begin with an SOA record")
+			}
 			if rr.Type == protocol.TypeSOA {
+				if len(records) > 0 && !sameAXFRSOA(records[0], rr) {
+					return nil, fmt.Errorf("AXFR closing SOA does not match the opening SOA")
+				}
 				soaCount++
 			}
+			records = append(records, rr)
 		}
 
 		// Check if transfer is complete (second SOA)
@@ -695,6 +751,14 @@ func (c *AXFRClient) receiveAXFRResponse(conn net.Conn, expectedTXID uint16, key
 	}
 
 	return records, nil
+}
+
+// sameAXFRSOA reports whether the closing SOA has the opening SOA's owner and
+// serial (F218).
+func sameAXFRSOA(open, closing *protocol.ResourceRecord) bool {
+	o, ok1 := open.Data.(*protocol.RDataSOA)
+	c, ok2 := closing.Data.(*protocol.RDataSOA)
+	return ok1 && ok2 && open.Name.Equal(closing.Name) && o.Serial == c.Serial
 }
 
 // extractMAC extracts the TSIG MAC from a message for multi-message verification

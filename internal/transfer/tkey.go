@@ -3,13 +3,9 @@
 package transfer
 
 import (
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
-	"crypto/sha512"
 	"encoding/binary"
 	"fmt"
-	"hash"
 	"math/big"
 	"strings"
 	"time"
@@ -250,6 +246,19 @@ func computeDHValue(prime, base, exp []byte) ([]byte, error) {
 	g := new(big.Int).SetBytes(base)
 	x := new(big.Int).SetBytes(exp)
 
+	// Reject degenerate parameters (F212): a zero modulus makes Exp compute
+	// the unbounded g^x, and p < 3, g outside [2, p-2] or x = 0 yield a
+	// public value that carries no secret.
+	if p.Cmp(big.NewInt(3)) < 0 {
+		return nil, fmt.Errorf("DH prime must be at least 3")
+	}
+	if g.Cmp(big.NewInt(2)) < 0 || g.Cmp(new(big.Int).Sub(p, big.NewInt(1))) >= 0 {
+		return nil, fmt.Errorf("DH base must be in [2, p-2]")
+	}
+	if x.Sign() == 0 {
+		return nil, fmt.Errorf("DH private value must be non-zero")
+	}
+
 	// Compute g^x mod p
 	result := new(big.Int).Exp(g, x, p)
 	return result.Bytes(), nil
@@ -257,20 +266,10 @@ func computeDHValue(prime, base, exp []byte) ([]byte, error) {
 
 // ComputeTKEYHMAC computes the HMAC for a TKEY record.
 // Used for verifying TKEY messages.
+// The algorithm is a TSIG HMAC name (trailing dot optional); unsupported
+// algorithms are an error rather than a silent HMAC-SHA256 (F213).
 func ComputeTKEYHMAC(msg []byte, key []byte, algorithm string) ([]byte, error) {
-	var h func() hash.Hash
-
-	alg := strings.ToLower(algorithm)
-	switch {
-	case strings.Contains(alg, "sha512"):
-		h = sha512.New
-	default:
-		h = sha256.New
-	}
-
-	hm := hmac.New(h, key)
-	hm.Write(msg)
-	return hm.Sum(nil), nil
+	return calculateMAC(key, msg, strings.TrimSuffix(strings.ToLower(algorithm), "."))
 }
 
 // ValidateTKEY validates a TKEY record and returns any error.

@@ -621,32 +621,19 @@ func TestSlaveManager_applyTransferredZone_Success(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// scheduleRetry - non-existent zone
+// timerFired - non-existent zone (the retry/refresh timer of a removed zone)
 // ---------------------------------------------------------------------------
 
-func TestSlaveManager_scheduleRetry_NonexistentZone(t *testing.T) {
+func TestSlaveManager_timerFired_NonexistentZone(t *testing.T) {
 	sm := NewSlaveManager(nil)
-	sm.scheduleRetry("nonexistent.com.")
-	// Should return early without panic
-}
-
-// ---------------------------------------------------------------------------
-// scheduleRetry - existing zone (short retry interval)
-// ---------------------------------------------------------------------------
-
-func TestSlaveManager_scheduleRetry_ExistingZone(t *testing.T) {
-	sm := NewSlaveManager(nil)
-	sm.AddSlaveZone(SlaveZoneConfig{
-		ZoneName:      "test.com.",
-		Masters:       []string{"192.0.2.1:53"},
-		Timeout:       1 * time.Millisecond,
-		RetryInterval: 10 * time.Millisecond,
-		TransferType:  "axfr",
-	})
-
-	// scheduleRetry runs in background and calls performZoneTransfer after retryInterval
-	sm.scheduleRetry("test.com.")
-	time.Sleep(50 * time.Millisecond) // Should not panic
+	sz, err := NewSlaveZone(SlaveZoneConfig{ZoneName: "nonexistent.com.", Masters: []string{"192.0.2.1:53"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sm.timerFired("nonexistent.com.", sz, sz.timerGen)
+	if sz.transferring {
+		t.Fatal("timer of an unmanaged zone started a transfer")
+	}
 }
 
 // ---------------------------------------------------------------------------

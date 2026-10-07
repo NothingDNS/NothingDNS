@@ -119,17 +119,30 @@ func NewKeyStoreWithGracePeriod(gracePeriod time.Duration) *KeyStore {
 	}
 }
 
-// AddKey adds a key to the store
+// CanonicalTSIGKeyName returns the canonical form of a TSIG key name:
+// trimmed, lower-cased and absolute (trailing dot). Key names are domain
+// names, always absolute on the wire and compared case-insensitively
+// (RFC 8945 §4.2, canonical form per RFC 4034 §6.2), so a key configured as
+// "XFR-Key" must match a request signed with "xfr-key." (F502).
+func CanonicalTSIGKeyName(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if !strings.HasSuffix(name, ".") {
+		name += "."
+	}
+	return name
+}
+
+// AddKey adds a key to the store, indexed by its canonical name (F502).
 func (ks *KeyStore) AddKey(key *TSIGKey) {
 	ks.mu.Lock()
-	ks.keys[strings.ToLower(key.Name)] = key
+	ks.keys[CanonicalTSIGKeyName(key.Name)] = key
 	ks.mu.Unlock()
 }
 
-// GetKey retrieves a key by name
+// GetKey retrieves a key by name (case-insensitive, trailing dot optional).
 func (ks *KeyStore) GetKey(name string) (*TSIGKey, bool) {
 	ks.mu.RLock()
-	key, ok := ks.keys[strings.ToLower(name)]
+	key, ok := ks.keys[CanonicalTSIGKeyName(name)]
 	ks.mu.RUnlock()
 	return key, ok
 }
@@ -137,7 +150,7 @@ func (ks *KeyStore) GetKey(name string) (*TSIGKey, bool) {
 // RemoveKey removes a key from the store
 func (ks *KeyStore) RemoveKey(name string) {
 	ks.mu.Lock()
-	delete(ks.keys, strings.ToLower(name))
+	delete(ks.keys, CanonicalTSIGKeyName(name))
 	ks.mu.Unlock()
 }
 
@@ -153,7 +166,7 @@ func (ks *KeyStore) HasKeys() bool {
 // If the key has no AllowedCIDRs, the check is a no-op (IP is not restricted).
 func (ks *KeyStore) ValidateKeySource(keyName string, clientIP net.IP) error {
 	ks.mu.RLock()
-	key, ok := ks.keys[strings.ToLower(keyName)]
+	key, ok := ks.keys[CanonicalTSIGKeyName(keyName)]
 	ks.mu.RUnlock()
 	if !ok {
 		return fmt.Errorf("TSIG key not found: %s", keyName)
@@ -195,14 +208,14 @@ func (ks *KeyStore) RotateKey(newKey *TSIGKey) {
 	defer ks.mu.Unlock()
 
 	// Save current key as previous
-	oldKey, exists := ks.keys[strings.ToLower(newKey.Name)]
+	oldKey, exists := ks.keys[CanonicalTSIGKeyName(newKey.Name)]
 	if exists {
 		ks.previous = oldKey
 		ks.rotatedAt = time.Now()
 	}
 
 	// Add new key
-	ks.keys[strings.ToLower(newKey.Name)] = newKey
+	ks.keys[CanonicalTSIGKeyName(newKey.Name)] = newKey
 }
 
 // GetPreviousKey returns the previous key (if within grace period)
@@ -219,7 +232,7 @@ func (ks *KeyStore) GetPreviousKey(name string) *TSIGKey {
 	}
 
 	// Only return previous key if it's the same name (same key being rotated)
-	if ks.previous.Name == name {
+	if CanonicalTSIGKeyName(ks.previous.Name) == CanonicalTSIGKeyName(name) {
 		return ks.previous
 	}
 	return nil
@@ -240,10 +253,12 @@ func (ks *KeyStore) ClearPreviousKey() {
 func (ks *KeyStore) ReplaceKey(name string, newKey *TSIGKey) {
 	ks.mu.Lock()
 	defer ks.mu.Unlock()
-	ks.keys[strings.ToLower(name)] = newKey
+	ks.keys[CanonicalTSIGKeyName(name)] = newKey
 }
 
-// ParseTSIGKey parses a TSIG key from base64 secret
+// ParseTSIGKey parses a TSIG key from base64 secret. The key's Name is
+// stored in canonical form (lower-case, absolute) so the TSIG RRs signed
+// with it carry the canonical key name (F502).
 func ParseTSIGKey(name, algorithm, secretB64 string) (*TSIGKey, error) {
 	secret, err := base64.StdEncoding.DecodeString(secretB64)
 	if err != nil {
@@ -251,7 +266,7 @@ func ParseTSIGKey(name, algorithm, secretB64 string) (*TSIGKey, error) {
 	}
 
 	return &TSIGKey{
-		Name:      name,
+		Name:      CanonicalTSIGKeyName(name),
 		Algorithm: algorithm,
 		Secret:    secret,
 		CreatedAt: time.Now(),
@@ -454,7 +469,7 @@ func SignMessage(msg *protocol.Message, key *TSIGKey, fudge uint16) (*protocol.R
 	}
 
 	// Create TSIG resource record
-	keyName, err := protocol.ParseName(key.Name)
+	keyName, err := protocol.ParseName(CanonicalTSIGKeyName(key.Name))
 	if err != nil {
 		return nil, fmt.Errorf("invalid TSIG key name %q: %w", key.Name, err)
 	}
@@ -569,20 +584,31 @@ func tsigWireData(data protocol.RData) ([]byte, error) {
 
 // verifyWithKey performs the actual TSIG verification with a given key
 func verifyWithKey(msg *protocol.Message, key *TSIGKey, previousMAC []byte) error {
+	_, err := verifyTSIGDigest(msg, key, func(tsigs *TSIGRecord) ([]byte, error) {
+		// F83: the MAC covers the received Error / Other Data TSIG variables
+		// (RFC 8945 §4.3.3), so they cannot be altered without detection.
+		return buildSignedDataWithError(msg, key.Name, previousMAC, key.Algorithm, tsigs.TimeSigned, tsigs.Fudge, tsigs.OriginalID, tsigs.Error, tsigs.OtherData)
+	})
+	return err
+}
+
+// verifyTSIGDigest checks msg's TSIG record (algorithm, time window, MAC over
+// the data built by digest, replay window) and returns the verified record.
+func verifyTSIGDigest(msg *protocol.Message, key *TSIGKey, digest func(*TSIGRecord) ([]byte, error)) (*TSIGRecord, error) {
 	// Find TSIG record in additional section
 	tsigRR, err := findTSIGRecord(msg)
 	if err != nil {
-		return fmt.Errorf("finding TSIG record: %w", err)
+		return nil, fmt.Errorf("finding TSIG record: %w", err)
 	}
 
 	// Unpack TSIG data from either in-memory representation.
 	raw, err := tsigWireData(tsigRR.Data)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	tsigs, _, err := UnpackTSIGRecord(raw, 0)
 	if err != nil {
-		return fmt.Errorf("unpacking TSIG: %w", err)
+		return nil, fmt.Errorf("unpacking TSIG: %w", err)
 	}
 
 	// Check algorithm matches. RFC 8945 §4.3.3 (referencing RFC 1035 §2.3.3)
@@ -592,31 +618,31 @@ func verifyWithKey(msg *protocol.Message, key *TSIGKey, previousMAC []byte) erro
 	// which the cryptographic verification would have accepted because
 	// PackName canonicalizes to lowercase when building the signed-data.
 	if !strings.EqualFold(tsigs.Algorithm, key.Algorithm) {
-		return fmt.Errorf("algorithm mismatch: got %s, expected %s", tsigs.Algorithm, key.Algorithm)
+		return nil, fmt.Errorf("algorithm mismatch: got %s, expected %s", tsigs.Algorithm, key.Algorithm)
 	}
 
 	// Check time
 	now := time.Now().UTC()
 	fudge := time.Duration(tsigs.Fudge) * time.Second
 	if now.Before(tsigs.TimeSigned.Add(-fudge)) || now.After(tsigs.TimeSigned.Add(fudge)) {
-		return fmt.Errorf("TSIG time out of range")
+		return nil, fmt.Errorf("TSIG time out of range")
 	}
 
 	// Build signed data
-	signedData, err := buildSignedData(msg, key.Name, previousMAC, key.Algorithm, tsigs.TimeSigned, tsigs.Fudge, tsigs.OriginalID)
+	signedData, err := digest(tsigs)
 	if err != nil {
-		return fmt.Errorf("building signed data: %w", err)
+		return nil, fmt.Errorf("building signed data: %w", err)
 	}
 
 	// Calculate expected MAC
 	expectedMAC, err := calculateMAC(key.Secret, signedData, key.Algorithm)
 	if err != nil {
-		return fmt.Errorf("calculating MAC: %w", err)
+		return nil, fmt.Errorf("calculating MAC: %w", err)
 	}
 
 	// Compare MACs
 	if !hmac.Equal(tsigs.MAC, expectedMAC) {
-		return fmt.Errorf("MAC verification failed")
+		return nil, fmt.Errorf("MAC verification failed")
 	}
 
 	// RFC 8945 anti-replay: now that the MAC has authenticated the message,
@@ -624,10 +650,10 @@ func verifyWithKey(msg *protocol.Message, key *TSIGKey, previousMAC []byte) erro
 	// captured-and-replayed messages are rejected here even if they fall
 	// within the fudge window of "now".
 	if err := checkReplay(key.Name, tsigs.TimeSigned, fudge); err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return tsigs, nil
 }
 
 // calculateMAC calculates HMAC for given data and algorithm
@@ -685,6 +711,15 @@ func calculateMAC(key, data []byte, algorithm string) ([]byte, error) {
 // both signer and verifier must lowercase it identically for the MAC to match
 // across implementations (BIND/Knot/NSD).
 func buildSignedData(msg *protocol.Message, keyName string, previousMAC []byte, algorithm string, timeSigned time.Time, fudge uint16, originalID uint16) ([]byte, error) {
+	return buildSignedDataWithError(msg, keyName, previousMAC, algorithm, timeSigned, fudge, originalID, TSIGErrNoError, nil)
+}
+
+// buildSignedDataWithError is buildSignedData with the TSIG Error and Other
+// Data variables included in the digest as RFC 8945 §4.3.3 requires (F83).
+func buildSignedDataWithError(msg *protocol.Message, keyName string, previousMAC []byte, algorithm string, timeSigned time.Time, fudge uint16, originalID uint16, tsigError uint16, otherData []byte) ([]byte, error) {
+	if len(otherData) > maxTSIGWireFieldLen {
+		return nil, fmt.Errorf("TSIG other data too large: %d bytes", len(otherData))
+	}
 	var buf bytes.Buffer
 
 	// Previous MAC (multi-message TCP AXFR sequence per RFC 8945 §5.3.2.1).
@@ -698,6 +733,9 @@ func buildSignedData(msg *protocol.Message, keyName string, previousMAC []byte, 
 	// Message bytes with the TSIG RR removed and ARCOUNT adjusted to match
 	// the now-shorter Additionals slice (handled by cloneMessageWithoutTSIG).
 	msgCopy := cloneMessageWithoutTSIG(msg)
+	// RFC 8945 §4.3.1: the digested message carries the TSIG Original ID in
+	// place of the (possibly rewritten) header ID (F83).
+	msgCopy.Header.ID = originalID
 	msgBytes := make([]byte, 65535)
 	n, err := msgCopy.Pack(msgBytes)
 	if err != nil {
@@ -755,15 +793,206 @@ func buildSignedData(msg *protocol.Message, keyName string, previousMAC []byte, 
 	buf.WriteByte(byte(fudge >> 8))
 	buf.WriteByte(byte(fudge))
 
-	// Error (uint16 = 0 for non-error)
-	buf.WriteByte(0)
-	buf.WriteByte(0)
+	// Error (uint16)
+	buf.WriteByte(byte(tsigError >> 8))
+	buf.WriteByte(byte(tsigError))
 
-	// Other length (uint16 = 0) + Other data (empty)
-	buf.WriteByte(0)
-	buf.WriteByte(0)
+	// Other length (uint16) + Other data
+	buf.WriteByte(byte(len(otherData) >> 8))
+	buf.WriteByte(byte(len(otherData)))
+	buf.Write(otherData)
 
 	return buf.Bytes(), nil
+}
+
+// packTSIGDigestMessage packs msg as it is digested by a multi-message TSIG
+// chain: TSIG RR removed, ARCOUNT adjusted, header ID replaced by originalID.
+func packTSIGDigestMessage(msg *protocol.Message, originalID uint16) ([]byte, error) {
+	msgCopy := cloneMessageWithoutTSIG(msg)
+	msgCopy.Header.ID = originalID
+	msgBytes := make([]byte, 65535)
+	n, err := msgCopy.Pack(msgBytes)
+	if err != nil {
+		return nil, fmt.Errorf("packing message: %w", err)
+	}
+	return msgBytes[:n], nil
+}
+
+// buildTimersOnlySignedData builds the digest input for a signed message
+// after the first one of a multi-message response (RFC 8945 §5.3.1, F314):
+//
+//	Prior MAC (MAC Size + MAC) of the previous signed message
+//	DNS messages: every unsigned message since then (unsignedMsgs, already
+//	    packed) followed by this message without its TSIG RR
+//	TSIG timers: Time Signed (uint48) + Fudge (uint16)
+func buildTimersOnlySignedData(msg *protocol.Message, priorMAC, unsignedMsgs []byte, timeSigned time.Time, fudge uint16, originalID uint16) ([]byte, error) {
+	if len(priorMAC) > maxTSIGWireFieldLen {
+		return nil, fmt.Errorf("TSIG prior MAC too large: %d bytes", len(priorMAC))
+	}
+	msgBytes, err := packTSIGDigestMessage(msg, originalID)
+	if err != nil {
+		return nil, err
+	}
+	timeUnix, err := encodeTSIGTimeSigned(timeSigned)
+	if err != nil {
+		return nil, err
+	}
+	var buf bytes.Buffer
+	buf.WriteByte(byte(len(priorMAC) >> 8))
+	buf.WriteByte(byte(len(priorMAC)))
+	buf.Write(priorMAC)
+	buf.Write(unsignedMsgs)
+	buf.Write(msgBytes)
+	buf.Write([]byte{byte(timeUnix >> 40), byte(timeUnix >> 32), byte(timeUnix >> 24), byte(timeUnix >> 16), byte(timeUnix >> 8), byte(timeUnix)})
+	buf.WriteByte(byte(fudge >> 8))
+	buf.WriteByte(byte(fudge))
+	return buf.Bytes(), nil
+}
+
+// TSIGRequestMAC returns the MAC of the TSIG record on a signed request. A
+// response to that request is bound to it by digesting this MAC (RFC 8945
+// §4.3.3).
+func TSIGRequestMAC(req *protocol.Message) ([]byte, error) {
+	mac, err := extractMAC(req)
+	if err != nil {
+		return nil, err
+	}
+	if mac == nil {
+		return nil, fmt.Errorf("no TSIG record found")
+	}
+	return mac, nil
+}
+
+// TSIGStreamSigner signs the messages of a multi-message TSIG response such
+// as an AXFR/IXFR stream (RFC 8945 §5.3.1, F312–F314). The first signed
+// message digests the request MAC, the message and all TSIG variables; every
+// later signed message digests the previous MAC, every unsigned message sent
+// since (see Skip), the message, and the TSIG timers only. Messages must be
+// signed or skipped in the order they are sent, after any final rewrite of
+// their header or additional section.
+type TSIGStreamSigner struct {
+	key      *TSIGKey
+	fudge    uint16
+	priorMAC []byte // request MAC until the first signed message
+	pending  []byte // unsigned messages since the last signed message
+	signed   bool
+	now      func() time.Time
+}
+
+// NewTSIGStreamSigner returns a signer for the responses to a request whose
+// TSIG MAC is requestMAC.
+func NewTSIGStreamSigner(key *TSIGKey, requestMAC []byte, fudge uint16) *TSIGStreamSigner {
+	return &TSIGStreamSigner{key: key, fudge: fudge, priorMAC: append([]byte(nil), requestMAC...), now: time.Now}
+}
+
+// Sign returns the TSIG RR for msg, the next message of the stream. The
+// caller appends it as the last additional record without further changes
+// to msg.
+func (s *TSIGStreamSigner) Sign(msg *protocol.Message) (*protocol.ResourceRecord, error) {
+	if s == nil || s.key == nil {
+		return nil, fmt.Errorf("nil TSIG stream signer")
+	}
+	timeSigned := s.now().UTC()
+	var signedData []byte
+	var err error
+	if !s.signed {
+		signedData, err = buildSignedData(msg, s.key.Name, s.priorMAC, s.key.Algorithm, timeSigned, s.fudge, msg.Header.ID)
+	} else {
+		signedData, err = buildTimersOnlySignedData(msg, s.priorMAC, s.pending, timeSigned, s.fudge, msg.Header.ID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("building signed data: %w", err)
+	}
+	mac, err := calculateMAC(s.key.Secret, signedData, s.key.Algorithm)
+	if err != nil {
+		return nil, fmt.Errorf("calculating MAC: %w", err)
+	}
+	rdata, err := PackTSIGRecord(&TSIGRecord{
+		Algorithm:  s.key.Algorithm,
+		TimeSigned: timeSigned,
+		Fudge:      s.fudge,
+		MAC:        mac,
+		OriginalID: msg.Header.ID,
+		Error:      TSIGErrNoError,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("packing TSIG: %w", err)
+	}
+	keyName, err := protocol.ParseName(CanonicalTSIGKeyName(s.key.Name))
+	if err != nil {
+		return nil, fmt.Errorf("invalid TSIG key name %q: %w", s.key.Name, err)
+	}
+	s.priorMAC, s.pending, s.signed = mac, nil, true
+	return &protocol.ResourceRecord{
+		Name:  keyName,
+		Type:  protocol.TypeTSIG,
+		Class: protocol.ClassANY,
+		TTL:   0,
+		Data:  &RDataTSIG{Raw: rdata},
+	}, nil
+}
+
+// Skip records msg as sent unsigned; it is digested by the next signed
+// message. The first message of a stream must be signed.
+func (s *TSIGStreamSigner) Skip(msg *protocol.Message) error {
+	if s == nil || !s.signed {
+		return fmt.Errorf("the first message of a TSIG stream must be signed")
+	}
+	b, err := packTSIGDigestMessage(msg, msg.Header.ID)
+	if err != nil {
+		return err
+	}
+	s.pending = append(s.pending, b...)
+	return nil
+}
+
+// tsigStreamVerifier is the client side of TSIGStreamSigner: it verifies the
+// response messages of a multi-message TSIG exchange in arrival order
+// (RFC 8945 §5.3.1, F314).
+type tsigStreamVerifier struct {
+	key      *TSIGKey
+	priorMAC []byte // request MAC until the first signed message is verified
+	pending  []byte // unsigned messages since the last signed message
+	signed   bool
+	unsigned int
+}
+
+func newTSIGStreamVerifier(key *TSIGKey, requestMAC []byte) *tsigStreamVerifier {
+	return &tsigStreamVerifier{key: key, priorMAC: requestMAC}
+}
+
+// verify processes the next response message. An unsigned message is
+// accepted (and kept for the next digest) only after a signed first message
+// and while at most maxUnsignedTSIGMessages unsigned messages are pending;
+// the caller still requires the final message to be signed.
+func (v *tsigStreamVerifier) verify(msg *protocol.Message) error {
+	if !hasTSIG(msg) {
+		if !v.signed {
+			return fmt.Errorf("first response is missing TSIG")
+		}
+		v.unsigned++
+		if v.unsigned > maxUnsignedTSIGMessages {
+			return fmt.Errorf("response has more than %d consecutive unsigned messages", maxUnsignedTSIGMessages)
+		}
+		b, err := packTSIGDigestMessage(msg, msg.Header.ID)
+		if err != nil {
+			return err
+		}
+		v.pending = append(v.pending, b...)
+		return nil
+	}
+	first := !v.signed
+	tsigs, err := verifyTSIGDigest(msg, v.key, func(ts *TSIGRecord) ([]byte, error) {
+		if first {
+			return buildSignedDataWithError(msg, v.key.Name, v.priorMAC, v.key.Algorithm, ts.TimeSigned, ts.Fudge, ts.OriginalID, ts.Error, ts.OtherData)
+		}
+		return buildTimersOnlySignedData(msg, v.priorMAC, v.pending, ts.TimeSigned, ts.Fudge, ts.OriginalID)
+	})
+	if err != nil {
+		return err
+	}
+	v.priorMAC, v.pending, v.signed, v.unsigned = tsigs.MAC, nil, true, 0
+	return nil
 }
 
 // findTSIGRecord finds the TSIG record in a message's additional section

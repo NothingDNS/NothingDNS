@@ -844,6 +844,7 @@ func TestDynamicDNSHandler_HandleUpdate_RejectsUpdateOutsideZone(t *testing.T) {
 	ks := NewKeyStore()
 	ks.AddKey(key)
 	handler.SetKeyStore(ks)
+	handler.AllowKeyUpdate("key.example.com.", "example.com.") // F452: update rights are granted per key and zone
 
 	name, _ := protocol.ParseName("example.com.")
 	updateName, _ := protocol.ParseName("www.example.net.")

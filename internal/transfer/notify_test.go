@@ -592,7 +592,8 @@ func TestNOTIFYSender_SendNOTIFY_IDMismatch(t *testing.T) {
 	}()
 
 	sender := NewNOTIFYSender(":0")
-	sender.SetTimeout(2 * time.Second)
+	sender.SetTimeout(200 * time.Millisecond)
+	sender.retransmits = 0
 
 	err = sender.SendNOTIFY("example.com.", 2024010101, serverConn.LocalAddr().String())
 	if err == nil {
@@ -954,7 +955,7 @@ func TestNOTIFYSlaveHandler_HandleNOTIFY_SerialFromAuthority(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// HandleNOTIFY - serial from local zone (no SOA in Answer or Authority)
+// HandleNOTIFY - no SOA in Answer or Authority (serial unknown)
 // ---------------------------------------------------------------------------
 
 func TestNOTIFYSlaveHandler_HandleNOTIFY_SerialFromLocalZone(t *testing.T) {
@@ -991,13 +992,16 @@ func TestNOTIFYSlaveHandler_HandleNOTIFY_SerialFromLocalZone(t *testing.T) {
 		t.Errorf("Expected RcodeSuccess, got %d", resp.Header.Flags.RCODE)
 	}
 
-	// Local zone serial is 300, current zone serial is also 300, so receivedSerial <= z.SOA.Serial
-	// This means needsUpdate=false, so nothing on the channel
+	// The SOA serial is only a hint (RFC 1996 §3.7/§3.11): a NOTIFY without
+	// one must still be forwarded, flagged SerialUnknown, rather than being
+	// compared with the local serial and dropped (F208).
 	select {
-	case <-handler.GetNotifyChannel():
-		t.Error("Expected no NOTIFY event since serial didn't increase")
+	case notifyReq := <-handler.GetNotifyChannel():
+		if !notifyReq.SerialUnknown {
+			t.Error("NOTIFY without SOA hint was not flagged SerialUnknown")
+		}
 	default:
-		// Expected - no update needed
+		t.Error("NOTIFY without SOA hint was dropped")
 	}
 }
 

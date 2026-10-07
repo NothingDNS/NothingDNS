@@ -135,29 +135,37 @@ func (s *IXFRServer) RecordChange(zoneName string, oldSerial, newSerial uint32, 
 // HandleIXFR handles an IXFR request message
 // Returns the IXFR response records
 func (s *IXFRServer) HandleIXFR(req *protocol.Message, clientIP net.IP) ([]*protocol.ResourceRecord, error) {
+	records, _, err := s.HandleIXFRWithKey(req, clientIP)
+	return records, err
+}
+
+// HandleIXFRWithKey is HandleIXFR that also returns the TSIG key that
+// authenticated the request (nil for an unsigned request). Callers must sign
+// the response stream with it (RFC 8945 §5.3.1, F313).
+func (s *IXFRServer) HandleIXFRWithKey(req *protocol.Message, clientIP net.IP) ([]*protocol.ResourceRecord, *TSIGKey, error) {
 	if s == nil || s.axfrServer == nil {
-		return nil, fmt.Errorf("IXFR server is nil")
+		return nil, nil, fmt.Errorf("IXFR server is nil")
 	}
 
 	// Check if client is allowed (delegate to AXFR server)
 	if !s.axfrServer.IsAllowed(clientIP) {
-		return nil, fmt.Errorf("client %s not authorized for IXFR", clientIP)
+		return nil, nil, fmt.Errorf("client %s not authorized for IXFR", clientIP)
 	}
 
 	// Validate request
 	if req == nil {
-		return nil, fmt.Errorf("IXFR request is nil")
+		return nil, nil, fmt.Errorf("IXFR request is nil")
 	}
 	if len(req.Questions) != 1 {
-		return nil, fmt.Errorf("IXFR requires exactly one question")
+		return nil, nil, fmt.Errorf("IXFR requires exactly one question")
 	}
 
 	question := req.Questions[0]
 	if question == nil || question.Name == nil {
-		return nil, fmt.Errorf("IXFR question is invalid")
+		return nil, nil, fmt.Errorf("IXFR question is invalid")
 	}
 	if question.QType != protocol.TypeIXFR {
-		return nil, fmt.Errorf("invalid query type for IXFR: %d", question.QType)
+		return nil, nil, fmt.Errorf("invalid query type for IXFR: %d", question.QType)
 	}
 
 	zoneName := question.Name.String()
@@ -167,41 +175,55 @@ func (s *IXFRServer) HandleIXFR(req *protocol.Message, clientIP net.IP) ([]*prot
 	z, ok := s.zones[strings.ToLower(zoneName)]
 	s.axfrServer.zonesMu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("zone %s not found", zoneName)
+		return nil, nil, fmt.Errorf("zone %s not found", zoneName)
 	}
 
 	if z == nil {
-		return nil, fmt.Errorf("zone is nil")
+		return nil, nil, fmt.Errorf("zone is nil")
 	}
-	if z.SOA == nil {
-		return nil, fmt.Errorf("zone has no SOA record")
+	z.RLock()
+	hasSOA := z.SOA != nil
+	z.RUnlock()
+	if !hasSOA {
+		return nil, nil, fmt.Errorf("zone has no SOA record")
 	}
 
 	// Verify TSIG — if keyStore has keys, TSIG is required
+	var tsigKey *TSIGKey
 	if s.axfrServer.keyStore != nil && s.axfrServer.keyStore.HasKeys() {
 		if !hasTSIG(req) {
-			return nil, fmt.Errorf("TSIG authentication required for IXFR")
+			return nil, nil, fmt.Errorf("TSIG authentication required for IXFR")
 		}
 		keyName, err := getTSIGKeyName(req)
 		if err != nil {
-			return nil, fmt.Errorf("getting TSIG key name: %w", err)
+			return nil, nil, fmt.Errorf("getting TSIG key name: %w", err)
 		}
 
 		key, ok := s.axfrServer.keyStore.GetKey(keyName)
 		if !ok {
-			return nil, fmt.Errorf("TSIG key not found: %s", keyName)
+			return nil, nil, fmt.Errorf("TSIG key not found: %s", keyName)
 		}
 
 		if err := s.axfrServer.keyStore.ValidateKeySource(keyName, clientIP); err != nil {
-			return nil, fmt.Errorf("TSIG client IP check failed: %w", err)
+			return nil, nil, fmt.Errorf("TSIG client IP check failed: %w", err)
 		}
 
 		if err := VerifyMessage(req, key, nil); err != nil {
-			return nil, fmt.Errorf("TSIG verification failed: %w", err)
+			return nil, nil, fmt.Errorf("TSIG verification failed: %w", err)
 		}
+		tsigKey = key
 	} else if hasTSIG(req) {
 		// TSIG was provided but we have no keys to verify it — reject
-		return nil, fmt.Errorf("TSIG key not found")
+		return nil, nil, fmt.Errorf("TSIG key not found")
+	}
+
+	// One zone read lock covers the serial decision and the generated
+	// answer, so a concurrent update can neither be half-seen nor make the
+	// answer's SOA disagree with the serial it was chosen for (F413).
+	z.RLock()
+	defer z.RUnlock()
+	if z.SOA == nil {
+		return nil, nil, fmt.Errorf("zone has no SOA record")
 	}
 
 	// Extract client serial from Authority section (SOA record)
@@ -219,22 +241,25 @@ func (s *IXFRServer) HandleIXFR(req *protocol.Message, clientIP net.IP) ([]*prot
 	//      it's up-to-date, causing the stale zone to persist silently.
 	//      Fall back to AXFR so the client gets a consistent snapshot.
 	if serverSerial == clientSerial {
-		return s.generateSingleSOA(z)
+		records, err := s.generateSingleSOA(z)
+		return records, tsigKey, err
 	}
 	if serialIsNewer(clientSerial, serverSerial) {
 		// Server is behind the client: refuse the IXFR delta (we can't
 		// produce a correct forward-difference) and force a full AXFR.
-		return s.axfrServer.generateAXFRRecords(z)
+		records, err := s.axfrServer.generateAXFRRecordsLocked(z)
+		return records, tsigKey, err
 	}
 
 	// Try to generate incremental changes
 	records, err := s.generateIncrementalIXFR(z, clientSerial)
 	if err != nil {
 		// Fall back to AXFR
-		return s.axfrServer.generateAXFRRecords(z)
+		records, err = s.axfrServer.generateAXFRRecordsLocked(z)
+		return records, tsigKey, err
 	}
 
-	return records, nil
+	return records, tsigKey, nil
 }
 
 // extractClientSerial extracts the client's SOA serial from the IXFR request
@@ -257,7 +282,7 @@ func (s *IXFRServer) extractClientSerial(req *protocol.Message) uint32 {
 }
 
 // generateSingleSOA generates a response with just the SOA record
-// Used when client is already up to date
+// Used when client is already up to date. The caller holds z's read lock.
 func (s *IXFRServer) generateSingleSOA(z *zone.Zone) ([]*protocol.ResourceRecord, error) {
 	origin, err := protocol.ParseName(z.Origin)
 	if err != nil {
@@ -272,7 +297,8 @@ func (s *IXFRServer) generateSingleSOA(z *zone.Zone) ([]*protocol.ResourceRecord
 	return []*protocol.ResourceRecord{soaRR}, nil
 }
 
-// generateIncrementalIXFR generates incremental changes between client and server serials
+// generateIncrementalIXFR generates incremental changes between client and
+// server serials. The caller holds z's read lock (it reads z.SOA).
 func (s *IXFRServer) generateIncrementalIXFR(z *zone.Zone, clientSerial uint32) ([]*protocol.ResourceRecord, error) {
 	zoneName := strings.ToLower(z.Origin)
 
@@ -342,6 +368,14 @@ func (s *IXFRServer) generateIncrementalIXFR(z *zone.Zone, clientSerial uint32) 
 	}
 	if uncovered {
 		return nil, fmt.Errorf("journal doesn't cover client serial %d", clientSerial)
+	}
+	// The delta must end at the serial the response is framed with. A zone
+	// change that was not journalled (API record edit, zone-file reload)
+	// leaves the journal tail behind z.SOA.Serial; serving the shorter delta
+	// under the current SOA marks the secondary current while it lacks those
+	// changes, so fall back to AXFR (F225).
+	if tail := journal[len(journal)-1]; tail.Serial != z.SOA.Serial {
+		return nil, fmt.Errorf("journal ends at serial %d, zone is at %d", tail.Serial, z.SOA.Serial)
 	}
 
 	origin, err := protocol.ParseName(z.Origin)
@@ -521,9 +555,20 @@ func (c *IXFRClient) Transfer(zoneName string, currentSerial uint32, key *TSIGKe
 		return nil, fmt.Errorf("sending IXFR request: %w", err)
 	}
 
-	// Receive response records
-	records, err := c.receiveIXFRResponse(conn, req.Header.ID, key)
+	// Receive response records. With a key, the response stream is bound to
+	// this request's TSIG MAC (RFC 8945 §4.3.3, F314).
+	var requestMAC []byte
+	if key != nil {
+		if requestMAC, err = TSIGRequestMAC(req); err != nil {
+			return nil, fmt.Errorf("reading IXFR request MAC: %w", err)
+		}
+	}
+	records, err := c.receiveIXFRResponseForRequest(conn, req.Header.ID, key, currentSerial, requestMAC)
 	if err != nil {
+		return nil, fmt.Errorf("receiving IXFR response: %w", err)
+	}
+	// A master is authoritative only for the requested zone (F217).
+	if err := checkTransferInZone(req.Questions[0].Name, records); err != nil {
 		return nil, fmt.Errorf("receiving IXFR response: %w", err)
 	}
 
@@ -612,12 +657,89 @@ func (c *IXFRClient) sendMessage(conn net.Conn, msg *protocol.Message) error {
 	return err
 }
 
-// receiveIXFRResponse receives IXFR response records over TCP
-func (c *IXFRClient) receiveIXFRResponse(conn net.Conn, expectedTXID uint16, key *TSIGKey) ([]*protocol.ResourceRecord, error) {
+// maxUnsignedTSIGMessages is the RFC 8945 §5.3.1 bound on consecutive
+// unsigned messages in a TSIG-signed multi-message transfer.
+const maxUnsignedTSIGMessages = 99
+
+// ixfrStreamTracker follows the RFC 1995 §4 record structure of an IXFR
+// response so the client knows exactly when the transfer is complete,
+// independently of how the master split the records into TCP messages (F198,
+// F199):
+//
+//	SOA(new)                              up-to-date (new not newer than client)
+//	SOA(new) RRs... SOA                   AXFR-style full zone
+//	SOA(new) [SOA(old) dels SOA(x) adds]... SOA(new)   incremental
+type ixfrStreamTracker struct {
+	clientSerial uint32
+	newSerial    uint32
+	n            int
+	incremental  bool
+	inAdds       bool // incremental: currently in an additions section
+	done         bool
+}
+
+// feed consumes one answer RR and reports whether it completed the transfer.
+func (t *ixfrStreamTracker) feed(rr *protocol.ResourceRecord) error {
+	idx := t.n
+	t.n++
+	var soa *protocol.RDataSOA
+	if rr != nil && rr.Type == protocol.TypeSOA {
+		soa, _ = rr.Data.(*protocol.RDataSOA)
+		if soa == nil {
+			return fmt.Errorf("IXFR response contains a malformed SOA record")
+		}
+	}
+	switch {
+	case idx == 0:
+		if soa == nil {
+			return fmt.Errorf("IXFR response does not begin with an SOA record")
+		}
+		t.newSerial = soa.Serial
+		// RFC 1995 §2/§4: a server with nothing newer answers with its SOA
+		// alone.
+		if !serialIsNewer(soa.Serial, t.clientSerial) {
+			t.done = true
+		}
+	case idx == 1:
+		if soa == nil {
+			return nil // AXFR-style full transfer
+		}
+		if soa.Serial == t.newSerial {
+			t.done = true // AXFR-style transfer of an SOA-only zone
+			return nil
+		}
+		t.incremental = true // first diff block's old SOA opens deletions
+	case soa == nil:
+		return nil
+	case !t.incremental:
+		t.done = true // AXFR-style closing SOA
+	case !t.inAdds:
+		t.inAdds = true // diff block's new SOA opens additions
+	case soa.Serial == t.newSerial:
+		t.done = true // closing SOA
+	default:
+		t.inAdds = false // next diff block's old SOA
+	}
+	return nil
+}
+
+// receiveIXFRResponse receives IXFR response records over TCP. clientSerial is
+// the serial sent in the request; it distinguishes the single-SOA up-to-date
+// answer from the opening SOA of a transfer.
+func (c *IXFRClient) receiveIXFRResponse(conn net.Conn, expectedTXID uint16, key *TSIGKey, clientSerial uint32) ([]*protocol.ResourceRecord, error) {
+	return c.receiveIXFRResponseForRequest(conn, expectedTXID, key, clientSerial, nil)
+}
+
+// receiveIXFRResponseForRequest is receiveIXFRResponse for a request whose
+// TSIG MAC is requestMAC: with a key, the stream is verified as one
+// RFC 8945 §5.3.1 TSIG chain starting from it (F314).
+func (c *IXFRClient) receiveIXFRResponseForRequest(conn net.Conn, expectedTXID uint16, key *TSIGKey, clientSerial uint32, requestMAC []byte) ([]*protocol.ResourceRecord, error) {
 	var records []*protocol.ResourceRecord
-	var soaCount int
 	var totalBytes int
-	previousMAC := []byte{}
+	tracker := &ixfrStreamTracker{clientSerial: clientSerial}
+	tsigChain := newTSIGStreamVerifier(key, requestMAC)
+	firstMessage := true
+	unsigned := 0
 
 	for {
 		if err := conn.SetReadDeadline(time.Now().Add(c.timeout)); err != nil {
@@ -626,9 +748,8 @@ func (c *IXFRClient) receiveIXFRResponse(conn net.Conn, expectedTXID uint16, key
 
 		lengthBuf := make([]byte, 2)
 		if _, err := io.ReadFull(conn, lengthBuf); err != nil {
-			if soaCount >= 2 {
-				break
-			}
+			// F199: a stream that ends before its closing SOA is truncated,
+			// never a complete transfer.
 			return nil, fmt.Errorf("reading message length: %w", err)
 		}
 
@@ -669,32 +790,44 @@ func (c *IXFRClient) receiveIXFRResponse(conn net.Conn, expectedTXID uint16, key
 			return nil, fmt.Errorf("IXFR failed with rcode: %d", msg.Header.Flags.RCODE)
 		}
 
-		// Verify TSIG if present
-		if key != nil && hasTSIG(msg) {
-			if err := VerifyMessage(msg, key, previousMAC); err != nil {
+		// F197: a keyed transfer requires TSIG on the first message, on the
+		// last message, and on at least every 100th message in between
+		// (RFC 8945 §5.3.1).
+		if key != nil {
+			if hasTSIG(msg) {
+				unsigned = 0
+			} else {
+				if firstMessage {
+					return nil, fmt.Errorf("IXFR first response is missing TSIG")
+				}
+				unsigned++
+				if unsigned > maxUnsignedTSIGMessages {
+					return nil, fmt.Errorf("IXFR response has more than %d consecutive unsigned messages", maxUnsignedTSIGMessages)
+				}
+			}
+			// F314: signed messages are verified against the request MAC /
+			// previous MAC; unsigned ones are digested into the next one.
+			if err := tsigChain.verify(msg); err != nil {
 				return nil, fmt.Errorf("TSIG verification failed: %w", err)
 			}
-			mac, err := extractMAC(msg)
-			if err != nil {
-				return nil, fmt.Errorf("failed to extract TSIG MAC: %w", err)
-			}
-			previousMAC = mac
 		}
+		firstMessage = false
 
 		// Process answer records
 		for _, rr := range msg.Answers {
-			records = append(records, rr)
-
-			if rr.Type == protocol.TypeSOA {
-				soaCount++
+			if tracker.done {
+				return nil, fmt.Errorf("IXFR response has records after its final SOA")
 			}
+			if err := tracker.feed(rr); err != nil {
+				return nil, err
+			}
+			records = append(records, rr)
 		}
 
-		// A single-SOA message is always terminal: either the RFC 1995 §2
-		// up-to-date response (no changes) or the transfer's final SOA
-		// arriving as its own message. Waiting for a second SOA here made
-		// every up-to-date refresh fall through to a spurious EOF error.
-		if len(msg.Answers) == 1 && msg.Answers[0].Type == protocol.TypeSOA {
+		if tracker.done {
+			if key != nil && !hasTSIG(msg) {
+				return nil, fmt.Errorf("IXFR final response is missing TSIG")
+			}
 			break
 		}
 
