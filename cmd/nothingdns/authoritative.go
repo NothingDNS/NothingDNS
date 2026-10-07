@@ -26,7 +26,10 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 	// Per RFC 1034 §4.2.1, if the query name is at or below a delegation
 	// point, we return a referral (non-authoritative) response with NS
 	// records and optional glue.
-	if nsRecords, delegation, found := z.FindDelegation(qname); found {
+	// F520: a cut strictly below a DNAME owner is occluded (RFC 6672 §2.4);
+	// the DNAME redirects such names (Step 1c) instead of the referral.
+	_, _, dnameRedirect, _ := nameAuthority(z, qname, qtype)
+	if nsRecords, delegation, found := z.FindDelegation(qname); found && !dnameRedirect {
 		resp := h.buildReferralResponse(r, z, nsRecords, delegation)
 		h.logger.Debugf("Delegation referral for %s at %s", qname, delegation)
 		if h.metrics != nil {
@@ -40,6 +43,27 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 		}
 		reply(w, r, resp)
 		return true
+	}
+	// F302: FindDelegation only looks strictly above qname, so a query AT a
+	// zone cut was answered as authoritative data (AA=1 NODATA, or the
+	// delegation NS RRset in the answer section). Everything at the cut
+	// except DS belongs to the child zone (RFC 1034 §4.3.2 step 3b, RFC 4035
+	// §3.1.4.1), so it gets the same referral as a name below the cut.
+	if qtype != protocol.TypeDS && canonicalize(qname) != canonicalize(z.Origin) && !dnameRedirect {
+		if nsRecords := z.Lookup(qname, "NS"); len(nsRecords) > 0 {
+			resp := h.buildReferralResponse(r, z, nsRecords, canonicalize(qname))
+			if h.metrics != nil {
+				h.metrics.RecordResponse(protocol.RcodeSuccess)
+			}
+			if handled, err := h.checkRPZResponseIPWithError(w, r, q, resp); handled || err != nil {
+				if err != nil {
+					h.logger.Warnf("RPZ response write failed for %s: %v", qname, err)
+				}
+				return true
+			}
+			reply(w, r, resp)
+			return true
+		}
 	}
 
 	// ── Step 1: GeoDNS override ──
@@ -84,6 +108,22 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 			return true
 		}
 	}
+	// F488: a zone served with NSEC3 denial publishes its parameters at the
+	// apex (RFC 5155 §7.3).
+	if qtype == protocol.TypeNSEC3PARAM && canonicalize(qname) == canonicalize(z.Origin) &&
+		len(z.Lookup(qname, "NSEC3PARAM")) == 0 && h.serveZoneNSEC3PARAM(w, r, z, wantsDNSSEC) {
+		return true
+	}
+
+	// ── Step 1c: DNAME (RFC 6672) ──
+	// A DNAME redirects every name below its owner. F515: this ran after
+	// the exact-match and CNAME steps, so data a zone file holds below a
+	// DNAME owner — occluded, RFC 6672 §2.4 — was answered (and signed)
+	// instead of the redirection (RFC 1034 §4.3.2 step 3c).
+	if dnameRec, synthTarget, found := z.FindDNAME(qname); found {
+		h.handleDNAMERecord(z, w, r, q, qname, dnameRec, synthTarget, wantsDNSSEC)
+		return true
+	}
 
 	// ── Step 2: Exact match ──
 	records := z.Lookup(qname, typeToString(qtype))
@@ -117,14 +157,6 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 		return false // signal to ServeDNS to chase the CNAME
 	}
 
-	// ── Step 3b: DNAME check (RFC 6672) ──
-	// Check for a DNAME record whose owner is a suffix of the query name.
-	// If found, synthesize a CNAME response and resolve the target.
-	if dnameRec, synthTarget, found := z.FindDNAME(qname); found {
-		h.handleDNAMERecord(w, r, q, qname, dnameRec, synthTarget)
-		return true
-	}
-
 	// ── Step 4: Wildcard matching (RFC 4592) ──
 	// Only attempt wildcards if the exact name doesn't exist at all.
 	// If the name exists but has no records of the requested type,
@@ -132,24 +164,11 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 	// NodeExists, not NameExists: an empty non-terminal is an existing node,
 	// so it is NODATA rather than a wildcard candidate or an NXDOMAIN.
 	if !z.NodeExists(qname) {
-		wcRecords, _, wcFound := z.LookupWildcard(qname, typeToString(qtype))
+		wcRecords, wildcard, wcFound := z.LookupWildcard(qname, typeToString(qtype))
 		if wcFound {
 			if len(wcRecords) > 0 {
 				// Synthesize answer: wildcard records with the query name as owner
-				synthRecords := make([]zone.Record, len(wcRecords))
-				for i, rec := range wcRecords {
-					synthRecords[i] = rec
-					synthRecords[i].Name = qname
-				}
-				var resp *protocol.Message
-				h.zoneSignersMu.RLock()
-				signer, ok := h.zoneSigners[z.Origin]
-				h.zoneSignersMu.RUnlock()
-				if ok && wantsDNSSEC {
-					resp = h.buildSignedResponse(r, synthRecords, signer, true)
-				} else {
-					resp = h.buildResponse(r, synthRecords)
-				}
+				resp := h.buildWildcardResponse(r, z, wildcard, wcRecords, wantsDNSSEC)
 				if h.metrics != nil {
 					h.metrics.RecordResponse(protocol.RcodeSuccess)
 				}
@@ -160,6 +179,11 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 					return true
 				}
 				reply(w, r, resp)
+				return true
+			}
+			// F303: a wildcard CNAME applies to every qtype (RFC 4592 §2.2.1,
+			// RFC 1034 §4.3.2 step 3c), not only to CNAME queries.
+			if qtype != protocol.TypeCNAME && h.answerWildcardCNAME(z, w, r, q, qname, wantsDNSSEC) {
 				return true
 			}
 			// Wildcard exists but no records of the requested type → NODATA
@@ -193,6 +217,82 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 	}
 	reply(w, r, resp)
 	return true
+}
+
+// answerWildcardCNAME synthesizes the CNAME owned by the wildcard that covers
+// qname and follows its target, first inside z (which may be a view zone that
+// the global zone set does not hold), then through resolveCNAMETarget. It
+// returns false when the covering wildcard owns no CNAME.
+func (h *integratedHandler) answerWildcardCNAME(z *zone.Zone, w server.ResponseWriter, r *protocol.Message, q *protocol.Question, qname string, wantsDNSSEC bool) bool {
+	cnames, wildcard, found := z.LookupWildcard(qname, "CNAME")
+	if !found || len(cnames) == 0 {
+		return false
+	}
+	synth := cnames[0]
+	synth.Name = qname
+	synth.RData = qualifyAgainstOrigin(synth.RData, z.Origin)
+	target := canonicalize(synth.RData)
+
+	resp := h.buildWildcardResponse(r, z, wildcard, []zone.Record{synth}, wantsDNSSEC)
+	// F517/F518: the target is answered by its own zone (z first: it may be
+	// a view zone), signed, with a denial proof when it is negative.
+	tgt := h.resolveChainTarget(w, r, map[string]*zone.Zone{z.Origin: z}, target, q.QType, wantsDNSSEC)
+	for _, rr := range tgt.answers {
+		resp.AddAnswer(rr)
+	}
+	resp.Authorities = append(resp.Authorities, tgt.authority...)
+	resp.Header.Flags.RCODE = tgt.rcode
+
+	if handled, err := h.applyRPZResponsePolicyWithError(w, r, q, resp, target); handled || err != nil {
+		if err != nil {
+			h.logger.Warnf("RPZ response write failed for %s: %v", qname, err)
+		}
+		return true
+	}
+	if h.metrics != nil {
+		h.metrics.RecordResponse(resp.Header.Flags.RCODE)
+	}
+	reply(w, r, resp)
+	return true
+}
+
+// buildWildcardResponse answers the query with records synthesized from the
+// wildcard owner (RFC 4592). F512: for a DO=1 client of a signed zone the
+// RRset was signed as if QNAME existed (RRSIG Labels = QNAME labels) and the
+// answer carried no proof that QNAME does not exist, contradicting the
+// zone's own denial chain; an expansion more than one label below the
+// wildcard's closest encloser validated Bogus. The RRset is now signed at the
+// wildcard owner, so its RRSIG Labels field marks the expansion (RFC 4034
+// §3.1.3, RFC 4035 §5.3.4), and the authority section carries the signed
+// NSEC/NSEC3 proving no closer match (RFC 4035 §3.1.3.3, RFC 5155 §7.2.6).
+func (h *integratedHandler) buildWildcardResponse(r *protocol.Message, z *zone.Zone, wildcard string, records []zone.Record, wantsDNSSEC bool) *protocol.Message {
+	resp := h.buildResponse(r, records) // owners = QNAME
+	if !wantsDNSSEC || len(resp.Answers) == 0 {
+		return resp
+	}
+	wcName, err := protocol.ParseName(wildcard)
+	if err != nil {
+		return resp
+	}
+	rrs := make([]*protocol.ResourceRecord, 0, len(resp.Answers))
+	for _, rr := range resp.Answers {
+		cp := *rr
+		cp.Name = wcName
+		rrs = append(rrs, &cp)
+	}
+	rrsig := h.signZoneRRSet(z, rrs)
+	if rrsig == nil {
+		return resp // unsigned zone (or signing failed, logged)
+	}
+	rrsig.Name = resp.Answers[0].Name
+	resp.AddAnswer(rrsig)
+	for _, proof := range h.wildcardAnswerRRs(z, r.Questions[0].Name.String(), strings.TrimPrefix(wildcard, "*.")) {
+		resp.Authorities = append(resp.Authorities, proof)
+		if sig := h.signZoneRRSet(z, []*protocol.ResourceRecord{proof}); sig != nil {
+			resp.Authorities = append(resp.Authorities, sig)
+		}
+	}
+	return resp
 }
 
 // buildReferralResponse constructs a delegation (referral) response.
@@ -254,7 +354,70 @@ func (h *integratedHandler) buildReferralResponse(query *protocol.Message, z *zo
 		}
 	}
 
+	// F384: from a signed zone, a DO=1 referral must say whether the
+	// delegation is secure: the DS RRset and its RRSIG, or the NSEC at the
+	// cut proving there is no DS, with its RRSIG (RFC 4035 §3.1.4). Without
+	// either a validator cannot tell an insecure delegation from a stripped DS.
+	if hasDOBit(query) && delegName != nil {
+		var dsRRs []*protocol.ResourceRecord
+		for _, rec := range z.Lookup(delegation, "DS") {
+			if data := parseRData(rec.Type, rec.RData); data != nil {
+				dsRRs = append(dsRRs, &protocol.ResourceRecord{
+					Name: delegName, Type: protocol.TypeDS, Class: protocol.ClassIN, TTL: rec.TTL, Data: data,
+				})
+			}
+		}
+		if rrsig := h.signZoneRRSet(z, dsRRs); rrsig != nil {
+			resp.Authorities = append(resp.Authorities, dsRRs...)
+			resp.Authorities = append(resp.Authorities, rrsig)
+		} else if len(dsRRs) == 0 {
+			// F488/F489: the NSEC at the cut, or the NSEC3 matching it (or,
+			// with opt-out, the closest provable encloser proof), from the
+			// authoritative chain. Each record is its own RRset.
+			for _, rr := range h.insecureDelegationProof(z, delegation) {
+				if rrsig := h.signZoneRRSet(z, []*protocol.ResourceRecord{rr}); rrsig != nil {
+					resp.Authorities = append(resp.Authorities, rr, rrsig)
+				}
+			}
+		}
+	}
+
 	return resp
+}
+
+// signZoneRRSet signs rrs with z's active ZSK. It returns nil when the zone
+// has no signer or active ZSK, or signing fails.
+func (h *integratedHandler) signZoneRRSet(z *zone.Zone, rrs []*protocol.ResourceRecord) *protocol.ResourceRecord {
+	if z == nil || len(rrs) == 0 {
+		return nil
+	}
+	h.zoneSignersMu.RLock()
+	signer, ok := h.zoneSigners[z.Origin]
+	h.zoneSignersMu.RUnlock()
+	if !ok || signer == nil {
+		return nil
+	}
+	zsks := signer.GetActiveZSKs()
+	if len(zsks) == 0 {
+		return nil
+	}
+	inception := time.Now().UTC()
+	expiration := inception.Add(30 * 24 * time.Hour)
+	rrsig, err := signer.SignRRSet(rrs, zsks[0],
+		dnssecSignatureUnixTime(inception), dnssecSignatureUnixTime(expiration))
+	if err != nil {
+		h.logger.Warnf("Failed to sign %s RRset in %s: %v", typeToString(rrs[0].Type), z.Origin, err)
+		return nil
+	}
+	return rrsig
+}
+
+// dsAnsweredByParent reports whether the zone at origin must pass a DS query
+// on to a parent zone that follows it in the longest-first match list (F383):
+// DS at a zone apex is parent-side data (RFC 4035 §3.1.4.1), so a co-hosted
+// child must not answer it with its own NODATA.
+func dsAnsweredByParent(qtype uint16, qname, origin string, parentFollows bool) bool {
+	return qtype == protocol.TypeDS && parentFollows && canonicalize(qname) == canonicalize(origin)
 }
 
 // buildNXDOMAINResponse returns an authoritative NXDOMAIN with the zone's
@@ -335,7 +498,7 @@ func (h *integratedHandler) addSOAAuthority(resp *protocol.Message, z *zone.Zone
 // the target, returning a complete DNS response with both DNAME and CNAME
 // records plus the resolved target answers.
 // Per RFC 6672, a DNAME at a superdomain synthesizes a CNAME for subdomains.
-func (h *integratedHandler) handleDNAMERecord(w server.ResponseWriter, r *protocol.Message, q *protocol.Question, qname string, dnameRecord zone.Record, synthCNAMETarget string) {
+func (h *integratedHandler) handleDNAMERecord(z *zone.Zone, w server.ResponseWriter, r *protocol.Message, q *protocol.Question, qname string, dnameRecord zone.Record, synthCNAMETarget string, wantsDNSSEC bool) {
 	qtype := q.QType
 
 	// Build the DNAME resource record
@@ -376,26 +539,36 @@ func (h *integratedHandler) handleDNAMERecord(w server.ResponseWriter, r *protoc
 		Data:  &protocol.RDataCNAME{CName: synthCNAMETargetParsed},
 	}
 
-	// Resolve the synthesized CNAME target
-	targetAnswers := h.resolveCNAMETarget(w, r, q, synthCNAMETarget, qtype)
+	// Resolve the synthesized CNAME target. F517/F518: by its own zone (z
+	// first: it may be a view zone), signed, with a denial proof when negative.
+	tgt := h.resolveChainTarget(w, r, map[string]*zone.Zone{z.Origin: z}, synthCNAMETarget, qtype, wantsDNSSEC)
 
 	// Build the response
 	resp := &protocol.Message{
 		Header: protocol.Header{
 			ID:    r.Header.ID,
-			Flags: protocol.NewResponseFlags(protocol.RcodeSuccess),
+			Flags: protocol.NewResponseFlags(tgt.rcode),
 		},
 		Questions: r.Questions,
 	}
 	resp.Header.Flags.AA = true
 	resp.AddAnswer(dnameRR)
+	// F382: the DNAME is authoritative zone data and must be signed for a DO=1
+	// client (RFC 6672 §5.3.1); only the synthesized CNAME goes out unsigned —
+	// a validator re-derives it from the signed DNAME.
+	if wantsDNSSEC {
+		if rrsig := h.signZoneRRSet(z, []*protocol.ResourceRecord{dnameRR}); rrsig != nil {
+			resp.AddAnswer(rrsig)
+		}
+	}
 	resp.AddAnswer(cnameRR)
-	for _, rr := range targetAnswers {
+	for _, rr := range tgt.answers {
 		resp.AddAnswer(rr)
 	}
+	resp.Authorities = append(resp.Authorities, tgt.authority...)
 
 	if h.metrics != nil {
-		h.metrics.RecordResponse(protocol.RcodeSuccess)
+		h.metrics.RecordResponse(tgt.rcode)
 	}
 	if handled, err := h.checkRPZResponseIPWithError(w, r, q, resp); handled || err != nil {
 		if err != nil {
@@ -410,6 +583,9 @@ func (h *integratedHandler) handleDNAMERecord(w server.ResponseWriter, r *protoc
 type cnameChainResult struct {
 	// cnameRecords are the collected CNAME records along the chain.
 	cnameRecords []zone.Record
+	// cnameZones[i] is the zone cnameRecords[i] was read from (F517: each
+	// link is signed by its own zone).
+	cnameZones []*zone.Zone
 	// targetName is the final name the chain resolves to.
 	targetName string
 	// loopDetected is true if a CNAME loop was detected.
@@ -424,7 +600,7 @@ type cnameChainResult struct {
 // The caller must NOT hold zonesMu; this method acquires the read lock
 // internally as needed.
 func (h *integratedHandler) chaseCNAMEInZones(name string) cnameChainResult {
-	return chaseCNAMEChain(name, func(current string) *zone.Record {
+	return chaseCNAMEChain(name, func(current string) (*zone.Record, *zone.Zone) {
 		h.zonesMu.RLock()
 		defer h.zonesMu.RUnlock()
 		return h.findCNAMEInZonesLocked(current)
@@ -436,13 +612,13 @@ func (h *integratedHandler) chaseCNAMEInZones(name string) cnameChainResult {
 // answered, never across the whole server, or one horizon's aliases would
 // resolve against another horizon's data.
 func chaseCNAMEInZoneSet(name string, zones map[string]*zone.Zone) cnameChainResult {
-	return chaseCNAMEChain(name, func(current string) *zone.Record {
+	return chaseCNAMEChain(name, func(current string) (*zone.Record, *zone.Zone) {
 		return findCNAMEIn(zones, current)
 	})
 }
 
 // chaseCNAMEChain walks a CNAME chain, asking lookup for the next link.
-func chaseCNAMEChain(name string, lookup func(string) *zone.Record) cnameChainResult {
+func chaseCNAMEChain(name string, lookup func(string) (*zone.Record, *zone.Zone)) cnameChainResult {
 	const maxCNAMEDepth = 16
 
 	visited := make(map[string]struct{}, maxCNAMEDepth)
@@ -457,7 +633,7 @@ func chaseCNAMEChain(name string, lookup func(string) *zone.Record) cnameChainRe
 		}
 		visited[current] = struct{}{}
 
-		cnameRec := lookup(current)
+		cnameRec, z := lookup(current)
 		if cnameRec == nil {
 			// No CNAME found; the chain terminates at current.
 			result.targetName = current
@@ -465,6 +641,7 @@ func chaseCNAMEChain(name string, lookup func(string) *zone.Record) cnameChainRe
 		}
 
 		result.cnameRecords = append(result.cnameRecords, *cnameRec)
+		result.cnameZones = append(result.cnameZones, z)
 		current = canonicalize(cnameRec.RData)
 	}
 
@@ -484,23 +661,32 @@ func chaseCNAMEChain(name string, lookup func(string) *zone.Record) cnameChainRe
 // can build wire answers and chase the chain with absolute names —
 // serving the raw relative forms produced answers like "al. CNAME www."
 // (owner and target both wrong, chain resolution broken).
-func (h *integratedHandler) findCNAMEInZonesLocked(name string) *zone.Record {
-	return findCNAMEIn(h.zones, name)
+func (h *integratedHandler) findCNAMEInZonesLocked(name string) (*zone.Record, *zone.Zone) {
+	return findCNAMEIn(h.localZonesLocked(), name)
 }
 
-// findCNAMEIn searches one set of zones for a CNAME at name.
-func findCNAMEIn(zones map[string]*zone.Zone, name string) *zone.Record {
+// findCNAMEIn searches one set of zones for a CNAME at name, and returns it
+// with the zone it came from. F519: only the zone authoritative for name
+// (longest origin) is consulted, and not for a name at or below one of its
+// zone cuts or below a DNAME — that data is the child's, or occluded (RFC
+// 6672 §2.4); any zone in map order used to answer.
+func findCNAMEIn(zones map[string]*zone.Zone, name string) (*zone.Record, *zone.Zone) {
 	cname := canonicalize(name)
-	for _, z := range zones {
-		recs := z.Lookup(cname, "CNAME")
-		if len(recs) > 0 {
-			rec := recs[0]
-			rec.Name = qualifyAgainstOrigin(rec.Name, z.Origin)
-			rec.RData = qualifyAgainstOrigin(rec.RData, z.Origin)
-			return &rec
-		}
+	z := authoritativeZoneIn(zones, cname)
+	if z == nil {
+		return nil, nil
 	}
-	return nil
+	if _, _, redirect, cut := nameAuthority(z, cname, protocol.TypeCNAME); redirect || cut {
+		return nil, nil
+	}
+	recs := z.Lookup(cname, "CNAME")
+	if len(recs) == 0 {
+		return nil, nil
+	}
+	rec := recs[0]
+	rec.Name = qualifyAgainstOrigin(rec.Name, z.Origin)
+	rec.RData = qualifyAgainstOrigin(rec.RData, z.Origin)
+	return &rec, z
 }
 
 // qualifyAgainstOrigin expands a BIND-relative name to its absolute form:
@@ -522,39 +708,15 @@ func qualifyAgainstOrigin(name, origin string) string {
 
 // resolveCNAMETarget attempts to resolve a CNAME target using local zones,
 // cache, and upstream. It returns answer records for the original query type
-// at the CNAME target, or nil if resolution failed.
+// at the CNAME target, or nil if resolution failed. Local zones answer
+// through resolveChainTarget (authoritative zone only, F519), unsigned.
 func (h *integratedHandler) resolveCNAMETarget(w server.ResponseWriter, r *protocol.Message, q *protocol.Question, targetName string, qtype uint16) []*protocol.ResourceRecord {
-	qtypeStr := typeToString(qtype)
+	return h.resolveChainTarget(w, r, nil, targetName, qtype, false).answers
+}
 
-	// 1. Try local zones first
-	h.zonesMu.RLock()
-	for _, z := range h.zones {
-		recs := z.Lookup(targetName, qtypeStr)
-		if len(recs) > 0 {
-			h.zonesMu.RUnlock()
-			var answers []*protocol.ResourceRecord
-			for _, rec := range recs {
-				data := parseRData(rec.Type, rec.RData)
-				if data == nil {
-					continue
-				}
-				targetNameParsed, err := protocol.ParseName(targetName)
-				if err != nil {
-					continue
-				}
-				answers = append(answers, &protocol.ResourceRecord{
-					Name:  targetNameParsed,
-					Type:  qtype,
-					Class: protocol.ClassIN,
-					TTL:   rec.TTL,
-					Data:  data,
-				})
-			}
-			return answers
-		}
-	}
-	h.zonesMu.RUnlock()
-
+// resolveExternalCNAMETarget resolves a chain target no local zone is
+// authoritative for, from the cache or upstream (recursion permitting).
+func (h *integratedHandler) resolveExternalCNAMETarget(w server.ResponseWriter, r *protocol.Message, targetName string, qtype uint16) []*protocol.ResourceRecord {
 	// Out-of-zone targets need the cache or upstream, i.e. recursion; a
 	// client without recursion rights gets only the in-zone part.
 	if !recursionAllowedFor(w) {
@@ -648,43 +810,9 @@ func (h *integratedHandler) resolveCNAMETarget(w server.ResponseWriter, r *proto
 }
 
 // buildCNAMEResponse constructs a complete DNS response with a CNAME chain
-// and the resolved target records.
+// and the resolved target records (unsigned; see buildChainResponse).
 func (h *integratedHandler) buildCNAMEResponse(query *protocol.Message, cnameRecords []zone.Record, targetAnswers []*protocol.ResourceRecord) *protocol.Message {
-	resp := &protocol.Message{
-		Header: protocol.Header{
-			ID:    query.Header.ID,
-			Flags: protocol.NewResponseFlags(protocol.RcodeSuccess),
-		},
-		Questions: query.Questions,
-	}
-	resp.Header.Flags.AA = true
-
-	// Add all CNAME records in the chain
-	for _, rec := range cnameRecords {
-		data := parseRData("CNAME", rec.RData)
-		if data == nil {
-			continue
-		}
-		nameParsed, err := protocol.ParseName(rec.Name)
-		if err != nil {
-			continue
-		}
-		rr := &protocol.ResourceRecord{
-			Name:  nameParsed,
-			Type:  protocol.TypeCNAME,
-			Class: protocol.ClassIN,
-			TTL:   rec.TTL,
-			Data:  data,
-		}
-		resp.AddAnswer(rr)
-	}
-
-	// Append the resolved target records
-	for _, rr := range targetAnswers {
-		resp.AddAnswer(rr)
-	}
-
-	return resp
+	return h.buildChainResponse(query, cnameChainResult{cnameRecords: cnameRecords}, cnameTarget{answers: targetAnswers}, false)
 }
 
 // serveZoneDNSKEY answers a DNSKEY query at the apex from the zone's signing
@@ -753,6 +881,38 @@ func (h *integratedHandler) serveZoneDNSKEY(w server.ResponseWriter, r *protocol
 			h.logger.Warnf("RPZ response write failed for DNSKEY %s: %v", z.Origin, err)
 		}
 		return true
+	}
+	reply(w, r, resp)
+	return true
+}
+
+// serveZoneNSEC3PARAM answers an apex NSEC3PARAM query for a signed zone
+// served with NSEC3 denial. Returns false when the zone is unsigned or uses
+// NSEC, so the caller falls through to NODATA.
+func (h *integratedHandler) serveZoneNSEC3PARAM(w server.ResponseWriter, r *protocol.Message, z *zone.Zone, wantsDNSSEC bool) bool {
+	h.zoneSignersMu.RLock()
+	signer := h.zoneSigners[z.Origin]
+	h.zoneSignersMu.RUnlock()
+	if signer == nil {
+		return false
+	}
+	rr := h.nsec3ParamRR(z)
+	if rr == nil {
+		return false
+	}
+	resp := &protocol.Message{
+		Header:    protocol.Header{ID: r.Header.ID, Flags: protocol.NewResponseFlags(protocol.RcodeSuccess)},
+		Questions: r.Questions,
+	}
+	resp.Header.Flags.AA = true
+	resp.AddAnswer(rr)
+	if wantsDNSSEC {
+		if rrsig := h.signZoneRRSet(z, []*protocol.ResourceRecord{rr}); rrsig != nil {
+			resp.AddAnswer(rrsig)
+		}
+	}
+	if h.metrics != nil {
+		h.metrics.RecordResponse(protocol.RcodeSuccess)
 	}
 	reply(w, r, resp)
 	return true

@@ -37,19 +37,7 @@ type CacheManager struct {
 
 // NewCacheManager creates a new cache manager with the given configuration.
 func NewCacheManager(cfg *config.Config, logger *util.Logger) *CacheManager {
-	cacheConfig := cache.Config{
-		Capacity:          cfg.Cache.Size,
-		MinTTL:            time.Duration(cfg.Cache.MinTTL) * time.Second,
-		MaxTTL:            time.Duration(cfg.Cache.MaxTTL) * time.Second,
-		DefaultTTL:        time.Duration(cfg.Cache.DefaultTTL) * time.Second,
-		NegativeTTL:       time.Duration(cfg.Cache.NegativeTTL) * time.Second,
-		PrefetchEnabled:   cfg.Cache.Prefetch,
-		PrefetchThreshold: time.Duration(cfg.Cache.PrefetchThreshold) * time.Second,
-		ServeStale:        cfg.Cache.ServeStale,
-		StaleGrace:        time.Duration(cfg.Cache.StaleGraceSecs) * time.Second,
-	}
-
-	dnsCache := cache.New(cacheConfig)
+	dnsCache := cache.New(cacheConfigFromConfig(cfg))
 	logger.Infof("Cache initialized with capacity %d", cfg.Cache.Size)
 
 	var memMonitor *memory.Monitor
@@ -76,6 +64,22 @@ func NewCacheManager(cfg *config.Config, logger *util.Logger) *CacheManager {
 	m.persistPath = filepath.Join(persistDir, cachePersistFile)
 
 	return m
+}
+
+// cacheConfigFromConfig maps the cache section to the cache's runtime
+// configuration; used at start and on every reload (F618).
+func cacheConfigFromConfig(cfg *config.Config) cache.Config {
+	return cache.Config{
+		Capacity:          cfg.Cache.Size,
+		MinTTL:            time.Duration(cfg.Cache.MinTTL) * time.Second,
+		MaxTTL:            time.Duration(cfg.Cache.MaxTTL) * time.Second,
+		DefaultTTL:        time.Duration(cfg.Cache.DefaultTTL) * time.Second,
+		NegativeTTL:       time.Duration(cfg.Cache.NegativeTTL) * time.Second,
+		PrefetchEnabled:   cfg.Cache.Prefetch,
+		PrefetchThreshold: time.Duration(cfg.Cache.PrefetchThreshold) * time.Second,
+		ServeStale:        cfg.Cache.ServeStale,
+		StaleGrace:        time.Duration(cfg.Cache.StaleGraceSecs) * time.Second,
+	}
 }
 
 // Stop stops the cache manager and its components.

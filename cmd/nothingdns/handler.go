@@ -26,6 +26,7 @@ import (
 	"github.com/nothingdns/nothingdns/internal/resolver"
 	"github.com/nothingdns/nothingdns/internal/rpz"
 	"github.com/nothingdns/nothingdns/internal/server"
+	"github.com/nothingdns/nothingdns/internal/transfer"
 	"github.com/nothingdns/nothingdns/internal/upstream"
 	"github.com/nothingdns/nothingdns/internal/util"
 	"github.com/nothingdns/nothingdns/internal/zone"
@@ -63,6 +64,7 @@ type integratedHandler struct {
 	validator       *dnssec.Validator
 	zoneSigners     map[string]*dnssec.Signer
 	zoneSignersMu   sync.RWMutex
+	nsec3Memo       nsec3HashMemo   // F488: NSEC3 owner hashes for online denial
 	zoneTree        *zone.RadixTree // Radix tree for O(log n) zone matching
 	cluster         *cluster.Cluster
 	splitHorizon    *filter.SplitHorizon
@@ -89,7 +91,19 @@ type integratedHandler struct {
 	pipeline *Pipeline // DNS query pipeline (lazy-initialized)
 
 	notifyOnce sync.Once
-	updateOnce sync.Once
+	// xferKeysMu makes a SIGHUP change of transfer.tsig_keys atomic for
+	// request handling (F583): AXFR/IXFR/UPDATE authentication runs under
+	// RLock against one consistent key set and DDNS handler, and the reload
+	// swaps them under Lock — in-flight requests finish with the previous
+	// set, later ones see only the new one.
+	xferKeysMu sync.RWMutex
+	// ddnsConsumerMu guards ddnsConsumer, the DDNS handler whose update
+	// events processUpdateEvents currently drains (one consumer per
+	// handler; a reload swaps the handler, F583).
+	ddnsConsumerMu sync.Mutex
+	ddnsConsumer   *transfer.DynamicDNSHandler
+	// ddnsRaftMu serializes DDNS updates replicated through Raft (F452).
+	ddnsRaftMu sync.Mutex
 }
 
 // ServeDNS implements the server.Handler interface.
@@ -685,7 +699,22 @@ func minimizeResponse(resp *protocol.Message) {
 			}
 			resp.Authorities = filtered
 		} else {
-			resp.Authorities = nil
+			// F512: a wildcard-expanded positive answer carries the signed
+			// NSEC/NSEC3 proving no closer match (RFC 4035 §3.1.3.3).
+			var proof []*protocol.ResourceRecord
+			for _, rr := range resp.Authorities {
+				if rr == nil {
+					continue
+				}
+				covered := rr.Type
+				if sig, ok := rr.Data.(*protocol.RDataRRSIG); ok && rr.Type == protocol.TypeRRSIG {
+					covered = sig.TypeCovered
+				}
+				if covered == protocol.TypeNSEC || covered == protocol.TypeNSEC3 {
+					proof = append(proof, rr)
+				}
+			}
+			resp.Authorities = proof
 		}
 	} else {
 		// Non-authoritative: keep NS (referrals) and SOA (negative caching),
@@ -703,7 +732,10 @@ func minimizeResponse(resp *protocol.Message) {
 				if rr == nil {
 					continue
 				}
-				if rr.Type == protocol.TypeSOA || rr.Type == protocol.TypeNS || isDNSSECType(rr.Type) {
+				// F384: a signed referral's DS RRset rides with the NS RRset
+				// (RFC 4035 §3.1.4); dropping it leaves its RRSIG orphaned.
+				if rr.Type == protocol.TypeSOA || rr.Type == protocol.TypeNS || isDNSSECType(rr.Type) ||
+					(hasNS && rr.Type == protocol.TypeDS) {
 					filtered = append(filtered, rr)
 				}
 			}
@@ -877,6 +909,12 @@ func (h *integratedHandler) applyRPZRuleWithError(w server.ResponseWriter, r *pr
 		// Allow the query to proceed normally
 		return false, nil
 	case rpz.ActionTCPOnly:
+		// TC=1 only means something over UDP. Over a stream transport the
+		// client has already done what the policy asks; truncating again
+		// would make the name unresolvable, so the query proceeds normally.
+		if ci := w.ClientInfo(); ci != nil && ci.Protocol != "udp" {
+			return false, nil
+		}
 		// Set TC bit to force TCP retry
 		resp := r.Copy()
 		resp.Header.Flags.TC = true
@@ -1025,13 +1063,57 @@ func extractNSNames(resp *protocol.Message) []string {
 // RebuildZoneTree rebuilds the zone radix tree from all zone sources.
 // Call after adding or removing zones to maintain O(log n) zone lookup.
 func (h *integratedHandler) RebuildZoneTree() {
+	// F547: after the rebuild (and after zonesMu is released — deferred
+	// calls run last-in first-out), let the NOTIFY sender see every
+	// transferable zone's serial. It only schedules async sends.
+	var notifyZones map[string]*zone.Zone
+	defer func() {
+		if h.transfer.Notifier != nil {
+			h.transfer.Notifier.Observe(notifyZones)
+		}
+	}()
 	h.zonesMu.Lock()
 	defer h.zonesMu.Unlock()
 
+	// h.zones is also the AXFR/IXFR/NOTIFY/DDNS zones map. Every entry is a
+	// zone loaded into the zone manager (boot, SIGHUP); the manager is the
+	// source of truth once API/Raft mutations run. Drop entries the manager
+	// deleted and adopt objects it replaced (snapshot restore), so a deleted
+	// zone is neither served nor transferred, and AXFR hands out the same
+	// data queries see (F402, F403). Done in place: the transfer handlers
+	// share this map.
+	if h.zoneManager != nil {
+		covered := make(map[*zone.Zone]struct{}, len(h.zones))
+		for origin, z := range h.zones {
+			if cur, ok := h.zoneManager.Get(origin); !ok {
+				delete(h.zones, origin)
+			} else {
+				if cur != z {
+					h.zones[origin] = cur
+				}
+				covered[cur] = struct{}{}
+			}
+		}
+		// Adopt zones that exist only in the manager (created via the API or
+		// a Raft create_zone, installed by a snapshot, synced from KV), so
+		// they are transferable (AXFR/IXFR/XoT) under the same allow_list /
+		// TSIG / XoT ACL as config zones, and NOTIFY/DDNS see them (F449).
+		for origin, z := range h.zoneManager.List() {
+			if _, ok := covered[z]; !ok {
+				if h.zones == nil {
+					h.zones = make(map[string]*zone.Zone)
+				}
+				h.zones[origin] = z
+			}
+		}
+	}
+
 	// Merge all zone sources into one map for the radix tree
 	merged := make(map[string]*zone.Zone)
+	notifyZones = make(map[string]*zone.Zone, len(h.zones))
 	for k, v := range h.zones {
 		merged[k] = v
+		notifyZones[k] = v
 	}
 	if h.kvPersistence != nil {
 		for k, v := range h.kvPersistence.Manager().List() {
@@ -1051,7 +1133,7 @@ func (h *integratedHandler) RebuildZoneTree() {
 		h.zoneManager,
 		h.kvPersistence,
 		h.zoneTree,
-	)
+	).withSlaveZones(h.transfer.SlaveManager)
 }
 
 // ReloadViews reloads split-horizon view configuration and zone files.

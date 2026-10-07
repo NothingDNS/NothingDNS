@@ -139,6 +139,9 @@ func TestReloadPreservesUntrackedZones(t *testing.T) {
 	// An API-created zone: present in handler.zones but never in zoneFiles.
 	apiZone := zone.NewZone("api.example.")
 	h.zones["api.example."] = apiZone
+	// As in production (boot KV sync), the zone is also in the zone manager;
+	// RebuildZoneTree drops handler-map zones the manager no longer has (F402).
+	h.zoneManager.LoadZone(apiZone, "")
 
 	// A file-backed zone, so the reload has a real stale origin to prune.
 	if _, err := reloadConfiguredZoneFiles(

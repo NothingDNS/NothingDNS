@@ -72,6 +72,13 @@ type TransferComponents struct {
 	NotifyHandler *transfer.NOTIFYSlaveHandler
 	DDNSHandler   *transfer.DynamicDNSHandler
 	SlaveManager  *transfer.SlaveManager
+	Notifier      *zoneNotifier // outgoing NOTIFY; nil = disabled (F547)
+	// AXFRKeys / SlaveKeys are the AXFR/IXFR and slave TSIG key stores,
+	// re-synced by SIGHUP (F583/F584); nil = not reloadable (tests).
+	// DDNSHandler and the AXFR/IXFR key set are read and swapped under
+	// integratedHandler.xferKeysMu.
+	AXFRKeys  *managedKeyStore
+	SlaveKeys *managedKeyStore
 }
 
 // Observability groups monitoring and tracing dependencies.

@@ -5,6 +5,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"sync"
 	"time"
 
@@ -54,6 +55,7 @@ func NewClusterManager(cfg *config.Config, logger *util.Logger, dnsCache *cache.
 		SeedNodes:             cfg.Cluster.SeedNodes,
 		CacheSync:             cfg.Cluster.CacheSync,
 		HTTPAddr:              cfg.Server.HTTP.Bind,
+		DNSAddr:               clusterDNSAdvertiseAddr(cfg),
 		EncryptionKey:         cfg.Cluster.EncryptionKey,
 		SnapshotEncryptionKey: cfg.Cluster.SnapshotEncryptionKey,
 		AllowInsecureCluster:  cfg.Cluster.AllowInsecureCluster,
@@ -62,6 +64,12 @@ func NewClusterManager(cfg *config.Config, logger *util.Logger, dnsCache *cache.
 		DataDir:               cfg.Cluster.DataDir,
 		Peers:                 mapClusterPeers(cfg.Cluster.Peers),
 		RPCTLS:                rpcTLS,
+	}
+
+	if clusterConfig.DNSAddr == "" && clusterConfig.ConsensusMode == cluster.ConsensusRaft {
+		logger.Warnf("cluster: no DNS address to advertise (wildcard DNS bind and no cluster.dns_advertise_addr); while this node leads, followers answer forwarded RFC 2136 UPDATEs with SERVFAIL")
+	} else if clusterConfig.DNSAddr != "" {
+		logger.Infof("cluster: advertising DNS address %s", clusterConfig.DNSAddr)
 	}
 
 	mgr.Cluster, err = cluster.New(clusterConfig, logger, dnsCache)
@@ -84,6 +92,23 @@ func NewClusterManager(cfg *config.Config, logger *util.Logger, dnsCache *cache.
 	go mgr.metricsUpdater(metricsCollector, 30*time.Second)
 
 	return mgr, nil
+}
+
+// clusterDNSAdvertiseAddr is the DNS TCP host:port this node advertises to
+// the cluster (F562): cluster.dns_advertise_addr when set, else the first
+// concrete (non-wildcard) DNS TCP listen address, else "" (none).
+func clusterDNSAdvertiseAddr(cfg *config.Config) string {
+	if cfg.Cluster.DNSAdvertiseAddr != "" {
+		return cfg.Cluster.DNSAdvertiseAddr
+	}
+	for _, a := range dnsListenAddrs(cfg.Server.TCPBind, cfg.Server.Bind, cfg.Server.Port) {
+		host, port, err := net.SplitHostPort(a)
+		if err != nil || isWildcardHost(host) || port == "0" {
+			continue
+		}
+		return a
+	}
+	return ""
 }
 
 // mapClusterPeers converts config peer entries to cluster.PeerConfig.

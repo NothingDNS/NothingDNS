@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/config"
@@ -31,6 +32,10 @@ type servers struct {
 	tls      *server.TLSServer
 	doq      *quic.DoQServer
 	xot      *transfer.XoTServer
+	// Reloadable certificates of the DoT and DoQ listeners (F607/F608);
+	// reloadCertificates re-reads them on SIGHUP.
+	dotCerts *server.CertReloader
+	doqCerts *server.CertReloader
 }
 
 // startServers creates and starts the UDP, TCP, TLS (DoT), DoQ, and XoT
@@ -122,7 +127,7 @@ func startServers(cfg *config.Config, handler *integratedHandler, transferMgr *T
 
 	// XoT (RFC 9103)
 	if cfg.Server.XoT.Enabled {
-		if err := s.startXoT(cfg, handler.zones, transferMgr, logger); err != nil {
+		if err := s.startXoT(cfg, handler.zones, &handler.zonesMu, transferMgr, logger); err != nil {
 			return s, err
 		}
 	}
@@ -137,12 +142,13 @@ func (s *servers) startTLS(cfg *config.Config, handler *integratedHandler, dsoAd
 		tlsAddr = fmt.Sprintf(":%d", server.DefaultTLSPort)
 	}
 
-	tlsConfig, err := buildTLSConfig(cfg.Server.TLS.CertFile, cfg.Server.TLS.KeyFile)
+	certs, err := server.NewCertReloader(cfg.Server.TLS.CertFile, cfg.Server.TLS.KeyFile)
 	if err != nil {
 		return fmt.Errorf("loading TLS certificate: %w", err)
 	}
+	s.dotCerts = certs
 
-	s.tls = server.NewTLSServer(tlsAddr, handler, tlsConfig)
+	s.tls = server.NewTLSServer(tlsAddr, handler, dotTLSConfig(certs))
 	if dsoAdapter != nil {
 		s.tls.SetDSOHandler(dsoAdapter)
 	}
@@ -176,15 +182,18 @@ func (s *servers) startDoQ(cfg *config.Config, handler *integratedHandler, logge
 		return fmt.Errorf("QUIC enabled but cert_file/key_file not configured")
 	}
 
-	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	certs, err := server.NewCertReloader(certFile, keyFile)
 	if err != nil {
 		return fmt.Errorf("loading QUIC certificate: %w", err)
 	}
+	s.doqCerts = certs
 
+	// Certificates stays empty so GetCertificate serves every handshake,
+	// with or without SNI, from the reloadable holder (F608).
 	quicTLSConfig := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		NextProtos:   []string{"doq"},
-		MinVersion:   tls.VersionTLS13,
+		GetCertificate: certs.GetCertificate,
+		NextProtos:     []string{"doq"},
+		MinVersion:     tls.VersionTLS13,
 		CurvePreferences: []tls.CurveID{
 			tls.CurveP256,
 			tls.X25519,
@@ -205,8 +214,11 @@ func (s *servers) startDoQ(cfg *config.Config, handler *integratedHandler, logge
 	return nil
 }
 
-// startXoT starts the DNS Zone Transfer over TLS server (RFC 9103).
-func (s *servers) startXoT(cfg *config.Config, zones map[string]*zone.Zone, transferMgr *TransferManager, logger *util.Logger) error {
+// startXoT starts the DNS Zone Transfer over TLS server (RFC 9103). zones is
+// the handler's shared zones map and zonesMu the lock its writers hold
+// (handler.zonesMu); the XoT server must read the map under that same lock
+// (F448).
+func (s *servers) startXoT(cfg *config.Config, zones map[string]*zone.Zone, zonesMu *sync.RWMutex, transferMgr *TransferManager, logger *util.Logger) error {
 	xotAddr := cfg.Server.XoT.Bind
 	if xotAddr == "" {
 		xotAddr = fmt.Sprintf(":%d", 853)
@@ -235,6 +247,7 @@ func (s *servers) startXoT(cfg *config.Config, zones map[string]*zone.Zone, tran
 	if err != nil {
 		return fmt.Errorf("creating XoT server: %w", err)
 	}
+	s.xot.SetZonesMu(zonesMu)
 	s.xot.SetJournalStore(transferMgr.Result().JournalStore)
 
 	if err := s.xot.Serve(xotAddr); err != nil {
@@ -356,29 +369,62 @@ func isWildcardHost(host string) bool {
 	return ip != nil && ip.IsUnspecified()
 }
 
-// buildTLSConfig creates a tls.Config for DoT with dynamic certificate
-// reloading (supports Let's Encrypt auto-renewal without restart).
+// buildTLSConfig loads certFile/keyFile into a reloadable holder and
+// returns the DoT tls.Config serving it.
 func buildTLSConfig(certFile, keyFile string) (*tls.Config, error) {
-	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	certs, err := server.NewCertReloader(certFile, keyFile)
 	if err != nil {
 		return nil, err
 	}
+	return dotTLSConfig(certs), nil
+}
+
+// dotTLSConfig creates the DoT tls.Config. Certificates is left empty so
+// crypto/tls asks GetCertificate on every handshake, with or without SNI
+// (F607): the certificate comes from the in-memory holder, which SIGHUP
+// reloads (reloadCertificates). Previously the pair was re-read from disk
+// on each SNI handshake while clients without SNI kept the startup
+// certificate until restart.
+func dotTLSConfig(certs *server.CertReloader) *tls.Config {
 	return &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS13,
+		MinVersion: tls.VersionTLS13,
 		CurvePreferences: []tls.CurveID{
 			tls.CurveP256,
 			tls.X25519,
 		},
-		// Dynamic certificate loading — reloads on each handshake.
-		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-			updatedCert, err := tls.LoadX509KeyPair(certFile, keyFile)
-			if err != nil {
-				return nil, err
+		GetCertificate: certs.GetCertificate,
+	}
+}
+
+// reloadCertificates re-reads the certificate files of every running TLS
+// DNS listener — DoT, DoQ and XoT (whose CA file is re-read too) — for a
+// SIGHUP/API reload (F611). A listener whose files fail to load keeps
+// serving its previous certificate; the failure is logged. Certificate and
+// CA file paths are fixed at startup.
+func (s *servers) reloadCertificates(logger *util.Logger) {
+	if s == nil {
+		return
+	}
+	reload := func(name string, fn func() error) {
+		if err := fn(); err != nil {
+			if logger != nil {
+				logger.Errorf("%s: certificate reload failed, keeping the previous certificate: %v", name, err)
 			}
-			return &updatedCert, nil
-		},
-	}, nil
+			return
+		}
+		if logger != nil {
+			logger.Infof("%s: TLS certificate reloaded", name)
+		}
+	}
+	if s.dotCerts != nil {
+		reload("DoT", s.dotCerts.Reload)
+	}
+	if s.doqCerts != nil {
+		reload("DoQ", s.doqCerts.Reload)
+	}
+	if s.xot != nil {
+		reload("XoT", s.xot.ReloadTLS)
+	}
 }
 
 // startStatsCollector launches a background goroutine that periodically

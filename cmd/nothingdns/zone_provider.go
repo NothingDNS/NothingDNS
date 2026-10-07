@@ -7,6 +7,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/nothingdns/nothingdns/internal/transfer"
 	"github.com/nothingdns/nothingdns/internal/zone"
 )
 
@@ -67,6 +68,16 @@ func NewMultiZoneProvider(
 	}
 
 	return &MultiZoneProvider{providers: providers}
+}
+
+// withSlaveZones appends the transferred slave zones of sm (nil: no-op) as
+// the lowest-priority source. Slave zones live only in the SlaveManager, so
+// without this a secondary never answered for the zones it replicates (F397).
+func (m *MultiZoneProvider) withSlaveZones(sm *transfer.SlaveManager) *MultiZoneProvider {
+	if sm != nil {
+		m.providers = append(m.providers, &slaveZoneProvider{sm: sm})
+	}
+	return m
 }
 
 // FindZones queries all providers and merges results.
@@ -220,6 +231,66 @@ func (p *radixZoneProvider) GetZone(origin string) (*zone.Zone, bool) {
 		return nil, false
 	}
 	return zone, canonicalize(zone.Origin) == canonicalize(origin)
+}
+
+// slaveZoneProvider serves the zones a SlaveManager has transferred. It reads
+// the live SlaveZone data on every call, so a completed transfer (which
+// replaces the zone object) is visible without a rebuild. A slave zone that
+// has not completed a transfer yet (no SOA) is not served, and neither is one
+// whose SOA EXPIRE interval elapsed without a successful refresh (RFC 1035
+// §4.3.5; F447).
+type slaveZoneProvider struct {
+	sm *transfer.SlaveManager
+}
+
+func (p *slaveZoneProvider) ListZones() map[string]*zone.Zone {
+	result := make(map[string]*zone.Zone)
+	for name, sz := range p.sm.GetAllSlaveZones() {
+		if z := sz.GetZone(); z != nil && sz.IsServable() {
+			result[name] = z
+		}
+	}
+	return result
+}
+
+func (p *slaveZoneProvider) FindZones(qname string) []ZoneMatch {
+	var matches []ZoneMatch
+	for name, z := range p.ListZones() {
+		if isSubdomain(qname, name) {
+			matches = append(matches, ZoneMatch{name, z})
+		}
+	}
+	return matches
+}
+
+func (p *slaveZoneProvider) GetZone(origin string) (*zone.Zone, bool) {
+	sz := p.sm.GetSlaveZone(origin)
+	if sz == nil {
+		return nil, false
+	}
+	z := sz.GetZone()
+	if z == nil || !sz.IsServable() {
+		return nil, false
+	}
+	return z, true
+}
+
+// localZonesLocked returns the static zones plus the transferred slave zones
+// (a static zone wins on the same origin), for the CNAME paths that scan
+// whole zone sets rather than routing through the zone provider (F398).
+// The caller must hold zonesMu (at least RLock).
+func (h *integratedHandler) localZonesLocked() map[string]*zone.Zone {
+	if h.transfer.SlaveManager == nil {
+		return h.zones
+	}
+	slaves := (&slaveZoneProvider{sm: h.transfer.SlaveManager}).ListZones()
+	if len(slaves) == 0 {
+		return h.zones
+	}
+	for origin, z := range h.zones {
+		slaves[origin] = z
+	}
+	return slaves
 }
 
 // sortZonesByLength sorts zones by origin length descending (most specific first).

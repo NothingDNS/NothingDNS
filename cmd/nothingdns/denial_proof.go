@@ -80,56 +80,12 @@ func (h *integratedHandler) addDenialProof(resp *protocol.Message, z *zone.Zone,
 	// The SOA proves the negative TTL and must itself be signed.
 	sign(soaRRSet(resp))
 
-	for _, data := range h.denialRecords(z, qname, kind) {
-		rr := nsecRecord(data, z.GetDefaultTTL())
-		if rr == nil {
-			continue
-		}
+	// F488/F489: NSEC or NSEC3 (per dnssec.signing.nsec3) built from the
+	// zone's authoritative nodes only — see denial_chain.go.
+	for _, rr := range h.denialRRs(z, qname, kind) {
 		resp.Authorities = append(resp.Authorities, rr)
 		sign([]*protocol.ResourceRecord{rr})
 	}
-}
-
-// denialRecords picks the NSEC records that prove the denial, de-duplicated:
-// one NSEC frequently covers both the queried name and the wildcard, and
-// repeating it would just inflate the response.
-func (h *integratedHandler) denialRecords(z *zone.Zone, qname string, kind denialKind) []zone.NSECRecordData {
-	if kind == denialNoData {
-		if data, ok := z.NSECForName(qname); ok {
-			return []zone.NSECRecordData{data}
-		}
-		// RFC 4035 §3.1.3.4 (Wildcard No Data): a wildcard match with no records
-		// of the requested type. The queried name is not a zone node — only the
-		// wildcard owner is — so NSECForName(qname) above cannot find a proof and
-		// the type-absence proof must come from the wildcard itself. Without this
-		// the answer carried a signed SOA and no NSEC, and a validating resolver
-		// marked the NODATA Bogus.
-		if encloser, ok := z.ClosestEncloser(qname); ok {
-			if data, ok := z.NSECForName("*." + encloser); ok {
-				return []zone.NSECRecordData{data}
-			}
-		}
-		return nil
-	}
-
-	var out []zone.NSECRecordData
-	seen := make(map[string]struct{}, 2)
-	add := func(data zone.NSECRecordData, ok bool) {
-		if !ok {
-			return
-		}
-		if _, dup := seen[data.Owner]; dup {
-			return
-		}
-		seen[data.Owner] = struct{}{}
-		out = append(out, data)
-	}
-
-	add(z.NSECCovering(qname))
-	if encloser, ok := z.ClosestEncloser(qname); ok {
-		add(z.NSECCovering("*." + encloser))
-	}
-	return out
 }
 
 // soaRRSet collects the SOA records already placed in the authority section.

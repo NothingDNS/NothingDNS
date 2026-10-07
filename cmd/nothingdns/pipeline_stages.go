@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/cache"
+	"github.com/nothingdns/nothingdns/internal/config"
 	"github.com/nothingdns/nothingdns/internal/idna"
 	"github.com/nothingdns/nothingdns/internal/protocol"
 	"github.com/nothingdns/nothingdns/internal/server"
@@ -54,9 +55,14 @@ func validationStage(h *integratedHandler) Stage {
 
 		h.logger.Debugf("[%s] Query: %s %s", q.reqID, q.qname, typeToString(q.qtype))
 
-		// RFC 5891: Validate IDNA (internationalized domain names)
+		// RFC 5891: Validate IDNA (internationalized domain names) with the
+		// configured idna.* options (F621).
 		if h.idnaEnabled {
-			if _, err := idna.ToASCII(q.qname); err != nil {
+			profile := idna.Profile{UseSTD3Rules: true, AllowUnassigned: true}
+			if h.config != nil {
+				profile = idnaProfileFromConfig(h.config.IDNA)
+			}
+			if _, err := profile.ToASCII(q.qname); err != nil {
 				h.logger.Debugf("IDNA validation failed for %s: %v", q.qname, err)
 				sendErrorWithEDE(q.currentWriter, q.msg, protocol.RcodeFormatError, protocol.EDEProhibited, "invalid IDNA")
 				return true, nil
@@ -97,7 +103,10 @@ func metricsStage(h *integratedHandler) Stage {
 func aclStage(h *integratedHandler) Stage {
 	return func(ctx context.Context, q *query, w server.ResponseWriter) (bool, error) {
 		clientIP := w.ClientInfo().IP()
-		if h.security.ACLChecker != nil && clientIP != nil {
+		// A nil (unknown) client IP is still evaluated: it matches no rule,
+		// so it is refused once any rule exists (fail closed, F427). Skipping
+		// the check let transports without a client address bypass the ACL.
+		if h.security.ACLChecker != nil {
 			allowed, redirect := h.security.ACLChecker.IsAllowed(clientIP, q.qtype)
 			if !allowed {
 				if redirect != "" {
@@ -343,7 +352,10 @@ func splitHorizonStage(h *integratedHandler) Stage {
 			return false, nil
 		}
 		sortZonesByLength(viewMatches)
-		for _, m := range viewMatches {
+		for i, m := range viewMatches {
+			if dsAnsweredByParent(q.qtype, q.qname, m.Origin, i < len(viewMatches)-1) {
+				continue // F383
+			}
 			h.logger.Debugf("View %s: checking zone %s for %s", view.Name, m.Origin, q.qname)
 			if h.handleAuthoritative(m.Zone, w, q.msg, q.q, q.qname) {
 				return true, nil
@@ -379,55 +391,24 @@ func (h *integratedHandler) answerViewCNAME(q *query, w server.ResponseWriter, v
 		return false, nil
 	}
 
-	// Resolve the chain's endpoint inside the view first. Anything the view
-	// does not hold falls back to the ordinary path (global zones, cache,
+	// Resolve the chain's endpoint inside the view first. A name no view
+	// zone covers falls back to the ordinary path (global zones, cache,
 	// upstream) — the same answer any client would get, so nothing private
-	// to this view leaks and nothing public is hidden from it.
-	targetAnswers := lookupInZoneSet(vzMap, result.targetName, q.qtype)
-	if len(targetAnswers) == 0 {
-		targetAnswers = h.resolveCNAMETarget(w, q.msg, q.q, result.targetName, q.qtype)
-	}
-
-	resp := h.buildCNAMEResponse(q.msg, result.cnameRecords, targetAnswers)
+	// to this view leaks and nothing public is hidden from it. F517/F518:
+	// each link is signed by its own zone for DO=1, and a negative endpoint
+	// carries its zone's SOA and denial proof.
+	sign := hasDOBit(q.msg)
+	tgt := h.resolveChainTarget(w, q.msg, vzMap, result.targetName, q.qtype, sign)
+	resp := h.buildChainResponse(q.msg, result, tgt, sign)
 	handled, err := h.applyRPZResponsePolicyWithError(w, q.msg, q.q, resp, result.targetName)
 	if handled || err != nil {
 		return handled, err
 	}
 	if h.metrics != nil {
-		h.metrics.RecordResponse(protocol.RcodeSuccess)
+		h.metrics.RecordResponse(resp.Header.Flags.RCODE)
 	}
 	reply(q.currentWriter, q.msg, resp)
 	return true, nil
-}
-
-// lookupInZoneSet returns answer records of qtype for name from one set of
-// zones.
-func lookupInZoneSet(zones map[string]*zone.Zone, name string, qtype uint16) []*protocol.ResourceRecord {
-	qtypeStr := typeToString(qtype)
-	parsed, err := protocol.ParseName(name)
-	if err != nil {
-		return nil
-	}
-	var answers []*protocol.ResourceRecord
-	for _, z := range zones {
-		for _, rec := range z.Lookup(name, qtypeStr) {
-			data := parseRData(rec.Type, rec.RData)
-			if data == nil {
-				continue
-			}
-			answers = append(answers, &protocol.ResourceRecord{
-				Name:  parsed,
-				Type:  qtype,
-				Class: protocol.ClassIN,
-				TTL:   rec.TTL,
-				Data:  data,
-			})
-		}
-		if len(answers) > 0 {
-			return answers
-		}
-	}
-	return nil
 }
 
 // authoritativeStage checks local authoritative zones for a direct answer.
@@ -448,7 +429,10 @@ func authoritativeStage(h *integratedHandler) Stage {
 		}
 		h.zonesMu.RUnlock()
 
-		for _, m := range matchedZones {
+		for i, m := range matchedZones {
+			if dsAnsweredByParent(q.qtype, q.qname, m.name, i < len(matchedZones)-1) {
+				continue // F383
+			}
 			h.logger.Debugf("Checking zone %s for %s", m.name, q.qname)
 			if h.handleAuthoritative(m.z, w, q.msg, q.q, q.qname) {
 				return true, nil
@@ -485,8 +469,11 @@ func cnameStage(h *integratedHandler) Stage {
 			return true, nil
 		}
 		if len(result.cnameRecords) > 0 {
-			targetAnswers := h.resolveCNAMETarget(w, q.msg, q.q, result.targetName, q.qtype)
-			resp := h.buildCNAMEResponse(q.msg, result.cnameRecords, targetAnswers)
+			// F517/F518: sign each link with its own zone for DO=1; a
+			// negative endpoint carries its zone's SOA and denial proof.
+			sign := hasDOBit(q.msg)
+			tgt := h.resolveChainTarget(w, q.msg, nil, result.targetName, q.qtype, sign)
+			resp := h.buildChainResponse(q.msg, result, tgt, sign)
 
 			handled, err := h.applyRPZResponsePolicyWithError(w, q.msg, q.q, resp, result.targetName)
 			if handled || err != nil {
@@ -494,7 +481,7 @@ func cnameStage(h *integratedHandler) Stage {
 			}
 
 			if h.metrics != nil {
-				h.metrics.RecordResponse(protocol.RcodeSuccess)
+				h.metrics.RecordResponse(resp.Header.Flags.RCODE)
 			}
 			reply(q.currentWriter, q.msg, resp)
 			return true, nil
@@ -518,6 +505,28 @@ func authoritativeOnlyStage(h *integratedHandler) Stage {
 	}
 }
 
+// maxIterativeResolveTimeout bounds the whole-resolution budget of one
+// iterative lookup, whatever resolution.timeout says (F625).
+const maxIterativeResolveTimeout = 30 * time.Second
+
+// iterativeResolveTimeout is the budget for one iterative resolution:
+// resolution.timeout (5s when unset or unparsable, at most
+// maxIterativeResolveTimeout). It is read from cfg per query, so a reload
+// applies it (F625; previously a hard-coded 5s capped every resolution).
+func iterativeResolveTimeout(cfg *config.Config) time.Duration {
+	if cfg == nil {
+		return 5 * time.Second
+	}
+	d := parseDurationOrDefault(cfg.Resolution.Timeout, 5*time.Second)
+	if d <= 0 {
+		d = 5 * time.Second
+	}
+	if d > maxIterativeResolveTimeout {
+		d = maxIterativeResolveTimeout
+	}
+	return d
+}
+
 // resolverStage uses iterative recursive resolver if enabled.
 func resolverStage(h *integratedHandler) Stage {
 	return func(ctx context.Context, q *query, w server.ResponseWriter) (bool, error) {
@@ -527,7 +536,7 @@ func resolverStage(h *integratedHandler) Stage {
 
 		h.logger.Debugf("Resolving %s iteratively", q.qname)
 		resp, err := func() (*protocol.Message, error) {
-			resolveCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			resolveCtx, cancel := context.WithTimeout(ctx, iterativeResolveTimeout(h.config))
 			defer cancel()
 			return h.resolver.Resolve(resolveCtx, q.qname, q.qtype)
 		}()
@@ -679,6 +688,14 @@ func upstreamStage(h *integratedHandler) Stage {
 			return true, nil
 		}
 		q.msg.Header.ID = origID
+
+		// AD is this server's own claim (RFC 4035 §3.2.3): with a validator
+		// configured, only its Secure verdict may set it. The upstream's AD
+		// bit would otherwise reach the client — and the cache — even when
+		// the local validator found the answer Insecure.
+		if h.validator != nil {
+			resp.Header.Flags.AD = false
+		}
 
 		handled, dnssecValidated := h.validateDNSSECResponse(ctx, q.currentWriter, q.msg, q.qname, resp)
 		if handled {
@@ -989,7 +1006,7 @@ func transferStage(h *integratedHandler) Stage {
 			return true, nil
 		}
 		if transfer.IsUpdateRequest(q.msg) {
-			if h.transfer.DDNSHandler == nil {
+			if h.currentDDNSHandler() == nil {
 				sendError(q.currentWriter, q.msg, protocol.RcodeRefused)
 				return true, nil
 			}

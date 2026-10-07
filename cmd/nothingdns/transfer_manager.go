@@ -4,7 +4,9 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,6 +24,13 @@ type TransferManagerResult struct {
 	DDNSHandler   *transfer.DynamicDNSHandler
 	SlaveManager  *transfer.SlaveManager
 	JournalStore  *transfer.KVJournalStore
+	// AXFRKeys is the AXFR/IXFR server's TSIG key store and SlaveKeys the
+	// slave manager's; SIGHUP re-syncs both in place (F583/F584).
+	AXFRKeys  *managedKeyStore
+	SlaveKeys *managedKeyStore
+	// Notifier sends NOTIFY to transfer.also_notify on serial changes;
+	// nil when no targets are configured (F547).
+	Notifier *zoneNotifier
 }
 
 // TransferManager manages zone transfers and slave zone handling.
@@ -42,6 +51,18 @@ func NewTransferManager(cfg *config.Config, zones map[string]*zone.Zone, zonesMu
 	if cfg.Transfer.RequireTSIG {
 		axfrOptions = append(axfrOptions, transfer.WithRequireTSIG())
 	}
+	// Keys secondaries sign AXFR/IXFR requests with. Without them a
+	// require_tsig server (mandatory in production with an allow_list)
+	// refused every transfer: the AXFR server's key store was always empty.
+	// The store always exists (an empty store is what the server uses
+	// without one) so a SIGHUP can add, rotate or remove keys (F583).
+	xferKeys, err := transferKeysFromConfig(cfg.Transfer)
+	if err != nil {
+		return nil, err
+	}
+	mgr.result.AXFRKeys = newManagedKeyStore()
+	mgr.result.AXFRKeys.sync(xferKeys)
+	axfrOptions = append(axfrOptions, transfer.WithKeyStore(mgr.result.AXFRKeys.store))
 
 	// Initialize AXFR server for zone transfers
 	mgr.result.AXFRServer = transfer.NewAXFRServer(zones, axfrOptions...)
@@ -88,13 +109,38 @@ func NewTransferManager(cfg *config.Config, zones map[string]*zone.Zone, zonesMu
 	}
 	logger.Infof("NOTIFY handler initialized for %d zones", len(zones))
 
-	// Initialize Dynamic DNS handler
-	mgr.result.DDNSHandler = transfer.NewDynamicDNSHandler(zones)
-	logger.Infof("Dynamic DNS handler initialized for %d zones", len(zones))
+	// Initialize Dynamic DNS handler. UPDATE authorization (F452): an
+	// UPDATE must be TSIG-signed with a transfer.tsig_keys key (from an
+	// address in its allowed_cidrs, if set) whose allow_update names the
+	// zone. Every key is known (so a valid signature from a key without a
+	// grant is answered REFUSED, signed), but only allow_update grants
+	// update rights; with no keys every UPDATE is refused.
+	var grants int
+	mgr.result.DDNSHandler, grants = newDDNSHandlerFromConfig(zones, cfg.Transfer, xferKeys)
+	logger.Infof("Dynamic DNS handler initialized for %d zones (%d key/zone update grants)", len(zones), grants)
 
-	// Initialize Slave Manager for automatic zone transfers
-	keyStore := transfer.NewKeyStore()
-	mgr.result.SlaveManager = transfer.NewSlaveManager(keyStore)
+	// Outgoing NOTIFY (RFC 1996) to transfer.also_notify, optionally signed
+	// with the tsig_keys entry named by transfer.notify_key (F547). The
+	// notifier always exists so a SIGHUP can add, change or remove targets
+	// (F567); with no targets it sends nothing.
+	notifySend, err := notifySendFromConfig(cfg.Transfer)
+	if err != nil {
+		return nil, err
+	}
+	mgr.result.Notifier = newZoneNotifier(cfg.Transfer.AlsoNotify, notifySend, logger)
+	if len(cfg.Transfer.AlsoNotify) > 0 {
+		logger.Infof("NOTIFY enabled for %d also_notify target(s)", len(cfg.Transfer.AlsoNotify))
+	}
+
+	// Initialize Slave Manager for automatic zone transfers. Each slave
+	// zone's TSIG key is loaded into the slave key store first: AddSlaveZone
+	// and the transfer paths look the key up by tsig_key_name; previously the
+	// store stayed empty, so every keyed slave transfer failed with "TSIG key
+	// not found" before contacting the master. A SIGHUP re-syncs the store
+	// from the new slave_zones secrets (F584).
+	mgr.result.SlaveKeys = newManagedKeyStore()
+	mgr.result.SlaveKeys.sync(slaveKeysFromConfig(cfg.SlaveZones, logger))
+	mgr.result.SlaveManager = transfer.NewSlaveManager(mgr.result.SlaveKeys.store)
 	logger.Info("Slave manager initialized for automatic zone transfers")
 
 	// Configure slave zones from config if available
@@ -140,6 +186,7 @@ func (m *TransferManager) SetZonesMu(zonesMu *sync.RWMutex) {
 
 // Stop stops the transfer manager and its components.
 func (m *TransferManager) Stop() {
+	m.result.Notifier.Stop()
 	if m.result.SlaveManager != nil {
 		m.result.SlaveManager.Stop()
 	}
@@ -154,4 +201,131 @@ func (m *TransferManager) Stop() {
 // Result returns the transfer manager results.
 func (m *TransferManager) Result() *TransferManagerResult {
 	return &m.result
+}
+
+// notifySendFromConfig builds the NOTIFY send function for a transfer
+// section: signed with the tsig_keys entry named by notify_key, if any
+// (F547; also used by SIGHUP reload, F567).
+func notifySendFromConfig(tc config.TransferConfig) (notifySendFunc, error) {
+	if tc.NotifyKey == "" {
+		return newTransferNOTIFYSend(nil), nil
+	}
+	want := transfer.CanonicalTSIGKeyName(tc.NotifyKey)
+	for _, kc := range tc.TSIGKeys {
+		if transfer.CanonicalTSIGKeyName(kc.Name) != want {
+			continue
+		}
+		key, err := transfer.ParseTSIGKey(kc.Name, strings.ToLower(strings.TrimSuffix(kc.Algorithm, ".")), kc.Secret)
+		if err != nil {
+			return nil, fmt.Errorf("transfer.tsig_keys %q: %w", kc.Name, err)
+		}
+		return newTransferNOTIFYSend(key), nil
+	}
+	return nil, fmt.Errorf("transfer.notify_key %q does not name a transfer.tsig_keys entry", tc.NotifyKey)
+}
+
+// transferKeysFromConfig parses transfer.tsig_keys (with their
+// allowed_cidrs). Used at startup and by SIGHUP reload (F583).
+func transferKeysFromConfig(tc config.TransferConfig) ([]*transfer.TSIGKey, error) {
+	keys := make([]*transfer.TSIGKey, 0, len(tc.TSIGKeys))
+	for _, kc := range tc.TSIGKeys {
+		key, err := transfer.ParseTSIGKey(kc.Name, strings.ToLower(strings.TrimSuffix(kc.Algorithm, ".")), kc.Secret)
+		if err != nil {
+			return nil, fmt.Errorf("transfer.tsig_keys %q: %w", kc.Name, err)
+		}
+		key.AllowedCIDRs = kc.AllowedCIDRs
+		keys = append(keys, key)
+	}
+	return keys, nil
+}
+
+// newDDNSHandlerFromConfig builds the Dynamic DNS handler for zones. UPDATE
+// authorization (F452): an UPDATE must be TSIG-signed with a
+// transfer.tsig_keys key (from an address in its allowed_cidrs, if set)
+// whose allow_update names the zone. Every key is known (so a valid
+// signature from a key without a grant is answered REFUSED, signed), but
+// only allow_update grants update rights; with no keys every UPDATE is
+// refused. The handler cannot revoke a grant, so SIGHUP builds a new one
+// (F583). It returns the number of key/zone grants.
+func newDDNSHandlerFromConfig(zones map[string]*zone.Zone, tc config.TransferConfig, keys []*transfer.TSIGKey) (*transfer.DynamicDNSHandler, int) {
+	h := transfer.NewDynamicDNSHandler(zones)
+	store := transfer.NewKeyStore()
+	for _, k := range keys {
+		store.AddKey(k)
+	}
+	grants := 0
+	for _, kc := range tc.TSIGKeys {
+		for _, zoneName := range kc.AllowUpdate {
+			h.AllowKeyUpdate(kc.Name, zoneName)
+			grants++
+		}
+	}
+	h.SetKeyStore(store)
+	return h, grants
+}
+
+// slaveKeysFromConfig decodes each keyed slave zone's tsig_key_name /
+// tsig_secret (hmac-sha256). An invalid secret is skipped with a warning; a
+// name configured with different secrets keeps the first.
+func slaveKeysFromConfig(slaves []config.SlaveZoneConfig, logger *util.Logger) []*transfer.TSIGKey {
+	var keys []*transfer.TSIGKey
+	seen := make(map[string]*transfer.TSIGKey)
+	for _, sc := range slaves {
+		if sc.TSIGKeyName == "" {
+			continue
+		}
+		key, err := transfer.ParseTSIGKey(sc.TSIGKeyName, transfer.HmacSHA256, sc.TSIGSecret)
+		if err != nil {
+			if logger != nil {
+				logger.Warnf("slave zone %s: invalid tsig_secret: %v", sc.ZoneName, err)
+			}
+			continue
+		}
+		if prev, ok := seen[key.Name]; ok {
+			if !bytes.Equal(prev.Secret, key.Secret) && logger != nil {
+				logger.Warnf("slave zone %s: TSIG key %s is configured with different secrets; using the first", sc.ZoneName, key.Name)
+			}
+			continue
+		}
+		seen[key.Name] = key
+		keys = append(keys, key)
+	}
+	return keys
+}
+
+// managedKeyStore is a transfer.KeyStore whose contents this package owns:
+// it remembers the names it loaded so a reload can remove the ones the new
+// config dropped (KeyStore cannot list its keys). Not safe for concurrent
+// sync calls; reloads are serialized by reloadableState.reloadMu.
+type managedKeyStore struct {
+	store *transfer.KeyStore
+	names map[string]bool
+}
+
+func newManagedKeyStore() *managedKeyStore {
+	return &managedKeyStore{store: transfer.NewKeyStore(), names: make(map[string]bool)}
+}
+
+// sync makes the store hold exactly keys: every key is added (replacing a
+// same-named one) and every previously loaded name not in keys is removed.
+// Each change is atomic per key; request handlers that must see the whole
+// set change at once hold integratedHandler.xferKeysMu, which the reload
+// holds exclusively around sync (F583).
+func (m *managedKeyStore) sync(keys []*transfer.TSIGKey) {
+	if m == nil {
+		return
+	}
+	want := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		want[transfer.CanonicalTSIGKeyName(k.Name)] = true
+	}
+	for name := range m.names {
+		if !want[name] {
+			m.store.RemoveKey(name)
+		}
+	}
+	for _, k := range keys {
+		m.store.AddKey(k)
+	}
+	m.names = want
 }

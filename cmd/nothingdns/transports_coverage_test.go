@@ -532,7 +532,7 @@ func TestStartXoT_BadCert(t *testing.T) {
 	}
 
 	s := &servers{}
-	err := s.startXoT(cfg, nil, nil, newDiscardLogger())
+	err := s.startXoT(cfg, nil, nil, nil, newDiscardLogger())
 	if err == nil {
 		s.stopAll(newDiscardLogger())
 		t.Fatal("startXoT should fail when cert files don't exist")
@@ -564,7 +564,7 @@ func TestStartXoT_NilZonesError(t *testing.T) {
 	defer func() {
 		_ = recover()
 	}()
-	err := s.startXoT(cfg, nil, nil, newDiscardLogger())
+	err := s.startXoT(cfg, nil, nil, nil, newDiscardLogger())
 	s.stopAll(newDiscardLogger())
 	if err != nil {
 		t.Logf("startXoT (nil zones) returned %v (acceptable)", err)

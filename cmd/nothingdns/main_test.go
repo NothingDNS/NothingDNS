@@ -6522,6 +6522,7 @@ func TestProcessUpdateEvents(t *testing.T) {
 		Secret:    []byte("test-secret-key-12345678901234"),
 	})
 	h.transfer.DDNSHandler.SetKeyStore(ks)
+	h.transfer.DDNSHandler.AllowKeyUpdate("key.example.com.", "example.com.") // F452: per key and zone grant
 
 	go h.processUpdateEvents()
 
@@ -6686,6 +6687,7 @@ func TestHandleUPDATE_Success(t *testing.T) {
 		Secret:    []byte("test-secret-key-12345678901234"),
 	})
 	h.transfer.DDNSHandler.SetKeyStore(ks)
+	h.transfer.DDNSHandler.AllowKeyUpdate("key.example.com.", "example.com.") // F452: per key and zone grant
 
 	name, _ := protocol.ParseName("example.com.")
 	updateName, _ := protocol.ParseName("new.example.com.")

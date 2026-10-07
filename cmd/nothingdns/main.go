@@ -214,6 +214,11 @@ type upstreamReloadPlan struct {
 	upstreamManager *UpstreamManager
 	dnssecManager   *DNSSECManager
 	dnssecFetch     *dnssecResolverAdapter
+	// iterative is the iterative resolver built from the reloaded config
+	// (nil when resolution.recursive is false); it replaces the running one
+	// only when replaceIterative is set (F617).
+	iterative        *resolver.Resolver
+	replaceIterative bool
 }
 
 func prepareUpstreamComponents(cfg *config.Config, logger *util.Logger) (*upstreamReloadPlan, error) {
@@ -243,10 +248,16 @@ func applyUpstreamComponents(plan *upstreamReloadPlan, current *UpstreamManager,
 		handler.upstream = plan.upstreamManager.Client
 		handler.loadBalancer = plan.upstreamManager.LoadBalancer
 		handler.validator = plan.dnssecManager.Validator
-		// Preserve the iterative fetch path across hot reloads — the
-		// resolver itself is not rebuilt on SIGHUP, but the fresh
-		// validator's adapter starts without it (recursive-only setups
-		// would otherwise lose DNSSEC fetches until restart).
+		// Swap in the iterative resolver rebuilt from the reloaded
+		// resolution.* / dnssec.enabled settings (F617): nil turns
+		// iterative resolution off. Requests hold runtimeMu.RLock for
+		// their whole lifetime, so in-flight queries finish on the old
+		// resolver and every later one uses the new one. The fresh
+		// validator's adapter starts without an iterative fetch path, so
+		// it is wired to whichever resolver is now live.
+		if plan.replaceIterative {
+			handler.resolver = plan.iterative
+		}
 		plan.dnssecFetch.SetIterative(handler.resolver)
 		handler.runtimeMu.Unlock()
 	}
@@ -354,6 +365,9 @@ func commitLoadedConfig(newCfg *config.Config, cfgMu *sync.RWMutex, cfgRef **con
 	if handler != nil {
 		handler.runtimeMu.Lock()
 		handler.config = newCfg
+		// idna.enabled; the IDNA profile options are read per request from
+		// handler.config (F620/F621).
+		handler.idnaEnabled = newCfg.IDNA.Enabled
 		handler.runtimeMu.Unlock()
 	}
 }
@@ -743,10 +757,7 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 
 	// Initialize IDNA validator if enabled (RFC 5891)
 	idnaEnabled := cfg.IDNA.Enabled
-	if idnaEnabled {
-		logger.Infof("IDNA validation enabled (STD3=%v, Bidi=%v, Joiner=%v)",
-			cfg.IDNA.UseSTD3Rules, cfg.IDNA.CheckBidi, cfg.IDNA.CheckJoiner)
-	}
+	logIDNASettings(cfg.IDNA, logger)
 
 	// Create DNS handler (needed for API server DoH support)
 	handler := &integratedHandler{
@@ -788,13 +799,16 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 			NotifyHandler: transferManager.Result().NotifyHandler,
 			DDNSHandler:   transferManager.Result().DDNSHandler,
 			SlaveManager:  transferManager.Result().SlaveManager,
+			Notifier:      transferManager.Result().Notifier,
+			AXFRKeys:      transferManager.Result().AXFRKeys,
+			SlaveKeys:     transferManager.Result().SlaveKeys,
 		},
 		zoneProvider: NewMultiZoneProvider(
 			zones,
 			zoneManagerInstance,
 			kvPersistence,
 			zone.BuildRadixTree(zones),
-		),
+		).withSlaveZones(transferManager.Result().SlaveManager),
 		serverCtx:    serverCtx,
 		cancelServer: cancelServer,
 	}
@@ -814,51 +828,23 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 			handler.RebuildZoneTree()
 		})
 	}
+	// The cluster started above, so a boot-time Raft snapshot restore (and
+	// any log entries applied since) mutated the zone manager before this
+	// hook existed; rebuild once so routing reflects them (F399).
+	handler.RebuildZoneTree()
 
-	// Initialize iterative recursive resolver if enabled
-	if cfg.Resolution.Recursive {
-		resolverTransport := newResolverTransport(client, loadBalancer)
-		resolverConfig := resolver.Config{
-			MaxDepth:          cfg.Resolution.MaxDepth,
-			MaxCNAMEDepth:     16,
-			Timeout:           5 * time.Second,
-			EDNS0BufSize:      uint16(cfg.Resolution.EDNS0BufferSize),
-			QnameMinimization: cfg.Resolution.QnameMinimization,
-			Use0x20:           cfg.Resolution.Use0x20,
-			DNSSECOK:          cfg.DNSSEC.Enabled,
-		}
-		if cfg.Resolution.Timeout != "" {
-			if d, err := time.ParseDuration(cfg.Resolution.Timeout); err == nil {
-				resolverConfig.Timeout = d
-			}
-		}
-		if resolverConfig.EDNS0BufSize == 0 {
-			resolverConfig.EDNS0BufSize = 4096
-		}
-		if resolverConfig.MaxDepth > 30 {
-			logger.Warnf("MaxDepth %d exceeds safe limit, clamping to 30", resolverConfig.MaxDepth)
-			resolverConfig.MaxDepth = 30
-		}
-		if cfg.Resolution.RootHints != "" {
-			hints, err := loadRootHintsFile(cfg.Resolution.RootHints)
-			if err != nil {
-				return fmt.Errorf("loading root hints file %s: %w", cfg.Resolution.RootHints, err)
-			}
-			resolverConfig.Hints = hints
-			logger.Infof("Loaded %d custom root hints from %s", len(hints), cfg.Resolution.RootHints)
-		}
-		handler.resolver = resolver.NewResolver(resolverConfig, &resolverCacheAdapter{cache: dnsCache}, resolverTransport)
+	// Initialize iterative recursive resolver if enabled (the reload path
+	// rebuilds it with the same helper, F617).
+	iterative, err := buildIterativeResolver(cfg, dnsCache, logger)
+	if err != nil {
+		return err
+	}
+	if iterative != nil {
+		handler.resolver = iterative
 		// Route the validator's chain fetches through the iterative resolver:
 		// in recursive mode it is the authoritative fetch path (and the ONLY
 		// one when no upstream is configured).
 		dnssecFetch.SetIterative(handler.resolver)
-		logger.Info("Iterative recursive resolver enabled")
-		if resolverConfig.QnameMinimization {
-			logger.Info("QNAME minimization enabled (RFC 7816)")
-		}
-		if resolverConfig.Use0x20 {
-			logger.Info("0x20 encoding enabled for spoofing resistance")
-		}
 	}
 
 	// VULN-041: Warn if recursion is enabled without ACL rules but with explicit allow-unrestricted
@@ -1027,6 +1013,12 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 		return err
 	}
 	startStatsCollector(transports, metricsCollector, stopCh)
+	reloadState.setTransports(transports)
+
+	// Notify on load (F568): now that the transports are listening, send
+	// NOTIFY for every served zone so secondaries pick up changes made while
+	// this primary was down. Asynchronous; cancelled by transferManager.Stop.
+	transferManager.Result().Notifier.NotifyAll()
 
 	// Setup signal handling — delegating to a package-level helper makes
 	// the lifecycle overridable from tests (see main_test.go's
@@ -1110,6 +1102,10 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 
 				// Stop transfer manager (slave manager, notify handler, DDNS handler)
 				transferManager.Stop()
+				// A SIGHUP may have replaced the DDNS handler (F583).
+				if d := handler.currentDDNSHandler(); d != nil {
+					d.Close()
+				}
 
 				// Flush and shut down the OpenTelemetry tracer provider so
 				// batched spans reach the collector before exit.
@@ -1318,6 +1314,7 @@ func loadZoneSigner(z *zone.Zone, signingCfg config.SigningConfig) (*dnssec.Sign
 	if signingCfg.NSEC3 != nil {
 		signerCfg.NSEC3Enabled = true
 		signerCfg.NSEC3Iterations = signingCfg.NSEC3.Iterations
+		signerCfg.NSEC3OptOut = signingCfg.NSEC3.OptOut // F487
 		if signingCfg.NSEC3.Salt != "" {
 			salt, err := hex.DecodeString(signingCfg.NSEC3.Salt)
 			if err != nil {
