@@ -252,37 +252,16 @@ func TestIsASCII(t *testing.T) {
 	}
 }
 
-func TestBidirectionalCategory(t *testing.T) {
-	tests := []struct {
-		r    rune
-		want string
-	}{
-		{'a', "L"},
-		{'Z', "L"},
-		{'0', "EN"},
-		{'9', "EN"},
-		{0x0660, "AN"}, // Arabic-Indic digit zero
-		{0x0590, "R"},  // Hebrew
-		{0x0627, "AL"}, // Arabic letter alef
-	}
-
-	for _, tt := range tests {
-		t.Run(string(tt.r), func(t *testing.T) {
-			if got := bidirectionalCategory(tt.r); got != tt.want {
-				t.Errorf("bidirectionalCategory(%U) = %q, want %q", tt.r, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestIsCombiningMark(t *testing.T) {
 	tests := []struct {
 		r    rune
 		want bool
 	}{
-		{0x0300, true}, // Combining grave accent
-		{0x0320, true}, // Combining diaeresis below
-		{0x0930, true}, // Devanagari
+		{0x0300, true},  // Combining grave accent
+		{0x0320, true},  // Combining diaeresis below
+		{0x093F, true},  // Devanagari vowel sign I (Mc)
+		{0x0930, false}, // Devanagari letter RA (Lo), not a mark
+		{0x20DD, true},  // combining enclosing circle (Me)
 		{'a', false},
 		{'0', false},
 		{0x200D, false}, // ZWJ is not a combining mark in this check
@@ -292,28 +271,6 @@ func TestIsCombiningMark(t *testing.T) {
 		t.Run(string(tt.r), func(t *testing.T) {
 			if got := isCombiningMark(tt.r); got != tt.want {
 				t.Errorf("isCombiningMark(%U) = %v, want %v", tt.r, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestIsNumberCategory(t *testing.T) {
-	tests := []struct {
-		r    rune
-		want bool
-	}{
-		{'0', true},
-		{'9', true},
-		{0x0660, true}, // Arabic-Indic zero
-		{0x06F0, true}, // Extended Arabic-Indic zero
-		{'a', false},
-		{0x0627, false}, // Arabic letter
-	}
-
-	for _, tt := range tests {
-		t.Run(string(tt.r), func(t *testing.T) {
-			if got := isNumberCategory(tt.r); got != tt.want {
-				t.Errorf("isNumberCategory(%U) = %v, want %v", tt.r, got, tt.want)
 			}
 		})
 	}
@@ -432,50 +389,58 @@ func TestValidateSTD3(t *testing.T) {
 	}
 }
 
+// TestValidateBidi checks the RFC 5893 Bidi rule through ValidateLabel,
+// which shares bidiLabelOK with Profile.ToASCII (F623). RFC 5893 rule 3
+// allows an RTL label to end in a digit (EN or AN).
 func TestValidateBidi(t *testing.T) {
 	tests := []struct {
 		label   string
 		wantErr error
 	}{
-		{"example", nil}, // All LTR
-		{"مرحبا", nil},   // All RTL (no number at end)
-		{"hello", nil},   // LTR
-		{"123abc", nil},  // LTR with numbers
-		{"a", nil},       // Single LTR
-		// ErrInvalidBid: RTL string ending with number (Arabic numeral at end)
-		{"مرحبا١٢٣", ErrInvalidBid}, // RTL with Arabic-Indic digits at end (U+0660-0669)
+		{"example", nil},
+		{"مرحبا", nil},
+		{"123abc", nil},
+		{"مرحبا١٢٣", nil},          // AL ... AN at the end: allowed
+		{"מרחבא123", nil},          // R ... EN at the end: allowed
+		{"مرحبا١2", ErrInvalidBid}, // rule 4: EN and AN together
+		{"אa", ErrInvalidBid},      // rule 2: L in an RTL label
+		{"א-ב", nil},               // interior ES
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.label, func(t *testing.T) {
-			err := validateBidi(tt.label)
+			err := ValidateLabel(tt.label)
 			if err != tt.wantErr {
-				t.Errorf("validateBidi(%q) = %v, want %v", tt.label, err, tt.wantErr)
+				t.Errorf("ValidateLabel(%q) = %v, want %v", tt.label, err, tt.wantErr)
 			}
 		})
 	}
 }
 
 func TestValidateContext(t *testing.T) {
+	// RFC 5892 A.8/A.9 (F628): Arabic-Indic and extended Arabic-Indic
+	// digits must not be mixed; an ASCII digit next to them is no CONTEXTO
+	// violation (the replaced "Rule O" rejected "test1٢٣").
 	tests := []struct {
 		label   string
 		wantErr error
 	}{
 		{"example", nil},
 		{"test", nil},
-		// ZWJ in valid context would need specific emoji sequences
-		// Arabic-Indic digit preceded by ASCII digit triggers O rule
-		{"test١٢٣", nil}, // Full string has ASCII then Arabic-Indic - no error
-		// ErrContextO: Arabic-Indic digit preceded by ASCII digit
-		{"١٢٣test", nil},         // Arabic-Indic first, then ASCII - no error
-		{"test1٢٣", ErrContextO}, // ASCII digit followed by Arabic-Indic - triggers O rule
+		{"test١٢٣", nil},
+		{"١٢٣test", nil},
+		{"test1٢٣", nil},
+		{"ب١٢", nil},
+		{"ب۱۲", nil},
+		{"ب١۲", ErrContextO},
+		{"ب۱٢", ErrContextO},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.label, func(t *testing.T) {
-			err := validateContext(tt.label)
+			err := checkULabel(tt.label, false)
 			if err != tt.wantErr {
-				t.Errorf("validateContext(%q) = %v, want %v", tt.label, err, tt.wantErr)
+				t.Errorf("checkULabel(%q) = %v, want %v", tt.label, err, tt.wantErr)
 			}
 		})
 	}
@@ -511,23 +476,26 @@ func TestDecodeLabel(t *testing.T) {
 	}
 }
 
-func TestIsJoinable(t *testing.T) {
+func TestJoiningType(t *testing.T) {
 	tests := []struct {
 		r    rune
-		want bool
+		want uint8
 	}{
-		{0x1F600, true}, // Emoji
-		{0x0300, true},  // Combining diacritical
-		{'a', false},
-		{'0', false},
+		{0x0628, jtD}, // ARABIC LETTER BEH
+		{0x0627, jtR}, // ARABIC LETTER ALEF
+		{0x064B, jtT}, // ARABIC FATHATAN
+		{0x06CC, jtD}, // ARABIC LETTER FARSI YEH
+		{0x0710, jtR}, // SYRIAC LETTER ALAPH
+		{0xA872, jtL}, // PHAGS-PA SUPERFIXED LETTER RA
+		{0x1F600, jtU},
+		{'a', jtU},
+		{0x0640, jtU}, // TATWEEL is C but DISALLOWED: not recorded
 	}
 
 	for _, tt := range tests {
-		t.Run(string(tt.r), func(t *testing.T) {
-			if got := isJoinable(tt.r); got != tt.want {
-				t.Errorf("isJoinable(%U) = %v, want %v", tt.r, got, tt.want)
-			}
-		})
+		if got := joiningType(tt.r); got != tt.want {
+			t.Errorf("joiningType(%U) = %d, want %d", tt.r, got, tt.want)
+		}
 	}
 }
 
@@ -796,24 +764,6 @@ func TestValidateLabelWithIDNA(t *testing.T) {
 	err := validateLabel(label, true)
 	if err != nil {
 		t.Errorf("validateLabel(%q, true) error = %v", label, err)
-	}
-}
-
-func TestIsValidZWJContext(t *testing.T) {
-	tests := []struct {
-		runes []rune
-		index int
-	}{
-		{[]rune("test"), 1},
-		{[]rune("a"), 0},
-		{[]rune("ab"), 0},
-	}
-
-	for _, tt := range tests {
-		t.Run("", func(t *testing.T) {
-			got := isValidZWJContext(tt.runes, tt.index)
-			_ = got // Just verify it doesn't panic
-		})
 	}
 }
 

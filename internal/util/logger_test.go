@@ -3,8 +3,10 @@ package util
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -403,5 +405,89 @@ func TestLogFieldsSanitizedInTextFormat(t *testing.T) {
 	out := buf.String()
 	if strings.Contains(out, "\nINFO") {
 		t.Fatalf("FAIL: field-value log injection — CR/LF survived in a field value: %q", out)
+	}
+}
+
+// TestLoggerChildFollowsParent_F626: loggers derived with WithField /
+// WithFields share level, format and output with their parent, so a reload
+// (SetLevel/SetFormat on the root logger) reaches them; fields stay
+// per-logger.
+func TestLoggerChildFollowsParent_F626(t *testing.T) {
+	var buf bytes.Buffer
+	parent := NewLogger(INFO, TextFormat, &buf)
+	child := parent.WithField("component", "x")
+	grandchild := parent.WithFields(Fields{"a": 1}).WithField("b", 2)
+
+	parent.SetLevel(DEBUG)
+	child.Debug("child-debug")
+	grandchild.Debug("grandchild-debug")
+	if !strings.Contains(buf.String(), "child-debug") || !strings.Contains(buf.String(), "grandchild-debug") {
+		t.Fatalf("derived loggers ignored parent.SetLevel(DEBUG): %q", buf.String())
+	}
+
+	parent.SetLevel(ERROR)
+	buf.Reset()
+	child.Warn("child-warn")
+	if buf.Len() != 0 {
+		t.Fatalf("child logged WARN after parent.SetLevel(ERROR): %q", buf.String())
+	}
+
+	parent.SetLevel(INFO)
+	parent.SetFormat(JSONFormat)
+	buf.Reset()
+	child.Info("child-json")
+	if !strings.HasPrefix(buf.String(), "{") || !strings.Contains(buf.String(), `"component":"x"`) {
+		t.Fatalf("child ignored parent.SetFormat(JSON): %q", buf.String())
+	}
+
+	var buf2 bytes.Buffer
+	parent.SetOutput(&buf2)
+	child.Info("child-out")
+	if !strings.Contains(buf2.String(), "child-out") {
+		t.Fatal("child ignored parent.SetOutput")
+	}
+
+	// A change made through a child is visible to the parent too, and the
+	// parent never gains the child's fields.
+	child.SetLevel(WARN)
+	if parent.Level() != WARN {
+		t.Fatalf("parent level %v after child.SetLevel(WARN)", parent.Level())
+	}
+	buf2.Reset()
+	parent.Warn("parent-warn")
+	if strings.Contains(buf2.String(), "component") {
+		t.Fatalf("parent gained child fields: %q", buf2.String())
+	}
+}
+
+// TestLoggerChildConcurrentReload_F626 exercises a reload (SetLevel /
+// SetFormat on the root) while derived loggers log; run under -race.
+func TestLoggerChildConcurrentReload_F626(t *testing.T) {
+	parent := NewLogger(INFO, TextFormat, io.Discard)
+	children := []*Logger{parent.WithField("c", 1), parent.WithFields(Fields{"d": 2})}
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for _, c := range children {
+		wg.Add(1)
+		go func(l *Logger) {
+			defer wg.Done()
+			<-start
+			for i := 0; i < 200; i++ {
+				l.Infof("msg %d", i)
+				_ = l.WithField("i", i)
+			}
+		}(c)
+	}
+	close(start)
+	for i := 0; i < 200; i++ {
+		parent.SetLevel(LogLevel(i % 4))
+		parent.SetFormat(LogFormat(i % 2))
+	}
+	wg.Wait()
+	parent.SetLevel(ERROR)
+	for _, c := range children {
+		if c.Level() != ERROR {
+			t.Fatalf("child level %v, want ERROR", c.Level())
+		}
 	}
 }

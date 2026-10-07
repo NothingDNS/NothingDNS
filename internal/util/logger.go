@@ -55,14 +55,25 @@ const (
 type Fields map[string]interface{}
 
 // Logger provides structured logging functionality.
+//
+// Loggers derived with WithField/WithFields share their parent's level,
+// format and output (F626): SetLevel, SetFormat or SetOutput on any logger
+// of the family — e.g. a SIGHUP or PUT /api/v1/config/logging change on the
+// root logger — applies to all of them. Only the fields are per-logger.
 type Logger struct {
-	level      LogLevel
-	format     LogFormat
-	output     io.Writer
+	*logSink
 	fields     Fields
-	mu         sync.RWMutex
-	writeMu    *sync.Mutex
 	timeFormat string
+}
+
+// logSink is the level/format/output state shared by a logger and every
+// logger derived from it.
+type logSink struct {
+	mu      sync.RWMutex
+	level   LogLevel
+	format  LogFormat
+	output  io.Writer
+	writeMu sync.Mutex
 }
 
 // NewLogger creates a new Logger with the specified configuration.
@@ -71,11 +82,8 @@ func NewLogger(level LogLevel, format LogFormat, output io.Writer) *Logger {
 		output = os.Stdout
 	}
 	return &Logger{
-		level:      level,
-		format:     format,
-		output:     output,
+		logSink:    &logSink{level: level, format: format, output: output},
 		fields:     make(Fields),
-		writeMu:    &sync.Mutex{},
 		timeFormat: time.RFC3339,
 	}
 }
@@ -118,9 +126,6 @@ func (l *Logger) SetOutput(output io.Writer) {
 
 // WithField returns a new Logger with the specified field added.
 func (l *Logger) WithField(key string, value interface{}) *Logger {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-
 	newFields := make(Fields, len(l.fields)+1)
 	for k, v := range l.fields {
 		newFields[k] = v
@@ -128,20 +133,14 @@ func (l *Logger) WithField(key string, value interface{}) *Logger {
 	newFields[key] = value
 
 	return &Logger{
-		level:      l.level,
-		format:     l.format,
-		output:     l.output,
+		logSink:    l.logSink,
 		fields:     newFields,
-		writeMu:    l.writeMu,
 		timeFormat: l.timeFormat,
 	}
 }
 
 // WithFields returns a new Logger with the specified fields added.
 func (l *Logger) WithFields(fields Fields) *Logger {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-
 	newFields := make(Fields, len(l.fields)+len(fields))
 	for k, v := range l.fields {
 		newFields[k] = v
@@ -151,11 +150,8 @@ func (l *Logger) WithFields(fields Fields) *Logger {
 	}
 
 	return &Logger{
-		level:      l.level,
-		format:     l.format,
-		output:     l.output,
+		logSink:    l.logSink,
 		fields:     newFields,
-		writeMu:    l.writeMu,
 		timeFormat: l.timeFormat,
 	}
 }

@@ -6,45 +6,6 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// bidirectionalCategory coverage
-// ---------------------------------------------------------------------------
-
-func TestBidirectionalCategory_Categories(t *testing.T) {
-	tests := []struct {
-		r    rune
-		want string
-	}{
-		{'A', "L"},     // ASCII uppercase
-		{'z', "L"},     // ASCII lowercase
-		{'0', "EN"},    // ASCII digit
-		{'5', "EN"},    // ASCII digit
-		{0x0660, "AN"}, // Arabic-Indic digit
-		{0x0669, "AN"}, // Arabic-Indic digit
-		{0x200D, "ON"}, // ZWJ
-		{0x0590, "R"},  // Hebrew
-		{0x05FF, "R"},  // Hebrew
-		{0x0627, "AL"}, // Arabic letter
-		{0x06FF, "AL"}, // Arabic
-		{0x0700, "AL"}, // Syriac/Arabic supplement
-		{0x08FF, "AL"}, // Arabic extended
-		{0xFB50, "AL"}, // Arabic presentation forms A
-		{0xFDFF, "AL"}, // Arabic presentation forms A
-		{0xFE70, "AL"}, // Arabic presentation forms B
-		{0xFEFF, "AL"}, // Arabic presentation forms B
-		{' ', "ON"},    // Space falls to default
-		{'!', "ON"},    // Punctuation falls to default
-		{0x00C0, "L"},  // Latin extended uppercase (À)
-		{0x00DE, "L"},  // Latin extended uppercase (Þ)
-	}
-	for _, tt := range tests {
-		got := bidirectionalCategory(tt.r)
-		if got != tt.want {
-			t.Errorf("bidirectionalCategory(%U) = %q, want %q", tt.r, got, tt.want)
-		}
-	}
-}
-
-// ---------------------------------------------------------------------------
 // decodeLabel coverage
 // ---------------------------------------------------------------------------
 
@@ -277,37 +238,30 @@ func TestValidateDomain_Empty(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// validateContext edge cases
+// CONTEXTJ edge cases (RFC 5892 A.1/A.2, F628)
 // ---------------------------------------------------------------------------
 
-func TestValidateContext_ZWJAtStart(t *testing.T) {
-	// ZWJ at position 0 should fail
-	err := validateContext(string([]rune{0x200D, 'a', 'b'}))
-	if err != ErrContextJ {
+func TestContextJ_ZWJAtStart(t *testing.T) {
+	if err := checkULabel(string([]rune{0x200D, 'a', 'b'}), false); err != ErrContextJ {
 		t.Errorf("expected ErrContextJ for ZWJ at start, got %v", err)
 	}
 }
 
-func TestValidateContext_ZWJAtEnd(t *testing.T) {
-	// ZWJ at last position should fail
-	err := validateContext(string([]rune{'a', 'b', 0x200D}))
-	if err != ErrContextJ {
+func TestContextJ_ZWJAtEnd(t *testing.T) {
+	if err := checkULabel(string([]rune{'a', 'b', 0x200D}), false); err != ErrContextJ {
 		t.Errorf("expected ErrContextJ for ZWJ at end, got %v", err)
 	}
 }
 
-func TestValidateContext_ValidZWJ(t *testing.T) {
-	// ZWJ between combining marks should be valid
-	err := validateContext(string([]rune{0x0300, 0x200D, 0x0301}))
-	if err != nil {
-		t.Errorf("expected no error for valid ZWJ, got %v", err)
+func TestContextJ_ZWJAfterVirama(t *testing.T) {
+	// U+094D DEVANAGARI SIGN VIRAMA has ccc 9: ZWJ after it is valid.
+	if err := checkULabel(string([]rune{0x0915, 0x094D, 0x200D, 0x0937}), false); err != nil {
+		t.Errorf("expected no error for ZWJ after virama, got %v", err)
 	}
 }
 
-func TestValidateContext_InvalidZWJ(t *testing.T) {
-	// ZWJ between non-joinable characters
-	err := validateContext(string([]rune{'a', 0x200D, 'b'}))
-	if err != ErrContextJ {
+func TestContextJ_InvalidZWJ(t *testing.T) {
+	if err := checkULabel(string([]rune{'a', 0x200D, 'b'}), false); err != ErrContextJ {
 		t.Errorf("expected ErrContextJ for invalid ZWJ context, got %v", err)
 	}
 }
