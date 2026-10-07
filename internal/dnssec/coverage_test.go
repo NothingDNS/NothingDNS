@@ -117,9 +117,9 @@ func TestFindRRSIG_WrongDataType(t *testing.T) {
 		},
 	}
 
-	result := v.findRRSIG(answers, "test.com.", protocol.TypeA)
-	if result != nil {
-		t.Error("expected nil when RRSIG record has wrong Data type")
+	result := v.findRRSIGs(answers, "test.com.", protocol.TypeA)
+	if len(result) != 0 {
+		t.Error("expected no RRSIG when RRSIG record has wrong Data type")
 	}
 }
 
@@ -3989,8 +3989,8 @@ func TestFindRRSIG_NoMatch(t *testing.T) {
 	answers := []*protocol.ResourceRecord{
 		{Name: name, Type: protocol.TypeA, Data: &protocol.RDataA{}},
 	}
-	result := v.findRRSIG(answers, "other.com.", protocol.TypeA)
-	if result != nil {
-		t.Error("expected nil when no RRSIG found")
+	result := v.findRRSIGs(answers, "other.com.", protocol.TypeA)
+	if len(result) != 0 {
+		t.Error("expected no RRSIG when no RRSIG found")
 	}
 }

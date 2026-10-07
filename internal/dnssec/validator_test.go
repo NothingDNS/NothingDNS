@@ -545,21 +545,19 @@ func TestFindRRSIG(t *testing.T) {
 	}
 
 	// Test finding RRSIG for TypeA
-	rrsig := v.findRRSIG(answers, name.String(), protocol.TypeA)
-	if rrsig == nil {
-		t.Error("findRRSIG should find RRSIG for TypeA")
+	rrsigs := v.findRRSIGs(answers, name.String(), protocol.TypeA)
+	if len(rrsigs) == 0 {
+		t.Error("findRRSIGs should find RRSIG for TypeA")
 	}
 
 	// Test not finding RRSIG for TypeMX
-	rrsig = v.findRRSIG(answers, name.String(), protocol.TypeMX)
-	if rrsig != nil {
-		t.Error("findRRSIG should not find RRSIG for TypeMX")
+	if rrsigsMX := v.findRRSIGs(answers, name.String(), protocol.TypeMX); len(rrsigsMX) != 0 {
+		t.Error("findRRSIGs should not find RRSIG for TypeMX")
 	}
 
 	// Test with empty answers
-	rrsig = v.findRRSIG([]*protocol.ResourceRecord{}, name.String(), protocol.TypeA)
-	if rrsig != nil {
-		t.Error("findRRSIG should return nil for empty answers")
+	if rrsigsEmpty := v.findRRSIGs([]*protocol.ResourceRecord{}, name.String(), protocol.TypeA); len(rrsigsEmpty) != 0 {
+		t.Error("findRRSIGs should return empty for empty answers")
 	}
 }
 
@@ -2097,11 +2095,11 @@ func TestAuthenticatedDenialRRsSkipsMalformedRecords(t *testing.T) {
 
 func TestFindRRSIGSkipsMalformedRecords(t *testing.T) {
 	v := NewValidator(DefaultValidatorConfig(), nil, nil)
-	if got := v.findRRSIG([]*protocol.ResourceRecord{
+	if got := v.findRRSIGs([]*protocol.ResourceRecord{
 		nil,
 		{Type: protocol.TypeRRSIG, Data: &protocol.RDataRRSIG{TypeCovered: protocol.TypeA}},
-	}, "example.com.", protocol.TypeA); got != nil {
-		t.Fatalf("findRRSIG returned %+v, want nil", got)
+	}, "example.com.", protocol.TypeA); len(got) != 0 {
+		t.Fatalf("findRRSIGs returned %+v, want empty", got)
 	}
 }
 

@@ -690,8 +690,8 @@ func (v *Validator) validateMessage(ctx context.Context, msg *protocol.Message, 
 
 		owner := rrSet[0].Name.String()
 
-		// Find matching RRSIG
-		rrsig := v.findRRSIG(msg.Answers, owner, rrSet[0].Type)
+		// Find matching RRSIGs (RFC 4035 §5.3.3: attempt every signature).
+		rrsigs := v.findRRSIGs(msg.Answers, owner, rrSet[0].Type)
 
 		// RRsets reached through a CNAME/DNAME chain may belong to other zones.
 		// Validate each with the chain of its own zone: the RRSIG signer when
@@ -699,17 +699,23 @@ func (v *Validator) validateMessage(ctx context.Context, msg *protocol.Message, 
 		// whether an unsigned RRset is legitimately insecure or stripped.
 		if !sameDNSName(owner, queryName) {
 			target := owner
-			if rrsig != nil {
-				target = rrsig.SignerNameString()
-				if !inBailiwick(owner, target) {
+			for _, rrsig := range rrsigs {
+				if rrsig.SignerName == nil {
+					continue
+				}
+				signer := rrsig.SignerNameString()
+				if !inBailiwick(owner, signer) {
 					return ValidationBogus
+				}
+				if target == owner {
+					target = signer
 				}
 			}
 			if !sameDNSName(target, zoneLink.zone) {
 				other := v.chainFor(ctx, target, chains)
 				var fetchErr *chainFetchError
 				switch {
-				case other.err != nil && rrsig == nil && errors.As(other.err, &fetchErr) && !inBailiwick(owner, zoneLink.zone):
+				case other.err != nil && len(rrsigs) == 0 && errors.As(other.err, &fetchErr) && !inBailiwick(owner, zoneLink.zone):
 					// Could not fetch the delegation data of an out-of-bailiwick
 					// owner: the unsigned RRset stays unauthenticated (no AD), as
 					// before. In-bailiwick owners fall through to Bogus so a
@@ -723,24 +729,25 @@ func (v *Validator) validateMessage(ctx context.Context, msg *protocol.Message, 
 					// so the message as a whole is not Secure.
 					hasUnvalidated = true
 					continue
-				case rrsig == nil:
+				case len(rrsigs) == 0:
 					// The owner's zone is signed, yet the RRset carries no
 					// signature: stripped-RRSIG downgrade.
 					return ValidationBogus
 				}
 				otherLink := other.chain[len(other.chain)-1]
-				if !v.validateRRSIG(rrSet, rrsig, otherLink.dnsKeys) {
+				validated, ok := v.anyRRSIGValidates(rrSet, rrsigs, otherLink.dnsKeys)
+				if !ok {
 					return ValidationBogus
 				}
-				if int(rrsig.Labels) < len(rrSet[0].Name.LabelsSlice()) &&
-					!v.wildcardExpansionProven(msg, owner, rrsig.Labels, rrSet[0].Type, other.chain) {
+				if int(validated.Labels) < len(rrSet[0].Name.LabelsSlice()) &&
+					!v.wildcardExpansionProven(msg, owner, validated.Labels, rrSet[0].Type, other.chain) {
 					return ValidationBogus
 				}
 				continue
 			}
 		}
 
-		if rrsig == nil {
+		if len(rrsigs) == 0 {
 			// No signature for this RRset. We only reach validateMessage when
 			// the chain proved the query name's zone is SIGNED (Insecure
 			// subtrees are short-circuited in ValidateResponse). A missing
@@ -762,19 +769,21 @@ func (v *Validator) validateMessage(ctx context.Context, msg *protocol.Message, 
 			continue
 		}
 
-		// Validate the signature
-		if !v.validateRRSIG(rrSet, rrsig, zoneLink.dnsKeys) {
+		// Validate the signatures — any one validating authenticates the
+		// RRset (RFC 4035 §5.3.3).
+		validated, ok := v.anyRRSIGValidates(rrSet, rrsigs, zoneLink.dnsKeys)
+		if !ok {
 			return ValidationBogus
 		}
 
-		// Wildcard-expanded answers (RRSIG.Labels < the owner's label count)
+		// Wildcard-expanded answers (validated.Labels < the owner's label count)
 		// require an authenticated proof that the owner has NO exact match in
 		// the zone (RFC 4035 §5.3.4). Without it, a valid "*.zone" RRSIG could
 		// be replayed onto an explicit name that has its own different record.
-		// rrsig.Labels is part of the signed RRSIG RDATA, so an attacker cannot
+		// Labels is part of the signed RRSIG RDATA, so an attacker cannot
 		// forge the wildcard path — tampering Labels breaks the signature above.
-		if int(rrsig.Labels) < len(rrSet[0].Name.LabelsSlice()) {
-			if !v.wildcardExpansionProven(msg, owner, rrsig.Labels, rrSet[0].Type, chain) {
+		if int(validated.Labels) < len(rrSet[0].Name.LabelsSlice()) {
+			if !v.wildcardExpansionProven(msg, owner, validated.Labels, rrSet[0].Type, chain) {
 				return ValidationBogus
 			}
 		}
@@ -893,10 +902,30 @@ func inBailiwick(owner, zone string) bool {
 // RequireDNSSEC, or Insecure-equivalent without it.
 //
 // In practice authoritative servers return lowercase, so the bug
+// findRRSIGs returns every RRSIG covering (name, rrtype) in message order.
+//
+// DNS owner names are case-insensitive per RFC 1035 §2.3.3. The
+// previous rr.Name.String() == name comparison used Go string equality
+// (case-sensitive), so an RRSIG whose owner was "Example.com." but
+// whose covering RRset's owner came back as "example.com." would
+// be silently skipped. The matching RRSIG existed in the response;
+// the validator just couldn't find it — so the RRset reported
+// "no signature" and the whole response went Bogus under
+// RequireDNSSEC, or Insecure-equivalent without it.
+//
+// In practice authoritative servers return lowercase, so the bug
 // stayed dormant — but DNSSEC validation MUST not depend on a
 // server choosing to send canonical case. strings.EqualFold handles
 // the ASCII case-folding RFC 1035 requires.
-func (v *Validator) findRRSIG(answers []*protocol.ResourceRecord, name string, rrtype uint16) *protocol.RDataRRSIG {
+//
+// RFC 4035 §5.3.3 requires the validator to attempt EVERY signature over
+// an RRset and to accept the RRset when any one of them verifies under a
+// supported key: key/algorithm rollovers legitimately publish overlapping
+// RRSIGs (RFC 6781), and message order decides which signature appears
+// first. Returning only the first match made a stale-key signature mask a
+// live one (false SERVFAIL for a correctly-signed zone).
+func (v *Validator) findRRSIGs(answers []*protocol.ResourceRecord, name string, rrtype uint16) []*protocol.RDataRRSIG {
+	var out []*protocol.RDataRRSIG
 	for _, rr := range answers {
 		if rr == nil || rr.Name == nil {
 			continue
@@ -909,10 +938,23 @@ func (v *Validator) findRRSIG(answers []*protocol.ResourceRecord, name string, r
 			continue
 		}
 		if rrsig.TypeCovered == rrtype && strings.EqualFold(rr.Name.String(), name) {
-			return rrsig
+			out = append(out, rrsig)
 		}
 	}
-	return nil
+	return out
+}
+
+// anyRRSIGValidates reports whether at least one of rrsigs verifies rrSet
+// under dnsKeys, returning the signature that validated (its Labels field
+// drives the wildcard-expansion check). See findRRSIGs for why every
+// signature is attempted.
+func (v *Validator) anyRRSIGValidates(rrSet []*protocol.ResourceRecord, rrsigs []*protocol.RDataRRSIG, dnsKeys []*protocol.ResourceRecord) (*protocol.RDataRRSIG, bool) {
+	for _, rrsig := range rrsigs {
+		if v.validateRRSIG(rrSet, rrsig, dnsKeys) {
+			return rrsig, true
+		}
+	}
+	return nil, false
 }
 
 // validateRRSIG validates an RRSIG over an RRSet.
@@ -1836,7 +1878,7 @@ func (v *Validator) classifyDSDenial(msg *protocol.Message, zone string, chain [
 		}
 	}
 	if len(cnames) > 0 {
-		if sig := v.findRRSIG(msg.Answers, cnames[0].Name.String(), protocol.TypeCNAME); sig != nil && v.validateRRSIG(cnames, sig, keys) {
+		if _, ok := v.anyRRSIGValidates(cnames, v.findRRSIGs(msg.Answers, cnames[0].Name.String(), protocol.TypeCNAME), keys); ok {
 			return dsDenialNotZoneCut
 		}
 	}
@@ -1992,11 +2034,7 @@ func (v *Validator) authenticatedDenialRRs(msg *protocol.Message, chain []*chain
 
 	var out []*protocol.ResourceRecord
 	for k, rrSet := range sets {
-		rrsig := v.findRRSIG(msg.Authorities, k.name, k.rrtype)
-		if rrsig == nil {
-			continue
-		}
-		if !v.validateRRSIG(rrSet, rrsig, keys) {
+		if _, ok := v.anyRRSIGValidates(rrSet, v.findRRSIGs(msg.Authorities, k.name, k.rrtype), keys); !ok {
 			continue
 		}
 		out = append(out, rrSet...)
