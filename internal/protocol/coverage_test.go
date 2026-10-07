@@ -383,7 +383,7 @@ func TestMessageTruncateTCBitSemantics(t *testing.T) {
 		// additionals: removing additionals alone makes it fit.
 		maxSize := msg.WireLength() - len(msg.Additionals)*msg.Additionals[0].WireLength()
 		msg.Truncate(maxSize)
-		if got := msg.WireLength(); got > maxSize {
+		if got := packedLenForTest(msg); got > maxSize {
 			t.Fatalf("message does not fit after Truncate: %d > %d", got, maxSize)
 		}
 		if len(msg.Answers) != 1 {
@@ -410,7 +410,7 @@ func TestMessageTruncateTCBitSemantics(t *testing.T) {
 		// Budget that forces removal of additionals AND at least one answer.
 		maxSize := 12 + name.WireLength() + 4 + 2*msg.Answers[0].WireLength()
 		msg.Truncate(maxSize)
-		if got := msg.WireLength(); got > maxSize {
+		if got := packedLenForTest(msg); got > maxSize {
 			t.Fatalf("message does not fit after Truncate: %d > %d", got, maxSize)
 		}
 		if len(msg.Answers) >= 5 {

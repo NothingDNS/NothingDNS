@@ -32,7 +32,24 @@ type Message struct {
 	// RawBody is the byte slice of the DSO TLV stream (header excluded).
 	// Populated by UnpackMessage when Header.Flags.Opcode == OpcodeDSO.
 	RawBody []byte
+
+	// poolState tracks pool ownership. Only a Message handed out by
+	// messagePool (UnpackMessage / AcquireMessage) is msgPoolLive and may be
+	// returned by Release. The zero value (msgNotPooled) marks a Message built
+	// any other way (struct literal, NewMessage, NewQuery, Copy): its section
+	// slices may alias another live Message (reply()-style
+	// `&Message{Questions: query.Questions}`), so Release must never zero its
+	// entries or Put its backing arrays into the pool (F592). msgInPool makes a
+	// repeated Release a no-op instead of a second Put that would hand the
+	// same *Message to two later callers (F103).
+	poolState uint8
 }
+
+const (
+	msgNotPooled uint8 = iota // not from messagePool: Release is a no-op
+	msgPoolLive               // obtained from messagePool, owned by the caller
+	msgInPool                 // Released, sitting in messagePool
+)
 
 // NewMessage creates a new DNS message with the given header.
 func NewMessage(header Header) *Message {
@@ -224,6 +241,7 @@ var messagePool = sync.Pool{
 // length. Call Release() when done to return it to the pool.
 func AcquireMessage() *Message {
 	m := messagePool.Get().(*Message)
+	m.poolState = msgPoolLive
 	m.reset()
 	return m
 }
@@ -250,12 +268,22 @@ func (m *Message) reset() {
 // queued for later — call Copy() before Release(). It's safe to call
 // Release on a nil Message.
 //
+// Release only recycles Messages obtained from UnpackMessage or
+// AcquireMessage; for any other Message (struct literal, NewMessage,
+// NewQuery, Copy) it is a no-op, so a hand-built Message that shares
+// section slices with a live Message can never corrupt it or inject those
+// slices into the pool (F592). Do not copy a pooled Message by value
+// (`*dst = *src`): the copy would carry src's pool ownership.
+//
 // Phase 3A: only the *Message and its section-slice backing arrays are
 // pooled. Per-record structs (Question, ResourceRecord, Name, label
 // slices, RData) still allocate fresh on Unpack and are reclaimed by GC
 // after Release nils them in the slice.
 func (m *Message) Release() {
-	if m == nil {
+	if m == nil || m.poolState != msgPoolLive {
+		// nil, already Released (F103), or never obtained from the pool
+		// (F592): a hand-built Message's slices may be shared with a live
+		// Message, so it is left to the GC untouched.
 		return
 	}
 	for i := range m.Questions {
@@ -294,6 +322,7 @@ func (m *Message) Release() {
 	// window between Put and Get can be arbitrarily long under
 	// light load.
 	m.RawBody = nil
+	m.poolState = msgInPool
 	messagePool.Put(m)
 }
 
@@ -460,6 +489,7 @@ func UnpackMessage(buf []byte) (*Message, error) {
 	}
 
 	msg := messagePool.Get().(*Message)
+	msg.poolState = msgPoolLive
 	msg.RawBody = nil
 	// Enforce the zero-length section invariant at Get. Release() truncates
 	// before Put, but pooled messages have been observed carrying leftover
@@ -527,7 +557,7 @@ func UnpackMessage(buf []byte) (*Message, error) {
 			msg.Release()
 			return nil, ErrBufferTooSmall
 		}
-		rr, n, err := UnpackResourceRecord(buf, offset)
+		rr, n, err := unpackResourceRecord(buf, offset, msg.Header.Flags.Opcode == OpcodeUpdate)
 		if err != nil {
 			msg.Release()
 			return nil, fmt.Errorf("unpacking answer %d: %w", i, err)
@@ -546,7 +576,7 @@ func UnpackMessage(buf []byte) (*Message, error) {
 			msg.Release()
 			return nil, ErrBufferTooSmall
 		}
-		rr, n, err := UnpackResourceRecord(buf, offset)
+		rr, n, err := unpackResourceRecord(buf, offset, msg.Header.Flags.Opcode == OpcodeUpdate)
 		if err != nil {
 			msg.Release()
 			return nil, fmt.Errorf("unpacking authority %d: %w", i, err)
@@ -710,14 +740,6 @@ func (m *Message) Truncate(maxSize int) {
 		return
 	}
 
-	removeLast := func(records []*ResourceRecord) []*ResourceRecord {
-		last := len(records) - 1
-		if records[last] != nil {
-			currentLength -= records[last].WireLength()
-		}
-		return records[:last]
-	}
-
 	// Set the OPT record aside so the Additional-section trim below cannot
 	// consume it, then put it back at the end of the section (its
 	// conventional position).
@@ -732,10 +754,30 @@ func (m *Message) Truncate(maxSize int) {
 	}
 	m.Additionals = kept
 
+	// Measure with the packed (compressed) size the transports compare
+	// against, not the uncompressed WireLength (F102): ends[k] is the packed
+	// length of the header, questions and the first k records in section
+	// order. Records are only ever removed from the end of that order, and
+	// compression pointers only point backwards, so every intermediate
+	// message packs to exactly such a prefix. The OPT record (root owner,
+	// no names in RDATA) is counted at its uncompressed length.
+	ends := m.truncationPrefixLengths()
+	optLen := 0
+	if opt != nil {
+		optLen = opt.WireLength()
+	}
+	nAdditionals := len(m.Additionals)
+	size := func() int {
+		return ends[len(m.Answers)+len(m.Authorities)+nAdditionals] + optLen
+	}
+	currentLength = size()
+
 	// Try removing additional records first. These are optional data, so
 	// dropping them does not set the TC bit (RFC 2181 §9).
-	for len(m.Additionals) > 0 && currentLength > maxSize {
-		m.Additionals = removeLast(m.Additionals)
+	for nAdditionals > 0 && currentLength > maxSize {
+		nAdditionals--
+		m.Additionals = m.Additionals[:nAdditionals]
+		currentLength = size()
 	}
 	if opt != nil {
 		m.Additionals = append(m.Additionals, opt)
@@ -750,7 +792,8 @@ func (m *Message) Truncate(maxSize int) {
 
 	// Try removing authority records.
 	for len(m.Authorities) > 0 && currentLength > maxSize {
-		m.Authorities = removeLast(m.Authorities)
+		m.Authorities = m.Authorities[:len(m.Authorities)-1]
+		currentLength = size()
 		truncated = true
 	}
 	m.Header.NSCount = uint16(len(m.Authorities))
@@ -764,7 +807,8 @@ func (m *Message) Truncate(maxSize int) {
 
 	// Try removing answer records.
 	for len(m.Answers) > 0 && currentLength > maxSize {
-		m.Answers = removeLast(m.Answers)
+		m.Answers = m.Answers[:len(m.Answers)-1]
+		currentLength = size()
 		truncated = true
 	}
 	m.Header.ANCount = uint16(len(m.Answers))
@@ -782,10 +826,63 @@ func (m *Message) Truncate(maxSize int) {
 		for i, rr := range m.Additionals {
 			if rr == opt {
 				m.Additionals = append(m.Additionals[:i], m.Additionals[i+1:]...)
-				currentLength -= opt.WireLength()
 				break
 			}
 		}
 		m.Header.ARCount = uint16(len(m.Additionals))
 	}
+}
+
+// truncationPrefixLengths returns, for k = 0..len(Answers)+len(Authorities)+
+// len(Additionals), the packed length of the header, the questions and the
+// first k records in section order, using the same name compression as Pack.
+// If the message cannot be packed (nil sections etc.) it falls back to the
+// cumulative uncompressed WireLength, which is an upper bound.
+func (m *Message) truncationPrefixLengths() []int {
+	total := len(m.Answers) + len(m.Authorities) + len(m.Additionals)
+	ends := make([]int, 0, total+1)
+	if packed, ok := m.packedPrefixLengths(ends); ok {
+		return packed
+	}
+	length := HeaderLen
+	for _, q := range m.Questions {
+		length += q.WireLength()
+	}
+	ends = append(ends[:0], length)
+	for _, section := range [][]*ResourceRecord{m.Answers, m.Authorities, m.Additionals} {
+		for _, rr := range section {
+			length += rr.WireLength()
+			ends = append(ends, length)
+		}
+	}
+	return ends
+}
+
+func (m *Message) packedPrefixLengths(ends []int) ([]int, bool) {
+	buf := make([]byte, m.WireLength())
+	compression := compressionPool.Get().(map[string]int)
+	defer func() {
+		clear(compression)
+		compressionPool.Put(compression)
+	}()
+	offset := HeaderLen
+	for _, q := range m.Questions {
+		n, err := q.Pack(buf, offset, compression)
+		if err != nil {
+			return nil, false
+		}
+		offset += n
+	}
+	ends = append(ends, offset)
+	for _, section := range [][]*ResourceRecord{m.Answers, m.Authorities, m.Additionals} {
+		for _, rr := range section {
+			n, err := rr.Pack(buf, offset, compression)
+			if err != nil {
+				return nil, false
+			}
+			offset += n
+			ends = append(ends, offset)
+		}
+	}
+	return ends, true
 }

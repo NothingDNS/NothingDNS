@@ -180,6 +180,15 @@ func (rr *ResourceRecord) Release() {
 // UnpackResourceRecord deserializes a resource record from wire format.
 // Returns the record and the number of bytes consumed.
 func UnpackResourceRecord(buf []byte, offset int) (*ResourceRecord, int, error) {
+	return unpackResourceRecord(buf, offset, false)
+}
+
+// unpackResourceRecord is UnpackResourceRecord with RFC 2136 UPDATE
+// semantics selectable. In the prerequisite and update sections of an
+// UPDATE message, CLASS ANY/NONE records carry RDLENGTH 0 for every TYPE
+// (RFC 2136 §2.4.1, §2.4.3, §2.5.2); such records have no RDATA to hand
+// to the type's parser and are kept as an empty RDataRaw (F122).
+func unpackResourceRecord(buf []byte, offset int, update bool) (*ResourceRecord, int, error) {
 	startOffset := offset
 
 	// Unpack the name
@@ -231,7 +240,10 @@ func UnpackResourceRecord(buf []byte, offset int) (*ResourceRecord, int, error) 
 	}
 
 	// Create appropriate RData based on type
-	data := createRData(rrtype)
+	var data RData
+	if !update || rdlength != 0 || (rrclass != ClassANY && rrclass != ClassNONE) {
+		data = createRData(rrtype)
+	}
 
 	// Unpack RData
 	if data != nil {

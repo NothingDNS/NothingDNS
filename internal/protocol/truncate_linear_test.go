@@ -6,38 +6,39 @@ import (
 )
 
 // truncateReference preserves the pre-optimization behavior for equivalence
-// testing. It deliberately recomputes WireLength after every removal.
+// testing. It deliberately re-packs after every removal and measures the
+// packed (compressed) size, which is what Truncate budgets against (F102).
 func truncateReference(m *Message, maxSize int) {
-	if m == nil || m.WireLength() <= maxSize {
+	if m == nil || packedLenForTest(m) <= maxSize {
 		return
 	}
-	for len(m.Additionals) > 0 && m.WireLength() > maxSize {
+	for len(m.Additionals) > 0 && packedLenForTest(m) > maxSize {
 		m.Additionals = m.Additionals[:len(m.Additionals)-1]
 	}
 	m.Header.ARCount = uint16(len(m.Additionals))
-	if m.WireLength() <= maxSize {
+	if packedLenForTest(m) <= maxSize {
 		return
 	}
 
 	truncated := false
-	for len(m.Authorities) > 0 && m.WireLength() > maxSize {
+	for len(m.Authorities) > 0 && packedLenForTest(m) > maxSize {
 		m.Authorities = m.Authorities[:len(m.Authorities)-1]
 		truncated = true
 	}
 	m.Header.NSCount = uint16(len(m.Authorities))
-	if m.WireLength() <= maxSize {
+	if packedLenForTest(m) <= maxSize {
 		if truncated {
 			m.Header.SetTruncated(true)
 		}
 		return
 	}
 
-	for len(m.Answers) > 0 && m.WireLength() > maxSize {
+	for len(m.Answers) > 0 && packedLenForTest(m) > maxSize {
 		m.Answers = m.Answers[:len(m.Answers)-1]
 		truncated = true
 	}
 	m.Header.ANCount = uint16(len(m.Answers))
-	if truncated || m.WireLength() > maxSize {
+	if truncated || packedLenForTest(m) > maxSize {
 		m.Header.SetTruncated(true)
 	}
 }
@@ -105,8 +106,8 @@ func TestMessageTruncateLinearMatchesReference(t *testing.T) {
 			if got.Header.Flags.TC != want.Header.Flags.TC {
 				t.Fatalf("TC got=%v want=%v", got.Header.Flags.TC, want.Header.Flags.TC)
 			}
-			if got.WireLength() != want.WireLength() {
-				t.Fatalf("wire length got=%d want=%d", got.WireLength(), want.WireLength())
+			if packedLenForTest(got) != packedLenForTest(want) {
+				t.Fatalf("packed length got=%d want=%d", packedLenForTest(got), packedLenForTest(want))
 			}
 		})
 	}

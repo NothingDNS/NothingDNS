@@ -195,6 +195,16 @@ type RDataSVCB struct {
 	Priority uint16
 	Target   *Name
 	Params   []SvcParam
+
+	// wireParams is set by Unpack: Params are opaque data received from the
+	// wire (RFC 9460 §4.3) and are re-packed verbatim, without the authoring
+	// rules Pack applies to locally built records (semantic validation,
+	// dropping AliasMode params), so forwarded RDATA and RRSIGs stay intact.
+	wireParams bool
+	// aliasParams holds SvcParams received on an AliasMode record. They are
+	// hidden from Params (recipients MUST ignore them, RFC 9460 §2.4.2) but
+	// re-packed verbatim so the RDATA an RRSIG covers is not rewritten.
+	aliasParams []SvcParam
 }
 
 // Type returns TypeSVCB.
@@ -224,9 +234,11 @@ func (r *RDataSVCB) Pack(buf []byte, offset int) (int, error) {
 	offset += n
 
 	// SvcParams — must be in strictly increasing key order per RFC 9460
-	params := svcParamsForMode(r.Priority, r.Params)
-	if err := validateSvcParams(params); err != nil {
-		return 0, err
+	params := r.packParams()
+	if !r.wireParams {
+		if err := validateSvcParams(params); err != nil {
+			return 0, err
+		}
 	}
 	for _, p := range params {
 		// Key (2 bytes) + ValueLength (2 bytes) + Value
@@ -296,8 +308,13 @@ func (r *RDataSVCB) Unpack(buf []byte, offset int, rdlength uint16) (int, error)
 
 		params = append(params, SvcParam{Key: key, Value: value})
 	}
+	r.wireParams = true
+	r.aliasParams = nil
 	if r.Priority == 0 {
 		r.Params = nil
+		if len(params) != 0 {
+			r.aliasParams = params
+		}
 		return offset - startOffset, nil
 	}
 
@@ -309,8 +326,9 @@ func (r *RDataSVCB) Unpack(buf []byte, offset int, rdlength uint16) (int, error)
 	// RR at RRSet level. Rejecting here would make one quirky SVCB/HTTPS
 	// record from an upstream fail the entire message (including valid A/AAAA
 	// answers) and falsely mark the upstream unhealthy. Only the structural
-	// wire-format bounds checks above are required to parse safely. Pack still
-	// validates: records WE emit must be well-formed.
+	// wire-format bounds checks above are required to parse safely. Pack
+	// validates only locally built records; wire-received params (including
+	// AliasMode params, which recipients ignore) are re-packed verbatim.
 	r.Params = params
 
 	return offset - startOffset, nil
@@ -355,10 +373,22 @@ func (r *RDataSVCB) Len() int {
 	} else {
 		length += r.Target.WireLength()
 	}
-	for _, p := range svcParamsForMode(r.Priority, r.Params) {
+	for _, p := range r.packParams() {
 		length += 4 + len(p.Value) // key (2) + length (2) + value
 	}
 	return length
+}
+
+// packParams returns the params Pack and Len emit: wire-received params
+// verbatim, otherwise the mode-filtered params of a locally built record.
+func (r *RDataSVCB) packParams() []SvcParam {
+	if r.wireParams {
+		if r.Priority == 0 {
+			return r.aliasParams
+		}
+		return r.Params
+	}
+	return svcParamsForMode(r.Priority, r.Params)
 }
 
 func svcParamsForMode(priority uint16, params []SvcParam) []SvcParam {
@@ -385,10 +415,24 @@ func (r *RDataSVCB) Copy() RData {
 		params[i] = SvcParam{Key: p.Key, Value: val}
 	}
 	return &RDataSVCB{
-		Priority: r.Priority,
-		Target:   target,
-		Params:   params,
+		Priority:    r.Priority,
+		Target:      target,
+		Params:      params,
+		wireParams:  r.wireParams,
+		aliasParams: copySvcParams(r.aliasParams),
 	}
+}
+
+// copySvcParams deep-copies params, preserving nil.
+func copySvcParams(params []SvcParam) []SvcParam {
+	if params == nil {
+		return nil
+	}
+	out := make([]SvcParam, len(params))
+	for i, p := range params {
+		out[i] = SvcParam{Key: p.Key, Value: append([]byte(nil), p.Value...)}
+	}
+	return out
 }
 
 // RDataHTTPS represents an HTTPS (type 65) record per RFC 9460.
@@ -397,6 +441,10 @@ type RDataHTTPS struct {
 	Priority uint16
 	Target   *Name
 	Params   []SvcParam
+
+	// wireParams and aliasParams mirror the RDataSVCB fields.
+	wireParams  bool
+	aliasParams []SvcParam
 }
 
 // Type returns TypeHTTPS.
@@ -408,7 +456,7 @@ func (r *RDataHTTPS) Pack(buf []byte, offset int) (int, error) {
 		return 0, fmt.Errorf("nil HTTPS record")
 	}
 
-	inner := &RDataSVCB{Priority: r.Priority, Target: r.Target, Params: r.Params}
+	inner := &RDataSVCB{Priority: r.Priority, Target: r.Target, Params: r.Params, wireParams: r.wireParams, aliasParams: r.aliasParams}
 	return inner.Pack(buf, offset)
 }
 
@@ -426,6 +474,8 @@ func (r *RDataHTTPS) Unpack(buf []byte, offset int, rdlength uint16) (int, error
 	r.Priority = inner.Priority
 	r.Target = inner.Target
 	r.Params = inner.Params
+	r.wireParams = inner.wireParams
+	r.aliasParams = inner.aliasParams
 	return n, nil
 }
 
@@ -435,7 +485,7 @@ func (r *RDataHTTPS) String() string {
 		return ""
 	}
 
-	inner := &RDataSVCB{Priority: r.Priority, Target: r.Target, Params: r.Params}
+	inner := &RDataSVCB{Priority: r.Priority, Target: r.Target, Params: r.Params, wireParams: r.wireParams, aliasParams: r.aliasParams}
 	return inner.String()
 }
 
@@ -445,7 +495,7 @@ func (r *RDataHTTPS) Len() int {
 		return 0
 	}
 
-	inner := &RDataSVCB{Priority: r.Priority, Target: r.Target, Params: r.Params}
+	inner := &RDataSVCB{Priority: r.Priority, Target: r.Target, Params: r.Params, wireParams: r.wireParams, aliasParams: r.aliasParams}
 	return inner.Len()
 }
 
@@ -466,9 +516,11 @@ func (r *RDataHTTPS) Copy() RData {
 		params[i] = SvcParam{Key: p.Key, Value: val}
 	}
 	return &RDataHTTPS{
-		Priority: r.Priority,
-		Target:   target,
-		Params:   params,
+		Priority:    r.Priority,
+		Target:      target,
+		Params:      params,
+		wireParams:  r.wireParams,
+		aliasParams: copySvcParams(r.aliasParams),
 	}
 }
 
@@ -559,7 +611,9 @@ func formatSvcParam(p SvcParam) string {
 }
 
 // formatALPNValue decodes an ALPN wire-format value into a comma-separated string.
-// Wire format: repeated [length][protocol-id] pairs.
+// Wire format: repeated [length][protocol-id] pairs. A ',' or '\' inside a
+// protocol id is escaped as "\," / "\\" (RFC 9460 Appendix A.1) so the
+// value-list splits back into the same ids (splitALPNValueList).
 func formatALPNValue(value []byte) string {
 	var protocols []string
 	offset := 0
@@ -572,11 +626,13 @@ func formatALPNValue(value []byte) string {
 		if offset+protoLen > len(value) {
 			break
 		}
-		protocols = append(protocols, string(value[offset:offset+protoLen]))
+		protocols = append(protocols, alpnIDEscaper.Replace(string(value[offset:offset+protoLen])))
 		offset += protoLen
 	}
 	return strconv.Quote(strings.Join(protocols, ","))
 }
+
+var alpnIDEscaper = strings.NewReplacer(`\`, `\\`, `,`, `\,`)
 
 // formatIPv4HintValue formats IPv4 addresses from wire format.
 func formatIPv4HintValue(value []byte) string {

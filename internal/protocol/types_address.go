@@ -357,6 +357,9 @@ func (r *RDataAPL) Pack(buf []byte, offset int) (int, error) {
 	if r == nil {
 		return 0, fmt.Errorf("nil APL record")
 	}
+	if offset < 0 || offset > len(buf) {
+		return 0, ErrBufferTooSmall
+	}
 	startOffset := offset
 	for _, item := range r.Items {
 		if len(item.Address) > 127 {
@@ -386,11 +389,11 @@ func (r *RDataAPL) Unpack(buf []byte, offset int, rdlength uint16) (int, error) 
 	if r == nil {
 		return 0, fmt.Errorf("nil APL record")
 	}
-	startOffset := offset
-	endOffset := offset + int(rdlength)
-	if endOffset > len(buf) {
+	if offset < 0 || offset > len(buf) || int(rdlength) > len(buf)-offset {
 		return 0, ErrBufferTooSmall
 	}
+	startOffset := offset
+	endOffset := offset + int(rdlength)
 
 	r.Items = nil
 	for offset < endOffset {
@@ -406,6 +409,13 @@ func (r *RDataAPL) Unpack(buf []byte, offset int, rdlength uint16) (int, error) 
 		offset += 4
 		if offset+addrLen > endOffset {
 			return 0, ErrBufferTooSmall
+		}
+		// RFC 3123 §4: AFDPART/PREFIX are bounded by the address family
+		// (IPv4: 4 octets, /32; IPv6: 16 octets, /128).
+		if maxLen := aplFamilyAddressLen(item.AddressFamily); maxLen > 0 &&
+			(addrLen > maxLen || int(item.Prefix) > maxLen*8) {
+			return 0, fmt.Errorf("invalid APL item for family %d: afdlength %d, prefix %d",
+				item.AddressFamily, addrLen, item.Prefix)
 		}
 		item.Address = make([]byte, addrLen)
 		copy(item.Address, buf[offset:offset+addrLen])
@@ -430,6 +440,19 @@ func (r *RDataAPL) String() string {
 		parts = append(parts, fmt.Sprintf("%s%d:%s/%d", prefix, item.AddressFamily, aplAddressString(item), item.Prefix))
 	}
 	return strings.Join(parts, " ")
+}
+
+// aplFamilyAddressLen returns the maximum AFDPART length for a known APL
+// address family, or 0 for families RFC 3123 does not define.
+func aplFamilyAddressLen(family uint16) int {
+	switch family {
+	case 1:
+		return 4
+	case 2:
+		return 16
+	default:
+		return 0
+	}
 }
 
 func aplAddressString(item APLItem) string {

@@ -219,8 +219,8 @@ func TestRound042TruncatePostCondition(t *testing.T) {
 			before := rr042Sections(msg)
 			msg.Truncate(maxSize)
 
-			if got := msg.WireLength(); got > maxSize && !msg.Header.Flags.TC {
-				t.Errorf("WireLength() = %d > maxSize %d without the TC bit: a truncated "+
+			if got := packedLenForTest(msg); got > maxSize && !msg.Header.Flags.TC {
+				t.Errorf("packed length %d > maxSize %d without the TC bit: a truncated "+
 					"response must tell the client to retry over TCP", got, maxSize)
 			}
 			if len(msg.Questions) != len(full.Questions) {

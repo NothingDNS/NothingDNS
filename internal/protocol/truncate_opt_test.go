@@ -50,8 +50,8 @@ func TestTruncate_KeepsOPT(t *testing.T) {
 	if m.GetOPT() == nil {
 		t.Fatal("OPT record was dropped from the truncated response")
 	}
-	if m.WireLength() > 512 {
-		t.Errorf("truncated message is %d bytes, over the 512 limit", m.WireLength())
+	if packedLenForTest(m) > 512 {
+		t.Errorf("truncated message is %d bytes, over the 512 limit", packedLenForTest(m))
 	}
 	if int(m.Header.ARCount) != len(m.Additionals) {
 		t.Errorf("ARCount = %d, want %d", m.Header.ARCount, len(m.Additionals))
@@ -117,7 +117,7 @@ func TestTruncate_NoOPTUnchanged(t *testing.T) {
 	if !m.Header.Flags.TC {
 		t.Error("TC not set")
 	}
-	if m.WireLength() > 512 {
-		t.Errorf("message is %d bytes, over the limit", m.WireLength())
+	if packedLenForTest(m) > 512 {
+		t.Errorf("message is %d bytes, over the limit", packedLenForTest(m))
 	}
 }

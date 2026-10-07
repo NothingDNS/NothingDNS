@@ -93,7 +93,9 @@ func ParseRDataText(rtype, rdata string) RData {
 		}
 	case "MX":
 		parts := strings.Fields(rdata)
-		if len(parts) >= 2 {
+		// F109: exactly `preference exchange`; extra fields are rejected,
+		// not silently dropped.
+		if len(parts) == 2 {
 			pref, ok := parseUintField(parts[0], 16)
 			if !ok {
 				return nil
@@ -183,7 +185,7 @@ func ParseRDataText(rtype, rdata string) RData {
 // parseSOARData parses SOA RData: "mname rname serial refresh retry expire minimum"
 func parseSOARData(rdata string) RData {
 	fields := strings.Fields(rdata)
-	if len(fields) < 7 {
+	if len(fields) != 7 { // F109: reject trailing fields instead of dropping them
 		return nil
 	}
 	mname, err := ParseName(fields[0])
@@ -228,7 +230,7 @@ func parseSOARData(rdata string) RData {
 // parseSRVRData parses SRV RData: "priority weight port target"
 func parseSRVRData(rdata string) RData {
 	fields := strings.Fields(rdata)
-	if len(fields) < 4 {
+	if len(fields) != 4 { // F109: reject trailing fields instead of dropping them
 		return nil
 	}
 	priority, ok := parseUintField(fields[0], 16)
@@ -880,10 +882,24 @@ func parseQuotedRDataFields(line string) ([]string, bool) {
 	escaped := false
 	fieldStarted := false
 
-	for _, r := range line {
+	// F108: iterate octets, not runes. A character-string is arbitrary
+	// octets (RFC 1035 §3.3); ranging over runes rewrote every byte that is
+	// not valid UTF-8 as U+FFFD (EF BF BD). The delimiters below are all
+	// ASCII, so octet-wise scanning keeps valid UTF-8 intact.
+	for i := 0; i < len(line); i++ {
+		r := line[i]
 		if inQuotes && escaped {
-			current.WriteRune(r)
 			escaped = false
+			// F107: RFC 1035 §5.1 \DDD is the octet with decimal value DDD.
+			// Other \X escapes (and an out-of-range \DDD) keep X literally.
+			if i+2 < len(line) && isDecimalDigit(r) && isDecimalDigit(line[i+1]) && isDecimalDigit(line[i+2]) {
+				if v := int(r-'0')*100 + int(line[i+1]-'0')*10 + int(line[i+2]-'0'); v <= 255 {
+					current.WriteByte(byte(v))
+					i += 2
+					continue
+				}
+			}
+			current.WriteByte(r)
 			continue
 		}
 		switch r {
@@ -892,7 +908,7 @@ func parseQuotedRDataFields(line string) ([]string, bool) {
 				escaped = true
 				fieldStarted = true
 			} else {
-				current.WriteRune(r)
+				current.WriteByte(r)
 				fieldStarted = true
 			}
 		case '"':
@@ -911,7 +927,7 @@ func parseQuotedRDataFields(line string) ([]string, bool) {
 			}
 		case ' ', '\t':
 			if inQuotes {
-				current.WriteRune(r)
+				current.WriteByte(r)
 				fieldStarted = true
 			} else if current.Len() > 0 || fieldStarted {
 				fields = append(fields, current.String())
@@ -919,12 +935,12 @@ func parseQuotedRDataFields(line string) ([]string, bool) {
 				fieldStarted = false
 			}
 		default:
-			current.WriteRune(r)
+			current.WriteByte(r)
 			fieldStarted = true
 		}
 	}
 	if escaped {
-		current.WriteRune('\\')
+		current.WriteByte('\\')
 	}
 	if inQuotes {
 		return nil, false
@@ -933,6 +949,10 @@ func parseQuotedRDataFields(line string) ([]string, bool) {
 		fields = append(fields, current.String())
 	}
 	return fields, true
+}
+
+func isDecimalDigit(c byte) bool {
+	return c >= '0' && c <= '9'
 }
 
 // parseSSHFPRData parses SSHFP RData: "algorithm fingerprint-type fingerprint"
@@ -1479,7 +1499,7 @@ func parseMandatorySvcParam(value string) ([]byte, bool) {
 }
 
 func parseALPNSvcParam(value string) ([]byte, bool) {
-	protocols := strings.Split(unquoteSvcParamValue(value), ",")
+	protocols := splitALPNValueList(unquoteSvcParamValue(value))
 	wire := make([]byte, 0, len(value))
 	for _, proto := range protocols {
 		if proto == "" || len(proto) > 255 {
@@ -1489,6 +1509,30 @@ func parseALPNSvcParam(value string) ([]byte, bool) {
 		wire = append(wire, proto...)
 	}
 	return wire, true
+}
+
+// splitALPNValueList splits an alpn value-list on unescaped commas, decoding
+// the "\," and "\\" escapes formatALPNValue emits for protocol ids that
+// contain ',' or '\' (RFC 9460 Appendix A.1). Any other backslash is kept
+// literally so previously stored text keeps its meaning.
+func splitALPNValueList(s string) []string {
+	var items []string
+	var cur strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '\\' && i+1 < len(s) && (s[i+1] == ',' || s[i+1] == '\\') {
+			i++
+			cur.WriteByte(s[i])
+			continue
+		}
+		if c == ',' {
+			items = append(items, cur.String())
+			cur.Reset()
+			continue
+		}
+		cur.WriteByte(c)
+	}
+	return append(items, cur.String())
 }
 
 func parseIPHintSvcParam(value string, ipv6 bool) ([]byte, bool) {
