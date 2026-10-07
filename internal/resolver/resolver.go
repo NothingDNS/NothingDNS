@@ -6,10 +6,12 @@ import (
 	"context"
 	cryptorand "crypto/rand"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -214,6 +216,12 @@ func NewResolver(config Config, cache Cache, transport Transport) *Resolver {
 type delegation struct {
 	nsNames []string            // NS hostnames
 	addrs   map[string][]string // nsName -> IP addresses (glue or resolved)
+
+	// F258: lastAddr is the server that produced queryDelegation's last
+	// response; lame holds servers whose referral was unusable (upward or
+	// out-of-bailiwick), which queryDelegation skips from then on.
+	lastAddr string
+	lame     map[string]bool
 }
 
 // Resolve resolves a DNS query iteratively starting from root servers.
@@ -223,7 +231,9 @@ type delegation struct {
 func (r *Resolver) Resolve(ctx context.Context, name string, qtype uint16) (*protocol.Message, error) {
 	key := fmt.Sprintf("%s:%d", strings.ToLower(strings.TrimSuffix(name, ".")), qtype)
 	msg, err, _ := r.sfGroup.Do(key, func() (*protocol.Message, error) {
-		return r.resolve(ctx, name, qtype, 0)
+		// F257: one glueless-NS lookup budget per client query, shared by
+		// every nested NS-address resolution it triggers.
+		return r.resolve(withGluelessBudget(ctx), name, qtype, 0)
 	})
 	if err != nil || msg == nil {
 		return msg, err
@@ -283,7 +293,8 @@ func pruneAnswerToChain(msg *protocol.Message, qname string, qtype uint16) {
 	}
 
 	// A DNAME legitimately owns an ancestor of a chain name (it synthesizes the
-	// CNAMEs we followed), so keep DNAMEs whose owner is a suffix of a chain name.
+	// CNAMEs we followed), so keep DNAMEs (and their RRSIGs) whose owner is a
+	// suffix of a chain name.
 	ancestorOfChain := func(owner string) bool {
 		for name := range chain {
 			if name == owner || strings.HasSuffix(name, "."+owner) {
@@ -299,7 +310,10 @@ func pruneAnswerToChain(msg *protocol.Message, qname string, qtype uint16) {
 			continue
 		}
 		owner := norm(rr.Name.String())
-		if chain[owner] || (rr.Type == protocol.TypeDNAME && ancestorOfChain(owner)) {
+		// F543: the RRSIG over a kept DNAME is kept with it (a validator
+		// cannot authenticate the DNAME without it).
+		isDNAME := rr.Type == protocol.TypeDNAME || isRRSIGCovering(rr, protocol.TypeDNAME, rr.Name)
+		if chain[owner] || (isDNAME && ancestorOfChain(owner)) {
 			kept = append(kept, rr)
 		}
 	}
@@ -341,7 +355,14 @@ func (r *Resolver) resolve(ctx context.Context, name string, qtype uint16, cname
 				// reply(), which mutates it in place (header ID/flags, section
 				// minimization). entry.Message is the shared cached object, so
 				// serving it directly would corrupt the cache for all clients.
-				return entry.Message.Copy(), nil
+				resp := entry.Message.Copy()
+				// F545: the cache holds the authoritative reply as received,
+				// before any CNAME/DNAME was chased — chase it again so a hit
+				// never ends the chain at a dangling alias.
+				if out, chased, err := r.chaseAlias(ctx, name, qtype, cnameDepth, resp); chased {
+					return out, err
+				}
+				return resp, nil
 			}
 		}
 	}
@@ -383,7 +404,24 @@ func (r *Resolver) resolve(ctx context.Context, name string, qtype uint16, cname
 
 		resp, err := r.queryDelegation(ctx, qName, qTypeToSend, deleg)
 		if err != nil {
+			// F424: a cancelled/expired caller context is not an upstream
+			// failure — report it instead of spinning to a synthesized SERVFAIL.
+			if cerr := ctx.Err(); cerr != nil {
+				return nil, cerr
+			}
 			continue // try was exhausted, fail below
+		}
+
+		// F422/F423: an error rcode (SERVFAIL, REFUSED, ...), a negative
+		// answer without AA, or an empty NOERROR with neither SOA nor NS
+		// comes from a server that is not (properly) authoritative here.
+		// Mark it lame and try the delegation's next server; never accept
+		// or cache its answer. SERVFAIL once every server is lame.
+		if isLameResponse(resp) {
+			if !markLame(deleg) {
+				return servfail(name, qtype), nil
+			}
+			continue
 		}
 
 		// If we sent a minimized NS query and got an answer (not a
@@ -427,120 +465,9 @@ func (r *Resolver) resolve(ctx context.Context, name string, qtype uint16, cname
 			// Got authoritative answer
 			r.cacheResponse(name, qtype, resp, currentZoneCut)
 
-			// Check for DNAME that needs synthesis (RFC 6672)
-			// DNAME takes precedence over CNAME per RFC 6672 §2.1
-			if qtype != protocol.TypeCNAME && qtype != protocol.TypeDNAME && len(resp.Answers) > 0 {
-				if dname := findDNAME(resp.Answers, name); dname.found {
-					// Copy the DNAME record and capture Questions from the pooled response
-					// before releasing it. The pool zeroes backing arrays on Release;
-					// findDNAME returns a pointer into that array, so dname.dnameRR
-					// would be zeroed if captured after Release. The struct copy alone
-					// is not enough either: it shares the *Name and *RDataDNAME with
-					// records in the pooled response, and Release recycles both (the
-					// wire buffer and the rdata struct) — so deep-copy the owner name
-					// and wrap the target name in a fresh RDataDNAME.
-					dnameData, _ := dname.dnameRR.Data.(*protocol.RDataDNAME)
-					dnameRR := *dname.dnameRR
-					if dname.dnameRR.Name != nil {
-						dnameRR.Name = dname.dnameRR.Name.Copy()
-					}
-					if dnameData != nil && dnameData.DName != nil {
-						dnameRR.Data = &protocol.RDataDNAME{DName: dnameData.DName.Copy()}
-					}
-					responseID := resp.Header.ID
-					respQuestions := make([]*protocol.Question, 0, len(resp.Questions))
-					for _, q := range resp.Questions {
-						if q != nil {
-							respQuestions = append(respQuestions, q.Copy())
-						}
-					}
-					resp.Release()
-
-					// Synthesize a CNAME from the DNAME and chase it
-					cnameName, _ := protocol.ParseName(dname.synthTarget)
-					qnameParsed, _ := protocol.ParseName(name)
-					synthCNAME := &protocol.ResourceRecord{
-						Name:  qnameParsed,
-						Type:  protocol.TypeCNAME,
-						Class: protocol.ClassIN,
-						TTL:   dnameRR.TTL,
-						Data:  &protocol.RDataCNAME{CName: cnameName},
-					}
-
-					// Resolve the synthesized CNAME target
-					target, err := r.resolve(ctx, dname.synthTarget, qtype, cnameDepth+1)
-					if err != nil {
-						return nil, err
-					}
-
-					// Build a new response: DNAME + synthesized CNAME + target answers.
-					// Use AcquireMessage() so the pooled object is properly tracked;
-					// callers must Release() the result when done.
-					result := protocol.AcquireMessage()
-					result.Header.ID = responseID
-					result.Header.Flags = protocol.NewResponseFlags(protocol.RcodeSuccess)
-					result.Header.Flags.RA = true
-					result.Questions = respQuestions
-					result.AddAnswer(&dnameRR)
-					result.AddAnswer(synthCNAME)
-					for _, rr := range target.Answers {
-						if rr == nil {
-							continue
-						}
-						result.AddAnswer(rr)
-					}
-					return result, nil
-				}
-
-				// Check for CNAME that needs chasing (RFC 1034 §4.3.2)
-				if cname := findCNAME(resp.Answers, name); cname != "" {
-					// Save the CNAME records before chasing
-					cnameAnswers := resp.Answers
-
-					target, err := r.resolve(ctx, cname, qtype, cnameDepth+1)
-					if err != nil {
-						// Return the CNAME at least. The records still live in
-						// resp's backing array, so they must be copied out
-						// BEFORE resp goes back to the pool: returning resp
-						// itself after Release() hands the caller a message the
-						// pool now owns — emptied of content and shared with any
-						// concurrent resolution, which would also double-Put it
-						// on the caller's later Release. Mirrors the DNAME path
-						// above, which builds a fresh message for the same reason.
-						out := protocol.AcquireMessage()
-						out.Header.ID = resp.Header.ID
-						out.Header.Flags = protocol.NewResponseFlags(protocol.RcodeSuccess)
-						out.Header.Flags.RA = true
-						for _, q := range resp.Questions {
-							if q != nil {
-								out.AddQuestion(q.Copy())
-							}
-						}
-						for _, rr := range cnameAnswers {
-							if rr != nil {
-								out.AddAnswer(rr.Copy())
-							}
-						}
-						resp.Release()
-						return out, nil
-					}
-
-					// Merge: prepend CNAME records to the target's answer section
-					merged := make([]*protocol.ResourceRecord, 0, len(cnameAnswers)+len(target.Answers))
-					merged = append(merged, cnameAnswers...)
-					merged = append(merged, target.Answers...)
-					target.Answers = merged
-					// The target's answer belongs to the original client's question.
-					target.Header.ID = resp.Header.ID
-					target.Questions = nil
-					target.Header.QDCount = 0
-					for _, q := range resp.Questions {
-						if q != nil {
-							target.AddQuestion(q.Copy())
-						}
-					}
-					return target, nil
-				}
+			// Chase a DNAME/CNAME at the query name (RFC 6672, RFC 1034 §4.3.2).
+			if out, chased, err := r.chaseAlias(ctx, name, qtype, cnameDepth, resp); chased {
+				return out, err
 			}
 
 			// Ensure RA bit is set (we are a recursive resolver)
@@ -556,9 +483,17 @@ func (r *Resolver) resolve(ctx context.Context, name string, qtype uint16, cname
 			// Follow delegation. extractDelegation bailiwick-filters NS records
 			// against currentZoneCut and returns the narrowed zone cut.
 			newDeleg, newZoneCut := r.extractDelegation(resp, currentZoneCut)
-			if newDeleg == nil || len(newDeleg.nsNames) == 0 {
-				// No usable (in-bailiwick) NS records in referral — SERVFAIL.
-				return servfail(name, qtype), nil
+			// F259: a referral that does not move the zone cut closer to
+			// the query name (sideways/self referral) is a loop — lame too.
+			notCloser := strings.EqualFold(strings.TrimSuffix(newZoneCut, "."), strings.TrimSuffix(currentZoneCut, "."))
+			if newDeleg == nil || len(newDeleg.nsNames) == 0 || notCloser {
+				// No usable (in-bailiwick) NS records: this server is lame
+				// (e.g. an upward referral). Try the delegation's other
+				// servers; SERVFAIL once every one of them is lame.
+				if !markLame(deleg) {
+					return servfail(name, qtype), nil
+				}
+				continue
 			}
 
 			// Advance the zone cut to the delegated zone.
@@ -576,12 +511,216 @@ func (r *Resolver) resolve(ctx context.Context, name string, qtype uint16, cname
 			continue
 
 		default:
-			// SERVFAIL or unexpected — try next server
+			// Unreachable: isLameResponse filtered everything else.
 			continue
 		}
 	}
 
+	if cerr := ctx.Err(); cerr != nil {
+		return nil, cerr // F424
+	}
 	return servfail(name, qtype), nil
+}
+
+// chaseAlias follows a DNAME (RFC 6672) or CNAME (RFC 1034 §4.3.2) that resp
+// carries for the query name and assembles the client answer: the alias
+// records (with their RRSIGs) prepended to the target's answer, under the
+// TARGET's rcode, Authority and Additional sections — the rcode of the last
+// name in the chain and its SOA/NSEC/NSEC3 denial proof (RFC 2308 §2.1,
+// RFC 6604, RFC 4035 §3.1.3). chased is false when resp needs no chasing
+// (qtype CNAME/DNAME, no alias at the query name); resp is then untouched.
+// When chased, resp is consumed (released or reused) and must not be used.
+func (r *Resolver) chaseAlias(ctx context.Context, name string, qtype uint16, cnameDepth int, resp *protocol.Message) (*protocol.Message, bool, error) {
+	if qtype == protocol.TypeCNAME || qtype == protocol.TypeDNAME || len(resp.Answers) == 0 {
+		return nil, false, nil
+	}
+
+	// DNAME takes precedence over CNAME per RFC 6672 §2.1.
+	if dname := findDNAME(resp.Answers, name); dname.found {
+		// Deep-copy the DNAME, the RRSIGs covering it (F543: a validator
+		// needs them to authenticate the DNAME) and the Questions out of
+		// the pooled response before releasing it: findDNAME returns a
+		// pointer into resp's backing array, and Release recycles the
+		// records, their names and rdata.
+		alias := []*protocol.ResourceRecord{dname.dnameRR.Copy()}
+		for _, rr := range resp.Answers {
+			if isRRSIGCovering(rr, protocol.TypeDNAME, dname.dnameRR.Name) {
+				alias = append(alias, rr.Copy())
+			}
+		}
+		responseID := resp.Header.ID
+		respQuestions := make([]*protocol.Question, 0, len(resp.Questions))
+		for _, q := range resp.Questions {
+			if q != nil {
+				respQuestions = append(respQuestions, q.Copy())
+			}
+		}
+		resp.Release()
+
+		// Synthesize a CNAME from the DNAME and chase it.
+		cnameName, _ := protocol.ParseName(dname.synthTarget)
+		qnameParsed, _ := protocol.ParseName(name)
+		alias = append(alias, &protocol.ResourceRecord{
+			Name:  qnameParsed,
+			Type:  protocol.TypeCNAME,
+			Class: protocol.ClassIN,
+			TTL:   alias[0].TTL,
+			Data:  &protocol.RDataCNAME{CName: cnameName},
+		})
+
+		target, err := r.resolve(ctx, dname.synthTarget, qtype, cnameDepth+1)
+		if err != nil {
+			return nil, true, err
+		}
+		// F542: keep the target's rcode and Authority (NXDOMAIN/NODATA SOA
+		// and denial proof), exactly as the CNAME path below does.
+		// F572: the target answer may repeat records already carried.
+		target.Answers = dedupeRRs(append(alias, target.Answers...))
+		target.Header.ID = responseID
+		target.Header.Flags.RA = true
+		target.Questions = respQuestions
+		target.Header.QDCount = uint16(len(respQuestions))
+		return target, true, nil
+	}
+
+	cname := findCNAME(resp.Answers, name)
+	if cname == "" {
+		return nil, false, nil
+	}
+	// Save the CNAME records (and their RRSIGs) before chasing.
+	cnameAnswers := resp.Answers
+
+	target, err := r.resolve(ctx, cname, qtype, cnameDepth+1)
+	if err != nil {
+		id := resp.Header.ID
+		resp.Release()
+		if cerr := ctx.Err(); cerr != nil {
+			return nil, true, cerr // F424: not a dangling-CNAME NOERROR
+		}
+		// F544: the chain could not be completed (e.g. longer than
+		// MaxCNAMEDepth). A CNAME-only NOERROR would assert the name
+		// exists with no data of qtype; the honest answer is SERVFAIL.
+		out := servfail(name, qtype)
+		out.Header.ID = id
+		return out, true, nil
+	}
+
+	// Merge: prepend CNAME records to the target's answer section
+	merged := make([]*protocol.ResourceRecord, 0, len(cnameAnswers)+len(target.Answers))
+	merged = append(merged, cnameAnswers...)
+	merged = append(merged, target.Answers...)
+	// F572: an authoritative reply that already carried the in-zone target
+	// RRset (RFC 1034 §4.3.2 step 3a) would otherwise repeat every target
+	// record (and RRSIG) once per in-zone hop; RFC 2181 §5 forbids
+	// duplicate RRs in an RRset.
+	target.Answers = dedupeRRs(merged)
+	// The target's answer belongs to the original client's question.
+	target.Header.ID = resp.Header.ID
+	target.Questions = nil
+	target.Header.QDCount = 0
+	for _, q := range resp.Questions {
+		if q != nil {
+			target.AddQuestion(q.Copy())
+		}
+	}
+	return target, true, nil
+}
+
+// dedupeRRs removes exact duplicate records (same owner name compared
+// case-insensitively, type, class and RDATA wire bytes; RFC 2181 §5), keeping
+// the first occurrence and the original order. TTL is not part of identity.
+// Records that differ in any RDATA byte (distinct addresses, RRSIGs with a
+// different key tag/algorithm/signature) are kept; a record whose RDATA cannot
+// be packed is always kept. rrs is filtered in place.
+func dedupeRRs(rrs []*protocol.ResourceRecord) []*protocol.ResourceRecord {
+	if len(rrs) < 2 {
+		return rrs
+	}
+	seen := make(map[string]struct{}, len(rrs))
+	buf := make([]byte, 4096)
+	out := rrs[:0]
+	for _, rr := range rrs {
+		if rr == nil || rr.Name == nil || isNilRData(rr.Data) {
+			out = append(out, rr)
+			continue
+		}
+		n, err := rr.Data.Pack(buf, 0)
+		if errors.Is(err, protocol.ErrBufferTooSmall) {
+			buf = make([]byte, 65535)
+			n, err = rr.Data.Pack(buf, 0)
+		}
+		if err != nil {
+			out = append(out, rr)
+			continue
+		}
+		var hdr [4]byte
+		binary.BigEndian.PutUint16(hdr[0:], rr.Type)
+		binary.BigEndian.PutUint16(hdr[2:], rr.Class)
+		key := strings.ToLower(strings.TrimSuffix(rr.Name.String(), ".")) + "\x00" + string(hdr[:]) + string(buf[:n])
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, rr)
+	}
+	for i := len(out); i < len(rrs); i++ {
+		rrs[i] = nil
+	}
+	return out
+}
+
+// isNilRData reports whether d is nil or a typed-nil pointer.
+func isNilRData(d protocol.RData) bool {
+	if d == nil {
+		return true
+	}
+	v := reflect.ValueOf(d)
+	return v.Kind() == reflect.Pointer && v.IsNil()
+}
+
+// isRRSIGCovering reports whether rr is an RRSIG over the (owner, covered)
+// RRset; owner comparison is case-insensitive (RFC 4343).
+func isRRSIGCovering(rr *protocol.ResourceRecord, covered uint16, owner *protocol.Name) bool {
+	if rr == nil || rr.Type != protocol.TypeRRSIG || rr.Name == nil || owner == nil {
+		return false
+	}
+	sig, ok := rr.Data.(*protocol.RDataRRSIG)
+	if !ok || sig == nil || sig.TypeCovered != covered {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSuffix(rr.Name.String(), "."), strings.TrimSuffix(owner.String(), "."))
+}
+
+// markLame marks the server that produced deleg's last response as lame for
+// this delegation and reports whether any non-lame server remains.
+func markLame(deleg *delegation) bool {
+	if deleg.lame == nil {
+		deleg.lame = make(map[string]bool)
+	}
+	deleg.lame[deleg.lastAddr] = true
+	return hasUsableAddress(deleg)
+}
+
+// isLameResponse reports whether resp is unusable as an answer from a server
+// of the current delegation (F422/F423): any rcode other than NOERROR or
+// NXDOMAIN; a negative answer (NXDOMAIN or NODATA) without the AA bit, which
+// only an authoritative server may give (RFC 1035 §4.1.1, RFC 2308 §2); or a
+// NOERROR reply that is neither an answer, a NODATA (SOA) nor a referral (NS).
+func isLameResponse(resp *protocol.Message) bool {
+	switch resp.Header.Flags.RCODE {
+	case protocol.RcodeSuccess:
+		if isAnswer(resp) || isReferral(resp) {
+			return false
+		}
+		if isNODATA(resp) {
+			return !resp.Header.Flags.AA
+		}
+		return true
+	case protocol.RcodeNameError:
+		return !resp.Header.Flags.AA
+	default:
+		return true
+	}
 }
 
 // queryDelegation sends a non-recursive query to each nameserver in the
@@ -590,7 +729,11 @@ func (r *Resolver) queryDelegation(ctx context.Context, name string, qtype uint1
 	// Collect all available addresses
 	var addrs []string
 	for _, nsName := range deleg.nsNames {
-		addrs = append(addrs, deleg.addrs[nsName]...)
+		for _, a := range deleg.addrs[nsName] {
+			if !deleg.lame[a] {
+				addrs = append(addrs, a)
+			}
+		}
 	}
 
 	// Rotate the slice for load distribution using atomic counter.
@@ -633,6 +776,7 @@ func (r *Resolver) queryDelegation(ctx context.Context, name string, qtype uint1
 			}
 		}
 
+		deleg.lastAddr = addr
 		return resp, nil
 	}
 
@@ -823,10 +967,18 @@ func (r *Resolver) resolveNSAddresses(ctx context.Context, deleg *delegation) {
 	var wg sync.WaitGroup
 	resultCh := make(chan nsResult, len(deleg.nsNames))
 
+	launched := 0
 	for _, nsName := range deleg.nsNames {
 		if len(deleg.addrs[nsName]) > 0 {
 			continue // Has glue already
 		}
+		// F257 (NXNSAttack): a referral may list any number of glueless NS
+		// names, each costing a full resolution — cap the fan-out per
+		// referral and per client query.
+		if launched >= maxGluelessNSPerReferral || !takeGluelessBudget(ctx) {
+			break
+		}
+		launched++
 
 		wg.Add(1)
 		go func(name string) {
@@ -853,6 +1005,38 @@ func (r *Resolver) resolveNSAddresses(ctx context.Context, deleg *delegation) {
 type nsRecursionKey struct{}
 
 const maxNSRecursion = 4
+
+// maxGluelessNSPerReferral caps how many glueless NS names one referral may
+// trigger lookups for (BIND's CVE-2020-8616 limit), and
+// maxGluelessNSPerQuery caps them across a whole client query, including
+// referral retries and nested NS-address resolutions (NXNSAttack).
+const (
+	maxGluelessNSPerReferral = 5
+	maxGluelessNSPerQuery    = 32
+)
+
+type gluelessBudgetKey struct{}
+
+// withGluelessBudget attaches a fresh per-query glueless-NS lookup budget to
+// ctx unless one is already present.
+func withGluelessBudget(ctx context.Context) context.Context {
+	if _, ok := ctx.Value(gluelessBudgetKey{}).(*atomic.Int32); ok {
+		return ctx
+	}
+	b := new(atomic.Int32)
+	b.Store(maxGluelessNSPerQuery)
+	return context.WithValue(ctx, gluelessBudgetKey{}, b)
+}
+
+// takeGluelessBudget consumes one glueless-NS lookup from ctx's budget and
+// reports whether it was available. A ctx without a budget is unbounded.
+func takeGluelessBudget(ctx context.Context) bool {
+	b, ok := ctx.Value(gluelessBudgetKey{}).(*atomic.Int32)
+	if !ok {
+		return true
+	}
+	return b.Add(-1) >= 0
+}
 
 func nsRecursionDepth(ctx context.Context) int {
 	if d, ok := ctx.Value(nsRecursionKey{}).(int); ok {
@@ -1066,15 +1250,22 @@ func synthesizeSideRecord(owner string, qtype uint16, src *protocol.Message) *pr
 	}
 	resp.Header.Flags.QR = true
 	resp.Header.Flags.RA = true
+	var sigs []*protocol.ResourceRecord
 	for _, rr := range src.Answers {
 		ownerName, ok := rrOwnerName(rr)
 		if !ok {
 			continue
 		}
-		if rr.Type != qtype {
+		if !strings.EqualFold(ownerName, owner) {
 			continue
 		}
-		if !strings.EqualFold(ownerName, owner) {
+		// F573: keep the RRSIGs over this RRset — a later cache hit for
+		// (owner, qtype) must carry them like a cold resolution does.
+		if isRRSIGCovering(rr, qtype, rr.Name) {
+			sigs = append(sigs, rr)
+			continue
+		}
+		if rr.Type != qtype {
 			continue
 		}
 		switch qtype {
@@ -1096,6 +1287,7 @@ func synthesizeSideRecord(owner string, qtype uint16, src *protocol.Message) *pr
 	if len(resp.Answers) == 0 {
 		return nil
 	}
+	resp.Answers = append(resp.Answers, sigs...)
 	resp.Header.QDCount = uint16(len(resp.Questions))
 	resp.Header.ANCount = uint16(len(resp.Answers))
 	return resp
@@ -1303,6 +1495,18 @@ func hasAnyAddress(deleg *delegation) bool {
 	for _, nsName := range deleg.nsNames {
 		if len(deleg.addrs[nsName]) > 0 {
 			return true
+		}
+	}
+	return false
+}
+
+// hasUsableAddress reports whether deleg has any address not marked lame.
+func hasUsableAddress(deleg *delegation) bool {
+	for _, nsName := range deleg.nsNames {
+		for _, a := range deleg.addrs[nsName] {
+			if !deleg.lame[a] {
+				return true
+			}
 		}
 	}
 	return false

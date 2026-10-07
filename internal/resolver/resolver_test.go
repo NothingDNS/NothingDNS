@@ -343,7 +343,8 @@ func TestResolver_NXDomain(t *testing.T) {
 
 	transport.setAllRootHandlers(func(msg *protocol.Message) *protocol.Message {
 		resp := &protocol.Message{
-			Header: protocol.Header{ID: msg.Header.ID, Flags: protocol.Flags{QR: true, RCODE: protocol.RcodeNameError}},
+			// AA: a negative answer is only accepted from an authoritative server (F423).
+			Header: protocol.Header{ID: msg.Header.ID, Flags: protocol.Flags{QR: true, AA: true, RCODE: protocol.RcodeNameError}},
 		}
 		resp.Questions = msg.Questions
 		// Add SOA in authority to indicate negative response

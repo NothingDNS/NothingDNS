@@ -889,8 +889,12 @@ func (s *cacheShard) moveToFront(entry *Entry) {
 	s.pushFront(entry)
 }
 
-// intrusiveRemove removes an entry from the intrusive LRU list and releases
-// the pooled *Message it holds, if any.
+// intrusiveRemove unlinks an entry from the intrusive LRU list. It must not
+// Release the entry's *Message: moveToFront unlinks live entries, and Get /
+// GetStale hand the same *Message to callers that read it after the shard
+// lock is dropped. Releasing here wiped every promoted hit and returned a
+// still-referenced message to the pool (F67); the garbage collector reclaims
+// it once the last holder lets go.
 func (s *cacheShard) intrusiveRemove(entry *Entry) {
 	if entry.prev != nil {
 		entry.prev.next = entry.next
@@ -904,9 +908,6 @@ func (s *cacheShard) intrusiveRemove(entry *Entry) {
 	}
 	entry.prev = nil
 	entry.next = nil
-	if entry.Message != nil {
-		entry.Message.Release()
-	}
 }
 
 // EvictPercent removes approximately percent of entries from each shard,
@@ -965,12 +966,10 @@ func (c *Cache) Clear() {
 	for i := range c.shards {
 		s := &c.shards[i]
 		s.mu.Lock()
-		// Release pooled messages and unlink all entries
+		// Unlink all entries. Messages are not Released: callers may still
+		// hold them from an earlier Get (F67).
 		for e := s.lruFront; e != nil; {
 			next := e.next
-			if e.Message != nil {
-				e.Message.Release()
-			}
 			e.prev = nil
 			e.next = nil
 			e = next

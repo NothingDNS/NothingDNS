@@ -139,8 +139,11 @@ func TestCNAMEChaseError_ReturnedMessageIsNotPoolOwned(t *testing.T) {
 }
 
 // TestCNAMEChaseError_ChainNotTruncated is the CLAIM's user-visible half: the
-// released-and-returned message is emptied, so the CNAME chain the comment
-// promises to "return at least" is silently truncated.
+// released-and-returned message was emptied, so the parent merged against an
+// empty message. Since F544 the error path no longer "returns the CNAME at
+// least" (a dangling NOERROR): an uncompletable chain is SERVFAIL. The result
+// must still be an intact, caller-owned message carrying the first hop's
+// CNAME — not an emptied pool object.
 func TestCNAMEChaseError_ChainNotTruncated(t *testing.T) {
 	tr := &chainTransport{next: "b.example.com.", final: "c.example.com."}
 	r := newChainResolver(t, tr, 1)
@@ -156,15 +159,14 @@ func TestCNAMEChaseError_ChainNotTruncated(t *testing.T) {
 			names = append(names, rr.Name.String())
 		}
 	}
-	// The full chain is a -> b -> c. Losing the second hop means the resolver
-	// returned an answer for a name the client never asked about.
-	if len(names) < 2 {
-		t.Fatalf("FAIL: CNAME chain truncated: got answers for %v, expected at "+
-			"least a.example.com. and b.example.com. The error path returned the "+
-			"CNAME-bearing response after Release() had already emptied it, and the "+
-			"parent merged against that empty message. hops=%v", names, tr.hops)
+	if ret.Header.Flags.RCODE != protocol.RcodeServerFailure {
+		t.Fatalf("FAIL: over-long chain rcode=%d answers=%v, want SERVFAIL (F544: no dangling-CNAME NOERROR). hops=%v",
+			ret.Header.Flags.RCODE, names, tr.hops)
 	}
-	t.Logf("PASS: chain preserved: %v", names)
+	if len(names) == 0 || names[0] != "a.example.com." {
+		t.Fatalf("FAIL: returned message emptied/truncated: answers=%v hops=%v", names, tr.hops)
+	}
+	t.Logf("PASS: SERVFAIL with intact message: %v", names)
 }
 
 // TestCNAMEChaseSuccess_Unaffected is the CONTROL: a single-hop chain within

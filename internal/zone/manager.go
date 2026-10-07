@@ -1,12 +1,15 @@
 package zone
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nothingdns/nothingdns/internal/protocol"
 )
 
 // RFC 1982 serial number arithmetic constants
@@ -638,6 +641,116 @@ func (m *Manager) DeleteRecord(zoneName, name, rtype string) error {
 
 	m.notifyMutation(zoneName, false)
 	return nil
+}
+
+// DeleteRecordData deletes the single resource record name+type+rdata from a
+// zone, leaving the other records of the RRset in place (F417). The owner
+// name is matched case-insensitively (qualified against the zone origin) and
+// RDATA is compared in canonical form via RDataEqual. Exact duplicates of the
+// RR are one RR (RFC 2181 §5), so every stored copy equal to rdata is removed.
+// It bumps the SOA serial, persists the zone file and fires the mutation hook
+// exactly like DeleteRecord. An empty rdata is rejected: use DeleteRecord to
+// remove a whole RRset.
+func (m *Manager) DeleteRecordData(zoneName, name, rtype, rdata string) error {
+	zoneName = normalizeZoneName(zoneName)
+	rtype = strings.ToUpper(strings.TrimSpace(rtype))
+	if strings.TrimSpace(rdata) == "" {
+		return fmt.Errorf("record data is required to delete a single record")
+	}
+
+	m.mu.RLock()
+	z, exists := m.zones[zoneName]
+	m.mu.RUnlock()
+
+	if !exists {
+		return fmt.Errorf("zone %s not found", zoneName)
+	}
+
+	z.Lock()
+
+	name = qualifyName(name, z.Origin)
+	records, ok := z.Records[name]
+	if !ok {
+		z.Unlock()
+		return fmt.Errorf("no records found for %s", name)
+	}
+
+	filtered := make([]Record, 0, len(records))
+	found := false
+	for _, r := range records {
+		if strings.ToUpper(r.Type) == rtype && RDataEqual(rtype, r.RData, rdata) {
+			found = true
+			continue
+		}
+		filtered = append(filtered, r)
+	}
+
+	if !found {
+		z.Unlock()
+		return fmt.Errorf("record not found: %s %s %s", name, rtype, rdata)
+	}
+
+	if len(filtered) == 0 {
+		delete(z.Records, name)
+	} else {
+		z.Records[name] = filtered
+	}
+
+	IncrementSerial(z)
+	z.Unlock()
+
+	if m.zoneDir != "" {
+		m.mu.RLock()
+		path := m.files[zoneName]
+		m.mu.RUnlock()
+		if path != "" {
+			if err := m.writeZoneFile(z, path); err != nil {
+				m.warnf("zone: failed to persist zone %s to %s: %v", zoneName, path, err)
+			}
+		}
+	}
+
+	m.notifyMutation(zoneName, false)
+	return nil
+}
+
+// nameOnlyRDataTypes are the types whose presentation RDATA holds only
+// numbers and domain names, so it can be lowercased before encoding: their
+// names compare case-insensitively (RFC 4034 §6.2) and nothing else in the
+// RDATA carries case.
+var nameOnlyRDataTypes = map[string]bool{
+	"NS": true, "CNAME": true, "PTR": true, "DNAME": true, "MX": true,
+	"SRV": true, "KX": true, "AFSDB": true, "RT": true, "PX": true, "MD": true,
+	"MF": true, "MB": true, "MG": true, "MR": true, "MINFO": true, "RP": true,
+	"SOA": true,
+}
+
+// RDataEqual reports whether two presentation-form RDATA strings of type
+// rtype denote the same RDATA. Both sides are compared in canonical wire form
+// (so "2001:DB8::1" equals "2001:db8::0:1" and TXT quoting is normalized), with
+// domain names compared case-insensitively. Text that cannot be encoded falls
+// back to an exact comparison (case-insensitive for name-only types).
+// The comparison is a pure function of its inputs, so every Raft replica
+// selects the same record.
+func RDataEqual(rtype, a, b string) bool {
+	rtype = strings.ToUpper(strings.TrimSpace(rtype))
+	a, b = strings.TrimSpace(a), strings.TrimSpace(b)
+	if a == b {
+		return true
+	}
+	nameOnly := nameOnlyRDataTypes[rtype]
+	if nameOnly {
+		a, b = strings.ToLower(a), strings.ToLower(b)
+		if a == b {
+			return true
+		}
+	}
+	wa := serializeRecordData(Record{Type: rtype, RData: a})
+	wb := serializeRecordData(Record{Type: rtype, RData: b})
+	if wa != nil && wb != nil && protocol.RecordTypeFromText(rtype) != 0 {
+		return bytes.Equal(wa, wb)
+	}
+	return false
 }
 
 // UpdateRecord replaces a record identified by name+type+oldData with a new record.

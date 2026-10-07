@@ -274,7 +274,9 @@ func (c *Client) Query(msg *protocol.Message) (*protocol.Message, error) {
 	}
 
 	if err != nil {
-		server.markFailure()
+		// queryTCPBuf already recorded the failure (F92); marking it here
+		// too counted one failed query several times against the 3-strike
+		// threshold, ejecting a healthy upstream after a single loss.
 		atomic.AddUint64(&c.queriesFailed, 1)
 		return nil, err
 	}
@@ -514,21 +516,10 @@ func (c *Client) queryUDPBuf(server *Server, msg *protocol.Message, buf []byte) 
 	}
 	packed := buf[:n]
 
-	// From here on, any returned error reflects a problem talking to the
-	// server (dial/deadline/write/read/unpack). Record markFailure via defer
-	// so health-check probes and load-balancer back-off see the outcome.
-	// Previously the success path called markSuccess but no path called
-	// markFailure, leaving dead servers permanently marked healthy.
-	//
-	// Truncation is a soft outcome: the server DID respond, just over UDP
-	// with TC=1. The caller retries on TCP. Skip the failure mark in that
-	// case via the local flag below.
-	skipFailureMark := false
-	defer func() {
-		if err != nil && !skipFailureMark {
-			server.markFailure()
-		}
-	}()
+	// A UDP error does not mark the server failed (F92): every caller
+	// (Query, checkHealth) retries the exchange over TCP, and queryTCPBuf
+	// records the outcome of that retry — markSuccess, or exactly one
+	// markFailure for the whole failed exchange.
 
 	// Create UDP connection
 	conn, err := net.DialTimeout("udp", server.Address, server.Timeout)
@@ -566,14 +557,15 @@ func (c *Client) queryUDPBuf(server *Server, msg *protocol.Message, buf []byte) 
 		resp.Release()
 		return nil, fmt.Errorf("response ID mismatch: got %d, want %d", responseID, msg.Header.ID)
 	}
+	if !responseMatchesQuestion(msg, resp) {
+		resp.Release()
+		return nil, fmt.Errorf("response question mismatch")
+	}
 
 	server.markSuccess(latency)
 
-	// Check for truncation - caller should retry with TCP. Treat truncation
-	// as a transport "soft failure": the server responded, so do NOT call
-	// markFailure via the defer.
+	// Check for truncation - caller should retry with TCP.
 	if resp.Header.Flags.TC {
-		skipFailureMark = true
 		return resp, fmt.Errorf("response truncated")
 	}
 
@@ -745,10 +737,29 @@ func (c *Client) queryTCPBuf(server *Server, msg *protocol.Message, buf []byte) 
 		resp.Release()
 		return nil, fmt.Errorf("response ID mismatch: got %d, want %d", responseID, msg.Header.ID)
 	}
+	if !responseMatchesQuestion(msg, resp) {
+		resp.Release()
+		return nil, fmt.Errorf("response question mismatch")
+	}
 
 	server.markSuccess(latency)
 
 	return resp, nil
+}
+
+// responseMatchesQuestion reports whether resp echoes the question of query
+// (name case-insensitively, type and class exactly), as RFC 5452 section 9.1
+// requires before a reply is accepted (F93). A query without a question has
+// nothing to bind to and is not checked.
+func responseMatchesQuestion(query, resp *protocol.Message) bool {
+	if len(query.Questions) == 0 || query.Questions[0] == nil {
+		return true
+	}
+	if len(resp.Questions) != 1 || resp.Questions[0] == nil {
+		return false
+	}
+	want, got := query.Questions[0], resp.Questions[0]
+	return got.QType == want.QType && got.QClass == want.QClass && got.Name.Equal(want.Name)
 }
 
 func writePacket(conn net.Conn, data []byte) error {

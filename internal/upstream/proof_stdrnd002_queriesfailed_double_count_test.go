@@ -26,19 +26,58 @@ import (
 	"github.com/nothingdns/nothingdns/internal/protocol"
 )
 
-// deadUpstreamAddr returns a loopback address with nothing listening, so both
-// the UDP and the TCP attempt inside queryWithFailover fail deterministically.
+// deadUpstreamAddr returns a loopback address whose UDP and TCP ports are held
+// by the test for its whole lifetime and fail every exchange immediately: UDP
+// queries get a 1-byte (unparseable) datagram back and TCP connections are
+// accepted and closed before any reply. Holding the port matters: a
+// reserve-then-close address can be bound by another test binary running in
+// parallel (go test ./...), which then answers the "dead" upstream and makes
+// the failure-accounting tests flake (F443).
 func deadUpstreamAddr(t *testing.T) string {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	var (
+		l   net.Listener
+		pc  net.PacketConn
+		err error
+	)
+	for attempt := 0; attempt < 20; attempt++ {
+		l, err = net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("could not reserve a tcp port: %v", err)
+		}
+		pc, err = net.ListenPacket("udp", l.Addr().String())
+		if err == nil {
+			break
+		}
+		_ = l.Close()
+	}
 	if err != nil {
-		t.Fatalf("could not reserve a port: %v", err)
+		t.Fatalf("could not reserve matching tcp+udp ports: %v", err)
 	}
-	addr := l.Addr().String()
-	if err := l.Close(); err != nil {
-		t.Fatalf("could not release reserved port: %v", err)
-	}
-	return addr
+	t.Cleanup(func() {
+		_ = l.Close()
+		_ = pc.Close()
+	})
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			_, from, err := pc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			_, _ = pc.WriteTo([]byte{0}, from)
+		}
+	}()
+	go func() {
+		for {
+			conn, err := l.Accept()
+			if err != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+	return l.Addr().String()
 }
 
 func lbTestMessage(t *testing.T) *protocol.Message {
@@ -202,7 +241,11 @@ func startCountingUDPResolver(t *testing.T) (addr string, stop func()) {
 			if wn, err := resp.Pack(out); err == nil {
 				_, _ = pc.WriteTo(out[:wn], from)
 			}
-			resp.Release()
+			// resp is a literal (not pool-acquired) whose Questions slice
+			// aliases query's pooled backing array: Releasing it would hand
+			// that array to messagePool while query still owns it, and the
+			// client's concurrent UnpackMessage could reacquire it (F442 DATA
+			// RACE). Only the pool-acquired query is Released.
 			query.Release()
 		}
 	}()
