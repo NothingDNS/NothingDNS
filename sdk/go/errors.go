@@ -22,8 +22,17 @@ var (
 	// ErrForbidden matches HTTP 403 — the token is valid but the account's
 	// role is insufficient for the operation.
 	ErrForbidden = errors.New("nothingdns: forbidden")
-	// ErrRateLimited matches HTTP 429 — the endpoint's rate limit was hit.
+	// ErrRateLimited matches HTTP 429 — the endpoint's rate limit was hit,
+	// or (for login) another credential check from the same IP is in flight.
 	ErrRateLimited = errors.New("nothingdns: rate limited")
+	// ErrBadRequest matches HTTP 400 — the server refused the input, e.g. a
+	// record that does not parse for its type, a runtime config value the
+	// config loader would reject, or an upstream address without a port.
+	ErrBadRequest = errors.New("nothingdns: bad request")
+	// ErrConflict matches HTTP 409 — the change conflicts with existing
+	// state, e.g. a duplicate record, a CNAME conflict, an existing user, or
+	// an account defined in the server config file.
+	ErrConflict = errors.New("nothingdns: conflict")
 )
 
 // ErrAPIError is returned when the NothingDNS server answers with a non-2xx
@@ -48,8 +57,8 @@ func (e *ErrAPIError) Error() string {
 }
 
 // Is maps this error onto the package sentinels so callers can use
-// errors.Is with ErrNotFound, ErrUnauthorized, ErrForbidden and
-// ErrRateLimited.
+// errors.Is with ErrNotFound, ErrUnauthorized, ErrForbidden, ErrRateLimited,
+// ErrBadRequest and ErrConflict.
 func (e *ErrAPIError) Is(target error) bool {
 	switch target {
 	case ErrNotFound:
@@ -60,6 +69,10 @@ func (e *ErrAPIError) Is(target error) bool {
 		return e.StatusCode == 403
 	case ErrRateLimited:
 		return e.StatusCode == 429
+	case ErrBadRequest:
+		return e.StatusCode == 400
+	case ErrConflict:
+		return e.StatusCode == 409
 	}
 	return false
 }
@@ -107,3 +120,12 @@ func IsForbidden(err error) bool { return errors.Is(err, ErrForbidden) }
 
 // IsRateLimited reports whether err is the API error raised for HTTP 429.
 func IsRateLimited(err error) bool { return errors.Is(err, ErrRateLimited) }
+
+// IsBadRequest reports whether err is the API error raised for HTTP 400 —
+// input the server refused; the message says why.
+func IsBadRequest(err error) bool { return errors.Is(err, ErrBadRequest) }
+
+// IsConflict reports whether err is the API error raised for HTTP 409 — a
+// change that conflicts with existing state (duplicate record, CNAME
+// conflict, existing user, or an account defined in the server config file).
+func IsConflict(err error) bool { return errors.Is(err, ErrConflict) }

@@ -115,7 +115,13 @@ export class AuthResource {
     return userFromJson(json);
   }
 
-  /** Delete a user account by name (admin only). */
+  /**
+   * Delete a user account by name (admin only).
+   *
+   * @throws {@link NothingDNSApiError} 409 for an account defined in the
+   *   server config file (`User.configDefined`); 500 when the server could not
+   *   write its users file (nothing was changed).
+   */
   async deleteUser(username: string): Promise<string> {
     return messageOf(
       await this.transport.delete(`/api/v1/auth/users/${escapeSegment(username)}`),

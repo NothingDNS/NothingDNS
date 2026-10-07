@@ -2,6 +2,7 @@ package nothingdns
 
 import (
 	"context"
+	"strings"
 )
 
 // ZonesService handles zones, records, export and bulk PTR generation
@@ -66,6 +67,8 @@ type replaceRecordRequest struct {
 type deleteRecordRequest struct {
 	Name string `json:"name"`
 	Type string `json:"type"`
+	// Data, when set, limits the delete to the one record with this RDATA.
+	Data string `json:"data,omitempty"`
 }
 
 // ptrBulkRequest is the JSON body of POST /api/v1/zones/{zone}/ptr-bulk. Note
@@ -224,6 +227,25 @@ func (s *ZonesService) ReplaceRecord(ctx context.Context, zone, name, rtype, old
 // every address of a host. It returns the server's confirmation message.
 func (s *ZonesService) DeleteRecords(ctx context.Context, zone, name, rtype string) (string, error) {
 	body := deleteRecordRequest{Name: name, Type: rtype}
+	return s.t.doMessage(ctx, "DELETE", "/api/v1/zones/"+s.t.escape(zone)+"/records", nil, body)
+}
+
+// DeleteRecord deletes the single record of rtype owned by name whose RDATA
+// equals data, leaving the other records of the RRset in place. It requires
+// the operator role or higher. The server compares RDATA in canonical form
+// (domain names case-insensitively, TXT exactly). It returns the server's
+// confirmation message.
+//
+// It fails with an *ErrAPIError carrying status 404 (see IsNotFound) when no
+// record matches, and with an *ErrValidationError, without sending a request,
+// when data is blank — an empty data field would delete the whole RRset; use
+// DeleteRecords for that. SOA records and the zone apex NS RRset are refused
+// with 400 (see IsBadRequest).
+func (s *ZonesService) DeleteRecord(ctx context.Context, zone, name, rtype, data string) (string, error) {
+	if strings.TrimSpace(data) == "" {
+		return "", &ErrValidationError{Message: "data is required to delete a single record; use DeleteRecords to delete the whole RRset"}
+	}
+	body := deleteRecordRequest{Name: name, Type: rtype, Data: data}
 	return s.t.doMessage(ctx, "DELETE", "/api/v1/zones/"+s.t.escape(zone)+"/records", nil, body)
 }
 

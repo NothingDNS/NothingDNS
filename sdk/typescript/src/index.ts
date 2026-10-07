@@ -53,6 +53,8 @@ export {
   NothingDNSConnectionError,
   NothingDNSError,
   NothingDNSValidationError,
+  isBadRequest,
+  isConflict,
   isForbidden,
   isNotFound,
   isRateLimited,

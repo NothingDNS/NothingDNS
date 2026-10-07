@@ -205,10 +205,17 @@ try {
 | `NothingDNSConnectionError` | DNS failure, refused connection, TLS error or timeout. |
 | `NothingDNSValidationError` | A local argument check failed, or a 2xx body was not valid JSON. |
 
-Common status codes: `400` bad input · `401` missing/expired token · `403` role
-too low · `404` not found · `409` conflict (duplicate zone, user or upstream) ·
-`421` name conflict (zone/record collides with an existing one) · `429` rate
-limited · `500`/`503` server-side failure or subsystem unavailable.
+Common status codes: `400` bad input (`isBadRequest`; e.g. a record that does
+not parse for its type, a runtime config value the config loader would reject,
+an RPZ CNAME/OVERRIDE rule without valid `overrideData`, an upstream without a
+port or removing the last one) · `401` missing/expired token · `403` role too
+low · `404` not found (also `zones.deleteRecord` when no record has that data)
+· `409` conflict (`isConflict`; duplicate zone, user, upstream or record, CNAME
+conflict, or an account defined in the server config file) · `421` this node
+is not the Raft leader (retry against the leader) · `429` rate limited (for
+`auth.login` also when another login from the same IP is in flight) ·
+`500`/`503` server-side failure or subsystem unavailable (a failed save of
+users or runtime overrides leaves nothing changed).
 
 Since the SDK is promise-based, `Promise.allSettled` is a convenient way to fan
 out independent calls and collect partial failures.
@@ -246,7 +253,9 @@ for operators and admins.
 
 ```ts
 for (const user of await client.auth.listUsers()) {
-  console.log(user.username, user.role, user.createdAt);
+  // configDefined: account comes from the server config file; deleting or
+  // resetting it is refused with 409 (isConflict).
+  console.log(user.username, user.role, user.createdAt, user.configDefined);
 }
 
 await client.auth.createUser('ops', process.env.NDNS_OPS_PASSWORD!, 'operator');
@@ -266,7 +275,8 @@ await client.auth.deleteUser('ops');
 | `zones.listRecords(zone, { name })` | `GET /api/v1/zones/{zone}/records` | operator |
 | `zones.addRecord(zone, name, type, data, { ttl })` | `POST /api/v1/zones/{zone}/records` | operator |
 | `zones.replaceRecord(zone, name, type, oldData, data, { ttl })` | `PUT /api/v1/zones/{zone}/records` | operator |
-| `zones.deleteRecords(zone, name, type)` | `DELETE /api/v1/zones/{zone}/records` | operator |
+| `zones.deleteRecords(zone, name, type)` | `DELETE /api/v1/zones/{zone}/records` (whole RRset) | operator |
+| `zones.deleteRecord(zone, name, type, data)` | `DELETE /api/v1/zones/{zone}/records` (one record) | operator |
 | `zones.export(zone)` | `GET /api/v1/zones/{zone}/export` | operator |
 | `zones.ptrBulk(zone, cidr, pattern, options)` | `POST /api/v1/zones/{zone}/ptr-bulk` | operator |
 | `zones.ptr6Lookup(zone, ip)` | `GET /api/v1/zones/{zone}/ptr6-lookup` | operator |
@@ -476,7 +486,7 @@ are browser-facing and have no SDK method.
 | `health`, `ready`, `live` | `/health`, `/readyz`, `/livez` |
 | `status`, `serverConfig`, `openapiSpec` | `/api/v1/status`, `/api/v1/server/config`, `/api/openapi.json` |
 | `auth` | `login`, `bootstrap`, `session`, `logout`, `roles`, `listUsers`, `createUser`, `deleteUser` |
-| `zones` | `list`, `create`, `get`, `delete`, `reload`, `transfers`, `listRecords`, `addRecord`, `replaceRecord`, `deleteRecords`, `export`, `ptrBulk`, `ptr6Lookup` |
+| `zones` | `list`, `create`, `get`, `delete`, `reload`, `transfers`, `listRecords`, `addRecord`, `replaceRecord`, `deleteRecords`, `deleteRecord`, `export`, `ptrBulk`, `ptr6Lookup` |
 | `cache` | `stats`, `flush` |
 | `config` | `get`, `reload`, `setLogging`, `setRRL`, `setCache`, `setResolution`, `setDns64`, `setCookie` |
 | `acl` | `get`, `set`, `recursion`, `setRecursion` |

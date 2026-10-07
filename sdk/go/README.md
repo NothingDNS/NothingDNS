@@ -13,7 +13,7 @@ The SDK mirrors the server's API groups as namespaced services on a `Client`, re
 - **Context-aware** — every method takes a `context.Context`, so calls support cancellation and deadlines.
 - **Zero dependencies** — stdlib only (`net/http`, `encoding/json`, `context`, `time`, `net/url`, `errors`, `strings`).
 - **Forgiving decoding** — missing and unknown JSON fields are tolerated, so a newer server never breaks an older client.
-- **Precise errors** — typed `ErrAPIError` / `ErrConnectionError` / `ErrValidationError`, with `errors.Is`-friendly sentinels and helpers (`IsNotFound`, `IsUnauthorized`, `IsForbidden`, `IsRateLimited`).
+- **Precise errors** — typed `ErrAPIError` / `ErrConnectionError` / `ErrValidationError`, with `errors.Is`-friendly sentinels and helpers (`IsNotFound`, `IsUnauthorized`, `IsForbidden`, `IsRateLimited`, `IsBadRequest`, `IsConflict`).
 - **Concurrent** — a `Client` is safe to share across goroutines as long as the token is not swapped mid-flight.
 - **Documented** — Go doc comments on every exported type, method and field.
 
@@ -193,6 +193,8 @@ for _, r := range roles {
 
 // Users
 users, err := client.Auth.ListUsers(ctx)               // operator+
+// users[i].ConfigDefined is true for accounts from the server config file;
+// deleting or resetting those is refused with 409 (nothingdns.IsConflict).
 user, err := client.Auth.CreateUser(ctx, "alice", pw, "viewer")  // admin
 err := client.Auth.DeleteUser(ctx, "alice")            // admin (path form)
 err := client.Auth.DeleteUserByQuery(ctx, "alice")     // admin (query form)
@@ -220,7 +222,8 @@ records, err := client.Zones.ListRecords(ctx, "example.com", "")            // a
 records, err = client.Zones.ListRecords(ctx, "example.com", "www")           // filtered
 _, err = client.Zones.AddRecord(ctx, "example.com", "www", "A", "192.0.2.1", &nothingdns.AddRecordOptions{TTL: &ttl})
 _, err = client.Zones.ReplaceRecord(ctx, "example.com", "www", "A", "192.0.2.1", "192.0.2.2", nil)
-_, err = client.Zones.DeleteRecords(ctx, "example.com", "www", "A")
+_, err = client.Zones.DeleteRecord(ctx, "example.com", "www", "A", "192.0.2.2") // one record; 404 if absent
+_, err = client.Zones.DeleteRecords(ctx, "example.com", "www", "A")              // the whole RRset
 
 // Export (BIND zone-file text)
 export, err := client.Zones.Export(ctx, "example.com")
@@ -409,6 +412,8 @@ case nothingdns.IsForbidden(err):
     fmt.Println("your role is insufficient")
 case nothingdns.IsRateLimited(err):
     fmt.Println("slow down")
+case nothingdns.IsBadRequest(err), nothingdns.IsConflict(err):
+    fmt.Println("refused:", err) // the server message says why
 case nothingdns.IsUnauthorized(err):
     fmt.Println("token expired — log in again")
 case err != nil:
@@ -437,15 +442,15 @@ if errors.As(err, &apiErr) {
 | `200` | Success (JSON or plain text) | most reads and mutations; `Zones.Export` returns the zone file |
 | `201` | Created | `Zones.Create`, `Zones.AddRecord`, `Auth.CreateUser`, `RPZ.AddRule`, `Blocklists.Add` |
 | `204` | No content | `Client.ReportCSPViolation` |
-| `400` | Bad request / invalid data | `Login`, `Zones.Create`, `Zones.AddRecord`, `Config.SetLogging`, `Blocklists.Add`, `RPZ.AddRule` |
+| `400` | Bad request / invalid data (`IsBadRequest`) | `Login`, `Zones.Create`, `Zones.AddRecord`/`ReplaceRecord` (RDATA that does not parse for the type, SOA), `Zones.DeleteRecord(s)` (SOA, apex NS), `Config.Set*` (a value the config loader would reject), `Blocklists.Add`, `RPZ.AddRule` (CNAME/OVERRIDE without valid override data), `Upstreams.Add`/`Remove` (no port, last server), `ACL.Set` |
 | `401` | Unauthorized (missing/expired/rejected token) | any authenticated call |
 | `403` | Forbidden (role too low) | any admin-only or operator-only call |
-| `404` | Not found | `Zones.Get`/`Delete`, `Zones.ListRecords`, `RPZ`/`Blocklists` targets |
+| `404` | Not found | `Zones.Get`/`Delete`, `Zones.ListRecords`, `Zones.DeleteRecord` (no record with that data), `RPZ`/`Blocklists` targets |
 | `405` | Method not allowed | `Auth.Session` on some deployments |
-| `409` | Conflict (already exists) | `Auth.CreateUser`, `Zones.Create`, `Upstreams.Add` |
-| `421` | Misdirected (name conflict) | `Zones.Create`, `Zones.AddRecord`/`ReplaceRecord`/`DeleteRecords` |
-| `429` | Rate limited | any endpoint that has its own rate limit |
-| `500` | Internal server error | `Config.Reload`, `Cluster.Leave`, `Config.SetResolution` |
+| `409` | Conflict (`IsConflict`) | `Auth.CreateUser`, `Zones.Create`, `Upstreams.Add`, `Zones.AddRecord`/`ReplaceRecord` (duplicate record, CNAME conflict), `Auth.DeleteUser`/`DeleteUserByQuery`/`Bootstrap` (account defined in the config file) |
+| `421` | Misdirected (this node is not the Raft leader) | `Zones.Create`, `Zones.AddRecord`/`ReplaceRecord`/`DeleteRecord(s)` |
+| `429` | Rate limited | any endpoint that has its own rate limit; `Auth.Login` also when another login from the same IP is in flight |
+| `500` | Internal server error (nothing was changed when a save failed) | `Config.Reload`, `Cluster.Leave`, `Config.Set*` (overrides file not writable), `Auth.CreateUser`/`DeleteUser`/`Bootstrap` (users file not writable) |
 | `503` | Service unavailable / not ready | `Client.Ready`, `Zones.Transfers`, `Cache.Flush`, `Metrics.*` |
 
 ---
@@ -493,7 +498,7 @@ All 71 operations of the management API, in contract order. The **Role** column 
 | 21 | `Zones.ListRecords` | `GET /api/v1/zones/{zone}/records` | operator |
 | 22 | `Zones.AddRecord` | `POST /api/v1/zones/{zone}/records` | operator |
 | 23 | `Zones.ReplaceRecord` | `PUT /api/v1/zones/{zone}/records` | operator |
-| 24 | `Zones.DeleteRecords` | `DELETE /api/v1/zones/{zone}/records` | operator |
+| 24 | `Zones.DeleteRecords`, `Zones.DeleteRecord` (with `data`) | `DELETE /api/v1/zones/{zone}/records` | operator |
 | 25 | `Zones.Export` | `GET /api/v1/zones/{zone}/export` | operator |
 | 26 | `Zones.PTRBulk` | `POST /api/v1/zones/{zone}/ptr-bulk` | operator |
 | 27 | `Zones.PTR6Lookup` | `GET /api/v1/zones/{zone}/ptr6-lookup?ip=` | operator |

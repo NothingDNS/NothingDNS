@@ -66,6 +66,8 @@ export async function createMockServer() {
           }
           if (req.method === 'POST') return json(201, { message: 'record added' });
           if (req.method === 'PUT') return json(200, { message: 'record replaced' });
+          // Single-record delete (F419): 404 when no record carries the data.
+          if (body?.data === '192.0.2.250') return json(404, { error: 'record not found: api A 192.0.2.250' });
           return json(200, { message: 'records deleted' });
         case '/api/v1/zones/example.com/export':
           return text(200, ZONE_FILE);
@@ -111,7 +113,17 @@ export async function createMockServer() {
             }],
             total: 1, offset: 0, limit: 50,
           });
+        case '/api/v1/auth/users':
+          return json(200, [
+            { username: 'root', role: 'admin', created_at: '2026-10-01T00:00:00Z', config_defined: true },
+            { username: 'ops', role: 'operator', created_at: '2026-10-02T00:00:00Z', config_defined: false },
+          ]);
+        case '/api/v1/auth/users/root':
+          return json(409, { error: 'user is defined in the config file; change it there' });
         case '/api/v1/upstreams':
+          if (req.method === 'PUT' && !String(body?.server ?? '').includes(':')) {
+            return json(400, { error: 'server must be host:port' });
+          }
           if (req.method === 'GET') {
             return json(200, {
               upstreams: [{ address: '9.9.9.9:53', healthy: true, queries: 5, failed: 0, failovers: 0 }],

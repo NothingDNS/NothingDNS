@@ -188,6 +188,13 @@ export interface User {
   role: string;
   createdAt?: string;
   updatedAt?: string;
+  /**
+   * Set by `listUsers()` for accounts defined in the server config file. Those
+   * accounts cannot be deleted, re-roled or have their password reset through
+   * the API (the server answers 409, see `isConflict`); change them in the
+   * config file. Always `false` on the account returned by `createUser()`.
+   */
+  configDefined: boolean;
 }
 
 export const userFromJson = (json: unknown): User => {
@@ -197,6 +204,7 @@ export const userFromJson = (json: unknown): User => {
     role: str(d.role, 'viewer'),
     createdAt: d.created_at === undefined ? undefined : str(d.created_at),
     updatedAt: d.updated_at === undefined ? undefined : str(d.updated_at),
+    configDefined: bool(d.config_defined),
   };
 };
 

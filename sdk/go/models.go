@@ -131,6 +131,12 @@ type User struct {
 	CreatedAt string `json:"created_at,omitempty"`
 	// UpdatedAt is when the account was last modified, RFC 3339.
 	UpdatedAt string `json:"updated_at,omitempty"`
+	// ConfigDefined is set by ListUsers for accounts defined in the server
+	// config file. Those accounts cannot be deleted, re-roled or have their
+	// password reset through the API (the server answers 409; see
+	// IsConflict) — change them in the config file instead. It is always
+	// false on the account returned by CreateUser.
+	ConfigDefined bool `json:"config_defined,omitempty"`
 }
 
 // Role describes one entry of the server's role table.

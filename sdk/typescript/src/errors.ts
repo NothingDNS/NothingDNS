@@ -73,7 +73,28 @@ export function isForbidden(error: unknown): error is NothingDNSApiError {
   return error instanceof NothingDNSApiError && error.statusCode === 403;
 }
 
-/** True when the error is an HTTP 429 (rate limited). */
+/**
+ * True when the error is an HTTP 400 — input the server refused (for example
+ * a record that does not parse for its type, a runtime config value the config
+ * loader would reject, or an upstream address without a port).
+ */
+export function isBadRequest(error: unknown): error is NothingDNSApiError {
+  return error instanceof NothingDNSApiError && error.statusCode === 400;
+}
+
+/**
+ * True when the error is an HTTP 409 — a conflict with existing state
+ * (duplicate record, CNAME conflict, existing user, or an account defined in
+ * the server config file).
+ */
+export function isConflict(error: unknown): error is NothingDNSApiError {
+  return error instanceof NothingDNSApiError && error.statusCode === 409;
+}
+
+/**
+ * True when the error is an HTTP 429 (rate limited; for login also when
+ * another credential check from the same IP is in flight).
+ */
 export function isRateLimited(error: unknown): error is NothingDNSApiError {
   return error instanceof NothingDNSApiError && error.statusCode === 429;
 }

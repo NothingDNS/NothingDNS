@@ -212,6 +212,29 @@ export class ZonesResource {
     );
   }
 
+  /**
+   * Delete the single record of `type` owned by `name` whose RDATA equals
+   * `data`, leaving the rest of the RRset in place (operator+). The server
+   * compares RDATA in canonical form (names case-insensitively, TXT exactly).
+   *
+   * @throws {@link NothingDNSApiError} 404 when no record matches; 400 for SOA
+   *   records and the zone apex NS RRset.
+   * @throws {@link NothingDNSValidationError} when `data` is blank (an empty
+   *   data field would delete the whole RRset — use `deleteRecords` for that).
+   */
+  async deleteRecord(zone: string, name: string, type: string, data: string): Promise<string> {
+    if (data.trim() === '') {
+      throw new NothingDNSValidationError(
+        'data is required to delete a single record; use deleteRecords to delete the whole RRset',
+      );
+    }
+    return messageOf(
+      await this.t.delete(`/api/v1/zones/${escapeSegment(zone)}/records`, {
+        body: { name, type, data },
+      }),
+    );
+  }
+
   /** Export a zone in BIND zone-file format (operator+). */
   async export(zone: string): Promise<string> {
     return this.t.get<string>(`/api/v1/zones/${escapeSegment(zone)}/export`, { raw: true });
@@ -596,13 +619,18 @@ export class UpstreamsResource {
    * Add one upstream server at runtime (admin only).
    *
    * @param server - Address in `host:port` form, e.g. `9.9.9.9:53`.
-   * @throws {@link NothingDNSApiError} 409 when the server is already present.
+   * @throws {@link NothingDNSApiError} 409 when the server is already present;
+   *   400 when the address has no valid port or is private.
    */
   async add(server: string): Promise<string> {
     return this.change('add', server);
   }
 
-  /** Remove one upstream server at runtime (admin only). */
+  /**
+   * Remove one upstream server at runtime (admin only).
+   *
+   * @throws {@link NothingDNSApiError} 400 when it is the last server.
+   */
   async remove(server: string): Promise<string> {
     return this.change('remove', server);
   }

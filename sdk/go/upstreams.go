@@ -34,13 +34,15 @@ func (s *UpstreamsService) List(ctx context.Context) (*Upstreams, error) {
 // server's confirmation message.
 //
 // It fails with an *ErrAPIError carrying status 409 when the server is already
-// in the pool.
+// in the pool, and 400 (see IsBadRequest) when server has no valid port or is
+// a private address.
 func (s *UpstreamsService) Add(ctx context.Context, server string) (string, error) {
 	return s.change(ctx, "add", server)
 }
 
 // Remove removes one upstream server at runtime. It requires the admin role.
-// It returns the server's confirmation message.
+// It returns the server's confirmation message. Removing the last server is
+// refused with 400 (see IsBadRequest).
 func (s *UpstreamsService) Remove(ctx context.Context, server string) (string, error) {
 	return s.change(ctx, "remove", server)
 }

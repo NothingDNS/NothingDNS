@@ -164,6 +164,10 @@ func (a *AuthService) CreateUser(ctx context.Context, username, password, role s
 // DeleteUser deletes a user account by name (admin only), using the path
 // form DELETE /api/v1/auth/users/{username}. It returns the server's
 // confirmation message.
+//
+// It fails with an *ErrAPIError carrying status 409 (see IsConflict) for an
+// account defined in the server config file (User.ConfigDefined), and 500
+// when the server could not write its users file (nothing was changed).
 func (a *AuthService) DeleteUser(ctx context.Context, username string) (string, error) {
 	return a.t.doMessage(ctx, "DELETE", "/api/v1/auth/users/"+a.t.escape(username), nil, nil)
 }

@@ -155,6 +155,12 @@ func (m *mockAPI) handle(w http.ResponseWriter, r *http.Request) {
 		case http.MethodPut:
 			sendJSON(http.StatusOK, map[string]any{"message": "record replaced"})
 		default:
+			// Single-record delete (F419): the server answers 404 when no
+			// record of the RRset carries the given data.
+			if data, _ := body["data"].(string); data == "192.0.2.250" {
+				sendJSON(http.StatusNotFound, map[string]any{"error": "record not found: api A 192.0.2.250"})
+				return
+			}
 			sendJSON(http.StatusOK, map[string]any{"message": "records deleted"})
 		}
 		return
@@ -249,7 +255,18 @@ func (m *mockAPI) handle(w http.ResponseWriter, r *http.Request) {
 			}},
 			"total": 1, "offset": 0, "limit": 50,
 		})
+	case "/api/v1/auth/users":
+		sendJSON(http.StatusOK, []any{
+			map[string]any{"username": "root", "role": "admin", "created_at": "2026-10-01T00:00:00Z", "config_defined": true},
+			map[string]any{"username": "ops", "role": "operator", "created_at": "2026-10-02T00:00:00Z", "config_defined": false},
+		})
+	case "/api/v1/auth/users/root":
+		sendJSON(http.StatusConflict, map[string]any{"error": "user is defined in the config file; change it there"})
 	case "/api/v1/upstreams":
+		if server, _ := body["server"].(string); r.Method == http.MethodPut && !strings.Contains(server, ":") {
+			sendJSON(http.StatusBadRequest, map[string]any{"error": "server must be host:port"})
+			return
+		}
 		if r.Method == http.MethodGet {
 			sendJSON(http.StatusOK, map[string]any{
 				"upstreams": []any{map[string]any{"address": "9.9.9.9:53", "healthy": true, "queries": 5, "failed": 0, "failovers": 0}},
