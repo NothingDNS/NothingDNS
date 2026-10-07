@@ -583,11 +583,20 @@ func (s *XoTServer) generateAXFRRecords(z *zone.Zone) ([]*protocol.ResourceRecor
 		},
 	}
 
-	// Collect all zone records
+	// Collect all zone records. The apex SOA is emitted separately as the
+	// first and last record of the transfer (RFC 5936 §2.2), so it must be
+	// skipped here — the parser stores the apex SOA in both z.SOA and
+	// z.Records[apex], and re-emitting it mid-stream makes RFC-compliant
+	// secondaries treat the second SOA as end-of-transfer and discard every
+	// record after it, truncating the zone (mirrors
+	// AXFRServer.generateAXFRRecords).
 	var zoneRecords []*protocol.ResourceRecord
 	z.RLock()
 	for name, recs := range z.Records {
 		for _, rec := range recs {
+			if protocol.RecordTypeFromText(rec.Type) == protocol.TypeSOA {
+				continue
+			}
 			rr, err := s.zoneRecordToRR(name, rec)
 			if err != nil {
 				continue

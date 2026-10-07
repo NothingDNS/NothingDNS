@@ -686,7 +686,17 @@ func (s *Server) handleBulkPTR(w http.ResponseWriter, r *http.Request, zoneName 
 		return
 	}
 
-	// Actually apply changes
+	// Actually apply changes.
+	//
+	// Every mutation below is routed through proposeZoneWrite so that, in
+	// Raft mode, the write is replicated through consensus — and, when this
+	// node is not the leader, proposeZoneWrite has already written the
+	// 421/503 error and applied nothing, so we abort the batch untouched.
+	// Mutating zoneManager directly (the previous behavior) bypassed consensus
+	// entirely: the bulk write landed on the receiving node's local zone store
+	// only, was never replicated to the rest of the cluster, and was silently
+	// accepted even on a follower — the divergence the single-record endpoints
+	// in this file already prevent.
 	added, addedA, exists, existsA, skipped := 0, 0, 0, 0, 0
 	for _, ch := range changes {
 		if ch.Action == "skip" {
@@ -697,23 +707,35 @@ func (s *Server) handleBulkPTR(w http.ResponseWriter, r *http.Request, zoneName 
 		}
 		if ch.Action == "override" || ch.Action == "add" {
 			if ch.PTRExist {
-				if err := s.zoneManager.DeleteRecord(zoneName, ch.RevRecord, "PTR"); err != nil {
+				if routed, ok := s.proposeZoneWrite(w, func() error {
+					return s.cluster.ProposeDeleteRecord(zoneName, ch.RevRecord, "PTR")
+				}); routed {
+					if !ok {
+						return
+					}
+				} else if err := s.zoneManager.DeleteRecord(zoneName, ch.RevRecord, "PTR"); err != nil {
 					s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to delete existing PTR record: %v", err))
 					return
 				}
 			}
-			rec := zone.Record{
+			ptrRec := zone.Record{
 				Name:  ch.RevRecord,
 				Type:  "PTR",
 				Class: "IN",
 				TTL:   3600,
 				RData: ch.PTRName,
 			}
-			err := s.zoneManager.AddRecord(zoneName, rec)
-			if err == nil {
+			if routed, ok := s.proposeZoneWrite(w, func() error {
+				return s.cluster.ProposeAddRecord(zoneName, ptrRec.Name, ptrRec.Type, ptrRec.Class, ptrRec.TTL, ptrRec.RData)
+			}); routed {
+				if !ok {
+					return
+				}
 				added++
-			} else {
+			} else if err := s.zoneManager.AddRecord(zoneName, ptrRec); err != nil {
 				exists++
+			} else {
+				added++
 			}
 		}
 
@@ -723,7 +745,13 @@ func (s *Server) handleBulkPTR(w http.ResponseWriter, r *http.Request, zoneName 
 					existsA++
 					continue
 				}
-				if err := s.zoneManager.DeleteRecord(ch.AZone, ch.AName, "A"); err != nil {
+				if routed, ok := s.proposeZoneWrite(w, func() error {
+					return s.cluster.ProposeDeleteRecord(ch.AZone, ch.AName, "A")
+				}); routed {
+					if !ok {
+						return
+					}
+				} else if err := s.zoneManager.DeleteRecord(ch.AZone, ch.AName, "A"); err != nil {
 					s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to delete existing A record: %v", err))
 					return
 				}
@@ -735,11 +763,17 @@ func (s *Server) handleBulkPTR(w http.ResponseWriter, r *http.Request, zoneName 
 				TTL:   3600,
 				RData: ch.IP,
 			}
-			err := s.zoneManager.AddRecord(ch.AZone, aRec)
-			if err == nil {
+			if routed, ok := s.proposeZoneWrite(w, func() error {
+				return s.cluster.ProposeAddRecord(ch.AZone, aRec.Name, aRec.Type, aRec.Class, aRec.TTL, aRec.RData)
+			}); routed {
+				if !ok {
+					return
+				}
 				addedA++
-			} else {
+			} else if err := s.zoneManager.AddRecord(ch.AZone, aRec); err != nil {
 				existsA++
+			} else {
+				addedA++
 			}
 		}
 	}

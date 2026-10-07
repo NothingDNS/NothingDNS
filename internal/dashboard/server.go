@@ -512,12 +512,20 @@ func (s *Server) handleZones(w http.ResponseWriter, r *http.Request) {
 	if zm != nil {
 		for name, z := range zm.List() {
 			serial := int64(0)
+			records := 0
+			// AddRecord/DeleteRecord/DDNS mutate z.Records and z.SOA.Serial
+			// under z.Lock (zone/manager.go); read both under z.RLock like
+			// zone_service does — an unlocked len()/field read races with
+			// those writers.
+			z.RLock()
 			if z.SOA != nil {
 				serial = int64(z.SOA.Serial)
 			}
+			records = len(z.Records)
+			z.RUnlock()
 			zones = append(zones, ZoneAPIEntry{
 				Name:    name,
-				Records: len(z.Records),
+				Records: records,
 				Serial:  int(serial),
 			})
 		}
