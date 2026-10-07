@@ -91,17 +91,42 @@ export function ZoneEditor({ zoneName, initialRecords, onRefresh }: ZoneEditorPr
       // The update API cannot move a record between name buckets, so a rename
       // is delete-old + add-new. Delete first; only add the new record if the
       // delete succeeded, so a failure can't duplicate the record.
+      // The original data is what the server stores (record.original holds
+      // it when an inline TTL edit is pending).
+      const old = record.original ?? record;
       await api('DELETE', `/api/v1/zones/${encodeURIComponent(zoneName)}/records`, {
         name: record.name,
         type: record.type,
-        data: record.data,
+        data: old.data,
       });
-      await api('POST', `/api/v1/zones/${encodeURIComponent(zoneName)}/records`, {
-        name: next.name,
-        type: record.type,
-        ttl: next.ttl,
-        data: next.data,
-      });
+      try {
+        await api('POST', `/api/v1/zones/${encodeURIComponent(zoneName)}/records`, {
+          name: next.name,
+          type: record.type,
+          ttl: next.ttl,
+          data: next.data,
+        });
+      } catch (addErr) {
+        // The add was refused (409 CNAME conflict / duplicate, 400, ...)
+        // after the old record was already deleted: put the old record
+        // back so a refused rename never loses it, then reload the list.
+        const reason = addErr instanceof Error ? addErr.message : 'Failed to add the renamed record';
+        let restored = true;
+        try {
+          await api('POST', `/api/v1/zones/${encodeURIComponent(zoneName)}/records`, {
+            name: record.name,
+            type: record.type,
+            ttl: old.ttl,
+            data: old.data,
+          });
+        } catch {
+          restored = false;
+        }
+        onRefresh();
+        throw new Error(restored
+          ? `${reason} (the original record was kept)`
+          : `${reason}; restoring the original record ${record.type} ${record.name} also failed`, { cause: addErr });
+      }
     } else {
       await api('PUT', `/api/v1/zones/${encodeURIComponent(zoneName)}/records`, {
         name: next.name,
@@ -129,7 +154,10 @@ export function ZoneEditor({ zoneName, initialRecords, onRefresh }: ZoneEditorPr
       toast.success(`Deleted ${record.type} ${record.name}`);
       onRefresh();
     } catch (e) {
+      // 404 (already gone), 409 or 400 (SOA / apex NS): show the server's
+      // reason and reload so the list matches the zone again.
       toast.error(e instanceof Error ? e.message : `Failed to delete ${record.type} ${record.name}`);
+      onRefresh();
     } finally {
       setDeleting(false);
       setPendingDelete(null);
@@ -146,8 +174,8 @@ export function ZoneEditor({ zoneName, initialRecords, onRefresh }: ZoneEditorPr
         await api('DELETE', `/api/v1/zones/${encodeURIComponent(zoneName)}/records`, {
           name: r.name, type: r.type, data: r.data,
         });
-      } catch {
-        failures.push(`${r.type} ${r.name}`);
+      } catch (e) {
+        failures.push(`${r.type} ${r.name} (${e instanceof Error ? e.message : 'failed'})`);
       }
     }
     if (failures.length > 0) {

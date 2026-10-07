@@ -8,7 +8,26 @@ import { ErrorState } from '@/components/states';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { toast } from 'sonner';
 import { api, type RPZStats, type RPZRule } from '@/lib/api';
+import { isDomainName, isIPAddress } from '@/lib/network';
 import { Shield, Plus, RefreshCw, Wifi, WifiOff, Trash2, AlertTriangle } from 'lucide-react';
+
+// CNAME and OVERRIDE rules need override_data: the server refuses them
+// (400) without a non-root domain name (CNAME) or a single IP address
+// (OVERRIDE). Validate client-side for immediate feedback.
+const overrideDataSpec: Record<string, { placeholder: string; valid: (v: string) => boolean; error: string; hint: string }> = {
+  CNAME: {
+    placeholder: 'walled-garden.example.com.',
+    valid: isDomainName,
+    error: 'CNAME target must be a domain name (e.g. walled-garden.example.com.)',
+    hint: 'Matching queries are answered with a CNAME to this name.',
+  },
+  OVERRIDE: {
+    placeholder: '192.0.2.1 or 2001:db8::1',
+    valid: isIPAddress,
+    error: 'Override data must be an IP address (one IPv4 or IPv6 address)',
+    hint: 'Matching queries are answered with this address.',
+  },
+};
 
 export function RPZPage() {
   const [stats, setStats] = useState<RPZStats | null>(null);
@@ -19,6 +38,7 @@ export function RPZPage() {
   const [adding, setAdding] = useState(false);
   const [newPattern, setNewPattern] = useState('');
   const [newAction, setNewAction] = useState('NXDOMAIN');
+  const [newOverrideData, setNewOverrideData] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
 
@@ -63,13 +83,21 @@ export function RPZPage() {
     setToggling(false);
   };
 
+  const overrideSpec = overrideDataSpec[newAction];
+  const overrideData = newOverrideData.trim();
+  const overrideInvalid = overrideSpec !== undefined && overrideData !== '' && !overrideSpec.valid(overrideData);
+  const canAdd = newPattern.trim() !== '' && (overrideSpec === undefined || (overrideData !== '' && !overrideInvalid));
+
   const handleAddRule = async () => {
-    if (!newPattern.trim()) return;
+    if (!canAdd) return;
     setAdding(true);
     try {
-      await api('POST', '/api/v1/rpz/rules', { pattern: newPattern.trim(), action: newAction });
+      const body: { pattern: string; action: string; override_data?: string } = { pattern: newPattern.trim(), action: newAction };
+      if (overrideSpec) body.override_data = overrideData;
+      await api('POST', '/api/v1/rpz/rules', body);
       toast.success('Rule added');
       setNewPattern('');
+      setNewOverrideData('');
       fetchData();
     } catch (e: unknown) { toast.error(e instanceof Error ? e.message : 'Failed to add rule'); }
     setAdding(false);
@@ -159,7 +187,7 @@ export function RPZPage() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="flex gap-3">
+          <div className="flex flex-wrap gap-3">
             <Input
               placeholder="domain.example.com"
               value={newPattern}
@@ -179,10 +207,27 @@ export function RPZPage() {
               <option value="OVERRIDE">Override</option>
               <option value="DROP">Drop</option>
             </select>
-            <Button onClick={handleAddRule} disabled={adding || !newPattern.trim()}>
+            {overrideSpec && (
+              <Input
+                aria-label="RPZ override data"
+                aria-invalid={overrideInvalid}
+                aria-describedby="rpz-override-data-help"
+                placeholder={overrideSpec.placeholder}
+                value={newOverrideData}
+                onChange={e => setNewOverrideData(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleAddRule()}
+                className="flex-1"
+              />
+            )}
+            <Button onClick={handleAddRule} disabled={adding || !canAdd}>
               {adding ? 'Adding...' : 'Add Rule'}
             </Button>
           </div>
+          {overrideSpec && (
+            <p id="rpz-override-data-help" className={`mt-2 text-xs ${overrideInvalid ? 'text-destructive' : 'text-muted-foreground'}`}>
+              {overrideInvalid ? overrideSpec.error : `Required for ${newAction} rules. ${overrideSpec.hint}`}
+            </p>
+          )}
         </CardContent>
       </Card>
 
@@ -205,7 +250,7 @@ export function RPZPage() {
                       {(rule.action || 'UNKNOWN').toUpperCase()}
                     </div>
                     <div>
-                      <p className="font-mono text-sm">{rule.pattern}</p>
+                      <p className="font-mono text-sm">{rule.pattern}{rule.override_data ? <span className="text-muted-foreground"> → {rule.override_data}</span> : null}</p>
                       <p className="text-xs text-muted-foreground">Priority: {rule.priority} • Trigger: {rule.trigger}</p>
                     </div>
                   </div>

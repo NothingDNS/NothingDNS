@@ -282,6 +282,8 @@ export interface UpstreamsResponse {
 export interface UserInfo {
 	username: string;
 	role: string;
+	/** True for users defined in the config file: the API refuses to delete them or change their password/role (409). */
+	config_defined?: boolean;
 	created_at?: string;
 	updated_at?: string;
 }

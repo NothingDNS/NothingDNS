@@ -50,3 +50,22 @@ export function isEverywhere(value: string): boolean {
 	const v = value.trim();
 	return v === '0.0.0.0/0' || v === '::/0';
 }
+
+/** Reports whether value is a single IPv4 or IPv6 address (no prefix). */
+export function isIPAddress(value: string): boolean {
+	const v = value.trim();
+	return v !== '' && !v.includes('/') && isIPOrCIDR(v);
+}
+
+/**
+ * Reports whether value is a non-root domain name the server accepts as a
+ * name (protocol.ParseName): optional trailing dot, 1–63 character labels
+ * of letters, digits, '-' and '_' with no leading/trailing hyphen, at most
+ * 253 characters without the trailing dot.
+ */
+export function isDomainName(value: string): boolean {
+	let v = value.trim();
+	if (v.endsWith('.')) v = v.slice(0, -1);
+	if (v === '' || v.length > 253) return false;
+	return v.split('.').every((label) => /^[A-Za-z0-9_](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?$/.test(label));
+}

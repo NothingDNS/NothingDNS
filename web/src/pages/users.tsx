@@ -8,7 +8,11 @@ import { ErrorState } from '@/components/states';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { toast } from 'sonner';
 import { api, type UserInfo } from '@/lib/api';
-import { UserPlus, Trash2, Shield, Clock, User } from 'lucide-react';
+import { UserPlus, Trash2, Shield, Clock, User, FileLock } from 'lucide-react';
+
+// Config-file users are read-only through the API (409 on delete, password
+// reset or role change); they are changed in the config file and reloaded.
+const CONFIG_USER_HINT = 'Defined in the config file; it cannot be deleted or changed here. Edit the config file and reload instead.';
 
 export function UsersPage() {
   const [users, setUsers] = useState<UserInfo[]>([]);
@@ -57,7 +61,12 @@ export function UsersPage() {
       setDeleteTarget(null);
       fetchUsers();
     } catch (e: unknown) {
+      // 409 (config-defined user / last admin) or 500 (users file not
+      // written): show the server's reason and reload, since the list we
+      // showed may no longer match the server.
       toast.error(e instanceof Error ? e.message : 'Failed to delete user');
+      setDeleteTarget(null);
+      fetchUsers();
     }
     setDeleting(false);
   };
@@ -151,7 +160,16 @@ export function UsersPage() {
               <tbody>
                 {users.map((u) => (
                   <tr key={u.username} className="border-b hover:bg-muted/50 transition-colors">
-                    <td className="p-3 font-medium">{u.username}</td>
+                    <td className="p-3 font-medium">
+                      <span className="flex items-center gap-2">
+                        {u.username}
+                        {u.config_defined && (
+                          <Badge variant="outline" className="text-xs font-normal" title={CONFIG_USER_HINT}>
+                            <FileLock className="h-3 w-3" /> config file
+                          </Badge>
+                        )}
+                      </span>
+                    </td>
                     <td className="p-3">
                       <Badge variant={roleBadgeVariant(u.role)} className="flex items-center gap-1 w-fit">
                         <Shield className="h-3 w-3" />{u.role}
@@ -164,9 +182,21 @@ export function UsersPage() {
                       {u.updated_at ? <span className="flex items-center gap-1"><Clock className="h-3 w-3" />{new Date(u.updated_at).toLocaleDateString()}</span> : '-'}
                     </td>
                     <td className="p-3">
-                      <Button variant="ghost" size="sm" aria-label={`Delete user ${u.username}`} onClick={() => setDeleteTarget(u.username)} className="text-destructive hover:text-destructive">
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      {/* Disabled buttons swallow hover events in some browsers, so the
+                          wrapper carries the tooltip too. */}
+                      <span title={u.config_defined ? CONFIG_USER_HINT : undefined} className="inline-block">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          aria-label={`Delete user ${u.username}`}
+                          title={u.config_defined ? CONFIG_USER_HINT : undefined}
+                          disabled={u.config_defined}
+                          onClick={() => setDeleteTarget(u.username)}
+                          className="text-destructive hover:text-destructive"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </span>
                     </td>
                   </tr>
                 ))}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isEverywhere, isIPOrCIDR } from './network';
+import { isDomainName, isEverywhere, isIPAddress, isIPOrCIDR } from './network';
 
 describe('isIPOrCIDR', () => {
   it.each([
@@ -24,5 +24,23 @@ describe('isEverywhere', () => {
     expect(isEverywhere('0.0.0.0/0')).toBe(true);
     expect(isEverywhere('::/0')).toBe(true);
     expect(isEverywhere('10.0.0.0/8')).toBe(false);
+  });
+});
+
+describe('isIPAddress', () => {
+  it.each(['192.0.2.1', '2001:db8::1', '::ffff:192.0.2.1', ' 192.0.2.1 '])('accepts %s', (v) => {
+    expect(isIPAddress(v)).toBe(true);
+  });
+  it.each(['', '192.0.2.0/24', '::/0', 'walled.example.', '01.2.3.4', '192.0.2.1,192.0.2.2'])('rejects %s', (v) => {
+    expect(isIPAddress(v)).toBe(false);
+  });
+});
+
+describe('isDomainName', () => {
+  it.each(['garden.example.', 'garden.example', 'a', '_svc.example.com', 'x-1.example'])('accepts %s', (v) => {
+    expect(isDomainName(v)).toBe(true);
+  });
+  it.each(['', '.', 'not a name!', '-a.example', 'a-.example', 'a..b', `${'a'.repeat(64)}.example`, `${'a.'.repeat(127)}a`])('rejects %s', (v) => {
+    expect(isDomainName(v)).toBe(false);
   });
 });
