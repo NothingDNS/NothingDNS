@@ -98,7 +98,9 @@ func TestGenerateNSEC3_OptOutClassification(t *testing.T) {
 		t.Error("signed delegation (with DS) NSEC3 must not have the opt-out flag set")
 	}
 
-	// Unsigned delegation — opt-out flag set, empty bitmap.
+	// Unsigned delegation — opt-out flag set; the bitmap still lists NS and
+	// not DS/SOA (RFC 5155 §3.2.1, §8.9 — F247: an empty bitmap made the
+	// insecure child Bogus).
 	childRR := nsec3RecordForOwner(t, s, got, "child.example.com.")
 	if childRR == nil {
 		t.Fatal("missing NSEC3 for unsigned delegation")
@@ -110,8 +112,8 @@ func TestGenerateNSEC3_OptOutClassification(t *testing.T) {
 	if childNSEC3.Flags&protocol.NSEC3FlagOptOut == 0 {
 		t.Error("unsigned delegation NSEC3 must have the opt-out flag set")
 	}
-	if len(childNSEC3.TypeBitMap) != 0 {
-		t.Errorf("opt-out NSEC3 must have an empty type bitmap, got %v", childNSEC3.TypeBitMap)
+	if !childNSEC3.HasType(protocol.TypeNS) || childNSEC3.HasType(protocol.TypeDS) || childNSEC3.HasType(protocol.TypeSOA) {
+		t.Errorf("opt-out NSEC3 at an unsigned delegation must have NS set and DS/SOA clear, got %v", childNSEC3.TypeBitMap)
 	}
 }
 

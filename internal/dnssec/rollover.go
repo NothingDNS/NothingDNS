@@ -331,25 +331,25 @@ func (rs *RolloverScheduler) generateRolloverZSK(now time.Time) {
 		algo = 13 // ECDSAP256SHA256
 	}
 
-	key, err := rs.signer.GenerateKeyPair(algo, false)
-	if err != nil {
-		rs.logger("dnssec rollover: failed to generate ZSK: %v", err)
-		return
-	}
-
 	publishTime := now
 	activeTime := now.Add(rs.config.PublishSafety)
 	retireTime := activeTime.Add(rs.config.ZSKLifetime)
 	removeTime := retireTime.Add(rs.config.RetireSafety)
 
-	rs.signer.SetKeyState(key.KeyTag, KeyStatePublished)
-	rs.signer.SetKeyTiming(key.KeyTag, &KeyTiming{
+	// Add the key already Published with its timing (F242): adding it
+	// first and setting state/timing afterwards left a window in which
+	// the timing-less key counted as active and was used for signing.
+	key, err := rs.signer.generateKeyPairWithState(algo, false, KeyStatePublished, &KeyTiming{
 		Created: now,
 		Publish: publishTime,
 		Active:  activeTime,
 		Retire:  retireTime,
 		Remove:  removeTime,
 	})
+	if err != nil {
+		rs.logger("dnssec rollover: failed to generate ZSK: %v", err)
+		return
+	}
 
 	rs.logger("dnssec rollover: new ZSK %d generated (active=%s, retire=%s)",
 		key.KeyTag, activeTime.Format(time.DateOnly), retireTime.Format(time.DateOnly))
@@ -375,25 +375,25 @@ func (rs *RolloverScheduler) generateRolloverKSK(now time.Time) {
 		algo = 13
 	}
 
-	key, err := rs.signer.GenerateKeyPair(algo, true)
-	if err != nil {
-		rs.logger("dnssec rollover: failed to generate KSK: %v", err)
-		return
-	}
-
 	publishTime := now
 	activeTime := now.Add(rs.config.PublishSafety)
 	retireTime := activeTime.Add(rs.config.KSKLifetime)
 	removeTime := retireTime.Add(rs.config.RetireSafety)
 
-	rs.signer.SetKeyState(key.KeyTag, KeyStatePublished)
-	rs.signer.SetKeyTiming(key.KeyTag, &KeyTiming{
+	// Add the key already Published with its timing (F242): adding it
+	// first and setting state/timing afterwards left a window in which
+	// the timing-less key counted as active and was used for signing.
+	key, err := rs.signer.generateKeyPairWithState(algo, true, KeyStatePublished, &KeyTiming{
 		Created: now,
 		Publish: publishTime,
 		Active:  activeTime,
 		Retire:  retireTime,
 		Remove:  removeTime,
 	})
+	if err != nil {
+		rs.logger("dnssec rollover: failed to generate KSK: %v", err)
+		return
+	}
 
 	rs.logger("dnssec rollover: new KSK %d generated (active=%s, retire=%s)",
 		key.KeyTag, activeTime.Format(time.DateOnly), retireTime.Format(time.DateOnly))

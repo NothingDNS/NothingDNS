@@ -106,13 +106,21 @@ func TestValidateMessage_WildcardWithNSECProof(t *testing.T) {
 	aRecord := &protocol.ResourceRecord{Name: owner, Type: protocol.TypeA, Class: protocol.ClassIN, TTL: 300, Data: &protocol.RDataA{Address: [4]byte{192, 0, 2, 1}}}
 	aRRSIG := signRR(t, v, aRecord, 3, priv, keyTag)
 
-	// Signed NSEC covering anything.wild.example.com. via the wrap gap:
-	// wire order sorts the 8-label anything. (wire 08 ...) after z. (wire
-	// 01 7a...), so the covering NSEC is (z.wild.example.com. → a.wild.).
-	nsecOwner, _ := protocol.ParseName("z.wild.example.com.")
-	nsecNext, _ := protocol.ParseName("a.wild.example.com.")
+	// Signed NSEC covering anything.wild.example.com. (a. < anything. < z.
+	// in RFC 4034 §6.1 canonical order).
+	nsecOwner, _ := protocol.ParseName("a.wild.example.com.")
+	nsecNext, _ := protocol.ParseName("z.wild.example.com.")
 	nsecRR := &protocol.ResourceRecord{Name: nsecOwner, Type: protocol.TypeNSEC, Class: protocol.ClassIN, TTL: 300, Data: &protocol.RDataNSEC{NextDomain: nsecNext, TypeBitMap: []uint16{protocol.TypeA}}}
 	nsecRRSIG := signRR(t, v, nsecRR, 4, priv, keyTag)
+
+	// The closest encloser wild.example.com. lies between the signer and the
+	// owner, so the validator asks for its DS and needs the parent's proof
+	// that it is not a zone cut (F472): an NSEC at wild.example.com. without NS.
+	wildName, _ := protocol.ParseName("wild.example.com.")
+	wildNSEC := &protocol.ResourceRecord{Name: wildName, Type: protocol.TypeNSEC, Class: protocol.ClassIN, TTL: 300, Data: &protocol.RDataNSEC{NextDomain: nsecOwner, TypeBitMap: []uint16{protocol.TypeTXT, protocol.TypeRRSIG, protocol.TypeNSEC}}}
+	v.resolver = &mockResolver{responses: map[string]*protocol.Message{
+		"wild.example.com.|43": {Authorities: []*protocol.ResourceRecord{wildNSEC, signRR(t, v, wildNSEC, 3, priv, keyTag)}},
+	}}
 
 	// With the authenticated no-exact-match NSEC proof → SECURE.
 	withProof := &protocol.Message{

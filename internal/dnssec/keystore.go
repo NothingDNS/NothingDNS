@@ -207,6 +207,17 @@ func (ks *KeyStore) SaveKey(zoneName string, key *SigningKey) error {
 
 		keyID := make([]byte, 2)
 		binary.BigEndian.PutUint16(keyID, key.KeyTag)
+		// Key tags are a 16-bit checksum and collide (RFC 4034 App. B).
+		// Entries are keyed by tag alone, so only the SAME key may replace
+		// an existing entry; a different key with a colliding tag would
+		// silently destroy the stored key's private material.
+		if existing := zoneBucket.Get(keyID); existing != nil {
+			prev, decErr := decodeStoredKey(existing)
+			if decErr != nil || prev.Algorithm != stored.Algorithm || prev.Flags != stored.Flags ||
+				string(prev.PublicKeyData) != string(stored.PublicKeyData) {
+				return fmt.Errorf("key tag %d already holds a different key for zone %s", key.KeyTag, zoneName)
+			}
+		}
 		return zoneBucket.Put(keyID, encoded)
 	})
 }

@@ -337,8 +337,8 @@ func TestTrustAnchorStoreWithBuiltIn(t *testing.T) {
 	store := NewTrustAnchorStoreWithBuiltIn()
 
 	anchors := store.GetAnchorsForZone(".")
-	if len(anchors) != 2 {
-		t.Errorf("Expected 2 built-in root anchors, got %d", len(anchors))
+	if len(anchors) != 3 {
+		t.Errorf("Expected 3 built-in root anchors (KSK-2024, KSK-2017, KSK-2010), got %d", len(anchors))
 	}
 
 	// Check that the 2024 anchor exists

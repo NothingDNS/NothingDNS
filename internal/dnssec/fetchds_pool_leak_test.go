@@ -46,7 +46,7 @@ func (r *fetchdsResolver) Query(ctx context.Context, name string, qtype uint16) 
 // the pooled message returned by fetchDS. After Release(), Authorities
 // must be cleared.
 func TestFetchDSCallSiteDeferReleaseReleases(t *testing.T) {
-	msg := protocol.NewMessage(protocol.Header{
+	msg := pooledTestMessage(protocol.Header{
 		ID:      0x9999,
 		Flags:   protocol.NewResponseFlags(protocol.RcodeSuccess),
 		QDCount: 1,

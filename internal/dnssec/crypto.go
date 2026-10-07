@@ -47,6 +47,10 @@ func ParseDNSKEYPublicKey(algorithm uint8, keyData []byte) (*PublicKey, error) {
 	}
 }
 
+// maxRSAModulusBits is the RFC 5702 §2 upper bound for RSASHA256/RSASHA512
+// DNSKEY moduli.
+const maxRSAModulusBits = 4096
+
 // parseRSAPublicKey parses an RSA public key from DNSKEY wire format.
 // Wire format: exponent length (1 or 3 bytes) + exponent + modulus.
 // The algorithm parameter (RSASHA256 or RSASHA512) determines which hash
@@ -94,6 +98,12 @@ func parseRSAPublicKey(algorithm uint8, keyData []byte) (*PublicKey, error) {
 	modulus := new(big.Int).SetBytes(keyData[offset:])
 	if modulus.Sign() <= 0 {
 		return nil, fmt.Errorf("invalid RSA modulus")
+	}
+	// RFC 5702 §2.1/§2.2: RSASHA256 and RSASHA512 moduli are at most 4096
+	// bits. Larger moduli are attacker-controlled CPU cost per verification
+	// (a ~500,000-bit modulus fits in a DNSKEY RDATA and costs seconds) (F227).
+	if modulus.BitLen() > maxRSAModulusBits {
+		return nil, fmt.Errorf("RSA modulus too large: %d bits (max %d)", modulus.BitLen(), maxRSAModulusBits)
 	}
 
 	return &PublicKey{

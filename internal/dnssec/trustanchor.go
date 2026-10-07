@@ -197,6 +197,46 @@ func (s *TrustAnchorStore) FindClosestAnchor(name string) (*TrustAnchor, []strin
 	return nil, labels
 }
 
+// validAnchorsForZone returns clones of every anchor configured for exactly
+// zone that is valid at now.
+func (s *TrustAnchorStore) validAnchorsForZone(zone string, now time.Time) []*TrustAnchor {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var result []*TrustAnchor
+	for _, anchor := range s.anchors[canonicalZone(zone)] {
+		if anchor.isValidAt(now) {
+			result = append(result, cloneTrustAnchor(anchor))
+		}
+	}
+	return result
+}
+
+// keysMatchingAnyAnchor returns the DNSKEYs authenticated by anchor or by any
+// other currently valid anchor configured for the same zone. A zone may carry
+// several valid anchors at once (RFC 7958 root-anchors.xml lists both the
+// outgoing and the incoming root KSK during a rollover); trusting only the
+// first one makes the whole tree Bogus as soon as the DNSKEY RRset is
+// self-signed by the incoming key alone.
+func (v *Validator) keysMatchingAnyAnchor(anchor *TrustAnchor, dnsKeys []*protocol.ResourceRecord) []*protocol.ResourceRecord {
+	matched := v.keysMatchingAnchor(anchor, dnsKeys)
+	if v.trustAnchors == nil {
+		return matched
+	}
+	for _, other := range v.trustAnchors.validAnchorsForZone(anchor.Zone, time.Now()) {
+	next:
+		for _, rr := range v.keysMatchingAnchor(other, dnsKeys) {
+			for _, have := range matched {
+				if have == rr {
+					continue next
+				}
+			}
+			matched = append(matched, rr)
+		}
+	}
+	return matched
+}
+
 // LoadFromFile loads trust anchors from an RFC 7958 format XML file.
 func (s *TrustAnchorStore) LoadFromFile(path string) error {
 	data, err := readTrustAnchorFile(path)
@@ -411,10 +451,26 @@ func bytesEqual(a, b []byte) bool {
 	return subtle.ConstantTimeCompare(a, b) == 1
 }
 
-// BuiltInRootAnchors contains the IANA root trust anchors.
-// These are the current IANA root KSKs as of 2024.
+// BuiltInRootAnchors contains the IANA root trust anchors
+// (https://data.iana.org/root-anchors/root-anchors.xml).
 var BuiltInRootAnchors = []*TrustAnchor{
-	// Root KSK 2024 (KeyTag 20326)
+	// Root KSK-2024 (KeyTag 38696, IANA id Kmyv6jo). Without it, a validator
+	// relying on the built-in anchors goes Bogus for every answer once the
+	// root DNSKEY RRset is signed by KSK-2024 alone (F457).
+	{
+		Zone:       ".",
+		KeyTag:     38696,
+		Algorithm:  protocol.AlgorithmRSASHA256,
+		DigestType: 2, // SHA-256
+		Digest: []byte{
+			0x68, 0x3D, 0x2D, 0x0A, 0xCB, 0x8C, 0x9B, 0x71,
+			0x2A, 0x19, 0x48, 0xB2, 0x7F, 0x74, 0x12, 0x19,
+			0x29, 0x8D, 0x0A, 0x45, 0x0D, 0x61, 0x2C, 0x48,
+			0x3A, 0xF4, 0x44, 0xA4, 0xC0, 0xFB, 0x2B, 0x16,
+		},
+		ValidFrom: time.Date(2024, 7, 18, 0, 0, 0, 0, time.UTC),
+	},
+	// Root KSK-2017 (KeyTag 20326, IANA id Klajeyz)
 	{
 		Zone:       ".",
 		KeyTag:     20326,
@@ -429,7 +485,7 @@ var BuiltInRootAnchors = []*TrustAnchor{
 		ValidFrom: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
 		// ValidUntil will be set when this anchor is replaced
 	},
-	// Root KSK 2017 (KeyTag 19036) - expired but kept for reference
+	// Root KSK-2010 (KeyTag 19036, IANA id Kjqmt7v) - expired, kept for reference
 	{
 		Zone:       ".",
 		KeyTag:     19036,

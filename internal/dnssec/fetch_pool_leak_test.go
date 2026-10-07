@@ -65,7 +65,7 @@ func TestFetchDNSKEYAndSigsReleasesPooledMessage(t *testing.T) {
 	// After fetchDNSKEYAndSigs returns, check whether the message's
 	// sections were cleared (which is what Release() does — see
 	// protocol/message.go:237-277).
-	msg := protocol.NewMessage(protocol.Header{
+	msg := pooledTestMessage(protocol.Header{
 		ID:      0x1234,
 		Flags:   protocol.NewResponseFlags(protocol.RcodeSuccess),
 		QDCount: 1,
@@ -94,4 +94,13 @@ func TestFetchDNSKEYAndSigsReleasesPooledMessage(t *testing.T) {
 	}
 	t.Logf("PASS: fetchDNSKEYAndSigs released the pooled message " +
 		"(msg.Answers cleared by Release)")
+}
+
+// pooledTestMessage builds a message through the pool, as the real fetch
+// paths receive it. Release is a no-op for non-pooled messages (F592), so the
+// pool-leak tests must start from a pooled one to observe the release.
+func pooledTestMessage(h protocol.Header) *protocol.Message {
+	m := protocol.AcquireMessage()
+	m.Header = h
+	return m
 }

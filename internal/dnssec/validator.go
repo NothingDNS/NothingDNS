@@ -91,6 +91,17 @@ type Validator struct {
 	trustAnchors    *TrustAnchorStore
 	resolver        Resolver
 	validationCache *ValidationCache
+
+	// work is the per-response verification budget (F408). It is nil on
+	// the shared Validator; ValidateResponse runs on a per-call shallow copy
+	// carrying a fresh budget, so concurrent responses never share one.
+	work *responseBudget
+
+	// zoneCuts caches authenticated zone-cut proofs across responses
+	// (F477); shared by the per-call copies. nil disables caching.
+	zoneCuts *zoneCutCache
+	// now is the validator's clock; nil means time.Now (tests inject one).
+	now func() time.Time
 }
 
 // NewValidator creates a new DNSSEC validator.
@@ -110,6 +121,7 @@ func NewValidator(config ValidatorConfig, anchors *TrustAnchorStore, resolver Re
 		trustAnchors:    anchors,
 		resolver:        resolver,
 		validationCache: newValidationCacheIfNeeded(config),
+		zoneCuts:        newZoneCutCache(maxZoneCutCacheEntries),
 	}
 }
 
@@ -135,10 +147,24 @@ type DNSSECStatus struct {
 }
 
 // ValidateResponse validates a DNS response message.
+//
+// All cryptographic work for one response — chain building (including the
+// chains of other zones reached through CNAME/DNAME owners) and the message
+// itself — is charged against one per-response budget of signature
+// verifications and NSEC3 hash computations (F408). Exceeding it fails
+// closed: the response is Bogus.
 func (v *Validator) ValidateResponse(ctx context.Context, msg *protocol.Message, queryName string) (ValidationResult, error) {
+	return v.validateResponseBudget(ctx, msg, queryName, newResponseBudget())
+}
+
+// validateResponseBudget is ValidateResponse charging all work to b.
+func (v *Validator) validateResponseBudget(ctx context.Context, msg *protocol.Message, queryName string, b *responseBudget) (ValidationResult, error) {
 	if !v.config.Enabled {
 		return ValidationInsecure, nil
 	}
+	session := *v
+	session.work = b
+	v = &session
 
 	if msg == nil {
 		return ValidationBogus, fmt.Errorf("nil message")
@@ -203,6 +229,9 @@ func (v *Validator) ValidateResponse(ctx context.Context, msg *protocol.Message,
 
 	// Build validation chain from anchor to query name
 	chain, insecure, err := v.buildChain(ctx, anchor, remaining)
+	if v.work.exceeded {
+		return ValidationBogus, errWorkBudgetExceeded
+	}
 	if err != nil {
 		// A chain FETCH failure (network/upstream, not crypto) proves
 		// nothing about the zone: return Indeterminate, not Bogus. The
@@ -233,7 +262,93 @@ func (v *Validator) ValidateResponse(ctx context.Context, msg *protocol.Message,
 	// against THIS message's signatures. Always. Do not cache the per-message
 	// outcome — see comment above.
 	result := v.validateMessage(ctx, msg, queryName, chain)
+	if v.work.exceeded {
+		return ValidationBogus, errWorkBudgetExceeded
+	}
 	return result, nil
+}
+
+// Per-response work budget (F408, KeyTrap CVE-2023-50387 / CVE-2023-50868).
+// The per-RRset and per-section caps bound each step, but not their sum: a
+// response with 32 Answer RRsets, each reached through its own chain whose
+// every label needs a signed denial proof, multiplied them (about 1400
+// signature verifications and 1300 NSEC3 hashes at 150 iterations for 31
+// owners x 40 labels). A legitimate response — 10 RRsets behind a 3-link
+// chain in the middle of a KSK + ZSK rollover — needs about 15 verifications.
+const (
+	maxSigVerificationsPerResponse = 128
+	maxNSEC3HashesPerResponse      = 512
+	// maxZoneCutLookupsPerResponse bounds the DS lookups made to prove there
+	// is no zone cut between an RRSIG signer and an owner more than one label
+	// below it (F472). A deep reverse-IPv6 PTR under a /32 zone needs 23.
+	maxZoneCutLookupsPerResponse = 64
+)
+
+var errWorkBudgetExceeded = errors.New("DNSSEC per-response verification budget exceeded")
+
+// responseBudget counts the expensive operations performed for one response.
+// It is used by a single goroutine (one ValidateResponse call).
+type responseBudget struct {
+	sigLimit, hashLimit, lookupLimit int
+	sigs, hashes, lookups            int // operations charged so far
+	exceeded                         bool
+}
+
+func newResponseBudget() *responseBudget {
+	return &responseBudget{sigLimit: maxSigVerificationsPerResponse, hashLimit: maxNSEC3HashesPerResponse,
+		lookupLimit: maxZoneCutLookupsPerResponse}
+}
+
+// chargeSig reserves one signature verification. It reports false (and marks
+// the budget exceeded) once the response's allowance is spent. Without a
+// budget (internal callers outside ValidateResponse) it always succeeds.
+func (v *Validator) chargeSig() bool {
+	b := v.work
+	if b == nil {
+		return true
+	}
+	if b.sigs >= b.sigLimit {
+		b.exceeded = true
+		return false
+	}
+	b.sigs++
+	return true
+}
+
+// chargeHash reserves one NSEC3 hash computation; see chargeSig.
+func (v *Validator) chargeHash() bool {
+	b := v.work
+	if b == nil {
+		return true
+	}
+	if b.hashes >= b.hashLimit {
+		b.exceeded = true
+		return false
+	}
+	b.hashes++
+	return true
+}
+
+// chargeLookup reserves one zone-cut DS lookup (F472); see chargeSig.
+func (v *Validator) chargeLookup() bool {
+	b := v.work
+	if b == nil {
+		return true
+	}
+	if b.lookups >= b.lookupLimit {
+		b.exceeded = true
+		return false
+	}
+	b.lookups++
+	return true
+}
+
+// nsec3Hash is NSEC3Hash charged against the response budget.
+func (v *Validator) nsec3Hash(name string, algorithm uint8, iterations uint16, salt []byte) ([]byte, error) {
+	if !v.chargeHash() {
+		return nil, errWorkBudgetExceeded
+	}
+	return NSEC3Hash(name, algorithm, iterations, salt)
 }
 
 // signingZone returns the zone whose signatures authenticate msg for
@@ -262,6 +377,12 @@ func signingZone(msg *protocol.Message, queryName string) string {
 		return ""
 	}
 	if zone := pick(msg.Answers, true); zone != "" {
+		return zone
+	}
+	// A query name below a DNAME owns only the unsigned synthesized CNAME:
+	// the DNAME's signer authenticates it (F527). Walking the chain down to
+	// the query name instead would ask for DS at names the DNAME occludes.
+	if zone := dnameSigner(msg.Answers, queryName); zone != "" {
 		return zone
 	}
 	if len(msg.Answers) == 0 {
@@ -344,7 +465,7 @@ func (v *Validator) buildChain(ctx context.Context, anchor *TrustAnchor, remaini
 	// The anchor authenticates the KSK; the KSK's self-signature over the whole
 	// DNSKEY RRset authenticates the rest of the keys. Both are required —
 	// otherwise an injected DNSKEY would be trusted (DNSSEC bypass).
-	anchorKSKs := v.keysMatchingAnchor(anchor, dnsKeys)
+	anchorKSKs := v.keysMatchingAnyAnchor(anchor, dnsKeys)
 	if len(anchorKSKs) == 0 {
 		return nil, false, fmt.Errorf("trust anchor validation failed for %s", currentZone)
 	}
@@ -371,9 +492,18 @@ func (v *Validator) buildChain(ctx context.Context, anchor *TrustAnchor, remaini
 	// order, and validateMessage — which authenticates the answer with the
 	// LAST link's keys — would check example.com.'s signatures against
 	// com.'s DNSKEYs and mark every correctly-signed answer Bogus.
+	//
+	// `remaining` holds only the labels BELOW the anchor, so every child zone
+	// name is remaining[i:] + the anchor's own labels. Joining remaining[i:]
+	// alone is right only for the root anchor; under a non-root anchor such
+	// as example.com. it asked for DS at "insecure." instead of
+	// "insecure.example.com." and every delegation below it went Bogus (F407).
+	anchorLabels := splitLabels(canonicalZone(anchor.Zone))
 labels:
 	for i := len(remaining) - 1; i >= 0; i-- {
-		childZone := joinLabels(remaining[i:])
+		childLabels := make([]string, 0, len(remaining)-i+len(anchorLabels))
+		childLabels = append(append(childLabels, remaining[i:]...), anchorLabels...)
+		childZone := joinLabels(childLabels)
 		parentLink := chain[len(chain)-1]
 
 		// Check depth limit
@@ -430,6 +560,15 @@ labels:
 			return nil, false, fmt.Errorf("DS RRset for %s not signed by parent zone %s", childZone, parentLink.zone)
 		}
 
+		// Only DS records this validator can use form an authentication
+		// path. With none left the delegation is Insecure, exactly as if
+		// the parent had proven no DS (RFC 4035 §5.2, RFC 6840 §5.2; F373).
+		dsRecords = usableDSRecords(dsRecords)
+		if len(dsRecords) == 0 {
+			insecure = true
+			break labels
+		}
+
 		// Fetch DNSKEY (+ its RRSIGs) for the child zone.
 		childKeys, childSigs, err := v.fetchDNSKEYAndSigs(ctx, childZone)
 		if err != nil {
@@ -466,6 +605,48 @@ labels:
 	}
 
 	return chain, insecure, nil
+}
+
+// usableDSRecords returns the DS records of an authenticated DS RRset that can
+// authenticate a child key: a digest type calculateDSDigestFromDNSKEY
+// implements and a DNSKEY algorithm ParseDNSKEYPublicKey implements (F373).
+// SHA-1 DS records are dropped when a SHA-256 or SHA-384 DS is present
+// (RFC 4509 §3, F374), so a non-matching stronger digest cannot be bypassed
+// through its SHA-1 sibling.
+func usableDSRecords(dsRecords []*protocol.ResourceRecord) []*protocol.ResourceRecord {
+	var usable []*protocol.ResourceRecord
+	strong := false
+	for _, rr := range dsRecords {
+		ds, ok := rr.Data.(*protocol.RDataDS)
+		if !ok {
+			continue
+		}
+		switch ds.Algorithm {
+		case protocol.AlgorithmRSASHA256, protocol.AlgorithmRSASHA512,
+			protocol.AlgorithmECDSAP256SHA256, protocol.AlgorithmECDSAP384SHA384,
+			protocol.AlgorithmED25519:
+		default:
+			continue
+		}
+		switch ds.DigestType {
+		case 2, 4:
+			strong = true
+		case 1:
+		default:
+			continue
+		}
+		usable = append(usable, rr)
+	}
+	if !strong {
+		return usable
+	}
+	out := usable[:0]
+	for _, rr := range usable {
+		if rr.Data.(*protocol.RDataDS).DigestType != 1 {
+			out = append(out, rr)
+		}
+	}
+	return out
 }
 
 // keysMatchingDS returns the child DNSKEYs (KSKs) that a parent DS record
@@ -542,12 +723,13 @@ func (v *Validator) verifyDNSKEYSelfSignature(keys, sigs, trustedKSKs []*protoco
 	if len(trustedKSKs) == 0 {
 		return false
 	}
+	budget := maxSigVerificationsPerRRset
 	for _, sigRR := range sigs {
 		rrsig, ok := sigRR.Data.(*protocol.RDataRRSIG)
 		if !ok || rrsig.TypeCovered != protocol.TypeDNSKEY {
 			continue
 		}
-		if v.validateRRSIG(keys, rrsig, trustedKSKs) {
+		if v.validateRRSIGBudget(keys, rrsig, trustedKSKs, &budget) {
 			return true
 		}
 	}
@@ -561,6 +743,7 @@ func (v *Validator) verifyDSRRSIG(dsMsg *protocol.Message, dsRecords, parentKeys
 	if dsMsg == nil || len(dsRecords) == 0 || len(parentKeys) == 0 {
 		return false
 	}
+	budget := maxSigVerificationsPerRRset
 	for _, rr := range dsMsg.Answers {
 		if rr == nil || rr.Type != protocol.TypeRRSIG {
 			continue
@@ -569,7 +752,7 @@ func (v *Validator) verifyDSRRSIG(dsMsg *protocol.Message, dsRecords, parentKeys
 		if !ok || rrsig.TypeCovered != protocol.TypeDS {
 			continue
 		}
-		if v.validateRRSIG(dsRecords, rrsig, parentKeys) {
+		if v.validateRRSIGBudget(dsRecords, rrsig, parentKeys, &budget) {
 			return true
 		}
 	}
@@ -648,6 +831,12 @@ const (
 	// maxDelegationOps bounds the nested DS × DNSKEY comparison cost per
 	// delegation. Legitimate zones ship 1–2 DS and 2–4 DNSKEYs.
 	maxDelegationOps = 32
+	// maxSigVerificationsPerRRset bounds the (RRSIG × same-tag DNSKEY)
+	// signature verifications attempted for ONE RRset (F392). Without it, N
+	// DNSKEYs sharing a key tag and M RRSIGs carrying that tag cost N×M
+	// verifications (KeyTrap, CVE-2023-50387). A rollover RRset needs at
+	// most 2 RRSIGs × 2 colliding keys; past the budget the RRset is Bogus.
+	maxSigVerificationsPerRRset = 8
 )
 
 // validateMessage validates the DNS response message.
@@ -676,8 +865,22 @@ func (v *Validator) validateMessage(ctx context.Context, msg *protocol.Message, 
 	// (AD=0) rather than falsely stamping AD=1 (RFC 4035 §5.3.4).
 	hasUnvalidated := false
 	chains := map[string]chainResult{canonicalZone(zoneLink.zone): {chain: chain}}
+	// Authenticated Authority denial records per signing zone, computed once
+	// per response rather than once per wildcard-expanded RRset (F394).
+	denials := map[*chainLink][]*protocol.ResourceRecord{}
+	// Zone-cut checks between a signer and the names below it (F472).
+	noCut := map[string]bool{}
+	answerChain := walkAnswerChain(msg, queryName)
 	for _, rrSet := range answerGroups {
 		if len(rrSet) == 0 {
+			continue
+		}
+
+		// An unsigned CNAME synthesized exactly (owner, target, TTL) from a
+		// DNAME in this Answer section is authenticated by the DNAME's
+		// signature, which this loop verifies like any other RRset (RFC
+		// 6672 §5.3.1, RFC 4035 §5.3.3; F527).
+		if answerChain.isSynthesizedCNAME(rrSet) {
 			continue
 		}
 
@@ -736,12 +939,20 @@ func (v *Validator) validateMessage(ctx context.Context, msg *protocol.Message, 
 				}
 				otherLink := other.chain[len(other.chain)-1]
 				validated, ok := v.anyRRSIGValidates(rrSet, rrsigs, otherLink.dnsKeys)
-				if !ok {
+				if !ok || apexTypeBelowSigner(rrSet[0].Type, owner, otherLink.zone) {
 					return ValidationBogus
 				}
-				if int(validated.Labels) < len(rrSet[0].Name.LabelsSlice()) &&
-					!v.wildcardExpansionProven(msg, owner, validated.Labels, rrSet[0].Type, other.chain) {
+				if !v.noZoneCutBelowSigner(ctx, other.chain, owner, validated.Labels, noCut) {
 					return ValidationBogus
+				}
+				if int(validated.Labels) < rrsigOwnerLabels(rrSet[0].Name) {
+					proven, optOut := v.wildcardExpansionProof(msg, owner, validated.Labels, rrSet[0].Type, other.chain, denials)
+					if !proven {
+						return ValidationBogus
+					}
+					if optOut {
+						hasUnvalidated = true // RFC 5155 §9.2 (F523)
+					}
 				}
 				continue
 			}
@@ -772,7 +983,10 @@ func (v *Validator) validateMessage(ctx context.Context, msg *protocol.Message, 
 		// Validate the signatures — any one validating authenticates the
 		// RRset (RFC 4035 §5.3.3).
 		validated, ok := v.anyRRSIGValidates(rrSet, rrsigs, zoneLink.dnsKeys)
-		if !ok {
+		if !ok || apexTypeBelowSigner(rrSet[0].Type, owner, zoneLink.zone) {
+			return ValidationBogus
+		}
+		if !v.noZoneCutBelowSigner(ctx, chain, owner, validated.Labels, noCut) {
 			return ValidationBogus
 		}
 
@@ -782,18 +996,52 @@ func (v *Validator) validateMessage(ctx context.Context, msg *protocol.Message, 
 		// be replayed onto an explicit name that has its own different record.
 		// Labels is part of the signed RRSIG RDATA, so an attacker cannot
 		// forge the wildcard path — tampering Labels breaks the signature above.
-		if int(validated.Labels) < len(rrSet[0].Name.LabelsSlice()) {
-			if !v.wildcardExpansionProven(msg, owner, validated.Labels, rrSet[0].Type, chain) {
+		if int(validated.Labels) < rrsigOwnerLabels(rrSet[0].Name) {
+			proven, optOut := v.wildcardExpansionProof(msg, owner, validated.Labels, rrSet[0].Type, chain, denials)
+			if !proven {
 				return ValidationBogus
 			}
+			if optOut {
+				// The next closer lies in an Opt-Out span: the proof cannot
+				// exclude an unsigned delegation there, so the answer is not
+				// Secure (RFC 5155 §9.2; F523, consistent with F377).
+				hasUnvalidated = true
+			}
+		}
+	}
+
+	// A chain whose last name has no data of the query type is a negative
+	// answer for that name (RFC 6604 §2.1): its zone must prove the
+	// NXDOMAIN/NODATA, else the target RRset was stripped or the ending
+	// forged (F528).
+	if len(msg.Answers) > 0 && answerChain.open {
+		switch v.validateChainTerminal(ctx, msg, answerChain.terminal, chains, noCut) {
+		case ValidationBogus:
+			return ValidationBogus
+		case ValidationInsecure:
+			hasUnvalidated = true
 		}
 	}
 
 	// Validate negative response if applicable
 	if len(msg.Answers) == 0 {
-		result := v.validateNegativeResponse(msg, queryName, chain)
+		result, encloser := v.validateNegativeProof(msg, queryName, chain)
 		if result == ValidationBogus {
 			return ValidationBogus
+		}
+		// The denial is the signer's only if no zone cut lies between the
+		// signer and the deepest name the proof shows to exist (names below
+		// it do not exist, and queryName itself, for an exact-match proof,
+		// was checked against the delegation bitmap): otherwise a parent's
+		// stale or replayed NSEC/NSEC3 would deny names inside a delegated
+		// child (F508). Same cost model and cache as answers (F472, F477).
+		if !v.noZoneCutBelowSigner(ctx, chain, queryName, uint8(min(len(splitLabels(encloser)), 255)), noCut) {
+			return ValidationBogus
+		}
+		if result == ValidationInsecure {
+			// Opt-Out denial: not fully authenticated, AD must stay clear
+			// (RFC 5155 §9.2, F377).
+			hasUnvalidated = true
 		}
 	}
 
@@ -804,6 +1052,104 @@ func (v *Validator) validateMessage(ctx context.Context, msg *protocol.Message, 
 		return ValidationInsecure
 	}
 	return ValidationSecure
+}
+
+// apexTypeBelowSigner reports whether a signed RRset of rrtype owned by owner
+// can only be the data of a zone apex other than signer's: SOA, DNSKEY,
+// NSEC3PARAM, CDS and CDNSKEY exist only at a zone apex, and NS is signed only
+// at the apex (the parent's NS at a delegation is never signed, RFC 4035
+// §2.2). Signed by an ancestor zone, such an RRset is the parent forging (or
+// a stale signature over) child-apex data (F509). No lookup is needed.
+func apexTypeBelowSigner(rrtype uint16, owner, signer string) bool {
+	switch rrtype {
+	case protocol.TypeSOA, protocol.TypeDNSKEY, protocol.TypeNSEC3PARAM, protocol.TypeCDS, protocol.TypeCDNSKEY, protocol.TypeNS:
+		return !sameDNSName(owner, signer)
+	}
+	return false
+}
+
+// noZoneCutBelowSigner reports whether the zone of chain's last link (the
+// zone whose keys just verified an RRset owned by owner) contains owner, i.e.
+// no zone cut lies between them (RFC 4035 §5.3.1: the signer must be the zone
+// containing the RRset). The chain is built only down to the RRSIG signer
+// (715f339), so without this check a parent's signature over a name below one
+// of its delegations — a stale pre-delegation signature, or a parent forging
+// child data — validated Secure (F472).
+//
+// Only names strictly between the signer and the owner can be cuts the signer
+// is not authoritative below, so an owner at or one label below the signer
+// costs nothing. For a deeper owner each intermediate name, from the signer
+// downward, must be proven NOT a delegation by the signer's own authenticated
+// DS denial (an existing name or empty non-terminal without NS): one DS lookup
+// per intermediate name, memoized per response in memo and charged to the
+// response budget, and cached across responses for the proof's lifetime
+// (zoneCutCache, F477). A DS RRset, an insecure-delegation proof, a name error, a
+// missing proof or a failed fetch all fail closed. For a wildcard expansion
+// (sigLabels < owner labels) the names checked end at the closest encloser:
+// labels below it are synthesized and do not exist.
+func (v *Validator) noZoneCutBelowSigner(ctx context.Context, chain []*chainLink, owner string, sigLabels uint8, memo map[string]bool) bool {
+	if len(chain) == 0 {
+		return false
+	}
+	signer := canonicalZone(chain[len(chain)-1].zone)
+	if !inBailiwick(owner, signer) {
+		return true // other-zone owners are bound to their own signer elsewhere
+	}
+	ownerLabels := dnsLabelsLower(owner)
+	last := len(ownerLabels) - 1
+	if int(sigLabels) < last {
+		last = int(sigLabels)
+	}
+	for n := len(splitLabels(signer)) + 1; n <= last; n++ {
+		name := strings.Join(ownerLabels[len(ownerLabels)-n:], ".") + "."
+		key := signer + "|" + name
+		ok, seen := memo[key]
+		if !seen {
+			if isCut, hit := v.zoneCuts.get(signer, name, v.clock()); hit {
+				ok = !isCut
+			} else {
+				ok = v.provenNotZoneCut(ctx, signer, name, chain)
+			}
+			memo[key] = ok
+		}
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// provenNotZoneCut reports whether chain's last zone (signer) proves, with an
+// authenticated DS denial, that name is inside it and not a delegation. An
+// authenticated result either way (no-cut proof, signed DS RRset, signed
+// insecure-delegation proof) is cached for the proof's lifetime (F477);
+// unauthenticated, failed or budget-exhausted outcomes are never cached.
+func (v *Validator) provenNotZoneCut(ctx context.Context, signer, name string, chain []*chainLink) bool {
+	if !v.chargeLookup() {
+		return false
+	}
+	ds, dsMsg, err := v.fetchDS(ctx, name)
+	if err != nil {
+		return false
+	}
+	defer dsMsg.Release()
+	proven, isCut := false, false
+	if len(ds) > 0 {
+		_, proven = v.anyRRSIGValidates(ds, v.findRRSIGs(dsMsg.Answers, name, protocol.TypeDS), chain[len(chain)-1].dnsKeys)
+		isCut = true
+	} else {
+		switch v.classifyDSDenial(dsMsg, name, chain) {
+		case dsDenialNotZoneCut:
+			proven = true
+		case dsDenialInsecureDelegation:
+			proven, isCut = true, true
+		}
+	}
+	if proven && (v.work == nil || !v.work.exceeded) {
+		now := v.clock()
+		v.zoneCuts.put(signer, name, isCut, now, proofLifetime(dsMsg, now))
+	}
+	return proven && !isCut
 }
 
 // wildcardExpansionProven reports whether msg carries an authenticated
@@ -822,21 +1168,42 @@ func (v *Validator) validateMessage(ctx context.Context, msg *protocol.Message, 
 // (When the wildcard is exactly one level above owner, the next closer equals
 // owner and this reduces to proving owner's nonexistence.) Without such a proof
 // the answer stays fail-closed (Bogus), never fail-open.
-func (v *Validator) wildcardExpansionProven(msg *protocol.Message, owner string, sigLabels uint8, qtype uint16, chain []*chainLink) bool {
+//
+// denials memoizes authenticatedDenialRRs per chain link for the response
+// (F394): its signature work must not repeat for every wildcard RRset.
+//
+// It is wildcardExpansionProof without the Opt-Out result.
+func (v *Validator) wildcardExpansionProven(msg *protocol.Message, owner string, sigLabels uint8, qtype uint16, chain []*chainLink, denials map[*chainLink][]*protocol.ResourceRecord) bool {
+	proven, _ := v.wildcardExpansionProof(msg, owner, sigLabels, qtype, chain, denials)
+	return proven
+}
+
+// wildcardExpansionProof is wildcardExpansionProven that also reports optOut:
+// the proof rests on an NSEC3 with the Opt-Out flag covering the next closer,
+// so the answer must not be Secure (RFC 5155 §9.2, F523).
+func (v *Validator) wildcardExpansionProof(msg *protocol.Message, owner string, sigLabels uint8, qtype uint16, chain []*chainLink, denials map[*chainLink][]*protocol.ResourceRecord) (proven, optOut bool) {
 	ownerLabels := splitLabels(owner)
 	if int(sigLabels) >= len(ownerLabels) {
-		return false // not a wildcard expansion — caller should not have branched
+		return false, false // not a wildcard expansion — caller should not have branched
 	}
 	// Next closer = one label deeper than the wildcard's closest encloser,
 	// toward owner (rightmost sigLabels+1 labels of owner).
 	nextCloser := strings.Join(ownerLabels[len(ownerLabels)-int(sigLabels)-1:], ".")
 
-	authenticated := v.authenticatedDenialRRs(msg, chain)
+	if len(chain) == 0 {
+		return false, false
+	}
+	link := chain[len(chain)-1]
+	authenticated, done := denials[link]
+	if !done {
+		authenticated = v.authenticatedDenialRRs(msg, chain)
+		denials[link] = authenticated
+	}
 	var nsec3RRs []*protocol.ResourceRecord
 	checks := 0
 	for _, rr := range authenticated {
 		if checks >= maxNSECValidations {
-			return false
+			return false, false
 		}
 		checks++
 		if rr == nil || rr.Name == nil {
@@ -853,21 +1220,62 @@ func (v *Validator) wildcardExpansionProven(msg *protocol.Message, owner string,
 			// which binds the wildcard depth. A NoData (owner==name) match is
 			// rejected via the sameDNSName guard.
 			if !sameDNSName(nsecOwner, nextCloser) && v.validateNSEC(nsecOwner, nextCloser, qtype, nsec) {
-				return true
+				return true, false
 			}
 		case protocol.TypeNSEC3:
 			nsec3RRs = append(nsec3RRs, rr)
 		}
 	}
 	if len(nsec3RRs) > 0 {
-		// The proven closest encloser must have EXACTLY sigLabels labels, i.e.
-		// equal the wildcard's closest encloser — otherwise a deeper real
-		// closest encloser (as in the a.sub.example.com attack) is rejected.
-		if ce, _, ok := v.nsec3ClosestEncloserAndNextCloser(owner, nsec3RRs); ok && len(splitLabels(ce)) == int(sigLabels) {
-			return true
+		// RFC 5155 §8.8: the closest encloser is fixed by the RRSIG Labels
+		// field (the signed "*.<ce>" exists, so ce exists); the validator
+		// MUST only find an NSEC3 covering the next closer name. No NSEC3
+		// matching the closest encloser is required — RFC 5155 Appendix B.4,
+		// BIND and Knot send the cover alone (F522). The strict cover binds
+		// the wildcard depth: in the a.sub.example.com replay of a
+		// "*.example.com" signature the next closer sub.example.com exists,
+		// has its own NSEC3, and no NSEC3 strictly covers it. Only the next
+		// closer is hashed — no ancestor search (F395, CVE-2023-50868 class).
+		// An NSEC3 MATCHING the next closer proves it exists — the response
+		// contradicts itself (e.g. a stale cover replayed beside the current
+		// match) and the expansion is rejected.
+		params, ok := nsec3SharedParams(nsec3RRs)
+		if !ok {
+			return false, false
 		}
+		h, err := v.nsec3Hash(nextCloser, params.algo, params.iter, params.salt)
+		if err != nil {
+			return false, false
+		}
+		target := strings.ToUpper(protocol.Base32Encode(h))
+		for _, rr := range nsec3RRs {
+			n := rr.Data.(*protocol.RDataNSEC3) // nsec3SharedParams checked the type
+			ownerHash := strings.ToUpper(extractNSEC3Hash(rr.Name.String()))
+			if ownerHash == target {
+				return false, false
+			}
+			if nsec3HashInRange(target, ownerHash, strings.ToUpper(protocol.Base32Encode(n.NextHashed))) {
+				proven = true
+				if n.IsOptOut() {
+					optOut = true
+				}
+			}
+		}
+		return proven, optOut
 	}
-	return false
+	return false, false
+}
+
+// rrsigOwnerLabels returns the owner's label count as the RRSIG Labels field
+// counts it (RFC 4034 §3.1.3): a leading "*" label is not counted. An RRSIG
+// whose Labels equals this count covers the owner as written — including a
+// literal "*.zone" owner queried directly — not a wildcard expansion (F348).
+func rrsigOwnerLabels(owner *protocol.Name) int {
+	labels := owner.LabelsSlice()
+	if len(labels) > 0 && labels[0] == "*" {
+		return len(labels) - 1
+	}
+	return len(labels)
 }
 
 // sameDNSName reports whether two DNS owner names are equal, ignoring ASCII
@@ -949,8 +1357,12 @@ func (v *Validator) findRRSIGs(answers []*protocol.ResourceRecord, name string, 
 // drives the wildcard-expansion check). See findRRSIGs for why every
 // signature is attempted.
 func (v *Validator) anyRRSIGValidates(rrSet []*protocol.ResourceRecord, rrsigs []*protocol.RDataRRSIG, dnsKeys []*protocol.ResourceRecord) (*protocol.RDataRRSIG, bool) {
+	budget := maxSigVerificationsPerRRset
 	for _, rrsig := range rrsigs {
-		if v.validateRRSIG(rrSet, rrsig, dnsKeys) {
+		if budget <= 0 {
+			break
+		}
+		if v.validateRRSIGBudget(rrSet, rrsig, dnsKeys, &budget) {
 			return rrsig, true
 		}
 	}
@@ -959,9 +1371,17 @@ func (v *Validator) anyRRSIGValidates(rrSet []*protocol.ResourceRecord, rrsigs [
 
 // validateRRSIG validates an RRSIG over an RRSet.
 func (v *Validator) validateRRSIG(rrSet []*protocol.ResourceRecord, rrsig *protocol.RDataRRSIG, dnsKeys []*protocol.ResourceRecord) bool {
+	budget := maxSigVerificationsPerRRset
+	return v.validateRRSIGBudget(rrSet, rrsig, dnsKeys, &budget)
+}
+
+// validateRRSIGBudget is validateRRSIG charging every signature verification
+// against *budget, shared by all RRSIGs of one RRset (F392, KeyTrap). Once the
+// budget is spent no further verification is attempted and the RRSIG fails.
+func (v *Validator) validateRRSIGBudget(rrSet []*protocol.ResourceRecord, rrsig *protocol.RDataRRSIG, dnsKeys []*protocol.ResourceRecord, budget *int) bool {
 	// Check signature timestamps with clock skew tolerance
 	if !v.config.IgnoreTime {
-		now := uint32(time.Now().Unix())
+		now := uint32(v.clock().Unix())
 		// Convert clock skew to seconds for comparison with uint32 timestamps
 		clockSkewSec := validatorClockSkewSeconds(v.config.ClockSkew)
 		// Apply clock skew tolerance: allow signatures that expired recently
@@ -997,6 +1417,10 @@ func (v *Validator) validateRRSIG(rrSet []*protocol.ResourceRecord, rrsig *proto
 		if protocol.CalculateKeyTag(dnskey.Flags, dnskey.Algorithm, dnskey.PublicKey) != rrsig.KeyTag {
 			continue
 		}
+		if *budget <= 0 || !v.chargeSig() {
+			return false
+		}
+		*budget--
 		pubKey, err := ParseDNSKEYPublicKey(dnskey.Algorithm, dnskey.PublicKey)
 		if err != nil {
 			continue
@@ -1257,8 +1681,18 @@ func canonicalSort(rrs []*protocol.ResourceRecord) {
 // stuff the Authority section with thousands of bogus NSEC3 records to pin
 // CPU.
 func (v *Validator) validateNegativeResponse(msg *protocol.Message, queryName string, chain []*chainLink) ValidationResult {
+	result, _ := v.validateNegativeProof(msg, queryName, chain)
+	return result
+}
+
+// validateNegativeProof is validateNegativeResponse that also returns the
+// deepest name the proof shows to EXIST in the signing zone: queryName for an
+// exact-match or empty-non-terminal NODATA, the closest encloser for an
+// NXDOMAIN, wildcard NODATA or Opt-Out DS proof. validateMessage requires no
+// zone cut between the signer and that name (F508).
+func (v *Validator) validateNegativeProof(msg *protocol.Message, queryName string, chain []*chainLink) (ValidationResult, string) {
 	if len(msg.Questions) == 0 {
-		return ValidationBogus
+		return ValidationBogus, ""
 	}
 	qtype := msg.Questions[0].QType
 	isNXDomain := msg.Header.Flags.RCODE == protocol.RcodeNameError
@@ -1269,37 +1703,35 @@ func (v *Validator) validateNegativeResponse(msg *protocol.Message, queryName st
 	// without ever supplying a real signature — same downgrade-attack
 	// class as H-2 on the chain-build DS path. RFC 4035 §5.4 / RFC
 	// 5155 §8 require authenticated denial proofs.
-	authenticated := v.authenticatedDenialRRs(msg, chain)
+	authenticated := ancestorDelegationFiltered(v.authenticatedDenialRRs(msg, chain), queryName, qtype)
 	if len(authenticated) == 0 {
-		return ValidationBogus
+		return ValidationBogus, ""
+	}
+	// A DS RRset lives in the parent zone (RFC 4035 §3.1.4.1, §5.2): a denial
+	// signed by the zone whose apex is queryName (the child's own apex
+	// NSEC/NSEC3) never proves the DS absent (F379).
+	if qtype == protocol.TypeDS && queryName != "." && sameDNSName(chain[len(chain)-1].zone, queryName) {
+		return ValidationBogus, ""
 	}
 
-	// Walk authenticated set once, counting distinct proof contributions.
-	// A name-cover proof: NSEC/NSEC3 whose range covers queryName.
-	// A wildcard-cover proof: NSEC range covers "*.<ancestor>" of queryName,
-	// or (for NSEC3) any second distinct NSEC3 that passes range checks.
-	nameProofs := make(map[string]bool)     // distinct owner names whose range proves queryName
-	wildcardProofs := make(map[string]bool) // distinct owner names whose range covers a wildcard
+	// Walk the authenticated set once: collect NSEC records for the RFC 4035
+	// proofs below and record NSEC3 records whose owner hash MATCHES
+	// queryName with qtype absent (exact-match NODATA, RFC 5155 §8.5).
+	nameProofs := make(map[string]bool) // distinct exact-match NSEC3 owners proving queryName NODATA
+	var nsecRRs, nsec3NoData []*protocol.ResourceRecord
 
 	checks := 0
 	for _, rr := range authenticated {
 		if checks >= maxNSECValidations {
-			return ValidationBogus
+			return ValidationBogus, ""
 		}
 		checks++
 
 		key := strings.ToLower(rr.Name.String())
 
 		if rr.Type == protocol.TypeNSEC {
-			nsec, ok := rr.Data.(*protocol.RDataNSEC)
-			if !ok {
-				continue
-			}
-			if v.validateNSEC(rr.Name.String(), queryName, qtype, nsec) {
-				nameProofs[key] = true
-			}
-			if nsecCoversWildcardOfAncestor(rr.Name.String(), nsec, queryName) {
-				wildcardProofs[key] = true
+			if nsec, ok := rr.Data.(*protocol.RDataNSEC); ok && nsec.NextDomain != nil {
+				nsecRRs = append(nsecRRs, rr)
 			}
 		}
 		if rr.Type == protocol.TypeNSEC3 {
@@ -1307,7 +1739,17 @@ func (v *Validator) validateNegativeResponse(msg *protocol.Message, queryName st
 			if !ok {
 				continue
 			}
-			if v.validateNSEC3(rr.Name.String(), queryName, qtype, nsec3, chain) {
+			nsec3NoData = append(nsec3NoData, rr)
+			// validateNSEC3 also accepts a mere range COVER, which proves
+			// only that queryName does not exist — never NODATA (F347).
+			// A CNAME at queryName answers every qtype, so its bit must be
+			// clear too (RFC 5155 §8.5, RFC 6840 §4.3, F378).
+			// A delegation NSEC3 (NS set, SOA clear) is the parent's side of
+			// the cut: it proves only the absence of DS (RFC 6840 §4.1,
+			// F507).
+			if v.chargeHash() && nsec3OwnerMatches(rr.Name.String(), queryName, nsec3) && !nsec3.HasType(protocol.TypeCNAME) &&
+				(qtype == protocol.TypeDS || !isDelegationBitmap(nsec3.HasType)) &&
+				v.validateNSEC3(rr.Name.String(), queryName, qtype, nsec3, chain) {
 				nameProofs[key] = true
 			}
 		}
@@ -1325,43 +1767,247 @@ func (v *Validator) validateNegativeResponse(msg *protocol.Message, queryName st
 			}
 		}
 		if len(nsec3RRs) > 0 {
-			if v.validateNSEC3ClosestEncloser(queryName, nsec3RRs) {
-				return ValidationSecure
+			if ce, ok := v.nsec3NameErrorProven(queryName, nsec3RRs); ok {
+				if v.nsec3NextCloserOptOut(queryName, nsec3RRs) {
+					return ValidationInsecure, ce // RFC 5155 §9.2 (F377)
+				}
+				return ValidationSecure, ce
 			}
 			// If NSEC3 records exist but closest-encloser proof fails, do
 			// not fall back to the NSEC path — that would let an attacker
 			// mix-and-match record types.
 			if len(nsec3RRs) == checks {
-				return ValidationBogus
+				return ValidationBogus, ""
 			}
 		}
 	}
 
 	if isNXDomain {
-		// Require at least one name-cover AND a distinct wildcard-cover.
-		// For NSEC3 the second proof can come from any distinct NSEC3 (see
-		// above) — this is a strict superset of "single-proof accepted" but
-		// not the full RFC 5155 §8 three-proof closest-encloser algorithm.
-		if len(nameProofs) >= 1 && len(wildcardProofs) >= 1 {
-			// And the two proofs must come from distinct owner names; an
-			// attacker recycling the same NSEC for both slots is rejected.
-			for k := range nameProofs {
-				if !wildcardProofs[k] {
-					return ValidationSecure
-				}
-				if len(wildcardProofs) >= 2 {
-					return ValidationSecure
-				}
-			}
+		// NSEC NXDOMAIN (RFC 4035 §3.1.3.2 / §5.4): an NSEC that strictly
+		// covers queryName AND an NSEC covering the wildcard at queryName's
+		// closest encloser (one NSEC may prove both). An NSEC owned by
+		// queryName proves the name EXISTS and is never a name-error proof
+		// (F78).
+		if ce, ok := nsecNameErrorEncloser(queryName, nsecRRs); ok {
+			return ValidationSecure, ce
 		}
-		return ValidationBogus
+		return ValidationBogus, ""
 	}
 
-	// NODATA: a single matching proof is sufficient.
+	// NODATA (RFC 4035 §3.1.3.1, §3.1.3.4): an NSEC matching queryName with
+	// qtype absent, an empty-non-terminal cover, or a wildcard NODATA proof.
+	// A bare covering NSEC proves only that queryName does not exist, which
+	// does not rule out a wildcard answer (F79).
 	if len(nameProofs) >= 1 {
-		return ValidationSecure
+		return ValidationSecure, queryName
 	}
-	return ValidationBogus
+	if encloser, ok := nsecNoDataEncloser(queryName, qtype, nsecRRs); ok {
+		return ValidationSecure, encloser
+	}
+	if ce, ok := v.nsec3CoverNoDataEncloser(queryName, qtype, nsec3NoData); ok {
+		// A closest-encloser proof whose next-closer cover is Opt-Out
+		// leaves AD clear (RFC 5155 §9.2, F377).
+		if v.nsec3NextCloserOptOut(queryName, nsec3NoData) {
+			return ValidationInsecure, ce
+		}
+		return ValidationSecure, ce
+	}
+	return ValidationBogus, ""
+}
+
+// isDelegationBitmap reports whether an NSEC/NSEC3 type bitmap is that of a
+// delegation point as seen from the parent: NS set, SOA clear.
+func isDelegationBitmap(has func(uint16) bool) bool {
+	return has(protocol.TypeNS) && !has(protocol.TypeSOA)
+}
+
+// ancestorDelegationFiltered drops the authenticated NSEC records a zone may
+// not use to deny anything about queryName (RFC 6840 §4.1, RFC 4035 §5.4 /
+// RFC 6672 §5.3.2): the parent's NSEC at a delegation (NS set, SOA clear)
+// proves only that DS is absent at that very name, and says nothing about
+// other types there (the child is authoritative, F507) or about any name below
+// it; an NSEC whose owner has a DNAME cannot deny names below that owner, which
+// the DNAME redirects (F510). NSEC3 is handled by the closest-encloser checks.
+func ancestorDelegationFiltered(rrs []*protocol.ResourceRecord, queryName string, qtype uint16) []*protocol.ResourceRecord {
+	out := rrs[:0:0]
+	for _, rr := range rrs {
+		if nsec, ok := rr.Data.(*protocol.RDataNSEC); ok && rr.Type == protocol.TypeNSEC {
+			owner := rr.Name.String()
+			if sameDNSName(owner, queryName) {
+				if qtype != protocol.TypeDS && isDelegationBitmap(nsec.HasType) {
+					continue
+				}
+			} else if inBailiwick(queryName, owner) && (isDelegationBitmap(nsec.HasType) || nsec.HasType(protocol.TypeDNAME)) {
+				continue
+			}
+		}
+		out = append(out, rr)
+	}
+	return out
+}
+
+// nsec3NextCloserOptOut reports whether rrs carry a closest-encloser proof for
+// queryName in which an NSEC3 covering the next closer name has the Opt-Out
+// flag (RFC 5155 §8.6, §9.2).
+func (v *Validator) nsec3NextCloserOptOut(queryName string, rrs []*protocol.ResourceRecord) bool {
+	ce, params, ok := v.nsec3ClosestEncloserAndNextCloser(queryName, rrs)
+	if !ok {
+		return false
+	}
+	labels := splitLabels(queryName)
+	nextCloser := strings.Join(labels[len(labels)-len(splitLabels(ce))-1:], ".")
+	h, err := v.nsec3Hash(nextCloser, params.algo, params.iter, params.salt)
+	if err != nil {
+		return false
+	}
+	target := strings.ToUpper(protocol.Base32Encode(h))
+	for _, rr := range rrs {
+		n := rr.Data.(*protocol.RDataNSEC3) // nsec3SharedParams checked the type
+		if n.IsOptOut() && nsec3HashInRange(target, strings.ToUpper(extractNSEC3Hash(rr.Name.String())),
+			strings.ToUpper(protocol.Base32Encode(n.NextHashed))) {
+			return true
+		}
+	}
+	return false
+}
+
+// nsec3OwnerMatches reports whether the NSEC3 owner hash equals the NSEC3
+// hash of name under the record's own parameters.
+func nsec3OwnerMatches(owner, name string, nsec3 *protocol.RDataNSEC3) bool {
+	h, err := NSEC3Hash(name, nsec3.HashAlgorithm, nsec3.Iterations, nsec3.Salt)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(protocol.Base32Encode(h), extractNSEC3Hash(owner))
+}
+
+// nsec3CoverNoDataEncloser implements the NSEC3 NODATA proofs that do not use
+// an NSEC3 matching queryName (RFC 5155 §8.6/§8.7): a closest-encloser proof
+// for queryName plus either an NSEC3 matching "*.<closest encloser>" with
+// qtype absent (wildcard NODATA), or — for DS only — an Opt-Out NSEC3
+// covering the next closer name (unsigned delegation in an Opt-Out span).
+// It returns the proven closest encloser.
+func (v *Validator) nsec3CoverNoDataEncloser(queryName string, qtype uint16, rrs []*protocol.ResourceRecord) (string, bool) {
+	ce, _, ok := v.nsec3ClosestEncloserAndNextCloser(queryName, rrs)
+	if !ok {
+		return "", false
+	}
+	if qtype == protocol.TypeDS && v.nsec3NextCloserOptOut(queryName, rrs) {
+		return ce, true
+	}
+	wildcard := wildcardAt(ce)
+	for _, rr := range rrs {
+		n := rr.Data.(*protocol.RDataNSEC3)
+		if v.chargeHash() && nsec3OwnerMatches(rr.Name.String(), wildcard, n) && !n.HasType(qtype) && !n.HasType(protocol.TypeCNAME) {
+			return ce, true
+		}
+	}
+	return "", false
+}
+
+// dnsLabelsLower returns name's labels, lowercased, leftmost first.
+func dnsLabelsLower(name string) []string {
+	name = strings.ToLower(strings.TrimSuffix(name, "."))
+	if name == "" {
+		return nil
+	}
+	return strings.Split(name, ".")
+}
+
+// commonAncestorLabels returns the number of trailing labels a and b share.
+func commonAncestorLabels(a, b []string) int {
+	n := 0
+	for n < len(a) && n < len(b) && a[len(a)-1-n] == b[len(b)-1-n] {
+		n++
+	}
+	return n
+}
+
+// nsecCoverClosestEncloser reports whether nsec (owned by owner) strictly
+// covers queryName as a NONEXISTENT name, returning the closest encloser
+// derived from that cover (RFC 4592 §3.3.1 / RFC 4035 §5.4: the longest common
+// ancestor of queryName with the NSEC owner or next name). A cover whose next
+// name is a descendant of queryName proves queryName is an empty
+// non-terminal, i.e. that it exists; ok is false and ent is true then.
+func nsecCoverClosestEncloser(owner string, nsec *protocol.RDataNSEC, queryName string) (ce string, ent, ok bool) {
+	next := nsec.NextDomain.String()
+	if sameDNSName(owner, queryName) || !nameInRange(queryName, owner, next) {
+		return "", false, false
+	}
+	if !sameDNSName(next, queryName) && inBailiwick(next, queryName) {
+		return "", true, false
+	}
+	q := dnsLabelsLower(queryName)
+	n := commonAncestorLabels(q, dnsLabelsLower(owner))
+	if m := commonAncestorLabels(q, dnsLabelsLower(next)); m > n {
+		n = m
+	}
+	if n >= len(q) {
+		return "", false, false
+	}
+	return joinLabels(q[len(q)-n:]), false, true
+}
+
+// wildcardAt returns "*.<ce>" for a closest encloser ce.
+func wildcardAt(ce string) string {
+	if ce == "." {
+		return "*."
+	}
+	return "*." + ce
+}
+
+// nsecNameErrorEncloser reports whether the authenticated NSEC records prove
+// that queryName does not exist and that no wildcard at its closest encloser
+// could have synthesized an answer.
+// It returns the closest encloser of the proof.
+func nsecNameErrorEncloser(queryName string, nsecs []*protocol.ResourceRecord) (string, bool) {
+	for _, c := range nsecs {
+		ce, _, ok := nsecCoverClosestEncloser(c.Name.String(), c.Data.(*protocol.RDataNSEC), queryName)
+		if !ok {
+			continue
+		}
+		wildcard := wildcardAt(ce)
+		for _, w := range nsecs {
+			wn := w.Data.(*protocol.RDataNSEC)
+			if nameInRange(wildcard, w.Name.String(), wn.NextDomain.String()) {
+				return ce, true
+			}
+		}
+	}
+	return "", false
+}
+
+// nsecNoDataEncloser reports whether the authenticated NSEC records prove that
+// queryName has no RRset of qtype: an exact-match NSEC without qtype, an
+// empty-non-terminal cover, or a wildcard NODATA proof (cover of queryName
+// plus an NSEC owned by the closest encloser's wildcard without qtype).
+// It returns the deepest name the proof shows to exist: queryName (exact
+// match, empty non-terminal) or the closest encloser (wildcard NODATA).
+func nsecNoDataEncloser(queryName string, qtype uint16, nsecs []*protocol.ResourceRecord) (string, bool) {
+	for _, rr := range nsecs {
+		nsec := rr.Data.(*protocol.RDataNSEC)
+		if sameDNSName(rr.Name.String(), queryName) {
+			// A CNAME bit means the CNAME answers qtype (RFC 6840 §4.3, F378).
+			if !nsec.HasType(qtype) && !nsec.HasType(protocol.TypeCNAME) {
+				return queryName, true
+			}
+			continue
+		}
+		ce, ent, ok := nsecCoverClosestEncloser(rr.Name.String(), nsec, queryName)
+		if ent {
+			return queryName, true
+		}
+		if !ok {
+			continue
+		}
+		wildcard := wildcardAt(ce)
+		for _, w := range nsecs {
+			if wn := w.Data.(*protocol.RDataNSEC); sameDNSName(w.Name.String(), wildcard) && !wn.HasType(qtype) && !wn.HasType(protocol.TypeCNAME) {
+				return ce, true
+			}
+		}
+	}
+	return "", false
 }
 
 // validateNSEC3ClosestEncloser implements the three-part NXDOMAIN proof
@@ -1384,9 +2030,16 @@ func (v *Validator) validateNegativeResponse(msg *protocol.Message, queryName st
 // three sub-proofs succeed; any single failure means NXDOMAIN is unproven
 // and the caller must mark the response Bogus.
 func (v *Validator) validateNSEC3ClosestEncloser(queryName string, rrs []*protocol.ResourceRecord) bool {
+	_, ok := v.nsec3NameErrorProven(queryName, rrs)
+	return ok
+}
+
+// nsec3NameErrorProven is validateNSEC3ClosestEncloser returning the proven
+// closest encloser.
+func (v *Validator) nsec3NameErrorProven(queryName string, rrs []*protocol.ResourceRecord) (string, bool) {
 	closestEncloser, params, ok := v.nsec3ClosestEncloserAndNextCloser(queryName, rrs)
 	if !ok {
-		return false
+		return "", false
 	}
 
 	// 3. Wildcard "*.<closest_encloser>" cover — required for NXDOMAIN to prove
@@ -1396,7 +2049,10 @@ func (v *Validator) validateNSEC3ClosestEncloser(queryName string, rrs []*protoc
 	if closestEncloser == "." {
 		wildcard = "*."
 	}
-	return v.nsec3NameCovered(wildcard, params, rrs)
+	if !v.nsec3NameCovered(wildcard, params, rrs) {
+		return "", false
+	}
+	return closestEncloser, true
 }
 
 // nsec3Params holds the shared NSEC3 hash parameters of one proof.
@@ -1435,7 +2091,7 @@ func nsec3SharedParams(rrs []*protocol.ResourceRecord) (nsec3Params, bool) {
 // nsec3NameCovered reports whether the NSEC3 hash of name falls inside the
 // [owner, next) range of any NSEC3 in rrs (proof that name does not exist).
 func (v *Validator) nsec3NameCovered(name string, p nsec3Params, rrs []*protocol.ResourceRecord) bool {
-	h, err := NSEC3Hash(name, p.algo, p.iter, p.salt)
+	h, err := v.nsec3Hash(name, p.algo, p.iter, p.salt)
 	if err != nil {
 		return false
 	}
@@ -1470,7 +2126,7 @@ func (v *Validator) nsec3ClosestEncloserAndNextCloser(queryName string, rrs []*p
 	}
 
 	hashName := func(name string) (string, bool) {
-		h, err := NSEC3Hash(name, params.algo, params.iter, params.salt)
+		h, err := v.nsec3Hash(name, params.algo, params.iter, params.salt)
 		if err != nil {
 			return "", false
 		}
@@ -1484,6 +2140,7 @@ func (v *Validator) nsec3ClosestEncloserAndNextCloser(queryName string, rrs []*p
 	// queryName itself), find the FIRST whose hash equals some NSEC3 owner-hash.
 	labels := splitLabels(queryName)
 	var closestEncloser string
+	var ceNSEC3 *protocol.RDataNSEC3
 	for i := 1; i <= len(labels); i++ {
 		ancestor := strings.Join(labels[i:], ".")
 		if ancestor == "" {
@@ -1496,6 +2153,7 @@ func (v *Validator) nsec3ClosestEncloserAndNextCloser(queryName string, rrs []*p
 		for _, rr := range rrs {
 			if ownerHashOf(rr) == hUpper {
 				closestEncloser = ancestor
+				ceNSEC3 = rr.Data.(*protocol.RDataNSEC3) // nsec3SharedParams checked the type
 				break
 			}
 		}
@@ -1504,6 +2162,13 @@ func (v *Validator) nsec3ClosestEncloserAndNextCloser(queryName string, rrs []*p
 		}
 	}
 	if closestEncloser == "" {
+		return "", nsec3Params{}, false
+	}
+	// RFC 5155 §8.3 / RFC 6840 §4.1: a closest encloser whose NSEC3 shows a
+	// delegation (NS set, SOA clear) or a DNAME is the boundary of what this
+	// zone may deny — names below it belong to the child zone or are
+	// redirected by the DNAME (F507, F510).
+	if isDelegationBitmap(ceNSEC3.HasType) || ceNSEC3.HasType(protocol.TypeDNAME) {
 		return "", nsec3Params{}, false
 	}
 
@@ -1539,40 +2204,6 @@ func nsec3HashInRange(hash, ownerHash, nextHash string) bool {
 	}
 	// Wrap-around
 	return hash > ownerHash || hash < nextHash
-}
-
-// nsecCoversWildcardOfAncestor reports whether the NSEC's [owner, NextDomain)
-// range covers a wildcard owner "*.<X>" for some ancestor X of queryName
-// (including queryName itself). RFC 4035 §5.4 wildcard non-existence proof.
-func nsecCoversWildcardOfAncestor(owner string, nsec *protocol.RDataNSEC, queryName string) bool {
-	if nsec == nil || nsec.NextDomain == nil {
-		return false
-	}
-	next := nsec.NextDomain.String()
-	// Walk ancestors of queryName: the name itself, then its parent, ... up
-	// to (but not including) the root. The wildcard "*.<root>" == "*." is
-	// included as the broadest fallback.
-	name := strings.TrimSuffix(queryName, ".")
-	for {
-		wildcard := "*." + name
-		if name == "" {
-			wildcard = "*."
-		}
-		if nameInRange(wildcard, owner, next) {
-			return true
-		}
-		idx := strings.Index(name, ".")
-		if idx < 0 {
-			// Last iteration: try wildcard at root.
-			if name != "" {
-				name = ""
-				continue
-			}
-			break
-		}
-		name = name[idx+1:]
-	}
-	return false
 }
 
 // validateNSEC validates an NSEC record for authenticated denial.
@@ -1637,7 +2268,7 @@ func (v *Validator) validateNSEC3(owner, queryName string, qtype uint16, nsec3 *
 	}
 
 	// Hash the query name using the NSEC3 record's parameters
-	hashedName, err := NSEC3Hash(queryName, nsec3.HashAlgorithm, nsec3.Iterations, nsec3.Salt)
+	hashedName, err := v.nsec3Hash(queryName, nsec3.HashAlgorithm, nsec3.Iterations, nsec3.Salt)
 	if err != nil {
 		return false
 	}
@@ -1685,13 +2316,36 @@ func extractNSEC3Hash(owner string) string {
 // "b.example." even though canonical order puts everything under "a.example."
 // before "b.example.", which would misjudge NSEC gap membership.
 func canonicalNameCompare(a, b string) int {
-	// RFC 4034 §6.1: canonical order is the order of the length-prefixed
-	// wire-format names, compared as unsigned byte sequences. A label-count
-	// tiebreak (more labels = greater) does NOT reproduce it: b.example.com
-	// (wire 01 62 ...) sorts BEFORE aa.example.com (wire 02 61 61 ...),
-	// while a label-count tiebreak orders it after. Evaluating NSEC gaps
-	// with the wrong order mis-authenticates denials for existing names.
-	return bytes.Compare(protocol.CanonicalWireName(a), protocol.CanonicalWireName(b))
+	// RFC 4034 §6.1: sort by the most significant (rightmost) label first;
+	// each label is a case-folded, left-justified octet string where the
+	// absence of an octet sorts first (so "aa" < "b" and a parent sorts
+	// before its children). Comparing whole wire-format names left-to-right
+	// is NOT canonical order: the length byte would decide ("b" < "aa") and
+	// the leftmost label would outrank the zone labels, so a genuine NSEC from
+	// a correctly ordered zone could "cover" an existing name (F77).
+	la := wireLabels(protocol.CanonicalWireName(a))
+	lb := wireLabels(protocol.CanonicalWireName(b))
+	for i, j := len(la)-1, len(lb)-1; i >= 0 && j >= 0; i, j = i-1, j-1 {
+		if c := bytes.Compare(la[i], lb[j]); c != 0 {
+			return c
+		}
+	}
+	return len(la) - len(lb)
+}
+
+// wireLabels splits an uncompressed wire-format name into its labels
+// (leftmost first), excluding the root label.
+func wireLabels(wire []byte) [][]byte {
+	var labels [][]byte
+	for i := 0; i < len(wire); {
+		n := int(wire[i])
+		if n == 0 || i+1+n > len(wire) {
+			break
+		}
+		labels = append(labels, wire[i+1:i+1+n])
+		i += 1 + n
+	}
+	return labels
 }
 
 // nameInRange checks if a name falls between owner and next (in canonical order).
@@ -1938,7 +2592,7 @@ func (v *Validator) nsec3DSDenial(zone string, rrs []*protocol.ResourceRecord) d
 	if !ok {
 		return dsDenialNone
 	}
-	h, err := NSEC3Hash(zone, params.algo, params.iter, params.salt)
+	h, err := v.nsec3Hash(zone, params.algo, params.iter, params.salt)
 	if err != nil {
 		return dsDenialNone
 	}
@@ -1975,7 +2629,7 @@ func (v *Validator) nsec3DSDenial(zone string, rrs []*protocol.ResourceRecord) d
 		ceLabels = nil
 	}
 	nextCloser := strings.Join(labels[len(labels)-len(ceLabels)-1:], ".")
-	nh, err := NSEC3Hash(nextCloser, params.algo, params.iter, params.salt)
+	nh, err := v.nsec3Hash(nextCloser, params.algo, params.iter, params.salt)
 	if err != nil {
 		return dsDenialNone
 	}
@@ -2031,10 +2685,29 @@ func (v *Validator) authenticatedDenialRRs(msg *protocol.Message, chain []*chain
 		k := rrsetKey{strings.ToLower(rr.Name.String()), rr.Type}
 		sets[k] = append(sets[k], rr)
 	}
+	// KeyTrap (F393): a complete denial needs at most 3 NSEC3 RRsets (RFC
+	// 5155) and the negative/wildcard proofs already reject more than
+	// maxNSECValidations records, so refuse an oversized Authority section
+	// BEFORE verifying its signatures, not after.
+	if len(sets) > maxNSECValidations {
+		return nil
+	}
 
 	var out []*protocol.ResourceRecord
 	for k, rrSet := range sets {
-		if _, ok := v.anyRRSIGValidates(rrSet, v.findRRSIGs(msg.Authorities, k.name, k.rrtype), keys); !ok {
+		// NSEC/NSEC3 records are never wildcard-synthesized (RFC 4035
+		// §5.3.4, RFC 4592 §4.4): only a signature whose Labels covers the
+		// owner as written authenticates them. Otherwise the RRSIG of a
+		// literal "*.zone" NSEC verifies for ANY renamed owner below zone,
+		// moving its gap anywhere (forged NXDOMAIN / insecure delegation,
+		// F372).
+		var sigs []*protocol.RDataRRSIG
+		for _, sig := range v.findRRSIGs(msg.Authorities, k.name, k.rrtype) {
+			if int(sig.Labels) == rrsigOwnerLabels(rrSet[0].Name) {
+				sigs = append(sigs, sig)
+			}
+		}
+		if _, ok := v.anyRRSIGValidates(rrSet, sigs, keys); !ok {
 			continue
 		}
 		out = append(out, rrSet...)

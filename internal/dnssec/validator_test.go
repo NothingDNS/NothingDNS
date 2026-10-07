@@ -1104,16 +1104,16 @@ func TestBuildChainWithDelegation(t *testing.T) {
 	}
 
 	childKeyTag := protocol.CalculateKeyTag(childDnskey.Flags, childDnskey.Algorithm, childDnskey.PublicKey)
-	childDigest := calculateDSDigestFromDNSKEY("example.", childDnskey, 2)
+	childDigest := calculateDSDigestFromDNSKEY("example.com.", childDnskey, 2)
 
 	// Set up mock resolver
 	parentName, _ := protocol.ParseName("com.")
-	childName, _ := protocol.ParseName("example.")
+	childName, _ := protocol.ParseName("example.com.")
 
 	parentDnskeyRR := &protocol.ResourceRecord{Name: parentName, Type: protocol.TypeDNSKEY, Data: parentDnskey}
 	parentDnskeySig := makeDNSKEYRRSIG(t, "com.", privKey, parentDnskey, []*protocol.ResourceRecord{parentDnskeyRR})
 	childDnskeyRR := &protocol.ResourceRecord{Name: childName, Type: protocol.TypeDNSKEY, Data: childDnskey}
-	childDnskeySig := makeDNSKEYRRSIG(t, "example.", childPrivKey, childDnskey, []*protocol.ResourceRecord{childDnskeyRR})
+	childDnskeySig := makeDNSKEYRRSIG(t, "example.com.", childPrivKey, childDnskey, []*protocol.ResourceRecord{childDnskeyRR})
 
 	// The DS RRset lives in the parent zone, so it must carry an RRSIG by
 	// the parent's key — buildChain rejects unsigned DS RRsets as forgeable.
@@ -1134,10 +1134,10 @@ func TestBuildChainWithDelegation(t *testing.T) {
 			"com.|" + strconv.Itoa(int(protocol.TypeDNSKEY)): {
 				Answers: []*protocol.ResourceRecord{parentDnskeyRR, parentDnskeySig},
 			},
-			"example.|" + strconv.Itoa(int(protocol.TypeDS)): {
+			"example.com.|" + strconv.Itoa(int(protocol.TypeDS)): {
 				Answers: []*protocol.ResourceRecord{childDSRR, childDSSig},
 			},
-			"example.|" + strconv.Itoa(int(protocol.TypeDNSKEY)): {
+			"example.com.|" + strconv.Itoa(int(protocol.TypeDNSKEY)): {
 				Answers: []*protocol.ResourceRecord{childDnskeyRR, childDnskeySig},
 			},
 		},
@@ -1149,7 +1149,8 @@ func TestBuildChainWithDelegation(t *testing.T) {
 	config := DefaultValidatorConfig()
 	v := NewValidator(config, store, mock)
 
-	// Build chain with remaining label "example"
+	// Build chain with remaining label "example": below the com. anchor the
+	// child zone is example.com., not "example." (F407).
 	chain, _, err := v.buildChain(context.Background(), anchor, []string{"example"})
 	if err != nil {
 		t.Fatalf("buildChain with delegation failed: %v", err)

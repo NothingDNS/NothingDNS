@@ -41,7 +41,7 @@ func (r *dnskeyResolver) Query(ctx context.Context, name string, qtype uint16) (
 // populated after fetchDNSKEY returns — the leak. After the fix:
 // msg.Answers cleared by Release().
 func TestFetchDNSKEYReleasesPooledMessage(t *testing.T) {
-	msg := protocol.NewMessage(protocol.Header{
+	msg := pooledTestMessage(protocol.Header{
 		ID:      0xCCCC,
 		Flags:   protocol.NewResponseFlags(protocol.RcodeSuccess),
 		QDCount: 1,

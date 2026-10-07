@@ -133,7 +133,7 @@ func cmdDNSSECGenerateKey(args []string) error {
 	keyType := fs.String("type", "ZSK", "Key type (KSK or ZSK)")
 	zone := fs.String("zone", "", "Zone name (required)")
 	outputDir := fs.String("output", ".", "Output directory for key files")
-	keySize := fs.Int("keysize", 0, "Key size in bits (for RSA: 2048, 3072, 4096)")
+	keySize := fs.Int("keysize", 0, "Key size in bits (for RSA: 1024-4096, default 2048)")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -156,6 +156,11 @@ func cmdDNSSECGenerateKey(args []string) error {
 	alg, err := validateGeneratedKeyAlgorithm(*algorithm)
 	if err != nil {
 		return err
+	}
+	if (alg == protocol.AlgorithmRSASHA256 || alg == protocol.AlgorithmRSASHA512) && *keySize != 0 {
+		if err := validateRSAKeySize(*keySize); err != nil {
+			return err
+		}
 	}
 
 	// Generate key pair
@@ -282,6 +287,11 @@ func cmdDNSSECSignZone(args []string) error {
 		*algorithm == int(protocol.AlgorithmRSAMD5)
 	if isRSA && *keySize <= 0 {
 		return fmt.Errorf("keysize must be > 0 for RSA algorithms (recommended: 2048, 3072, or 4096)")
+	}
+	if isRSA {
+		if err := validateRSAKeySize(*keySize); err != nil {
+			return err
+		}
 	}
 	nsec3Iter := uint16(0)
 	if *nsec3 {
@@ -568,6 +578,22 @@ func validateGeneratedKeyAlgorithm(algorithm int) (uint8, error) {
 	}
 }
 
+// RFC 5702 §2 bounds RSASHA256/RSASHA512 moduli to 1024..4096 bits; the
+// validator rejects larger DNSKEYs (internal/dnssec maxRSAModulusBits, F227),
+// so dnsctl must not generate keys nothing will validate (F460).
+const (
+	minDNSCTLRSAKeyBits = 1024
+	maxDNSCTLRSAKeyBits = 4096
+)
+
+func validateRSAKeySize(bits int) error {
+	if bits < minDNSCTLRSAKeyBits || bits > maxDNSCTLRSAKeyBits {
+		return fmt.Errorf("invalid RSA key size %d bits: must be %d-%d (RFC 5702; larger DNSKEYs are rejected by validators)",
+			bits, minDNSCTLRSAKeyBits, maxDNSCTLRSAKeyBits)
+	}
+	return nil
+}
+
 func validateDSDigestType(digestType int) (uint8, error) {
 	switch digestType {
 	case 1, 2, 4:
@@ -610,6 +636,9 @@ func generateKeyPairOnce(algorithm uint8, isKSK bool, keySize int) (*dnssec.Sign
 		size := 2048
 		if keySize > 0 {
 			size = keySize
+		}
+		if err := validateRSAKeySize(size); err != nil {
+			return nil, err
 		}
 		rsaKey, rsaErr := rsa.GenerateKey(rand.Reader, size)
 		if rsaErr != nil {

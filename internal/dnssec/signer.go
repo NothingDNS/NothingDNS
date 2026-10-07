@@ -1,7 +1,6 @@
 package dnssec
 
 import (
-	"bytes"
 	"fmt"
 	"sort"
 	"strings"
@@ -193,6 +192,13 @@ func (s *Signer) SetKeyTiming(keyTag uint16, timing *KeyTiming) {
 
 // GenerateKeyPair generates a new key pair for the zone.
 func (s *Signer) GenerateKeyPair(algorithm uint8, isKSK bool) (*SigningKey, error) {
+	return s.generateKeyPairWithState(algorithm, isKSK, KeyStateCreated, nil)
+}
+
+// generateKeyPairWithState generates a key and adds it to the signer with its
+// rollover state and timing already set, so no reader ever observes it with
+// Timing == nil — which isActive treats as "always active" (F242).
+func (s *Signer) generateKeyPairWithState(algorithm uint8, isKSK bool, state KeyState, timing *KeyTiming) (*SigningKey, error) {
 	const maxKeyTagAttempts = 16
 
 	for attempt := 0; attempt < maxKeyTagAttempts; attempt++ {
@@ -201,6 +207,8 @@ func (s *Signer) GenerateKeyPair(algorithm uint8, isKSK bool) (*SigningKey, erro
 			return nil, err
 		}
 		if key.KeyTag != 0 {
+			key.State = state
+			key.Timing = timing
 			s.AddKey(key)
 			return key, nil
 		}
@@ -378,9 +386,20 @@ func (s *Signer) SignZone(records []*protocol.ResourceRecord) ([]*protocol.Resou
 		zsks = ksks
 	}
 
+	// Delegation points and the names below them (F459, RFC 4035 §2.2): the
+	// parent is authoritative only for the DS RRset at a cut. The delegation
+	// NS RRset and glue are published unsigned, otherwise a validator accepts
+	// the parent's copy of child data — e.g. glue for a name inside an
+	// unsigned child zone validated as Secure.
+	cuts := s.zoneCuts(otherRRs)
+
 	for _, rrSet := range groups {
 		// Add the records
 		signedRecords = append(signedRecords, rrSet...)
+
+		if !s.authoritativeRRSet(rrSet[0].Name.String(), rrSet[0].Type, cuts) {
+			continue
+		}
 
 		// Sign with all ZSKs
 		for _, zsk := range zsks {
@@ -393,11 +412,24 @@ func (s *Signer) SignZone(records []*protocol.ResourceRecord) ([]*protocol.Resou
 	}
 
 	// Generate denial of existence records
+	// Only authoritative data enters the chain (RFC 4035 §2.3, RFC 5155
+	// §7.1): no glue owners below a cut, and a cut's bitmap shows only the
+	// NS, DS and RRSIG types it really has.
+	var chainRecords []*protocol.ResourceRecord
+	for _, rr := range signedRecords {
+		name := rr.Name.String()
+		if rr.Type == protocol.TypeNS || rr.Type == protocol.TypeRRSIG || s.authoritativeRRSet(name, rr.Type, cuts) {
+			if !belowZoneCut(name, cuts) {
+				chainRecords = append(chainRecords, rr)
+			}
+		}
+	}
+
 	var denialRecords []*protocol.ResourceRecord
 	if s.config.NSEC3Enabled {
-		denialRecords = s.generateNSEC3(signedRecords)
+		denialRecords = s.generateNSEC3(chainRecords)
 	} else {
-		denialRecords = s.generateNSEC(signedRecords)
+		denialRecords = s.generateNSEC(chainRecords)
 	}
 
 	// Sign denial records
@@ -415,6 +447,51 @@ func (s *Signer) SignZone(records []*protocol.ResourceRecord) ([]*protocol.Resou
 	}
 
 	return signedRecords, nil
+}
+
+// zoneCuts returns the delegation points among records: owners other than
+// the zone apex that carry an NS RRset.
+func (s *Signer) zoneCuts(records []*protocol.ResourceRecord) []string {
+	seen := make(map[string]bool)
+	var cuts []string
+	for _, rr := range records {
+		if rr == nil || rr.Name == nil || rr.Type != protocol.TypeNS {
+			continue
+		}
+		name := strings.ToLower(rr.Name.String())
+		if sameDNSName(name, s.zone) || seen[name] {
+			continue
+		}
+		seen[name] = true
+		cuts = append(cuts, name)
+	}
+	return cuts
+}
+
+// belowZoneCut reports whether name lies strictly below one of cuts (glue or
+// occluded data the parent is not authoritative for).
+func belowZoneCut(name string, cuts []string) bool {
+	for _, cut := range cuts {
+		if !sameDNSName(name, cut) && inBailiwick(name, cut) {
+			return true
+		}
+	}
+	return false
+}
+
+// authoritativeRRSet reports whether the zone is authoritative for (and so
+// signs) the RRset owner/rrtype: everything except data below a cut and,
+// at a cut, everything but the DS RRset (RFC 4035 §2.2).
+func (s *Signer) authoritativeRRSet(owner string, rrtype uint16, cuts []string) bool {
+	if belowZoneCut(owner, cuts) {
+		return false
+	}
+	for _, cut := range cuts {
+		if sameDNSName(owner, cut) {
+			return rrtype == protocol.TypeDS
+		}
+	}
+	return true
 }
 
 // SignRRSet creates an RRSIG record for an RRSet.
@@ -691,6 +768,26 @@ func (s *Signer) emptyNonTerminals(records []*protocol.ResourceRecord) []string 
 	return out
 }
 
+// denialTTL returns the TTL for the zone's NSEC/NSEC3 records: the lesser of
+// the apex SOA's MINIMUM field and the SOA's own TTL (RFC 9077 §3, updating
+// RFC 4034 §4 and RFC 5155 §3). A fixed 86400 let resolvers doing aggressive
+// NSEC caching (RFC 8198) deny newly added names for a day (F248). Without an
+// apex SOA in records the historical 86400 is kept.
+func (s *Signer) denialTTL(records []*protocol.ResourceRecord) uint32 {
+	for _, rr := range records {
+		if rr == nil || rr.Name == nil || rr.Type != protocol.TypeSOA || !sameDNSName(rr.Name.String(), s.zone) {
+			continue
+		}
+		if soa, ok := rr.Data.(*protocol.RDataSOA); ok {
+			if soa.Minimum < rr.TTL {
+				return soa.Minimum
+			}
+			return rr.TTL
+		}
+	}
+	return 86400
+}
+
 func (s *Signer) generateNSEC(records []*protocol.ResourceRecord) []*protocol.ResourceRecord {
 	// Collect unique owner names and their types. Empty non-terminals own no
 	// records, so they are seeded separately — a NODATA answer for one of them
@@ -709,21 +806,21 @@ func (s *Signer) generateNSEC(records []*protocol.ResourceRecord) []*protocol.Re
 		nameTypes[name][rr.Type] = true
 	}
 
-	// Get sorted list of names — in RFC 4034 §6.1 canonical (wire) order.
-	// Presentation-format sort.Strings diverges from wire order whenever
-	// sibling labels have different lengths (b.example.com sorts before
-	// aa.example.com by wire length prefix, after it by string compare),
-	// producing NSEC chains whose gaps do not match canonical intervals.
+	// Get sorted list of names — in RFC 4034 §6.1 canonical order
+	// (rightmost label first, labels as case-folded octet strings), the same
+	// order the validator's nameInRange uses (F77). Neither presentation
+	// sort.Strings nor a whole-wire-name byte compare produces it.
 	names := make([]string, 0, len(nameTypes))
 	for name := range nameTypes {
 		names = append(names, name)
 	}
 	sort.Slice(names, func(i, j int) bool {
-		return bytes.Compare(protocol.CanonicalWireName(names[i]), protocol.CanonicalWireName(names[j])) < 0
+		return canonicalNameCompare(names[i], names[j]) < 0
 	})
 
 	// Create NSEC chain
 	var nsecRecords []*protocol.ResourceRecord
+	ttl := s.denialTTL(records)
 
 	for i, name := range names {
 		// Next name in chain (wraps around)
@@ -736,7 +833,12 @@ func (s *Signer) generateNSEC(records []*protocol.ResourceRecord) []*protocol.Re
 			types = append(types, t)
 		}
 
-		// Add NSEC type
+		// Add NSEC type, and RRSIG: the NSEC RRset itself is signed, so the
+		// owner always has an RRSIG — also at an unsigned delegation, whose
+		// NS RRset is not signed (F459, RFC 4035 §2.3).
+		if !nameTypes[name][protocol.TypeRRSIG] {
+			types = append(types, protocol.TypeRRSIG)
+		}
 		types = append(types, protocol.TypeNSEC)
 		sort.Slice(types, func(i, j int) bool { return types[i] < types[j] })
 
@@ -759,7 +861,7 @@ func (s *Signer) generateNSEC(records []*protocol.ResourceRecord) []*protocol.Re
 			Name:  owner,
 			Type:  protocol.TypeNSEC,
 			Class: protocol.ClassIN,
-			TTL:   86400, // Standard TTL for NSEC
+			TTL:   ttl,
 			Data:  nsec,
 		}
 
@@ -806,11 +908,12 @@ func (s *Signer) generateNSEC3(records []*protocol.ResourceRecord) []*protocol.R
 			ni.hasDS = true
 		case protocol.TypeNSEC3, protocol.TypeRRSIG:
 			// Neither NSEC3 nor RRSIG indicates a secure delegation.
-			// NSEC3 records live at hashed owner names, and RRSIGs cover
-			// every RRset in a signed zone — including the delegation NS
-			// RRset that the parent always signs. Counting RRSIG would
-			// mark every delegation "secure" and opt-out would never
-			// engage for unsigned children (RFC 5155 §6.1.1).
+			// NSEC3 records live at hashed owner names, and at a cut an
+			// RRSIG covers only the DS RRset (SignZone no longer signs the
+			// delegation NS, F459) or comes from a caller passing an
+			// already-signed zone. Counting RRSIG would mark such
+			// delegations "secure" and opt-out would never engage for
+			// unsigned children (RFC 5155 §6.1.1).
 		default:
 			// Any other record type means this is a secure delegation
 			ni.hasOther = true
@@ -854,33 +957,31 @@ func (s *Signer) generateNSEC3(records []*protocol.ResourceRecord) []*protocol.R
 
 	// Create NSEC3 records
 	var nsec3Records []*protocol.ResourceRecord
+	ttl := s.denialTTL(records)
 
 	for i, hn := range hashes {
 		// Next hash in chain (wraps around)
 		nextIndex := (i + 1) % len(hashes)
 		nextHash := hashes[nextIndex].hashBytes
 
-		// Get types for the original name
+		// List all record types at this name. RRSIG is present at the
+		// original owner name and stays in the bitmap; the NSEC3 type MUST
+		// NOT be listed here — RFC 5155 §3.2.1: "the NSEC3 type itself will
+		// never be present in the Type Bit Maps" (NSEC3 records live at
+		// hashed owner names, not at the original name).
+		//
+		// An Opt-Out unsigned delegation keeps its real bitmap too (F247):
+		// RFC 5155 §8.9 accepts a matching NSEC3 as proof of an insecure
+		// delegation only with NS set and DS/SOA clear. An empty bitmap
+		// claimed "exists, not a zone cut", so validators treated the
+		// unsigned child as Bogus.
 		var types []uint16
-
-		if hn.isOptOut {
-			// Opt-out: empty bitmap, proves no secure records in this range
-			// The opt-out flag indicates there may be unsigned delegations
-			types = nil
-		} else {
-			// Full proof: list all record types at this name. RRSIG is
-			// present at the original owner name and stays in the bitmap;
-			// the NSEC3 type MUST NOT be listed here — RFC 5155 §3.2.1:
-			// "the NSEC3 type itself will never be present in the Type
-			// Bit Maps" (NSEC3 records live at hashed owner names, not at
-			// the original name).
-			for _, rr := range records {
-				if rr.Name.String() == hn.original {
-					types = append(types, rr.Type)
-				}
+		for _, rr := range records {
+			if rr.Name.String() == hn.original {
+				types = append(types, rr.Type)
 			}
-			sort.Slice(types, func(i, j int) bool { return types[i] < types[j] })
 		}
+		sort.Slice(types, func(i, j int) bool { return types[i] < types[j] })
 
 		// Set flags: bit 0 = opt-out
 		flags := uint8(0)
@@ -910,7 +1011,7 @@ func (s *Signer) generateNSEC3(records []*protocol.ResourceRecord) []*protocol.R
 			Name:  owner,
 			Type:  protocol.TypeNSEC3,
 			Class: protocol.ClassIN,
-			TTL:   86400,
+			TTL:   ttl,
 			Data:  nsec3,
 		}
 

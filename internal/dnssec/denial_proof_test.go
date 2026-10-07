@@ -71,7 +71,9 @@ func TestValidateNegativeResponse_SignedNODATA(t *testing.T) {
 		TTL:   300,
 		Data: &protocol.RDataNSEC{
 			NextDomain: mustName(t, "www.example.com."),
-			TypeBitMap: []uint16{protocol.TypeNS, protocol.TypeRRSIG}, // A absent
+			// A absent. Not a delegation bitmap (NS without SOA): the parent's
+			// NSEC at a cut proves only DS absence (F507).
+			TypeBitMap: []uint16{protocol.TypeMX, protocol.TypeRRSIG},
 		},
 	}
 	rrset, rrsig := f.signDenialSet(t, []*protocol.ResourceRecord{nsec})

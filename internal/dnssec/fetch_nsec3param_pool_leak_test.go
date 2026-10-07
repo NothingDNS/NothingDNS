@@ -61,7 +61,7 @@ func (r *nsec3paramResolver) Query(ctx context.Context, name string, qtype uint1
 // reproduction. It must FAIL before the fix (fetchNSEC3PARAM never
 // calls msg.Release()) and PASS after.
 func TestFetchNSEC3PARAMReleasesPooledMessage(t *testing.T) {
-	msg := protocol.NewMessage(protocol.Header{
+	msg := pooledTestMessage(protocol.Header{
 		ID:      0x5678,
 		Flags:   protocol.NewResponseFlags(protocol.RcodeSuccess),
 		QDCount: 1,
