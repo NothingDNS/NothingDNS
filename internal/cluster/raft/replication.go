@@ -23,6 +23,13 @@ func (n *Node) ProposeEntry(command []byte, entryType EntryType) (Index, error) 
 	if n.state != StateLeader {
 		return 0, fmt.Errorf("not leader (state=%s)", n.state)
 	}
+	// F168: an entry that cannot fit in a single AppendEntries frame can
+	// never be replicated — every request for a follower at that index
+	// (heartbeats included) would be refused by writeFramed. Refuse it here
+	// before it is persisted rather than wedge replication.
+	if limit := appendEntriesBudget(n.config.NodeID) - appendEntryWireOverhead; len(command) > limit {
+		return 0, fmt.Errorf("command too large for replication (%d > %d bytes)", len(command), limit)
+	}
 
 	e := entry{
 		Index: n.lastIndex() + 1,
@@ -157,13 +164,50 @@ func (n *Node) buildAppendRequestLocked(peerID NodeID, term Term) (AppendRequest
 		return AppendRequest{}, false
 	}
 	return AppendRequest{
-		Term:         term,
-		LeaderID:     n.config.NodeID,
-		PrevLogIndex: prevLogIndex,
-		PrevLogTerm:  prevLogTerm,
-		Entries:      n.entriesFrom(nextIdx),
-		LeaderCommit: n.commitIndex,
+		Term:          term,
+		LeaderID:      n.config.NodeID,
+		PrevLogIndex:  prevLogIndex,
+		PrevLogTerm:   prevLogTerm,
+		Entries:       n.limitAppendBatchLocked(n.entriesFrom(nextIdx)),
+		LeaderCommit:  n.commitIndex,
+		LeaderDNSAddr: n.dnsAddr,
 	}, true
+}
+
+// appendEntryWireOverhead is the per-entry framing cost in encodeEntrySlice
+// (index, term, type, command length, commitment).
+const appendEntryWireOverhead = 8 + 8 + 1 + 4 + 8
+
+// appendFrameSlack reserves room for the AEAD nonce and tag (28 bytes for
+// AES-GCM) that writeFramed adds on encrypted clusters.
+const appendFrameSlack = 64
+
+// appendEntriesBudget is the number of bytes the encoded entries of one
+// AppendEntries may occupy so the whole request still fits in a frame.
+func appendEntriesBudget(leaderID NodeID) int {
+	// encodeAppendRequest fixed fields + the entry-slice count prefix.
+	fixed := 8 + 4 + len(leaderID) + 8 + 8 + 4 + 8 + 4
+	return maxRPCMessageBytes - appendFrameSlack - fixed
+}
+
+// limitAppendBatchLocked trims a replication batch to Config.MaxLogEntries
+// entries and to the frame byte budget (F167). Without it a follower lagging
+// by more than one frame's worth of commands gets a request writeFramed
+// always refuses and never catches up. The first entry is always kept
+// (ProposeEntry guarantees it fits). MUST hold n.mu.
+func (n *Node) limitAppendBatchLocked(entries []entry) []entry {
+	budget := appendEntriesBudget(n.config.NodeID) - (2 + len(n.dnsAddr)) // F562 trailer
+	used := 0
+	for i, e := range entries {
+		if n.config.MaxLogEntries > 0 && i >= n.config.MaxLogEntries {
+			return entries[:i]
+		}
+		used += appendEntryWireOverhead + len(e.Command)
+		if i > 0 && used > budget {
+			return entries[:i]
+		}
+	}
+	return entries
 }
 
 // replicateTo sends one AppendEntries to a single peer based on its nextIndex,
@@ -256,10 +300,8 @@ func (n *Node) sendInstallSnapshot(peerID NodeID, req SnapshotRequest) {
 			delete(n.snapshotInFlight, peerID)
 			n.mu.Unlock()
 		}()
-		ctx, cancel := context.WithTimeout(context.Background(), raftRPCTimeout)
-		defer cancel()
-		resp, err := n.transport.SendSnapshot(ctx, peerID, req)
-		if err != nil || resp == nil {
+		resp, ok := n.sendSnapshotChunks(peerID, req)
+		if !ok {
 			return
 		}
 		n.mu.Lock()
@@ -284,4 +326,59 @@ func (n *Node) sendInstallSnapshot(peerID NodeID, req SnapshotRequest) {
 			}
 		}
 	}()
+}
+
+// snapshotChunkBytes is the largest slice of snapshot data carried by one
+// InstallSnapshot RPC. A whole-snapshot frame is refused by writeFramed once
+// the state machine outgrows maxRPCMessageBytes, which would leave a follower
+// that needs a snapshot permanently behind (F173); larger snapshots are sent
+// as a sequence of chunks of this size.
+const snapshotChunkBytes = maxRPCMessageBytes / 4
+
+// sendSnapshotChunks delivers req to peerID, splitting Data into
+// snapshotChunkBytes chunks when it does not fit one. It returns the
+// response to the final (installing) chunk. ok is false when a send failed,
+// a chunk was refused, or this node stopped leading req.Term mid-transfer;
+// a newer term seen in an intermediate response is handled here.
+func (n *Node) sendSnapshotChunks(peerID NodeID, req SnapshotRequest) (*SnapshotResponse, bool) {
+	data := req.Data
+	off := 0
+	for {
+		chunk := req
+		if len(data) > snapshotChunkBytes {
+			end := off + snapshotChunkBytes
+			if end > len(data) {
+				end = len(data)
+			}
+			chunk.Data = data[off:end]
+			chunk.Offset = uint64(off)
+			chunk.Total = uint64(len(data))
+			off = end
+		} else {
+			off = len(data)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), raftRPCTimeout)
+		resp, err := n.transport.SendSnapshot(ctx, peerID, chunk)
+		cancel()
+		if err != nil || resp == nil {
+			return nil, false
+		}
+		if off >= len(data) {
+			return resp, true
+		}
+		n.mu.Lock()
+		if resp.Term > n.currentTerm {
+			if err := n.advanceTermLocked(resp.Term); err != nil {
+				util.Errorf("raft: snapshot response term advance failed: %v", err)
+			}
+			n.state = StateFollower
+			n.mu.Unlock()
+			return nil, false
+		}
+		stillLeader := n.state == StateLeader && n.currentTerm == req.Term
+		n.mu.Unlock()
+		if !resp.Success || !stillLeader {
+			return nil, false
+		}
+	}
 }

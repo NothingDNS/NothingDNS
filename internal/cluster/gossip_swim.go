@@ -205,6 +205,11 @@ func (gp *GossipProtocol) handleGossip(msg Message, from *net.UDPAddr) {
 			continue
 		}
 
+		// An authenticated Gossip frame from the node itself proves it is
+		// alive, exactly like a Ping; without this a healthy peer that only
+		// gossips is suspected every SuspicionMult probe intervals (F139).
+		gp.nodeList.MarkSeen(info.ID)
+
 		existing, ok := gp.nodeList.Get(info.ID)
 		if !ok {
 			// New node
@@ -227,9 +232,19 @@ func (gp *GossipProtocol) handleGossip(msg Message, from *net.UDPAddr) {
 				}
 				gp.callbacksMu.RUnlock()
 			}
-		} else if info.Version > existing.Version {
-			// Update existing node
+		} else if info.State != existing.State || info.Version > existing.Version {
+			// Update existing node. existing.Version is our local counter,
+			// bumped by every local suspect/dead/ack/draining transition, so
+			// it is not comparable with the peer's own Version (which also
+			// restarts at 1 when the peer restarts). This frame is the peer's
+			// authenticated, sequence-ordered report about itself, so a state
+			// it reports that differs from ours wins (F133).
 			gp.nodeList.UpdateState(info.ID, info.State)
+			// Hand OnNodeUpdate the node as it is now, not the pre-update
+			// copy, so handlers observe the state just applied (F343).
+			if updated, ok := gp.nodeList.Get(info.ID); ok {
+				existing = updated
+			}
 			gp.callbacksMu.RLock()
 			if gp.onNodeUpdate != nil {
 				func() {
@@ -337,13 +352,16 @@ func (gp *GossipProtocol) probeNodes() {
 		case NodeStateAlive:
 			// Mark suspect if not seen recently
 			if since > gp.config.ProbeInterval*time.Duration(gp.config.SuspicionMult) {
-				gp.nodeList.UpdateState(node.ID, NodeStateSuspect)
+				gp.nodeList.transitionIfUnchanged(node.ID, NodeStateAlive, node.LastSeen, NodeStateSuspect)
 			}
 
 		case NodeStateSuspect:
 			// Mark dead if suspect for too long
 			if since > gp.config.ProbeInterval*time.Duration(gp.config.SuspicionMult*2) {
-				gp.nodeList.UpdateState(node.ID, NodeStateDead)
+				// Refuted (acked/seen) since the snapshot: not dead (F138).
+				if !gp.nodeList.transitionIfUnchanged(node.ID, NodeStateSuspect, node.LastSeen, NodeStateDead) {
+					continue
+				}
 				gp.callbacksMu.RLock()
 				if gp.onNodeLeave != nil {
 					func() {
@@ -360,7 +378,7 @@ func (gp *GossipProtocol) probeNodes() {
 		case NodeStateDead:
 			// Remove dead nodes after extended period
 			if since > gp.config.ProbeInterval*10 {
-				gp.nodeList.Remove(node.ID)
+				gp.nodeList.removeIfUnchanged(node.ID, NodeStateDead, node.LastSeen)
 			}
 		}
 	}

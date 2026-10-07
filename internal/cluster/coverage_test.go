@@ -1541,6 +1541,7 @@ func TestGossipProtocol_HandleNodeStats(t *testing.T) {
 func TestGossipProtocol_HandleClusterMetrics(t *testing.T) {
 	self := &Node{ID: "self", State: NodeStateAlive}
 	nl := NewNodeList(self)
+	nl.Add(&Node{ID: "remote-metrics-node", State: NodeStateAlive}) // only members are tracked (F134)
 	cfg := DefaultGossipConfig()
 
 	gp, _ := NewGossipProtocol(cfg, nl, true)

@@ -39,6 +39,11 @@ type ClusterIntegration struct {
 	// Applied index tracking
 	appliedIndex    Index
 	lastAppliedTerm Term
+	// snapshotGen counts snapshot installs (bumped by fastForwardApplied).
+	// The apply loop compares it across each entry's apply to detect an
+	// InstallSnapshot that superseded its in-flight batch (F174). Guarded
+	// by node.mu.
+	snapshotGen uint64
 
 	// applyHook, when set, is invoked with each committed ZoneCommand so the
 	// real zone store can be updated. Guarded by mu.
@@ -197,7 +202,10 @@ func NewClusterIntegration(nodeID NodeID, peers []NodeID, peerAddrs map[NodeID]s
 // bootstrapState reconstructs durable state at startup: restore the latest
 // persisted snapshot (if any) into the store and indices, then replay only the
 // WAL entries that follow the snapshot. Called once, before the node starts.
-func (ci *ClusterIntegration) bootstrapState() {
+// An unreadable WAL (ErrWALCorrupt or an I/O error) is returned, not logged:
+// booting with an empty log would silently drop fsync-acked, possibly
+// committed entries (F162).
+func (ci *ClusterIntegration) bootstrapState() error {
 	var snapIndex Index
 
 	ci.mu.RLock()
@@ -205,10 +213,19 @@ func (ci *ClusterIntegration) bootstrapState() {
 	ci.mu.RUnlock()
 
 	if ci.snapshotter != nil {
-		if snap, err := ci.snapshotter.Load(); err == nil && snap != nil && snap.LastIndex > 0 {
+		// F157: an unreadable snapshot or a failed restore is fatal, like an
+		// unreadable WAL. The WAL has been compacted through the snapshot
+		// index, so booting without the snapshot misaligns every log index,
+		// and booting with its indices but not its state serves an empty store
+		// while claiming everything through LastIndex was applied.
+		snap, err := ci.snapshotter.Load()
+		if err != nil {
+			return fmt.Errorf("load raft snapshot: %w", err)
+		}
+		if snap != nil && snap.LastIndex > 0 {
 			if restore != nil {
 				if err := restore(snap.Data); err != nil {
-					ci.logger.Errorf("raft: restoring boot snapshot failed: %v", err)
+					return fmt.Errorf("restore raft snapshot at index %d: %w", snap.LastIndex, err)
 				}
 			}
 			ci.node.lastSnapshot = snap.LastIndex
@@ -224,21 +241,32 @@ func (ci *ClusterIntegration) bootstrapState() {
 	}
 
 	// Replay only the post-snapshot WAL tail into the log.
-	if entries, err := ci.wal.ReadAll(); err == nil {
-		for _, e := range entries {
-			if e.Index > snapIndex {
-				ci.node.log = append(ci.node.log, e)
-			}
-		}
-	} else {
-		ci.logger.Warnf("raft: reading WAL at boot failed: %v", err)
+	entries, err := ci.wal.ReadAll()
+	if err != nil {
+		return fmt.Errorf("replay raft WAL: %w", err)
 	}
+	for _, e := range entries {
+		if e.Index <= snapIndex {
+			continue
+		}
+		// F157: the tail must continue the snapshot without a gap (e.g. a
+		// missing snapshot over a compacted WAL); n.log is positional, so a
+		// gap would silently shift every index.
+		if want := snapIndex + Index(len(ci.node.log)) + 1; e.Index != want {
+			return fmt.Errorf("replay raft WAL: entry %d where %d expected (snapshot at %d): log gap", e.Index, want, snapIndex)
+		}
+		ci.node.log = append(ci.node.log, e)
+	}
+	return nil
 }
 
 // Start starts the Raft integration.
 func (ci *ClusterIntegration) Start() error {
 	// Reconstruct durable state (snapshot + WAL tail) before the node runs.
-	ci.bootstrapState()
+	// Refuse to start on an unreadable WAL (F162).
+	if err := ci.bootstrapState(); err != nil {
+		return err
+	}
 
 	// Start RPC server
 	ci.rpcServer.Start()
@@ -320,7 +348,10 @@ func (ci *ClusterIntegration) takeSnapshot() {
 
 	if ci.snapshotter != nil {
 		if err := ci.snapshotter.Save(&Snapshot{Index: idx, Term: term, LastIndex: idx, LastTerm: term, Data: data}); err != nil {
-			ci.logger.Warnf("raft: persisting snapshot failed: %v", err)
+			// F159: do not compact. Without a durable snapshot the WAL
+			// prefix is the only on-disk copy of the entries through idx.
+			ci.logger.Warnf("raft: persisting snapshot failed, log not compacted: %v", err)
+			return
 		}
 	}
 	ci.node.installLeaderSnapshot(idx, term, data)
@@ -331,6 +362,7 @@ func (ci *ClusterIntegration) takeSnapshot() {
 // installed, advancing the integration's applied index past the snapshot.
 func (ci *ClusterIntegration) fastForwardApplied(idx Index) {
 	if idx > ci.appliedIndex {
+		ci.snapshotGen++
 		ci.appliedIndex = idx
 		ci.lastAppliedTerm = ci.node.lastSnapshotTerm
 		// The in-memory ledger (ci.stateMachine) only tracks log applies;
@@ -394,6 +426,7 @@ func (ci *ClusterIntegration) applyLoop() {
 					pending = append(pending, ci.node.log[pos])
 				}
 			}
+			gen := ci.snapshotGen
 			ci.node.mu.Unlock()
 
 			for _, e := range pending {
@@ -401,6 +434,17 @@ func (ci *ClusterIntegration) applyLoop() {
 				// with respect to snapshot capture, so a snapshot never sees a
 				// store mutated past the appliedIndex it records.
 				ci.applyMu.Lock()
+				// F174: an InstallSnapshot may land while this batch is being
+				// applied outside the node lock. The snapshot already contains
+				// (and supersedes) every remaining entry of the batch, so they
+				// must not be re-applied on top of the restored store.
+				ci.node.mu.Lock()
+				superseded := ci.snapshotGen != gen
+				ci.node.mu.Unlock()
+				if superseded {
+					ci.applyMu.Unlock()
+					break
+				}
 				if e.Term != 0 {
 					// F050 (revised): an apply failure means this node's
 					// state machine is diverging from the committed log.
@@ -416,6 +460,17 @@ func (ci *ClusterIntegration) applyLoop() {
 					ci.runApplyHook(e)
 				}
 				ci.node.mu.Lock()
+				if ci.snapshotGen != gen {
+					// The snapshot was installed while this entry was being
+					// applied, so its restore may have run before this
+					// entry's store mutation. Re-establish the snapshot
+					// state (under the node lock, serialized with further
+					// installs) and keep appliedIndex at the snapshot.
+					ci.reapplySnapshotLocked()
+					ci.node.mu.Unlock()
+					ci.applyMu.Unlock()
+					break
+				}
 				ci.appliedIndex = e.Index
 				ci.lastAppliedTerm = e.Term
 				ci.node.mu.Unlock()
@@ -423,6 +478,21 @@ func (ci *ClusterIntegration) applyLoop() {
 			}
 		}
 	}
+}
+
+// reapplySnapshotLocked restores the node's current snapshot into the store
+// and resets the log-apply ledger, discarding a stale entry mutation that
+// raced with a snapshot install (F174). Caller must hold ci.node.mu.
+func (ci *ClusterIntegration) reapplySnapshotLocked() {
+	ci.mu.RLock()
+	restore := ci.restoreFn
+	ci.mu.RUnlock()
+	if restore != nil && len(ci.node.snapshotBytes) > 0 {
+		if err := restore(ci.node.snapshotBytes); err != nil {
+			ci.logger.Errorf("raft: re-restoring snapshot at %d after a racing apply failed (Sev-1): %v", ci.node.lastSnapshot, err)
+		}
+	}
+	ci.stateMachine.reset()
 }
 
 // applyWithRetry applies a committed entry to the state machine, retrying
@@ -609,6 +679,11 @@ func (ci *ClusterIntegration) SetSnapshotFns(snapshot func() ([]byte, error), re
 	// When a snapshot is installed, fast-forward our applied index. Set
 	// directly (no lock): SetSnapshotFns runs at construction, before Start.
 	ci.node.onSnapshotInstalled = ci.fastForwardApplied
+	// Persist snapshots received from the leader before they are installed
+	// (and the WAL compacted), so a restarted follower boots from them.
+	if ci.snapshotter != nil {
+		ci.node.snapshotSaver = ci.snapshotter.Save
+	}
 }
 
 // SetApplyHook installs fn, called with each committed ZoneCommand as it is
@@ -633,6 +708,18 @@ func (ci *ClusterIntegration) GetLeaderID() NodeID {
 		return ci.nodeID
 	}
 	return ci.node.LeaderID()
+}
+
+// SetDNSAddr sets the DNS (TCP) host:port this node advertises to Raft
+// followers ("" advertises none). Call before Start. F562.
+func (ci *ClusterIntegration) SetDNSAddr(addr string) {
+	ci.node.SetDNSAddr(addr)
+}
+
+// LeaderDNSAddr returns the current leader's node ID and the DNS address it
+// advertises; see Node.LeaderDNSAddr. F562.
+func (ci *ClusterIntegration) LeaderDNSAddr() (NodeID, string) {
+	return ci.node.LeaderDNSAddr()
 }
 
 // ErrNotLeader is returned by AddNode/RemoveNode when this node is not

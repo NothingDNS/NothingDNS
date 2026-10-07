@@ -125,8 +125,23 @@ func encodeWALEntry(e entry) []byte {
 }
 
 // writeLocked appends one entry. Caller must hold w.mu.
+//
+// F165: a write that fails part-way (ENOSPC/EFBIG short write) must not leave
+// a partial record behind — the next successful append would land after it,
+// turning the torn bytes into mid-file corruption that refuses boot. Cut the
+// file back to its pre-write size on failure.
 func (w *WAL) writeLocked(e entry) error {
-	return util.WriteFull(w.logFile, encodeWALEntry(e))
+	info, err := w.logFile.Stat()
+	if err != nil {
+		return fmt.Errorf("stat WAL before append: %w", err)
+	}
+	if err := util.WriteFull(w.logFile, encodeWALEntry(e)); err != nil {
+		if terr := w.logFile.Truncate(info.Size()); terr != nil {
+			return fmt.Errorf("%w (removing partial WAL record failed: %w)", err, terr)
+		}
+		return err
+	}
+	return nil
 }
 
 // logPath returns the WAL's backing file path.
@@ -382,6 +397,16 @@ func (w *WAL) readAllLocked() ([]entry, error) {
 		}
 		e.Type = EntryType(body[cmdLen])
 
+		// F164: records are appended in decision order, and a record for
+		// index i is only ever written when the log held exactly the
+		// entries below i. A later record at an index already seen (retry
+		// after a failed fsync, or an append after a TruncateAfter that
+		// failed) therefore supersedes that index and everything after it
+		// — etcd WAL semantics. Appending blindly replayed both copies and
+		// shifted every following entry to the wrong log position.
+		for len(entries) > 0 && entries[len(entries)-1].Index >= e.Index {
+			entries = entries[:len(entries)-1]
+		}
 		entries = append(entries, e)
 		goodOffset += int64(walRecordHeaderSize) + int64(cmdLen) + 1
 	}

@@ -559,6 +559,30 @@ func (n *Node) Term() Term {
 	return n.currentTerm
 }
 
+// SetDNSAddr sets the DNS (TCP) host:port this node advertises to its
+// followers in AppendEntries ("" advertises none). F562.
+func (n *Node) SetDNSAddr(addr string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.dnsAddr = addr
+}
+
+// LeaderDNSAddr returns the known leader and the DNS address it advertised
+// in its last accepted AppendEntries. addr is "" when no leader is known,
+// the leader advertises none, or the address was learned from a different
+// (earlier) leader. A leader reports its own address. F562.
+func (n *Node) LeaderDNSAddr() (leader NodeID, addr string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.state == StateLeader {
+		return n.config.NodeID, n.dnsAddr
+	}
+	if n.leaderID == "" || n.leaderDNSFrom != n.leaderID {
+		return n.leaderID, ""
+	}
+	return n.leaderID, n.leaderDNSAddr
+}
+
 // LeaderID returns the most-recently-seen leader node ID, or "" if no
 // leader has been observed since startup (e.g. fresh follower waiting
 // for the first heartbeat). Followers learn the leader via

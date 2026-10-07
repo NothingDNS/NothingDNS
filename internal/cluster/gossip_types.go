@@ -215,6 +215,7 @@ type GossipProtocol struct {
 	// Sequence tracking for replay protection (per-sender high-water mark)
 	sequenceMu   sync.RWMutex
 	sequences    map[string]uint64 // NodeID -> last seen sequence number
+	seqWindows   map[string]uint64 // NodeID -> bit i set = (high-water - i) already seen (F142)
 	nextSequence uint64            // Monotonic counter for outgoing messages
 
 	// Stats

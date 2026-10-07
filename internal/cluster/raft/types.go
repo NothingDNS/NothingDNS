@@ -119,6 +119,11 @@ type AppendRequest struct {
 	PrevLogTerm  Term
 	Entries      []entry
 	LeaderCommit Index
+	// LeaderDNSAddr is the leader's advertised DNS (TCP) host:port, or ""
+	// when it advertises none (P2-G1/F562: followers forward RFC 2136
+	// UPDATEs there). Optional trailing wire field: peers that predate it
+	// neither send nor read it.
+	LeaderDNSAddr string
 }
 
 // AppendResponse is the AppendEntries RPC response.
@@ -141,6 +146,12 @@ type SnapshotRequest struct {
 	// Last included index/term in snapshot
 	LastIndex Index
 	LastTerm  Term
+	// Chunking (F173): a snapshot larger than one RPC frame is sent as a
+	// sequence of chunks. Total is the full snapshot length and Offset the
+	// position of Data within it; Total == 0 means Data is the whole
+	// snapshot (single-frame, legacy wire format).
+	Offset uint64
+	Total  uint64
 }
 
 // SnapshotResponse acknowledges a snapshot install. Success reports
@@ -274,6 +285,15 @@ type Node struct {
 	// non-leader can be redirected to the right node.
 	leaderID NodeID
 
+	// dnsAddr is this node's advertised DNS (TCP) address, sent to
+	// followers in every AppendEntries (F562). Set before Start.
+	dnsAddr string
+	// leaderDNSAddr is the DNS address advertised by leaderDNSFrom in its
+	// last accepted AppendEntries; it is reported only while leaderDNSFrom
+	// is still the known leader (F562). Guarded by mu.
+	leaderDNSAddr string
+	leaderDNSFrom NodeID
+
 	// Leader-specific volatile state
 	nextIndex  map[NodeID]Index // For each peer, the next log index to send
 	matchIndex map[NodeID]Index // For each peer, the highest replicated index
@@ -285,6 +305,10 @@ type Node struct {
 	// A peer is marked true while a send is outstanding and cleared when it
 	// completes. Guarded by n.mu.
 	snapshotInFlight map[NodeID]bool
+
+	// pendingSnapshot accumulates the chunks of an in-progress chunked
+	// InstallSnapshot on the receiving side (F173). Guarded by mu.
+	pendingSnapshot *pendingSnapshot
 
 	// Membership
 	peers map[NodeID]*Peer
@@ -312,6 +336,11 @@ type Node struct {
 	// (with its last-included index) so the integration layer can fast-forward
 	// its applied index. Guarded by n.mu at call time.
 	onSnapshotInstalled func(Index)
+
+	// snapshotSaver, when set, durably persists a snapshot received via
+	// InstallSnapshot BEFORE it is installed and the WAL is compacted, so a
+	// restarted follower can boot from it (F172). Guarded by n.mu at call time.
+	snapshotSaver func(*Snapshot) error
 
 	// Channels
 	voteCh       chan VoteRequest    // Incoming vote requests from RPC

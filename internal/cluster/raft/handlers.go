@@ -137,6 +137,8 @@ func (n *Node) appendEntriesLocked(req AppendRequest) AppendResponse {
 	n.state = StateFollower
 	if req.LeaderID != "" {
 		n.leaderID = req.LeaderID
+		// F562: remember the DNS address this leader advertises.
+		n.leaderDNSAddr, n.leaderDNSFrom = req.LeaderDNSAddr, req.LeaderID
 	}
 	resp.Term = n.currentTerm
 
@@ -171,6 +173,7 @@ func (n *Node) appendEntriesLocked(req AppendRequest) AppendResponse {
 	// overwriting only on a genuine term conflict so we never discard
 	// entries we already agree on (Raft §5.3 final paragraph).
 	var toAppend []entry
+	var appendFrom Index // global index of toAppend[0]
 	truncated := false
 	var keepThrough Index
 	for j, e := range req.Entries {
@@ -184,6 +187,7 @@ func (n *Node) appendEntriesLocked(req AppendRequest) AppendResponse {
 				truncated = true
 				keepThrough = idx - 1
 				toAppend = req.Entries[j:]
+				appendFrom = idx
 				n.log = append(n.log, toAppend...)
 				break
 			}
@@ -192,6 +196,7 @@ func (n *Node) appendEntriesLocked(req AppendRequest) AppendResponse {
 		}
 		// idx is past our log: append this and all remaining entries.
 		toAppend = req.Entries[j:]
+		appendFrom = idx
 		n.log = append(n.log, toAppend...)
 		break
 	}
@@ -200,12 +205,20 @@ func (n *Node) appendEntriesLocked(req AppendRequest) AppendResponse {
 	// entries durable when they are not lets the leader commit data this
 	// follower will lose on restart (Raft safety violation). resp.Success
 	// stays false, so the leader simply retries.
+	//
+	// F163: on failure, also drop the unpersisted entries from the in-memory
+	// log. Leaving them there made the leader's retry see them as "identical
+	// entry already present", persist nothing, and ACK Success=true for
+	// entries this follower never wrote to its WAL. (Any partially written
+	// records are superseded on replay by the retry's re-append.)
 	if truncated {
 		if err := n.persistTruncateLocked(keepThrough); err != nil {
+			n.truncateFrom(appendFrom)
 			return resp
 		}
 	}
 	if err := n.persistEntriesLocked(toAppend); err != nil {
+		n.truncateFrom(appendFrom)
 		return resp
 	}
 
@@ -303,6 +316,7 @@ func (n *Node) HandleSnapshotRequest(req SnapshotRequest) SnapshotResponse {
 			return SnapshotResponse{Term: n.currentTerm, Success: false}
 		}
 	}
+	n.snapshotLeaderContactLocked(req)
 
 	// Reject a stale or duplicate snapshot: installing one whose
 	// LastIndex is not past what we already have would rewind
@@ -311,6 +325,19 @@ func (n *Node) HandleSnapshotRequest(req SnapshotRequest) SnapshotResponse {
 	// snapshot must be idempotent, so ACK success without reinstalling.
 	if req.LastIndex <= n.lastSnapshot || req.LastIndex <= n.commitIndex {
 		return SnapshotResponse{Term: n.currentTerm, Success: true}
+	}
+
+	// A chunk of a snapshot too large for one frame (F173): buffer it and
+	// ACK; only the chunk that completes the snapshot goes on to install.
+	if req.Total != 0 {
+		data, complete, ok := n.assembleSnapshotChunkLocked(req)
+		if !ok {
+			return SnapshotResponse{Term: n.currentTerm, Success: false}
+		}
+		if !complete {
+			return SnapshotResponse{Term: n.currentTerm, Success: true}
+		}
+		req.Data = data
 	}
 
 	// If we have a state machine and snapshot data, restore it.
@@ -322,6 +349,15 @@ func (n *Node) HandleSnapshotRequest(req SnapshotRequest) SnapshotResponse {
 	// won't re-send a snapshot it already thinks we acknowledged.
 	// The right behavior is to refuse the install; the leader's
 	// next AppendEntries / snapshot retry will try again.
+	retain, err := n.reconcileLogWithSnapshotLocked(req)
+	if err != nil {
+		util.Errorf("raft: discarding log conflicting with snapshot at %d failed: %v", req.LastIndex, err)
+		return SnapshotResponse{Term: n.currentTerm, Success: false}
+	}
+	if err := n.persistReceivedSnapshotLocked(req); err != nil {
+		util.Errorf("raft: persisting received snapshot at %d failed: %v", req.LastIndex, err)
+		return SnapshotResponse{Term: n.currentTerm, Success: false}
+	}
 	if len(req.Data) > 0 && n.stateMachine != nil {
 		if err := n.stateMachine.Restore(req.Data); err != nil {
 			util.Errorf("failed to restore state machine from snapshot: %v", err)
@@ -332,11 +368,11 @@ func (n *Node) HandleSnapshotRequest(req SnapshotRequest) SnapshotResponse {
 	// Install snapshot: update indices and clear log. lastSnapshotTerm
 	// must move with lastSnapshot so entryTerm(lastSnapshot) keeps
 	// answering correctly for the new compaction point.
+	n.log = n.logAfterSnapshotLocked(req, retain)
 	n.lastSnapshot = req.LastIndex
 	n.lastSnapshotTerm = req.LastTerm
 	n.lastApplied = req.LastIndex
 	n.commitIndex = req.LastIndex
-	n.log = make([]entry, 0) // Discard all log entries before snapshot
 	n.snapshotBytes = req.Data
 	if n.persister != nil {
 		if err := n.persister.CompactBefore(req.LastIndex); err != nil {
@@ -349,6 +385,110 @@ func (n *Node) HandleSnapshotRequest(req SnapshotRequest) SnapshotResponse {
 		n.onSnapshotInstalled(req.LastIndex)
 	}
 	return SnapshotResponse{Term: n.currentTerm, Success: true}
+}
+
+// snapshotLeaderContactLocked treats a current-term InstallSnapshot (or one
+// of its chunks) as leader contact, exactly like AppendEntries: step down to
+// follower, record the leader and restart the election clock. While a
+// snapshot is in flight the leader sends this peer nothing else, so without
+// this a transfer longer than the election timeout made the follower
+// campaign mid-transfer, depose the leader and restart the transfer (F160).
+// Caller must hold n.mu and have already rejected req.Term < currentTerm.
+func (n *Node) snapshotLeaderContactLocked(req SnapshotRequest) {
+	n.state = StateFollower
+	if req.LeaderID != "" {
+		n.leaderID = req.LeaderID
+	}
+	n.signalElectionReset()
+}
+
+// reconcileLogWithSnapshotLocked decides what happens to the log entries
+// following a snapshot at (req.LastIndex, req.LastTerm) before it is
+// installed (F158, Raft Fig. 13 step 6). retain is true when the log already
+// holds that entry with the same term: the entries after it are consistent
+// with the leader (and may have been acknowledged) and must be kept.
+// Otherwise any entries past req.LastIndex conflict with the leader's
+// committed prefix; they are discarded from the WAL (and the log) first, so a
+// restart cannot resurrect them on top of the snapshot. Caller holds n.mu.
+func (n *Node) reconcileLogWithSnapshotLocked(req SnapshotRequest) (retain bool, err error) {
+	if req.LastIndex < n.lastSnapshot || req.LastIndex >= n.lastIndex() {
+		return false, nil
+	}
+	if t, ok := n.entryTerm(req.LastIndex); ok && t == req.LastTerm {
+		return true, nil
+	}
+	if err := n.persistTruncateLocked(req.LastIndex); err != nil {
+		return false, err
+	}
+	n.truncateFrom(req.LastIndex + 1)
+	return false, nil
+}
+
+// logAfterSnapshotLocked returns the log to keep once the snapshot is
+// installed: the entries after req.LastIndex when retain (see
+// reconcileLogWithSnapshotLocked), otherwise none. Must run before
+// n.lastSnapshot moves to req.LastIndex. Caller holds n.mu.
+func (n *Node) logAfterSnapshotLocked(req SnapshotRequest, retain bool) []entry {
+	if !retain {
+		return make([]entry, 0)
+	}
+	return append([]entry(nil), n.log[req.LastIndex-n.lastSnapshot:]...)
+}
+
+// pendingSnapshot is a chunked InstallSnapshot being reassembled.
+type pendingSnapshot struct {
+	term      Term
+	lastIndex Index
+	lastTerm  Term
+	total     uint64
+	buf       []byte
+}
+
+// assembleSnapshotChunkLocked appends one chunk of a chunked snapshot.
+// Chunks must arrive in order for the same (term, lastIndex, lastTerm,
+// total); a chunk at offset 0 (re)starts the transfer. ok is false for an
+// invalid or out-of-sequence chunk (the partial transfer is dropped and the
+// leader restarts from offset 0 on its next attempt). complete reports that
+// data now holds the whole snapshot. Caller must hold n.mu.
+func (n *Node) assembleSnapshotChunkLocked(req SnapshotRequest) (data []byte, complete, ok bool) {
+	if req.Total > maxSnapshotDataBytes || req.Offset > req.Total || uint64(len(req.Data)) > req.Total-req.Offset {
+		n.pendingSnapshot = nil
+		return nil, false, false
+	}
+	if req.Offset == 0 {
+		n.pendingSnapshot = &pendingSnapshot{term: req.Term, lastIndex: req.LastIndex, lastTerm: req.LastTerm, total: req.Total}
+	}
+	p := n.pendingSnapshot
+	if p == nil || p.term != req.Term || p.lastIndex != req.LastIndex || p.lastTerm != req.LastTerm ||
+		p.total != req.Total || uint64(len(p.buf)) != req.Offset {
+		n.pendingSnapshot = nil
+		return nil, false, false
+	}
+	p.buf = append(p.buf, req.Data...)
+	if uint64(len(p.buf)) < p.total {
+		return nil, false, true
+	}
+	n.pendingSnapshot = nil
+	return p.buf, true, true
+}
+
+// persistReceivedSnapshotLocked durably saves a snapshot received from the
+// leader before it is installed. The install discards the in-memory log and
+// compacts the WAL through req.LastIndex; without an on-disk snapshot at that
+// index a restarted node would boot with lastSnapshot=0 over a WAL that starts
+// at req.LastIndex+1 — misaligning every log index and losing the snapshot
+// state (F172). Caller must hold n.mu.
+func (n *Node) persistReceivedSnapshotLocked(req SnapshotRequest) error {
+	if n.snapshotSaver == nil {
+		return nil
+	}
+	return n.snapshotSaver(&Snapshot{
+		Index:     req.LastIndex,
+		Term:      req.LastTerm,
+		LastIndex: req.LastIndex,
+		LastTerm:  req.LastTerm,
+		Data:      req.Data,
+	})
 }
 
 // handleAppendResponse handles an AppendEntries response from a peer.
@@ -418,6 +558,7 @@ func (n *Node) handleSnapshotRequest(req SnapshotRequest) {
 			return
 		}
 	}
+	n.snapshotLeaderContactLocked(req)
 
 	// If we have a state machine and snapshot data, restore it.
 	// On Restore failure, we MUST NOT update the snapshot indices or
@@ -425,6 +566,15 @@ func (n *Node) handleSnapshotRequest(req SnapshotRequest) {
 	// actually load, leaving the node permanently divergent from the
 	// rest of the cluster. The leader will retry the snapshot install
 	// on its next AppendEntries; that's the standard recovery path.
+	retain, err := n.reconcileLogWithSnapshotLocked(req)
+	if err != nil {
+		util.Errorf("raft: discarding log conflicting with snapshot at %d failed: %v", req.LastIndex, err)
+		return
+	}
+	if err := n.persistReceivedSnapshotLocked(req); err != nil {
+		util.Errorf("raft: persisting received snapshot at %d failed: %v", req.LastIndex, err)
+		return
+	}
 	if len(req.Data) > 0 && n.stateMachine != nil {
 		if err := n.stateMachine.Restore(req.Data); err != nil {
 			util.Errorf("failed to restore state machine from snapshot: %v", err)
@@ -432,12 +582,12 @@ func (n *Node) handleSnapshotRequest(req SnapshotRequest) {
 		}
 	}
 
-	// Install snapshot: update indices and clear log
+	// Install snapshot: update indices and replace the log
+	n.log = n.logAfterSnapshotLocked(req, retain)
 	n.lastSnapshot = req.LastIndex
 	n.lastSnapshotTerm = req.LastTerm
 	n.lastApplied = req.LastIndex
 	n.commitIndex = req.LastIndex
-	n.log = make([]entry, 0)
 	n.snapshotBytes = req.Data
 	if n.persister != nil {
 		if err := n.persister.CompactBefore(req.LastIndex); err != nil {

@@ -259,8 +259,18 @@ func (gp *GossipProtocol) checkLeaderHealth() {
 		}
 		gp.electionRunning = true
 		gp.leaderTerm++ // Increment term — old leader's term is no longer valid
-		go gp.startElection()
+		gp.goElection()
 	}
+}
+
+// goElection runs startElection on a goroutine tracked by gp.wg so Stop
+// waits for it instead of returning while it still sends (F137).
+func (gp *GossipProtocol) goElection() {
+	gp.wg.Add(1)
+	go func() {
+		defer gp.wg.Done()
+		gp.startElection()
+	}()
 }
 
 func heartbeatTimedOutAt(lastHeartbeat, now time.Time, timeout time.Duration) bool {
@@ -331,6 +341,9 @@ func (gp *GossipProtocol) startElection() {
 	payloadBytes, err := encodePayload(payload)
 	if err != nil {
 		return
+	}
+	if gp.ctx.Err() != nil {
+		return // Stopped: do not send on a closed transport (F137).
 	}
 
 	// Route through sendMessage so each per-peer wire frame gets a

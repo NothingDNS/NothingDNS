@@ -54,6 +54,9 @@ type NodeMeta struct {
 	Zone     string
 	Weight   int // For load balancing
 	HTTPAddr string
+	// DNSAddr is the node's advertised DNS (TCP) host:port, "" if none.
+	// Raft followers forward RFC 2136 UPDATEs to the leader's (F562).
+	DNSAddr string `json:",omitempty"`
 }
 
 // NodeHealthStats holds per-node health metrics used for health-based routing.
@@ -194,10 +197,13 @@ func (nl *NodeList) Add(node *Node) bool {
 	nl.mu.Lock()
 	defer nl.mu.Unlock()
 
+	// Store our own copy: the caller keeps (and hands to OnNodeJoin handlers)
+	// its pointer, which must not alias the entry mutated under nl.mu (F144).
+	cp := *node
 	if existing, ok := nl.nodes[node.ID]; ok {
 		// Update if version is newer
 		if node.Version > existing.Version {
-			nl.nodes[node.ID] = node
+			nl.nodes[node.ID] = &cp
 			return true
 		}
 		return false
@@ -209,8 +215,16 @@ func (nl *NodeList) Add(node *Node) bool {
 		return false
 	}
 
-	nl.nodes[node.ID] = node
+	nl.nodes[node.ID] = &cp
 	return true
+}
+
+// has reports whether id is a current member.
+func (nl *NodeList) has(id string) bool {
+	nl.mu.RLock()
+	defer nl.mu.RUnlock()
+	_, ok := nl.nodes[id]
+	return ok
 }
 
 // UpdateState updates the state of a peer node (not self).
@@ -231,6 +245,38 @@ func (nl *NodeList) UpdateState(id string, state NodeState) bool {
 	node.State = state
 	node.LastSeen = time.Now()
 	node.Version++
+	return true
+}
+
+// transitionIfUnchanged moves a peer from `from` to `to` only if it is
+// still in `from` with the LastSeen the caller's snapshot observed. A
+// refutation that landed after the snapshot (Ack → Alive, or any MarkSeen)
+// wins over the stale failure-detector decision (F138).
+func (nl *NodeList) transitionIfUnchanged(id string, from NodeState, lastSeen time.Time, to NodeState) bool {
+	nl.mu.Lock()
+	defer nl.mu.Unlock()
+
+	node, ok := nl.nodes[id]
+	if !ok || id == nl.self.ID || node.State != from || !node.LastSeen.Equal(lastSeen) {
+		return false
+	}
+	node.State = to
+	node.LastSeen = time.Now()
+	node.Version++
+	return true
+}
+
+// removeIfUnchanged deletes a peer only if it is still in `from` with the
+// snapshot's LastSeen, so a node revived after the snapshot is kept (F138).
+func (nl *NodeList) removeIfUnchanged(id string, from NodeState, lastSeen time.Time) bool {
+	nl.mu.Lock()
+	defer nl.mu.Unlock()
+
+	node, ok := nl.nodes[id]
+	if !ok || id == nl.self.ID || node.State != from || !node.LastSeen.Equal(lastSeen) {
+		return false
+	}
+	delete(nl.nodes, id)
 	return true
 }
 

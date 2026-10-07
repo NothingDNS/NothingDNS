@@ -334,22 +334,40 @@ func (t *TCPTransport) dropConn(peerID NodeID, conn net.Conn) {
 // with a nil resp for one-way messages (snapshot). On any error the connection
 // is dropped so the next call starts clean.
 func (t *TCPTransport) exchange(ctx context.Context, peerID NodeID, reqType uint8, req any, wantType uint8, resp any) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	lock := t.peerLock(peerID)
 	lock.Lock()
 	defer lock.Unlock()
 
-	conn, err := t.getConn(peerID)
+	// F152: an RPC whose context expired while it waited behind a stuck
+	// exchange to the same peer must not start a dial/exchange of its own.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	conn, err := t.getConnContext(ctx, peerID)
 	if err != nil {
 		return err
 	}
-	if ctx != nil {
-		if deadline, ok := ctx.Deadline(); ok {
-			if err := conn.SetDeadline(deadline); err != nil {
-				t.dropConn(peerID, conn)
-				return fmt.Errorf("set deadline for peer %s: %w", peerID, err)
-			}
-		}
+	// F153: always (re)set the deadline. A zero deadline (context without
+	// one) clears the previous RPC's deadline left on the pooled conn.
+	deadline, _ := ctx.Deadline()
+	if err := conn.SetDeadline(deadline); err != nil {
+		t.dropConn(peerID, conn)
+		return fmt.Errorf("set deadline for peer %s: %w", peerID, err)
 	}
+	// F152: cancellation must also interrupt in-flight I/O. If the cancel
+	// callback has started, the conn's deadline state is unknown, so drop it.
+	stopCancel := context.AfterFunc(ctx, func() {
+		_ = conn.SetDeadline(time.Unix(1, 0))
+	})
+	defer func() {
+		if !stopCancel() && ctx.Err() != nil {
+			t.dropConn(peerID, conn)
+		}
+	}()
 
 	if err := writeRPCMessage(conn, reqType, req, t.aead); err != nil {
 		t.dropConn(peerID, conn)
@@ -415,6 +433,11 @@ func (t *TCPTransport) SendSnapshot(ctx context.Context, peerID NodeID, req Snap
 // if another goroutine raced ahead of us, close our duplicate and
 // return the winner.
 func (t *TCPTransport) getConn(peerID NodeID) (net.Conn, error) {
+	return t.getConnContext(context.Background(), peerID)
+}
+
+// getConnContext is getConn with the dial/handshake bounded by ctx (F152).
+func (t *TCPTransport) getConnContext(ctx context.Context, peerID NodeID) (net.Conn, error) {
 	// Check for existing connection
 	t.mu.RLock()
 	conn, ok := t.conns[peerID]
@@ -430,7 +453,7 @@ func (t *TCPTransport) getConn(peerID NodeID) (net.Conn, error) {
 	}
 
 	// Dial new connection
-	dialConn, err := t.dial(addr)
+	dialConn, err := t.dial(ctx, addr)
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", addr, err)
 	}
@@ -453,12 +476,14 @@ func (t *TCPTransport) getConn(peerID NodeID) (net.Conn, error) {
 	return dialConn, nil
 }
 
-func (t *TCPTransport) dial(addr string) (net.Conn, error) {
+func (t *TCPTransport) dial(ctx context.Context, addr string) (net.Conn, error) {
+	dialer := &net.Dialer{Timeout: t.dialTimeout}
 	if t.tlsConfig != nil {
-		dialer := &net.Dialer{Timeout: t.dialTimeout}
-		return tls.DialWithDialer(dialer, "tcp", addr, t.tlsConfig)
+		// tls.Dialer applies NetDialer.Timeout and ctx to the handshake too.
+		tlsDialer := &tls.Dialer{NetDialer: dialer, Config: t.tlsConfig}
+		return tlsDialer.DialContext(ctx, "tcp", addr)
 	}
-	return net.DialTimeout("tcp", addr, t.dialTimeout)
+	return dialer.DialContext(ctx, "tcp", addr)
 }
 
 func closeRaftConn(conn net.Conn) error {

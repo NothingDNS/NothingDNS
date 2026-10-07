@@ -75,7 +75,8 @@ func NewGossipProtocol(config GossipConfig, nodeList *NodeList, allowInsecure bo
 		cancel:       cancel,
 		nodeMetrics:  make(map[string]ClusterMetricsPayload),
 		sequences:    make(map[string]uint64),
-		nextSequence: 1, // Start at 1; 0 is the null/unset sentinel
+		seqWindows:   make(map[string]uint64),
+		nextSequence: gossipSequenceSeed(), // never 0 (the null/unset sentinel); above any earlier incarnation (F132)
 	}
 
 	// VULN-062: Encryption is mandatory unless explicitly allowed for dev/test.
@@ -132,7 +133,7 @@ func (gp *GossipProtocol) Start() error {
 
 	// Start leader election if we're the only node (no peers to join)
 	if len(gp.nodeList.GetAll()) <= 1 {
-		go gp.startElection()
+		gp.goElection()
 	}
 
 	return nil
@@ -157,4 +158,64 @@ func (gp *GossipProtocol) recoverCallback(name string) {
 	if recovered := recover(); recovered != nil {
 		util.Errorf("gossip: %s callback panic: %v", name, recovered)
 	}
+}
+
+// seqReplayWindow is how far below a sender's high-water mark a not-yet-seen
+// sequence is still accepted. One process sends from several goroutines (ack
+// on the receive loop, gossip/probe loops, API broadcasts), each allocating its
+// sequence before marshal+seal+write, so frames reach the wire out of sequence
+// order; a strict high-water mark dropped the lower one as a replay (F142).
+// Exact replays are still rejected via the per-sender bitmap.
+const seqReplayWindow = 64
+
+// maxSequenceEntries bounds the per-sender replay table. A key holder can send
+// frames under any number of fabricated sender IDs; membership (V13) and
+// nodeMetrics (F134) are already bounded against that, this map was not (F143).
+var maxSequenceEntries = 2 * maxClusterNodes
+
+// acceptSequence is the replay check for an authenticated frame: it returns
+// an error for a replayed or too-old sequence and records it otherwise.
+func (gp *GossipProtocol) acceptSequence(from string, seq uint64) error {
+	gp.sequenceMu.Lock()
+	defer gp.sequenceMu.Unlock()
+
+	high, seen := gp.sequences[from]
+	if !seen {
+		if len(gp.sequences) >= maxSequenceEntries {
+			// Evict only non-members; current members keep their replay state.
+			for id := range gp.sequences {
+				if !gp.nodeList.has(id) {
+					delete(gp.sequences, id)
+					delete(gp.seqWindows, id)
+				}
+			}
+			if len(gp.sequences) >= maxSequenceEntries {
+				return fmt.Errorf("gossip: replay table full, dropped frame from %s", from)
+			}
+		}
+		gp.sequences[from] = seq
+		gp.seqWindows[from] = 1
+		return nil
+	}
+
+	win, ok := gp.seqWindows[from]
+	if !ok {
+		win = ^uint64(0) // high-water recorded without a window: everything below it counts as seen
+	}
+	if seq > high {
+		if shift := seq - high; shift >= seqReplayWindow {
+			win = 1
+		} else {
+			win = win<<shift | 1
+		}
+		gp.sequences[from] = seq
+		gp.seqWindows[from] = win
+		return nil
+	}
+	d := high - seq
+	if d >= seqReplayWindow || win&(1<<d) != 0 {
+		return fmt.Errorf("gossip: replay detected from node %s (seq %d, last %d)", from, seq, high)
+	}
+	gp.seqWindows[from] = win | 1<<d
+	return nil
 }

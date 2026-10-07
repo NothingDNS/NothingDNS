@@ -62,8 +62,11 @@ func (fw *frameWriter) writeFramed(msgType uint8, msg any) error {
 	if err != nil {
 		return fmt.Errorf("encode native: %w", err)
 	}
-	if len(plainPayload) > maxRPCMessageBytes {
-		return fmt.Errorf("payload exceeds maxRPCMessageBytes (%d > %d)", len(plainPayload), maxRPCMessageBytes)
+	// F148: the reader caps the WIRE length (nonce+ciphertext+tag), so the
+	// plaintext budget is the cap minus the AEAD expansion. Checking only the
+	// plaintext let a sender emit frames every receiver rejects.
+	if maxPlain := maxRPCMessageBytes - fw.aead.NonceSize() - fw.aead.Overhead(); len(plainPayload) > maxPlain {
+		return fmt.Errorf("payload exceeds maxRPCMessageBytes after AEAD sealing (%d > %d)", len(plainPayload), maxPlain)
 	}
 	var msgTypeBuf [1]byte
 	msgTypeBuf[0] = msgType
@@ -122,9 +125,9 @@ func (fr *frameReader) readFramed(msg any) (uint8, error) {
 	if err != nil {
 		return msgType, err
 	}
-	if len(payload) == 0 {
-		return msgType, nil
-	}
+	// F147: no message encodes to zero bytes, so an empty payload is
+	// truncated input — let decodeNative reject it instead of returning
+	// success with msg left at its zero value.
 	return msgType, decodeNative(msg, payload)
 }
 
@@ -318,13 +321,27 @@ func decodeVoteResponse(v *VoteResponse, data []byte) error {
 //   Entries len      4 bytes
 //   Entries         len bytes
 //   LeaderCommit     8 bytes
+//   [DNSAddr len     2 bytes]  optional (F562); omitted when LeaderDNSAddr is ""
+//   [DNSAddr         len bytes]
+//
+// The optional trailer is additive: decoders that predate it stop after
+// LeaderCommit and ignore it; this decoder treats its absence as "".
+
+// maxLeaderDNSAddrLen bounds LeaderDNSAddr on the wire (a host:port).
+const maxLeaderDNSAddrLen = 255
 
 func encodeAppendRequest(a AppendRequest) ([]byte, error) {
 	entriesBytes, err := encodeEntrySlice(a.Entries)
 	if err != nil {
 		return nil, err
 	}
+	if len(a.LeaderDNSAddr) > maxLeaderDNSAddrLen {
+		return nil, fmt.Errorf("AppendRequest: LeaderDNSAddr longer than %d bytes", maxLeaderDNSAddrLen)
+	}
 	size := 8 + 4 + len(a.LeaderID) + 8 + 8 + 4 + len(entriesBytes) + 8
+	if a.LeaderDNSAddr != "" {
+		size += 2 + len(a.LeaderDNSAddr)
+	}
 	buf := make([]byte, size)
 	off := 0
 	binary.BigEndian.PutUint64(buf[off:], uint64(a.Term))
@@ -342,6 +359,11 @@ func encodeAppendRequest(a AppendRequest) ([]byte, error) {
 	copy(buf[off:], entriesBytes)
 	off += len(entriesBytes)
 	binary.BigEndian.PutUint64(buf[off:], uint64(a.LeaderCommit))
+	off += 8
+	if a.LeaderDNSAddr != "" {
+		binary.BigEndian.PutUint16(buf[off:], uint16(len(a.LeaderDNSAddr)))
+		copy(buf[off+2:], a.LeaderDNSAddr)
+	}
 	return buf, nil
 }
 
@@ -384,6 +406,19 @@ func decodeAppendRequest(a *AppendRequest, data []byte) error {
 		return fmt.Errorf("AppendRequest: truncated LeaderCommit")
 	}
 	a.LeaderCommit = Index(binary.BigEndian.Uint64(data[off:]))
+	off += 8
+	// Optional LeaderDNSAddr trailer (F562).
+	a.LeaderDNSAddr = ""
+	if rest := data[off:]; len(rest) > 0 {
+		if len(rest) < 2 {
+			return fmt.Errorf("AppendRequest: truncated LeaderDNSAddr length")
+		}
+		l := int(binary.BigEndian.Uint16(rest))
+		if l > maxLeaderDNSAddrLen || 2+l > len(rest) {
+			return fmt.Errorf("AppendRequest: LeaderDNSAddr length %d overflows data", l)
+		}
+		a.LeaderDNSAddr = string(rest[2 : 2+l])
+	}
 	return nil
 }
 
@@ -452,9 +487,14 @@ func decodeAppendResponse(a *AppendResponse, data []byte) error {
 //   Data       len bytes
 //   LastIndex  8 bytes
 //   LastTerm   8 bytes
+//   [Offset    8 bytes]  only for a chunk (Total != 0)
+//   [Total     8 bytes]  only for a chunk (Total != 0)
 
 func encodeSnapshotRequest(s SnapshotRequest) ([]byte, error) {
 	size := 8 + 4 + len(s.LeaderID) + 8 + len(s.Data) + 8 + 8
+	if s.Total != 0 {
+		size += 16
+	}
 	buf := make([]byte, size)
 	off := 0
 	binary.BigEndian.PutUint64(buf[off:], uint64(s.Term))
@@ -470,6 +510,12 @@ func encodeSnapshotRequest(s SnapshotRequest) ([]byte, error) {
 	binary.BigEndian.PutUint64(buf[off:], uint64(s.LastIndex))
 	off += 8
 	binary.BigEndian.PutUint64(buf[off:], uint64(s.LastTerm))
+	if s.Total != 0 {
+		off += 8
+		binary.BigEndian.PutUint64(buf[off:], s.Offset)
+		off += 8
+		binary.BigEndian.PutUint64(buf[off:], s.Total)
+	}
 	return buf, nil
 }
 
@@ -513,6 +559,14 @@ func decodeSnapshotRequest(s *SnapshotRequest, data []byte) error {
 	s.LastIndex = Index(binary.BigEndian.Uint64(data[off:]))
 	off += 8
 	s.LastTerm = Term(binary.BigEndian.Uint64(data[off:]))
+	off += 8
+	if len(data)-off >= 16 {
+		s.Offset = binary.BigEndian.Uint64(data[off:])
+		s.Total = binary.BigEndian.Uint64(data[off+8:])
+		if s.Total == 0 {
+			return fmt.Errorf("SnapshotRequest: chunk trailer with zero total")
+		}
+	}
 	return nil
 }
 

@@ -56,9 +56,17 @@ type Cluster struct {
 	// Status
 	started bool
 	mu      sync.RWMutex
+	// lifecycleMu serializes Start and Stop. Stop must NOT hold mu while it
+	// waits for the gossip/Raft goroutines to exit: those goroutines run
+	// event handlers that may call IsStarted/IsHealthy/Stats (F127).
+	lifecycleMu sync.Mutex
 
 	// Local health stats for health-based routing
 	localHealth NodeHealthStats
+
+	// zoneBatches routes ProposeZoneBatch apply results back to the
+	// proposer (F497, zone_batch.go).
+	zoneBatches zoneBatchWaiters
 }
 
 // Config configures the cluster.
@@ -75,6 +83,11 @@ type Config struct {
 	SeedNodes     []string
 	CacheSync     bool
 	HTTPAddr      string
+	// DNSAddr is this node's advertised DNS (TCP) host:port, "" for none.
+	// In Raft mode the leader sends it to followers in AppendEntries so a
+	// follower can forward RFC 2136 UPDATEs to it (F562). It must be a
+	// concrete address peers can reach, never a wildcard bind.
+	DNSAddr       string
 	EncryptionKey string // hex-encoded 32-byte AES-256 key (gossip + Raft RPC)
 	// SnapshotEncryptionKey, when set, AES-256-GCM-encrypts Raft
 	// snapshot files at rest. hex-encoded 32-byte key, validated by
@@ -198,6 +211,7 @@ func (c *Cluster) initGossip() error {
 			Zone:     c.config.Zone,
 			Weight:   c.config.Weight,
 			HTTPAddr: c.config.HTTPAddr,
+			DNSAddr:  c.config.DNSAddr,
 		},
 	}
 
@@ -308,6 +322,7 @@ func (c *Cluster) initRaft() error {
 			Zone:     c.config.Zone,
 			Weight:   c.config.Weight,
 			HTTPAddr: c.config.HTTPAddr,
+			DNSAddr:  c.config.DNSAddr,
 		},
 	}
 	c.nodeList = NewNodeList(self)
@@ -340,6 +355,7 @@ func (c *Cluster) initRaft() error {
 		return fmt.Errorf("creating Raft node: %w", err)
 	}
 	c.raft = raftNode
+	c.raft.SetDNSAddr(c.config.DNSAddr)
 
 	// Project committed Raft zone commands onto the local zone store so DNS
 	// data converges across the cluster.
@@ -354,6 +370,8 @@ func (c *Cluster) initRaft() error {
 
 // Start starts the cluster.
 func (c *Cluster) Start() error {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -393,6 +411,8 @@ func (c *Cluster) Start() error {
 
 // Stop stops the cluster.
 func (c *Cluster) Stop() error {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
 	c.mu.Lock()
 	if !c.started {
 		c.mu.Unlock()
@@ -400,6 +420,10 @@ func (c *Cluster) Stop() error {
 	}
 
 	c.started = false
+	// Release mu before waiting for the subsystem goroutines: a handler
+	// running on the gossip receive loop may call an accessor that takes
+	// mu, and gossip.Stop waits for that loop to exit (F127).
+	c.mu.Unlock()
 
 	if c.consensus == ConsensusRaft {
 		if err := c.raft.Stop(); err != nil {
@@ -411,7 +435,6 @@ func (c *Cluster) Stop() error {
 		}
 	}
 	c.logger.Info("Cluster stopped")
-	c.mu.Unlock()
 
 	return nil
 }
@@ -467,7 +490,7 @@ func (c *Cluster) UpdateNodeHealth(health NodeHealthStats) {
 	c.nodeList.UpdateHealth(c.config.NodeID, health)
 
 	// Broadcast to all cluster peers
-	if c.gossip != nil && c.started {
+	if c.gossip != nil && c.IsStarted() {
 		if err := c.gossip.BroadcastNodeStats(health); err != nil {
 			c.logger.Warnf("Failed to broadcast node health stats: %v", err)
 		}
@@ -526,6 +549,7 @@ func (c *Cluster) raftTopologyMembers() []TopologyMember {
 				Zone:     c.config.Zone,
 				Weight:   c.config.Weight,
 				HTTPAddr: c.config.HTTPAddr,
+				DNSAddr:  c.config.DNSAddr,
 			},
 			Health: c.localHealth,
 		},
@@ -537,6 +561,7 @@ func (c *Cluster) raftTopologyMembers() []TopologyMember {
 	out = append(out, self)
 
 	isLeader := c.raft.IsLeader()
+	learnedLeader, learnedDNS := c.raft.LeaderDNSAddr()
 	for _, p := range peers {
 		addr, port := splitHostPort(p.Addr, c.config.GossipPort)
 		state := NodeStateAlive
@@ -555,9 +580,10 @@ func (c *Cluster) raftTopologyMembers() []TopologyMember {
 				Port:  port,
 				State: state,
 				Meta: NodeMeta{
-					Region: c.config.Region,
-					Zone:   c.config.Zone,
-					Weight: c.config.Weight,
+					Region:  c.config.Region,
+					Zone:    c.config.Zone,
+					Weight:  c.config.Weight,
+					DNSAddr: peerDNSAddr(p.ID, learnedLeader, learnedDNS),
 				},
 			},
 			Role: role,
@@ -575,6 +601,15 @@ func (c *Cluster) raftTopologyMembers() []TopologyMember {
 		return out[i].ID < out[j].ID
 	})
 	return out
+}
+
+// peerDNSAddr is the DNS address a Raft peer advertised, known only for
+// the leader (it travels in AppendEntries, F562).
+func peerDNSAddr(id, leader raft.NodeID, addr string) string {
+	if id == leader {
+		return addr
+	}
+	return ""
 }
 
 func splitHostPort(hostport string, defaultPort int) (string, int) {
@@ -595,7 +630,7 @@ func splitHostPort(hostport string, defaultPort int) (string, int) {
 // BroadcastClusterMetrics broadcasts operational metrics to all cluster peers.
 // Call this periodically (e.g., every 30s) with the server's current metrics.
 func (c *Cluster) BroadcastClusterMetrics(queriesTotal, cacheHits, cacheMisses uint64, qps, latencyAvg, latencyP99 float64, uptime uint64) {
-	if c.gossip == nil || !c.started {
+	if c.gossip == nil || !c.IsStarted() {
 		return
 	}
 
@@ -770,6 +805,24 @@ func (c *Cluster) GetLeader() (leaderID string, ok bool) {
 	return "", false
 }
 
+// AdvertisedDNSAddr returns this node's advertised DNS (TCP) host:port
+// (Config.DNSAddr), "" when it advertises none. F562.
+func (c *Cluster) AdvertisedDNSAddr() string {
+	return c.config.DNSAddr
+}
+
+// LeaderDNSAddr returns the current Raft leader's node ID and the DNS (TCP)
+// host:port it advertises (F562, RFC 2136 §6 UPDATE forwarding). addr is ""
+// when no leader is known or the leader advertises no address; ok is false
+// outside Raft mode or when no leader is known. A leader reports itself.
+func (c *Cluster) LeaderDNSAddr() (leaderID, addr string, ok bool) {
+	if !c.IsRaftMode() {
+		return "", "", false
+	}
+	id, a := c.raft.LeaderDNSAddr()
+	return string(id), a, id != ""
+}
+
 // IsLeader returns true if this node is the cluster leader.
 func (c *Cluster) IsLeader() bool {
 	if c.consensus == ConsensusRaft && c.raft != nil {
@@ -829,9 +882,12 @@ func (c *Cluster) StartDraining() error {
 // If leaveCluster=false, the node exits draining state and resumes normal operation.
 func (c *Cluster) CompleteDraining(leaveCluster bool) error {
 	if leaveCluster {
-		// Broadcast that we're leaving the cluster
+		// Broadcast that we're leaving the cluster. There is no separate
+		// leave message: peers treat Draining=false as "back to alive" and
+		// would resume routing queries here (F128), so re-announce
+		// Draining=true to keep this node out of their routing pools.
 		if c.gossip != nil {
-			if err := c.gossip.BroadcastDraining(false, 0); err != nil {
+			if err := c.gossip.BroadcastDraining(true, 0); err != nil {
 				c.logger.Warnf("Failed to broadcast node leave: %v", err)
 			}
 		}
@@ -955,7 +1011,7 @@ func (c *Cluster) JoinSeed(seedAddr string) error {
 	if c.consensus == ConsensusRaft {
 		return fmt.Errorf("dynamic node joining not supported in Raft consensus mode; use static cluster configuration")
 	}
-	if c.gossip == nil || !c.started {
+	if c.gossip == nil || !c.IsStarted() {
 		return fmt.Errorf("cluster must be started before JoinSeed")
 	}
 	return c.gossip.Join(seedAddr)
@@ -1019,6 +1075,24 @@ func (c *Cluster) ProposeAddRecord(zoneName, name, rtype, class string, ttl uint
 func (c *Cluster) ProposeDeleteRecord(zoneName, name, rtype string) error {
 	return c.proposeZoneChange(raft.ZoneCommand{
 		Type: "del_record", Zone: zoneName, Name: name, RRTypeStr: rtype,
+	})
+}
+
+// ProposeDeleteRecordData replicates the deletion of the single RR
+// name+type+data through Raft (F418). It reuses the "del_record" command with
+// RData set, so the Raft log/wire format gains no new command type: a node
+// applying an old-format del_record (no RData) still deletes the whole RRset,
+// and one carrying RData deletes only the matching RR via
+// zone.Manager.DeleteRecordData. Rolling-upgrade note: a node running a
+// release that predates F418 ignores RData and deletes the whole RRset, so
+// upgrade every node before issuing per-record deletes.
+func (c *Cluster) ProposeDeleteRecordData(zoneName, name, rtype, data string) error {
+	if strings.TrimSpace(data) == "" {
+		return fmt.Errorf("record data is required to delete a single record")
+	}
+	return c.proposeZoneChange(raft.ZoneCommand{
+		Type: "del_record", Zone: zoneName, Name: name, RRTypeStr: rtype,
+		RData: []string{data},
 	})
 }
 
@@ -1165,8 +1239,13 @@ func (c *Cluster) restoreZones(data []byte) error {
 		}
 	}
 
+	// LoadZone deliberately does not fire the manager's mutation hook, but a
+	// snapshot install IS a mutation: without the notification query routing
+	// (and KV persistence) keep the pre-snapshot zone objects and the node
+	// answers from data the snapshot replaced (F342).
 	for _, z := range parsed {
 		c.zoneManager.LoadZone(z, "")
+		c.zoneManager.NotifyMutated(z.Origin)
 	}
 	return nil
 }
@@ -1200,6 +1279,12 @@ func (c *Cluster) applyRaftZoneCommand(cmd raft.ZoneCommand) {
 	if len(cmd.RData) > 0 {
 		data = cmd.RData[0]
 	}
+	// F497: an atomic zone batch travels as a create_zone envelope (see the
+	// rolling-upgrade note in zone_batch.go) and is applied all-or-nothing.
+	if batch, isBatch, decodeErr := decodeZoneBatch(cmd); isBatch {
+		c.applyZoneBatchCommand(cmd, batch, decodeErr)
+		return
+	}
 	class := cmd.Class
 	if class == "" {
 		class = "IN"
@@ -1211,7 +1296,13 @@ func (c *Cluster) applyRaftZoneCommand(cmd raft.ZoneCommand) {
 			Name: cmd.Name, Type: cmd.RRTypeStr, TTL: cmd.TTL, Class: class, RData: data,
 		})
 	case "del_record":
-		err = c.zoneManager.DeleteRecord(cmd.Zone, cmd.Name, cmd.RRTypeStr)
+		// F418: RData scopes the delete to one RR; an old-format command
+		// (no RData) keeps its whole-RRset meaning.
+		if strings.TrimSpace(data) != "" {
+			err = c.zoneManager.DeleteRecordData(cmd.Zone, cmd.Name, cmd.RRTypeStr, data)
+		} else {
+			err = c.zoneManager.DeleteRecord(cmd.Zone, cmd.Name, cmd.RRTypeStr)
+		}
 	case "update_record":
 		err = c.zoneManager.UpdateRecord(cmd.Zone, cmd.Name, cmd.RRTypeStr, cmd.OldData, zone.Record{
 			Name: cmd.Name, Type: cmd.RRTypeStr, TTL: cmd.TTL, Class: class, RData: data,
@@ -1264,7 +1355,11 @@ func (c *Cluster) handleZoneUpdate(payload ZoneUpdatePayload) {
 				c.logger.Warnf("Failed to parse zone %s from gossip: %v", payload.ZoneName, err)
 				return
 			}
+			// LoadZone does not fire the mutation hook; notify so query
+			// routing and KV persistence adopt the new zone object (F450,
+			// same shape as F342).
 			c.zoneManager.LoadZone(z, "")
+			c.zoneManager.NotifyMutated(z.Origin)
 			c.logger.Infof("Zone %s reloaded via gossip (serial=%d)", payload.ZoneName, payload.Serial)
 		}
 	case "add":

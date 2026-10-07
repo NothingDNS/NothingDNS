@@ -428,6 +428,13 @@ func (gp *GossipProtocol) handleClusterMetrics(msg Message, from *net.UDPAddr) {
 		return
 	}
 
+	// Only cluster members are tracked: storing any sender ID let a peer
+	// grow nodeMetrics without bound with fabricated IDs and have them
+	// summed into GetClusterMetrics. Membership is capped (F134).
+	if _, ok := gp.nodeList.Get(payload.NodeID); !ok {
+		return
+	}
+
 	// Store the metrics for this node
 	gp.nodeMetricsMu.Lock()
 	gp.nodeMetrics[payload.NodeID] = payload
@@ -470,7 +477,7 @@ func (gp *GossipProtocol) GetClusterMetrics() ClusterMetricsPayload {
 	defer gp.nodeMetricsMu.RUnlock()
 
 	var total ClusterMetricsPayload
-	count := 0
+	count, avgCount, p99Count := 0, 0, 0
 
 	for _, m := range gp.nodeMetrics {
 		total.QueriesTotal += m.QueriesTotal
@@ -484,19 +491,24 @@ func (gp *GossipProtocol) GetClusterMetrics() ClusterMetricsPayload {
 		}
 		if m.LatencyMsAvg > 0 {
 			total.LatencyMsAvg += m.LatencyMsAvg
+			avgCount++
 		}
 		if m.LatencyMsP99 > 0 {
 			total.LatencyMsP99 += m.LatencyMsP99
+			p99Count++
 		}
 	}
 
-	// Average the per-second and latency metrics
+	// Average the per-second and latency metrics, each over the nodes that
+	// reported it (dividing latencies by the QPS count inflated them, F135).
 	if count > 0 {
 		total.QueriesPerSec /= float64(count)
 	}
-	if count > 0 {
-		total.LatencyMsAvg /= float64(count)
-		total.LatencyMsP99 /= float64(count)
+	if avgCount > 0 {
+		total.LatencyMsAvg /= float64(avgCount)
+	}
+	if p99Count > 0 {
+		total.LatencyMsP99 /= float64(p99Count)
 	}
 
 	return total
@@ -561,20 +573,25 @@ func (gp *GossipProtocol) decodeMessage(data []byte, msg *Message) error {
 		return fmt.Errorf("incompatible protocol version")
 	}
 
-	// VULN-045: Replay protection via per-sender high-water mark.
+	// VULN-045: Replay protection via per-sender high-water mark + window.
 	if msg.ProtocolVersion != 0 {
-		gp.sequenceMu.Lock()
-		lastSeq, seen := gp.sequences[msg.From]
-		if seen && msg.Sequence <= lastSeq {
-			gp.sequenceMu.Unlock()
-			return fmt.Errorf("gossip: replay detected from node %s (seq %d <= last %d)", msg.From, msg.Sequence, lastSeq)
+		if err := gp.acceptSequence(msg.From, msg.Sequence); err != nil {
+			return err
 		}
-		gp.sequences[msg.From] = msg.Sequence
-		gp.sequenceMu.Unlock()
 	}
 
 	return nil
 }
+
+// gossipSequenceSeed returns the starting point of this process's outgoing
+// Sequence counter. Peers key their replay high-water mark by our (usually
+// configured, stable) node ID and keep it across our restarts, so restarting
+// the counter at 1 got every frame of a restarted node dropped as a replay
+// until it re-sent as many frames as its previous incarnation (F132).
+// Wall-clock nanoseconds put each incarnation above the last one, since a node
+// never sends more than one frame per nanosecond. A variable so tests can
+// inject the seed.
+var gossipSequenceSeed = func() uint64 { return uint64(time.Now().UnixNano()) }
 
 // sendMessage encodes, encrypts, and sends a message to a UDP address.
 func (gp *GossipProtocol) sendMessage(msgType MessageType, payload []byte, addr *net.UDPAddr) error {
