@@ -2515,18 +2515,17 @@ make clean        # Remove build artifacts
 
 ### 21.2 CI/CD (GitHub Actions)
 ```
-on push/PR:
-  - go vet
+not on push/PR — manual (workflow_dispatch) or on a v* tag push:
+  - go vet, staticcheck, errcheck, go-errorlint, govulncheck
   - go test -race -cover
   - go build (all platforms)
-  - Benchmark comparison with main branch
+  - dashboard (web) and SDK checks
+  - Build + push Docker images (ghcr.io), SBOM, provenance, cosign
 
-on tag:
-  - Cross-compile release binaries
-  - Build + push Docker images (ghcr.io)
-  - Generate changelog
-  - Create GitHub Release with binaries
+on GitHub release published (or manual re-run for a tag):
+  - Cross-compile release binaries and attach them to the release
 ```
+See docs/TESTING.md "CI Testing" for how to trigger the workflows.
 
 ---
 

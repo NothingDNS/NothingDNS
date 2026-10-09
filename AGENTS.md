@@ -13,7 +13,7 @@ go test ./internal/protocol/ -run TestName    # Single test
 go test ./internal/e2e/... -v                  # End-to-end tests
 ```
 
-**Static analysis (CI `Go` workflow / `security` job)** — must pass before merge:
+**Static analysis (CI `Go` workflow / `security` job)** — must pass before merge. CI does not run on push or PR: the workflows run only when triggered manually (`gh workflow run go.yml --ref main`) or on a `v*` tag push, so run these locally before pushing (see `docs/TESTING.md` "CI Testing"):
 
 ```bash
 staticcheck ./...

@@ -8,11 +8,13 @@ name: SDKs
 # commit would ship silently — the C# SDK in particular had no compiler run
 # on it anywhere until this job existed.
 
+# Not run on every push/PR: trigger it manually (Actions tab → Run workflow)
+# or by pushing a release tag (v*). See docs/TESTING.md "CI Testing".
 on:
+  workflow_dispatch:
   push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+    tags:
+      - 'v*'
 
 permissions:
   contents: read

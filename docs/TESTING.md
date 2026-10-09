@@ -588,28 +588,32 @@ go-fuzz -bin=./fuzz.zip -cover
 
 ### GitHub Actions
 
-```yaml
-# .github/workflows/go.yml (simplified)
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.25'
+The workflows do **not** run on every push or pull request. Run the local
+checks below before pushing; CI runs only when it is asked for:
 
-      - name: Test
-        run: go test ./... -count=1 -short
+| Workflow | Triggers |
+|---|---|
+| `go.yml` (build, vet, tests, race, static analysis, govulncheck) | manual (`workflow_dispatch`), push of a `v*` tag |
+| `web.yml` (dashboard type check, lint, tests, build; npm audit, Retire.js, CodeQL) | manual, push of a `v*` tag |
+| `sdk.yml` (Go, C#, Java, Python and TypeScript SDKs) | manual, push of a `v*` tag |
+| `container.yml` (multi-arch image, SBOM, provenance, cosign signature) | manual, push of a `v*` tag |
+| `release.yml` (release binaries and assets) | GitHub release published, manual re-run for an existing tag |
+| `advisory-monitor.yml` | weekly schedule (Monday 06:00 UTC), manual |
 
-      - name: Race detector
-        run: go test ./... -race -count=1
+Run a workflow manually from the repository's **Actions** tab (select the
+workflow → **Run workflow** → branch), or with the GitHub CLI:
 
-      - name: Coverage
-        run: |
-          go test ./... -coverprofile=coverage.out
-          bash <(curl -s https://codecov.io/bash)
+```bash
+gh workflow run go.yml --ref main
+gh workflow run web.yml --ref main
+gh workflow run sdk.yml --ref main
+gh run watch                     # follow the run
 ```
+
+Cutting a release: run the CI workflows on `main` manually and wait for them
+to pass, then push the tag (`git tag vX.Y.Z && git push origin vX.Y.Z`),
+which runs CI and builds the container image again for the tagged commit,
+and publish the GitHub release for that tag to build the release assets.
 
 ### Local CI
 

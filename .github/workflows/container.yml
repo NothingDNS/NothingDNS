@@ -1,12 +1,12 @@
 name: Container Image
 
+# Not run on every push/PR: trigger it manually (Actions tab → Run workflow)
+# or by pushing a release tag (v*). See docs/TESTING.md "CI Testing".
 on:
+  workflow_dispatch:
   push:
-    branches: [main]
     tags:
       - 'v*'
-  pull_request:
-    branches: [main]
 
 env:
   REGISTRY: ghcr.io
@@ -82,7 +82,7 @@ jobs:
           cosign sign --yes "$REGISTRY/$image_name@$IMAGE_DIGEST"
 
       - name: Update repo description
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
           REGISTRY: ${{ env.REGISTRY }}
           IMAGE_NAME: ${{ env.IMAGE_NAME }}

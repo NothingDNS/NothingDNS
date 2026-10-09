@@ -5,6 +5,12 @@ All notable changes to NothingDNS are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **CI no longer runs on every push or pull request**: the Go, web, SDK and container workflows run only when triggered manually (`workflow_dispatch`) or when a `v*` release tag is pushed; the release workflow still runs when a GitHub release is published. Run the local checks before pushing. See `docs/TESTING.md` "CI Testing".
+
 ## [1.2.18] — 2026-09-28
 
 ### Fixed
