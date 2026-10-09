@@ -302,6 +302,20 @@ func (h *integratedHandler) applyRPZResponsePolicyWithError(w server.ResponseWri
 	if h.security.RPZEngine == nil {
 		return false, nil
 	}
+	// QNAME triggers also match the CNAME targets the answer leads to,
+	// before the IP triggers (RPZ precedence); otherwise a CNAME to a
+	// listed name bypasses the policy (F664).
+	if q != nil {
+		for _, target := range extractCNAMETargets(resp, q.Name.String()) {
+			if rule := h.security.RPZEngine.QNAMEPolicy(target); rule != nil {
+				h.logger.Debugf("RPZ QNAME match on CNAME target %s for %s (policy: %s)", target, label, rule.PolicyName)
+				handled, err := h.applyRPZRuleWithError(w, r, q, rule)
+				if handled || err != nil {
+					return handled, err
+				}
+			}
+		}
+	}
 	respIPs := extractResponseIPs(resp)
 	if len(respIPs) > 0 {
 		if rule := h.security.RPZEngine.ResponseIPPolicy(respIPs); rule != nil {
@@ -1118,6 +1132,35 @@ func extractNSAddresses(resp *protocol.Message) []net.IP {
 
 // extractNSNames extracts nameserver names from authority NS records in a DNS response.
 // This is used for RPZ TriggerNSDNAME policy checking.
+// extractCNAMETargets follows the CNAME chain in resp's answer section from
+// qname and returns each target in order (bounded by the answer count, so a
+// loop ends).
+func extractCNAMETargets(resp *protocol.Message, qname string) []string {
+	if resp == nil {
+		return nil
+	}
+	var targets []string
+	owner := qname
+	for range resp.Answers {
+		next := ""
+		for _, rr := range resp.Answers {
+			if rr == nil || rr.Type != protocol.TypeCNAME || !strings.EqualFold(rr.Name.String(), owner) {
+				continue
+			}
+			if c, ok := rr.Data.(*protocol.RDataCNAME); ok && c != nil && c.CName != nil {
+				next = c.CName.String()
+				break
+			}
+		}
+		if next == "" {
+			break
+		}
+		targets = append(targets, next)
+		owner = next
+	}
+	return targets
+}
+
 func extractNSNames(resp *protocol.Message) []string {
 	var nsNames []string
 	if resp == nil {
