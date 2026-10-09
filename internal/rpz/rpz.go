@@ -74,10 +74,13 @@ type Engine struct {
 
 	// Rules keyed by trigger type for efficient lookup.
 	qnameRules    map[string]*Rule // exact + wildcard domain matches
+	nsdnameRules  map[string]*Rule // NSDNAME triggers, kept apart from QNAME (F645)
 	clientIPRules []*net.IPNet     // CIDR prefixes for client IP matching
 	clientActions []*Rule          // corresponding rules for client IP CIDRs
 	respIPRules   []*net.IPNet     // CIDR prefixes for response IP matching
 	respActions   []*Rule          // corresponding rules for response IPs
+	nsipRules     []*net.IPNet     // NSIP triggers, kept apart from response IPs (F652)
+	nsipActions   []*Rule          // corresponding rules for NSIP CIDRs
 
 	// Zone files loaded.
 	files []string
@@ -118,6 +121,7 @@ func NewEngine(cfg Config) *Engine {
 	}
 	e := &Engine{
 		qnameRules:    make(map[string]*Rule),
+		nsdnameRules:  make(map[string]*Rule),
 		clientActions: make([]*Rule, 0),
 		respActions:   make([]*Rule, 0),
 		files:         cfg.Files,
@@ -128,12 +132,10 @@ func NewEngine(cfg Config) *Engine {
 	return e
 }
 
-// Load loads all configured RPZ zone files.
+// Load loads all configured RPZ zone files. They are loaded while the engine
+// is disabled too (a disabled engine matches nothing), so enabling it at
+// runtime applies the configured policy instead of an empty one (F644).
 func (e *Engine) Load() error {
-	if !e.enabled.Load() {
-		return nil
-	}
-
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -142,34 +144,54 @@ func (e *Engine) Load() error {
 	// transient parse error in one file would silently destroy all
 	// previously-loaded rules from every other file.
 	newQName := make(map[string]*Rule)
+	newNSDName := make(map[string]*Rule)
 	newClientCIDRs := make([]*net.IPNet, 0)
 	newClientActions := make([]*Rule, 0)
 	newRespCIDRs := make([]*net.IPNet, 0)
 	newRespActions := make([]*Rule, 0)
+	newNSIPCIDRs := make([]*net.IPNet, 0)
+	newNSIPActions := make([]*Rule, 0)
 
 	// Save the current collections so we can restore them on failure.
 	prevQName := e.qnameRules
+	prevNSDName := e.nsdnameRules
 	prevClientCIDRs := e.clientIPRules
 	prevClientActions := e.clientActions
 	prevRespCIDRs := e.respIPRules
 	prevRespActions := e.respActions
+	prevNSIPCIDRs := e.nsipRules
+	prevNSIPActions := e.nsipActions
 
 	// Point the engine at the temporary collections for the duration of
 	// the load loop. addRule appends to the engine's current collections.
 	e.qnameRules = newQName
+	e.nsdnameRules = newNSDName
 	e.clientIPRules = newClientCIDRs
 	e.clientActions = newClientActions
 	e.respIPRules = newRespCIDRs
 	e.respActions = newRespActions
+	e.nsipRules = newNSIPCIDRs
+	e.nsipActions = newNSIPActions
 
 	for _, file := range e.files {
 		if err := e.loadFile(file); err != nil {
 			// Restore the previous rule set before returning the error.
 			e.qnameRules = prevQName
+			e.nsdnameRules = prevNSDName
 			e.clientIPRules = prevClientCIDRs
 			e.clientActions = prevClientActions
 			e.respIPRules = prevRespCIDRs
 			e.respActions = prevRespActions
+			e.nsipRules = prevNSIPCIDRs
+			e.nsipActions = prevNSIPActions
+			if !e.enabled.Load() {
+				// A disabled engine never fails start or reload over its
+				// files; the error comes back when it is enabled and reloaded.
+				if e.logger != nil {
+					e.logger.Warnf("rpz: load %s (engine disabled): %v", file, err)
+				}
+				return nil
+			}
 			return fmt.Errorf("rpz: load %s: %w", file, err)
 		}
 	}
@@ -526,14 +548,21 @@ func (e *Engine) parseAction(rtype, rdata string) (PolicyAction, string) {
 func (e *Engine) addRule(rule *Rule) {
 	switch rule.Trigger {
 	case TriggerQNAME, TriggerNSDNAME:
+		// NSDNAME triggers match nameserver names, not query names: sharing
+		// one map let an NSDNAME passthru replace a QNAME block on the same
+		// name, and an NSDNAME rule fire for queries of the name (F645).
+		rules := e.qnameRules
+		if rule.Trigger == TriggerNSDNAME {
+			rules = e.nsdnameRules
+		}
 		key := strings.ToLower(rule.Pattern)
-		if existing, ok := e.qnameRules[key]; ok {
+		if existing, ok := rules[key]; ok {
 			// Keep higher priority rule
 			if rule.Priority < existing.Priority {
-				e.qnameRules[key] = rule
+				rules[key] = rule
 			}
 		} else {
-			e.qnameRules[key] = rule
+			rules[key] = rule
 		}
 
 	case TriggerClientIP:
@@ -553,19 +582,30 @@ func (e *Engine) addRule(rule *Rule) {
 		e.respActions = append(e.respActions, rule)
 
 	case TriggerNSIP:
-		// Store same as response IP for lookup purposes
+		// NSIP triggers match nameserver addresses, not answer addresses:
+		// stored with the response-IP rules they fired for every A/AAAA
+		// answer in the prefix (F652).
 		_, cidr, err := net.ParseCIDR(rule.Pattern)
 		if err != nil {
 			return
 		}
-		e.respIPRules = append(e.respIPRules, cidr)
-		e.respActions = append(e.respActions, rule)
+		e.nsipRules = append(e.nsipRules, cidr)
+		e.nsipActions = append(e.nsipActions, rule)
 	}
 }
 
 // QNAMEPolicy evaluates RPZ policy for a query name.
 // Returns the matching rule or nil if no policy applies.
 func (e *Engine) QNAMEPolicy(qname string) *Rule {
+	return e.namePolicy(qname, false)
+}
+
+// NSDNAMEPolicy evaluates RPZ NSDNAME triggers for a nameserver name.
+func (e *Engine) NSDNAMEPolicy(nsName string) *Rule {
+	return e.namePolicy(nsName, true)
+}
+
+func (e *Engine) namePolicy(qname string, nsdname bool) *Rule {
 	if !e.enabled.Load() {
 		return nil
 	}
@@ -574,6 +614,10 @@ func (e *Engine) QNAMEPolicy(qname string) *Rule {
 
 	e.mu.RLock()
 	defer e.mu.RUnlock()
+	rules := e.qnameRules
+	if nsdname {
+		rules = e.nsdnameRules
+	}
 
 	// Trim trailing dot - DNS names from the protocol layer are already
 	// lowercase, but callers may pass mixed case, so lower only if needed
@@ -595,7 +639,7 @@ func (e *Engine) QNAMEPolicy(qname string) *Rule {
 
 	// Policy priority takes precedence over name specificity. On equal
 	// priorities, keep the exact match or closest wildcard encountered first.
-	best := e.qnameRules[qname]
+	best := rules[qname]
 
 	// Wildcard/suffix matching: walk up domain labels
 	// e.g., for "www.ads.example.com", check:
@@ -608,7 +652,7 @@ func (e *Engine) QNAMEPolicy(qname string) *Rule {
 		qname = qname[dot+1:]
 		wildcard := "*." + qname
 
-		if rule, ok := e.qnameRules[wildcard]; ok && (best == nil || rule.Priority < best.Priority) {
+		if rule, ok := rules[wildcard]; ok && (best == nil || rule.Priority < best.Priority) {
 			best = rule
 		}
 	}
@@ -653,7 +697,22 @@ func (e *Engine) ResponseIPPolicy(ips []net.IP) *Rule {
 
 	e.mu.RLock()
 	defer e.mu.RUnlock()
+	return ipPolicy(ips, e.respIPRules, e.respActions)
+}
 
+// NSIPPolicy evaluates RPZ NSIP policy for the addresses of the nameservers
+// in a response.
+func (e *Engine) NSIPPolicy(ips []net.IP) *Rule {
+	if !e.enabled.Load() || len(ips) == 0 {
+		return nil
+	}
+
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return ipPolicy(ips, e.nsipRules, e.nsipActions)
+}
+
+func ipPolicy(ips []net.IP, cidrs []*net.IPNet, actions []*Rule) *Rule {
 	// L-8: as for ClientIPPolicy, prefer the highest-priority match
 	// across all response IPs and all CIDR rules rather than the first
 	// slice-order hit. Iterating IPs as the outer loop preserves the
@@ -661,9 +720,9 @@ func (e *Engine) ResponseIPPolicy(ips []net.IP) *Rule {
 	// on multiple matches changes.
 	var best *Rule
 	for _, ip := range ips {
-		for i, cidr := range e.respIPRules {
+		for i, cidr := range cidrs {
 			if cidr.Contains(ip) {
-				r := e.respActions[i]
+				r := actions[i]
 				if best == nil || r.Priority < best.Priority {
 					best = r
 				}
@@ -688,9 +747,9 @@ func (e *Engine) Reload() error {
 // counters, or where lastReload reflected an in-flight reload.
 func (e *Engine) Stats() Stats {
 	e.mu.RLock()
-	qn := len(e.qnameRules)
+	qn := len(e.qnameRules) + len(e.nsdnameRules)
 	ci := len(e.clientIPRules)
-	ri := len(e.respIPRules)
+	ri := len(e.respIPRules) + len(e.nsipRules)
 	files := len(e.files)
 	lastReload := e.lastReload
 	e.mu.RUnlock()
@@ -767,8 +826,11 @@ func (e *Engine) ListQNAMERules() []*Rule {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	rules := make([]*Rule, 0, len(e.qnameRules))
+	rules := make([]*Rule, 0, len(e.qnameRules)+len(e.nsdnameRules))
 	for _, r := range e.qnameRules {
+		rules = append(rules, r)
+	}
+	for _, r := range e.nsdnameRules {
 		rules = append(rules, r)
 	}
 	return rules
