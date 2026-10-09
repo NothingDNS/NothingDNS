@@ -133,7 +133,15 @@ func (h *integratedHandler) resolveChainTarget(w server.ResponseWriter, r *proto
 	var out cnameTarget
 	qtypeStr := typeToString(qtype)
 	current := canonicalize(target)
+	// A name seen before means a loop (e.g. "* CNAME x" with x itself
+	// wildcard-covered): stop instead of re-emitting the same RRsets up to
+	// maxChainSteps times (F636).
+	visited := make(map[string]struct{}, maxChainSteps)
 	for step := 0; step < maxChainSteps; step++ {
+		if _, seen := visited[current]; seen {
+			return out
+		}
+		visited[current] = struct{}{}
 		z := h.chainZone(view, current)
 		if z == nil {
 			out.answers = append(out.answers, h.resolveExternalCNAMETarget(w, r, current, qtype)...)

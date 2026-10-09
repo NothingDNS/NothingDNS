@@ -56,11 +56,13 @@ func newServingSlave(t *testing.T, master string) *integratedHandler {
 }
 
 // awaitSlaveSerial bounds the wait for a transfer the test expects to complete.
+// The serial is published before completeTransfer re-arms the EXPIRE deadline,
+// so it also waits for that: a fresh deadline that has not passed (F663).
 func awaitSlaveSerial(t *testing.T, h *integratedHandler, serial uint32) {
 	t.Helper()
 	sz := h.transfer.SlaveManager.GetSlaveZone("example.com.")
 	deadline := time.Now().Add(10 * time.Second)
-	for sz.GetLastSerial() != serial {
+	for sz.GetLastSerial() != serial || sz.ExpiresAt().IsZero() || sz.Expired() {
 		if time.Now().After(deadline) {
 			t.Fatalf("slave zone never reached serial %d (at %d)", serial, sz.GetLastSerial())
 		}

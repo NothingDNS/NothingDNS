@@ -322,6 +322,7 @@ func reloadSecurityComponents(cfg *config.Config, current *SecurityManager, hand
 			WithACL(result.ACLChecker).
 			WithAccessPolicy(result.RecursionPolicy, result.AccessPolicyFile).
 			WithRateLimiter(result.RateLimiter).
+			WithRRL(result.RRL).
 			WithDNS64(result.DNS64Synth).
 			WithRuntimeOverrides(config.RuntimeOverridesFile(cfg.Storage.DataDir))
 	}
@@ -934,6 +935,7 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 		WithGeoDNS(geoEngine).
 		WithSlaveManager(transferManager.Result().SlaveManager).
 		WithRateLimiter(rateLimiter).
+		WithRRL(securityManager.Result().RRL).
 		WithRuntimeOverrides(config.RuntimeOverridesFile(cfg.Storage.DataDir)).
 		WithDNS64(dns64Synth).
 		WithCookieControl(func(enabled bool) error {

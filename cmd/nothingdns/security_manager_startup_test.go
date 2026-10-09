@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -88,4 +89,34 @@ func TestNewSecurityManagerValidSecuritySources(t *testing.T) {
 		t.Fatal("expected security manager")
 	}
 	mgr.Stop()
+}
+
+// A disabled rate limiter must still exist so PUT /api/v1/config/rrl can
+// enable it; a nil one makes that endpoint answer 503 forever (F634).
+func TestNewSecurityManagerDisabledRateLimiterIsToggleable(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.RRL.Enabled = false
+	cfg.RRL.Rate = 1
+	cfg.RRL.Burst = 1
+
+	mgr, err := NewSecurityManager(cfg, util.NewLogger(util.ERROR, util.TextFormat, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Stop()
+	rl := mgr.Result().RateLimiter
+	if rl == nil {
+		t.Fatal("RateLimiter is nil with rrl.enabled false")
+	}
+	ip := net.ParseIP("192.0.2.9")
+	for i := 0; i < 5; i++ {
+		if !rl.Allow(ip) {
+			t.Fatal("disabled limiter dropped a query")
+		}
+	}
+	rl.SetEnabled(true)
+	rl.Allow(ip)
+	if rl.Allow(ip) {
+		t.Error("limiter not enforcing after runtime enable")
+	}
 }

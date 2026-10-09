@@ -160,12 +160,28 @@ func (h *integratedHandler) tryDNS64Synthesis(ctx context.Context, w server.Resp
 	}
 	aQuery.Header.ID = upstream.RandomTXID()
 
-	// Send the A query through the same upstream path.
+	// Send the A query through the same upstream path, with DO=1 when
+	// validating like the main query: without RRSIGs the validator rejects
+	// the A answer of a signed zone as Bogus (F655).
+	outQuery := aQuery
+	if h.validator != nil {
+		outQuery = withDOBit(aQuery)
+	}
 	var aResp *protocol.Message
-	if h.loadBalancer != nil {
-		aResp, err = h.loadBalancer.QueryContext(ctx, aQuery)
+	if h.resolver != nil {
+		// The resolver stage answered the AAAA query, so the A query goes
+		// the same way: with only the iterative resolver (no upstream
+		// servers) DNS64 never synthesized (F658).
+		resolveCtx, cancel := context.WithTimeout(ctx, iterativeResolveTimeout(h.config))
+		aResp, err = h.resolver.Resolve(resolveCtx, qname, protocol.TypeA)
+		cancel()
+		if aResp != nil {
+			aResp.Header.ID = aQuery.Header.ID
+		}
+	} else if h.loadBalancer != nil {
+		aResp, err = h.loadBalancer.QueryContext(ctx, outQuery)
 	} else if h.upstream != nil {
-		aResp, err = h.upstream.QueryContext(ctx, aQuery)
+		aResp, err = h.upstream.QueryContext(ctx, outQuery)
 	} else {
 		return false
 	}
@@ -185,7 +201,7 @@ func (h *integratedHandler) tryDNS64Synthesis(ctx context.Context, w server.Resp
 		return false
 	}
 
-	if handled, _ := h.validateDNSSECResponse(ctx, w, r, qname, aResp); handled {
+	if handled, _, _ := h.validateDNSSECResponse(ctx, w, r, qname, aResp); handled {
 		return true
 	}
 	if handled, err := h.applyRPZResponsePolicyWithError(w, r, q, aResp, qname); handled || err != nil {
@@ -201,15 +217,30 @@ func (h *integratedHandler) tryDNS64Synthesis(ctx context.Context, w server.Resp
 	if synthesized == nil || len(synthesized.Answers) == 0 {
 		return false
 	}
+	// RFC 6147 §5.1.7: the synthesized AAAA lives no longer than the negative
+	// AAAA answer it replaces (its SOA's negative TTL, RFC 2308), or 600 s
+	// without an SOA, so a real AAAA added later is not hidden (F661).
+	ttlCap := uint32(600)
+	if negTTL, ok := negativeCacheTTL(resp); ok {
+		ttlCap = negTTL
+	}
+	for _, rr := range synthesized.Answers {
+		if rr.Type == protocol.TypeAAAA && rr.TTL > ttlCap {
+			rr.TTL = ttlCap
+		}
+	}
 
 	h.logger.Debugf("DNS64: synthesized %d AAAA records for %s", len(synthesized.Answers), qname)
 	reply(w, r, synthesized)
 	return true
 }
 
-func (h *integratedHandler) validateDNSSECResponse(ctx context.Context, w server.ResponseWriter, r *protocol.Message, qname string, resp *protocol.Message) (bool, bool) {
+// validateDNSSECResponse returns handled (a SERVFAIL was written), validated
+// (Secure, AD set) and bogus (Bogus/Indeterminate data passed through to a
+// CD=1 client, which the caller must not cache for CD=0 clients).
+func (h *integratedHandler) validateDNSSECResponse(ctx context.Context, w server.ResponseWriter, r *protocol.Message, qname string, resp *protocol.Message) (handled, validated, bogus bool) {
 	if h.validator == nil {
-		return false, false
+		return false, false, false
 	}
 
 	result, valErr := h.validator.ValidateResponse(ctx, resp, qname)
@@ -220,30 +251,40 @@ func (h *integratedHandler) validateDNSSECResponse(ctx context.Context, w server
 	case dnssec.ValidationSecure:
 		h.logger.Debugf("DNSSEC validation secure for %s", qname)
 		resp.Header.Flags.AD = true
-		return false, true
+		return false, true, false
 	case dnssec.ValidationBogus:
 		h.logger.Warnf("DNSSEC validation failed (bogus) for %s", qname)
 		if h.config.DNSSEC.Enabled {
+			// RFC 4035 §3.2.2: a CD=1 client validates itself and SHOULD
+			// get the data our policy rejects; it stays out of the cache (F662).
+			if r.Header.Flags.CD {
+				return false, false, true
+			}
 			if h.metrics != nil {
 				h.metrics.RecordResponse(protocol.RcodeServerFailure)
 			}
 			sendErrorWithEDE(w, r, protocol.RcodeServerFailure, protocol.EDEDNSSECBogus, "DNSSEC validation failed")
-			return true, false
+			return true, false, false
 		}
 	case dnssec.ValidationInsecure:
 		h.logger.Debugf("DNSSEC insecure zone for %s", qname)
 	case dnssec.ValidationIndeterminate:
 		h.logger.Debugf("DNSSEC indeterminate for %s", qname)
 		if h.config.DNSSEC.Enabled {
+			// RFC 4035 §3.2.2: a CD=1 client validates itself and SHOULD
+			// get the data our policy rejects; it stays out of the cache (F662).
+			if r.Header.Flags.CD {
+				return false, false, true
+			}
 			if h.metrics != nil {
 				h.metrics.RecordResponse(protocol.RcodeServerFailure)
 			}
 			sendErrorWithEDE(w, r, protocol.RcodeServerFailure, protocol.EDEDNSSECIndeterminate, "DNSSEC indeterminate")
-			return true, false
+			return true, false, false
 		}
 	}
 
-	return false, false
+	return false, false, false
 }
 
 func (h *integratedHandler) applyRPZResponsePolicy(w server.ResponseWriter, r *protocol.Message, q *protocol.Question, resp *protocol.Message, label string) bool {
@@ -272,13 +313,17 @@ func (h *integratedHandler) applyRPZResponsePolicyWithError(w server.ResponseWri
 		}
 	}
 	for _, nsName := range extractNSNames(resp) {
-		if rule := h.security.RPZEngine.QNAMEPolicy(nsName); rule != nil {
+		if rule := h.security.RPZEngine.NSDNAMEPolicy(nsName); rule != nil {
 			h.logger.Debugf("RPZ NSDNAME match for %s (policy: %s)", nsName, rule.PolicyName)
 			handled, err := h.applyRPZRuleWithError(w, r, q, rule)
 			if handled || err != nil {
 				return handled, err
 			}
 		}
+	}
+	if rule := h.security.RPZEngine.NSIPPolicy(extractNSAddresses(resp)); rule != nil {
+		h.logger.Debugf("RPZ NSIP match for %s (policy: %s)", label, rule.PolicyName)
+		return h.applyRPZRuleWithError(w, r, q, rule)
 	}
 	return false, nil
 }
@@ -301,16 +346,20 @@ func (h *integratedHandler) checkRPZResponseIPWithError(w server.ResponseWriter,
 	if h.security.RPZEngine == nil {
 		return false, nil
 	}
-	respIPs := extractResponseIPs(resp)
-	if len(respIPs) == 0 {
-		return false, nil
+	qname := "<nil>"
+	if q != nil && q.Name != nil {
+		qname = q.Name.String()
 	}
-	if rule := h.security.RPZEngine.ResponseIPPolicy(respIPs); rule != nil {
-		qname := "<nil>"
-		if q != nil && q.Name != nil {
-			qname = q.Name.String()
-		}
+	if rule := h.security.RPZEngine.ResponseIPPolicy(extractResponseIPs(resp)); rule != nil {
 		h.logger.Debugf("RPZ response IP match for %s (policy: %s)", qname, rule.PolicyName)
+		handled, err := h.applyRPZRuleWithError(w, r, q, rule)
+		if handled || err != nil {
+			return handled, err
+		}
+	}
+	// Referral glue is nameserver data: NSIP, not rpz-ip (F652/F653).
+	if rule := h.security.RPZEngine.NSIPPolicy(extractNSAddresses(resp)); rule != nil {
+		h.logger.Debugf("RPZ NSIP match for %s (policy: %s)", qname, rule.PolicyName)
 		return h.applyRPZRuleWithError(w, r, q, rule)
 	}
 	return false, nil
@@ -776,6 +825,7 @@ func minimizeResponse(resp *protocol.Message) {
 // If the client sent only a client cookie (first query), a fresh server cookie is
 // generated and returned with valid=true. If the client sent a server cookie that
 // fails validation, a fresh cookie option is returned with valid=false.
+// A malformed cookie option returns (nil, false).
 func (h *integratedHandler) processCookies(r *protocol.Message, clientIP net.IP) (cookieOptionData []byte, valid bool) {
 	// Find the OPT record in the query
 	opt := r.GetOPT()
@@ -798,10 +848,10 @@ func (h *integratedHandler) processCookies(r *protocol.Message, clientIP net.IP)
 	cookie, err := dnscookie.ParseCookieOption(cookieOpt.Data)
 	if err != nil {
 		h.logger.Debugf("Invalid cookie option from %s: %v", clientIP, err)
-		// Malformed cookie — generate a fresh response cookie
-		var emptyClient [dnscookie.ClientCookieLen]byte
-		serverCookie := h.cookieJar.GenerateServerCookie(emptyClient, clientIP)
-		return dnscookie.PackCookieOption(emptyClient, serverCookie), false
+		// Malformed cookie: FORMERR without a cookie (RFC 7873 §5.2.2). A
+		// BADCOOKIE carrying a zeroed client cookie was discarded by the
+		// client as unmatched (§5.3), leaving it to time out (F641).
+		return nil, false
 	}
 
 	// Generate a fresh server cookie for the response
@@ -936,6 +986,16 @@ func (h *integratedHandler) applyRPZRuleWithError(w server.ResponseWriter, r *pr
 			},
 			Questions: r.Questions,
 		}
+		// Local data answers only its own type: an A override for an AAAA
+		// or MX query is NODATA, not an A record under that question (F654).
+		overrideType := uint16(protocol.TypeAAAA)
+		if overrideIP.To4() != nil {
+			overrideType = protocol.TypeA
+		}
+		if q.QType != overrideType && q.QType != protocol.TypeANY {
+			_, err := w.Write(resp)
+			return true, err
+		}
 		if ip4 := overrideIP.To4(); ip4 != nil {
 			var addr [4]byte
 			copy(addr[:], ip4)
@@ -979,6 +1039,13 @@ func (h *integratedHandler) applyRPZRuleWithError(w server.ResponseWriter, r *pr
 			TTL:   rule.TTL,
 			Data:  &protocol.RDataCNAME{CName: targetName},
 		})
+		// Chase the target like a zone CNAME: a bare CNAME left stubs
+		// with no address for the walled garden (F660).
+		if q.QType != protocol.TypeCNAME {
+			for _, rr := range h.resolveCNAMETarget(w, r, q, targetName.String(), q.QType) {
+				resp.AddAnswer(rr)
+			}
+		}
 		_, err = w.Write(resp)
 		return true, err
 	default:
@@ -986,8 +1053,11 @@ func (h *integratedHandler) applyRPZRuleWithError(w server.ResponseWriter, r *pr
 	}
 }
 
-// extractResponseIPs extracts IP addresses from answer, authority, and additional sections of a DNS response.
-// This is used for RPZ response IP policy checking (TriggerResponseIP and TriggerNSIP).
+// extractResponseIPs extracts the IP addresses of the A/AAAA records in the
+// answer section of a DNS response, for RPZ response-IP (rpz-ip) checking.
+// Glue in the authority/additional sections is nameserver data, matched only
+// by NSIP triggers (extractNSAddresses): rpz-ip rules there blocked every
+// answer served via that nameserver (F653).
 func extractResponseIPs(resp *protocol.Message) []net.IP {
 	var ips []net.IP
 	if resp == nil {
@@ -1008,34 +1078,38 @@ func extractResponseIPs(resp *protocol.Message) []net.IP {
 			}
 		}
 	}
-	for _, rr := range resp.Authorities {
-		if rr == nil {
-			continue
-		}
-		switch rdata := rr.Data.(type) {
-		case *protocol.RDataA:
-			if rdata != nil {
-				ips = append(ips, net.IP(rdata.Address[:]))
-			}
-		case *protocol.RDataAAAA:
-			if rdata != nil {
-				ips = append(ips, net.IP(rdata.Address[:]))
-			}
-		}
+	return ips
+}
+
+// extractNSAddresses returns the addresses (glue A/AAAA in the authority and
+// additional sections) of the nameservers named by authority NS records, for
+// RPZ NSIP policy checking (F652).
+func extractNSAddresses(resp *protocol.Message) []net.IP {
+	var ips []net.IP
+	if resp == nil {
+		return ips
 	}
-	// Additional section contains glue A/AAAA records for nameservers (NSIP matching)
-	for _, rr := range resp.Additionals {
-		if rr == nil {
-			continue
-		}
-		switch rdata := rr.Data.(type) {
-		case *protocol.RDataA:
-			if rdata != nil {
-				ips = append(ips, net.IP(rdata.Address[:]))
+	ns := make(map[string]bool)
+	for _, name := range extractNSNames(resp) {
+		ns[strings.ToLower(name)] = true
+	}
+	if len(ns) == 0 {
+		return ips
+	}
+	for _, section := range [][]*protocol.ResourceRecord{resp.Authorities, resp.Additionals} {
+		for _, rr := range section {
+			if rr == nil || rr.Name == nil || !ns[strings.ToLower(rr.Name.String())] {
+				continue
 			}
-		case *protocol.RDataAAAA:
-			if rdata != nil {
-				ips = append(ips, net.IP(rdata.Address[:]))
+			switch rdata := rr.Data.(type) {
+			case *protocol.RDataA:
+				if rdata != nil {
+					ips = append(ips, net.IP(rdata.Address[:]))
+				}
+			case *protocol.RDataAAAA:
+				if rdata != nil {
+					ips = append(ips, net.IP(rdata.Address[:]))
+				}
 			}
 		}
 	}

@@ -570,11 +570,16 @@ func resolverStage(h *integratedHandler) Stage {
 		sanitizePipelineResponse(resp)
 
 		resp.Header.ID = q.msg.Header.ID
+		// The resolver returns the authoritative server's header: AA is not
+		// this server's claim on a recursive answer, and AD may only come
+		// from the local validator's Secure verdict (RFC 4035 §3.2.3, F659).
+		resp.Header.Flags.AA = false
+		resp.Header.Flags.AD = false
 
 		// Validate DNSSEC on recursively-resolved answers, exactly like the
 		// upstream path — recursion without validation would silently skip
 		// the validator for every query the resolver handles.
-		if handled, _ := h.validateDNSSECResponse(ctx, q.currentWriter, q.msg, q.qname, resp); handled {
+		if handled, _, _ := h.validateDNSSECResponse(ctx, q.currentWriter, q.msg, q.qname, resp); handled {
 			return true, nil
 		}
 
@@ -697,7 +702,7 @@ func upstreamStage(h *integratedHandler) Stage {
 			resp.Header.Flags.AD = false
 		}
 
-		handled, dnssecValidated := h.validateDNSSECResponse(ctx, q.currentWriter, q.msg, q.qname, resp)
+		handled, dnssecValidated, dnssecBogus := h.validateDNSSECResponse(ctx, q.currentWriter, q.msg, q.qname, resp)
 		if handled {
 			return true, nil
 		}
@@ -714,8 +719,9 @@ func upstreamStage(h *integratedHandler) Stage {
 			return true, nil
 		}
 
-		// Cache the response (Set deep-copies internally)
-		if resp.Header.Flags.RCODE == protocol.RcodeSuccess && len(resp.Answers) > 0 {
+		// Cache the response (Set deep-copies internally). Bogus data served
+		// to a CD=1 client is never cached (F662).
+		if !dnssecBogus && resp.Header.Flags.RCODE == protocol.RcodeSuccess && len(resp.Answers) > 0 {
 			ttl := extractTTL(resp)
 			// Bound resp's own TTLs by the cache policy BEFORE Set copies it,
 			// so the client and the cached entry agree on how long this answer
@@ -723,8 +729,8 @@ func upstreamStage(h *integratedHandler) Stage {
 			// seeds every downstream cache — carrying the raw upstream TTL.
 			h.cache.ApplyTTLPolicy(resp, ttl)
 			h.cache.Set(q.cacheKey, resp, ttl)
-		} else if resp.Header.Flags.RCODE == protocol.RcodeNameError ||
-			(resp.Header.Flags.RCODE == protocol.RcodeSuccess && len(resp.Answers) == 0) {
+		} else if !dnssecBogus && (resp.Header.Flags.RCODE == protocol.RcodeNameError ||
+			(resp.Header.Flags.RCODE == protocol.RcodeSuccess && len(resp.Answers) == 0)) {
 			// Store the full message so negative cache hits can serve the
 			// SOA (RFC 2308) and any NSEC/NSEC3 proofs back to the client.
 			// negTTL==0 falls back to the cache's configured negative TTL.
@@ -932,15 +938,20 @@ func cookieStage(h *integratedHandler) Stage {
 		}
 		cookieData, valid := h.processCookies(q.msg, clientIP)
 		if !valid {
+			// No cookie data means the option was malformed (F641).
+			rcode := uint8(protocol.RcodeBadCookie)
+			if cookieData == nil {
+				rcode = protocol.RcodeFormatError
+			}
 			resp := &protocol.Message{
 				Header: protocol.Header{
 					ID:    q.msg.Header.ID,
-					Flags: protocol.NewResponseFlags(protocol.RcodeBadCookie),
+					Flags: protocol.NewResponseFlags(rcode),
 				},
 				Questions: q.msg.Questions,
 			}
 			resp.SetEDNS0(4096, false)
-			if opt := resp.GetOPT(); opt != nil {
+			if opt := resp.GetOPT(); opt != nil && rcode == protocol.RcodeBadCookie {
 				// RFC 6891 §6.1.3: RcodeBadCookie (23) cannot ride in the
 				// 4-bit header RCODE alone — the OPT TTL must carry the
 				// extended byte (23>>4 = 1) or external clients decode the

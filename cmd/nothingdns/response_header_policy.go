@@ -51,6 +51,10 @@ type headerPolicyResponseWriter struct {
 	reqOPT bool
 	reqDO  bool
 
+	// reqAD is the request's AD bit. RFC 6840 §5.8: AD is set in a response
+	// only when the request had DO=1 or AD=1 (F635).
+	reqAD bool
+
 	// rcode is the RCODE of the last response written, for the query log;
 	// wrote reports whether a response was written at all.
 	rcode uint8
@@ -153,6 +157,9 @@ func (hw *headerPolicyResponseWriter) Write(msg *protocol.Message) (int, error) 
 		if !hw.RecursionAllowed() {
 			msg.Header.Flags.RA = false
 		}
+		if !hw.reqDO && !hw.reqAD {
+			msg.Header.Flags.AD = false
+		}
 		hw.normalizeOPT(msg)
 		hw.rcode, hw.wrote = msg.Header.Flags.RCODE, true
 		hw.answers = summarizeAnswers(msg)
@@ -228,6 +235,7 @@ func newHeaderPolicyWriter(h *integratedHandler, w server.ResponseWriter, req *p
 		hw.cd = req.Header.Flags.CD
 		hw.reqOPT = req.GetOPT() != nil
 		hw.reqDO = hasDOBit(req)
+		hw.reqAD = req.Header.Flags.AD
 	}
 	return hw
 }

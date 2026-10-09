@@ -2367,9 +2367,10 @@ func TestExtractResponseIPs(t *testing.T) {
 			{Data: &protocol.RDataAAAA{Address: [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2}}},
 		},
 	}
+	// Only the answer section: authority/additional glue is NSIP data (F653).
 	ips := extractResponseIPs(resp)
-	if len(ips) != 4 {
-		t.Fatalf("expected 4 IPs, got %d", len(ips))
+	if len(ips) != 2 {
+		t.Fatalf("expected 2 IPs, got %d", len(ips))
 	}
 }
 
@@ -2817,9 +2818,10 @@ func TestProcessCookies_MalformedCookie(t *testing.T) {
 	if optData, ok := opt.Data.(*protocol.RDataOPT); ok {
 		optData.AddOption(protocol.OptionCodeCookie, []byte("short"))
 	}
+	// A malformed option gets FORMERR without a cookie (RFC 7873 §5.2.2, F641).
 	data, valid := h.processCookies(msg, net.ParseIP("10.0.0.1"))
-	if data == nil {
-		t.Fatal("expected cookie data for malformed cookie")
+	if data != nil {
+		t.Errorf("expected no cookie data for malformed cookie, got %x", data)
 	}
 	if valid {
 		t.Error("expected valid=false for malformed cookie")
@@ -2907,7 +2909,8 @@ func TestApplyRPZRule_OverrideIPv4(t *testing.T) {
 func TestApplyRPZRule_OverrideIPv6(t *testing.T) {
 	h := newTestHandler()
 	w := newCaptureWriter("10.0.0.1", "udp")
-	msg := newTestQuery(t, "bad.com.", protocol.TypeA)
+	// An AAAA override answers AAAA queries; an A query gets NODATA (F654).
+	msg := newTestQuery(t, "bad.com.", protocol.TypeAAAA)
 	rule := &rpz.Rule{Action: rpz.ActionOverride, OverrideData: "2001:db8::1", TTL: 300, PolicyName: "test"}
 	if !h.applyRPZRule(w, msg, msg.Questions[0], rule) {
 		t.Error("expected applyRPZRule to return true")
@@ -3926,9 +3929,10 @@ func TestExtractResponseIPs_AAAAAllSections(t *testing.T) {
 			{Data: &protocol.RDataAAAA{Address: [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2}}},
 		},
 	}
+	// Authority/additional addresses are not response IPs (F653).
 	ips := extractResponseIPs(resp)
-	if len(ips) != 2 {
-		t.Fatalf("expected 2 IPs, got %d", len(ips))
+	if len(ips) != 0 {
+		t.Fatalf("expected 0 IPs, got %d", len(ips))
 	}
 }
 
@@ -3969,7 +3973,9 @@ func TestServeDNS_DNSCookie_Invalid(t *testing.T) {
 	msg.SetEDNS0(4096, false)
 	opt := msg.GetOPT()
 	if optData, ok := opt.Data.(*protocol.RDataOPT); ok {
-		optData.AddOption(protocol.OptionCodeCookie, []byte("badcookie"))
+		// Well-formed client cookie with a 16-byte server cookie this server
+		// never issued (a malformed option gets FORMERR instead, F641).
+		optData.AddOption(protocol.OptionCodeCookie, append([]byte("clientck"), make([]byte, 16)...))
 	}
 
 	w := newCaptureWriter("10.0.0.1", "udp")
@@ -4007,7 +4013,7 @@ func TestCookieStage_ReturnsBadCookieWriteError(t *testing.T) {
 	msg.SetEDNS0(4096, false)
 	opt := msg.GetOPT()
 	if optData, ok := opt.Data.(*protocol.RDataOPT); ok {
-		optData.AddOption(protocol.OptionCodeCookie, []byte("badcookie"))
+		optData.AddOption(protocol.OptionCodeCookie, append([]byte("clientck"), make([]byte, 16)...))
 	}
 
 	w := &errorWriter{client: &server.ClientInfo{Addr: &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 12345}, Protocol: "udp"}}
@@ -5457,7 +5463,8 @@ func TestServeDNS_Referral_RPZ_Glue(t *testing.T) {
 	h := newTestHandler()
 	tmpDir := t.TempDir()
 	rpzFile := filepath.Join(tmpDir, "rpz.zone")
-	if err := os.WriteFile(rpzFile, []byte("32.1.1.168.192.rpz-ip 300 IN CNAME .\n"), 0644); err != nil {
+	// Referral glue is matched by NSIP triggers, not rpz-ip (F653).
+	if err := os.WriteFile(rpzFile, []byte("32.1.1.168.192.rpz-nsip 300 IN CNAME .\n"), 0644); err != nil {
 		t.Fatalf("failed to write rpz file: %v", err)
 	}
 	engine := rpz.NewEngine(rpz.Config{Enabled: true, Files: []string{rpzFile}})

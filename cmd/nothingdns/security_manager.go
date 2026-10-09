@@ -125,9 +125,12 @@ func NewSecurityManager(cfg *config.Config, logger *util.Logger) (*SecurityManag
 		return nil, err
 	}
 
-	// Initialize rate limiter (client-side token bucket).
+	// Initialize rate limiter (client-side token bucket). It always exists —
+	// disabled limiters allow everything — so PUT /api/v1/config/rrl can
+	// enable it at runtime (F634).
+	mgr.result.RateLimiter = filter.NewRateLimiter(cfg.RRL)
+	mgr.result.RateLimiter.SetEnabled(cfg.RRL.Enabled)
 	if cfg.RRL.Enabled {
-		mgr.result.RateLimiter = filter.NewRateLimiter(cfg.RRL)
 		logger.Infof("RRL enabled: %d qps/client, burst %d", cfg.RRL.Rate, cfg.RRL.Burst)
 	}
 

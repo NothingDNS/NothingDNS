@@ -19,6 +19,8 @@ import (
 //   Bogus        -> enforced: SERVFAIL+EDE (true, false); else (false, false)
 //   Indeterminate-> enforced: SERVFAIL+EDE (true, false); else (false, false)
 //   Insecure     -> (false, false), no AD
+// The third result is true only for an enforced Bogus/Indeterminate passed
+// through to a CD=1 client (F662).
 //
 // The Secure fixture is a real ECDSA-signed chain built from the exported
 // signer API (NewSigner/GenerateKeyPair/SignRRSet/CreateDS), modeled on
@@ -170,7 +172,7 @@ func TestValidateDNSSECResponse_NilValidator(t *testing.T) {
 	w := newCaptureWriter("10.0.0.1", "udp")
 	r := newTestQuery(t, "example.com.", protocol.TypeA)
 
-	handled, validated := h.validateDNSSECResponse(context.Background(), w, r, "example.com.", nil)
+	handled, validated, _ := h.validateDNSSECResponse(context.Background(), w, r, "example.com.", nil)
 	if handled || validated {
 		t.Errorf("nil validator = (%v, %v), want (false, false)", handled, validated)
 	}
@@ -187,7 +189,7 @@ func TestValidateDNSSECResponse_SecureSetsAD(t *testing.T) {
 	w := newCaptureWriter("10.0.0.1", "udp")
 	r := newTestQuery(t, "example.com.", protocol.TypeA)
 
-	handled, validated := h.validateDNSSECResponse(context.Background(), w, r, "example.com.", fx.resp)
+	handled, validated, _ := h.validateDNSSECResponse(context.Background(), w, r, "example.com.", fx.resp)
 	if handled || !validated {
 		t.Fatalf("secure = (%v, %v), want (false, true)", handled, validated)
 	}
@@ -211,7 +213,7 @@ func TestValidateDNSSECResponse_BogusEnforced(t *testing.T) {
 	w := newCaptureWriter("10.0.0.1", "udp")
 	r := newTestQuery(t, "example.com.", protocol.TypeA)
 
-	handled, validated := h.validateDNSSECResponse(context.Background(), w, r, "example.com.", fx.resp)
+	handled, validated, _ := h.validateDNSSECResponse(context.Background(), w, r, "example.com.", fx.resp)
 	if !handled || validated {
 		t.Fatalf("bogus enforced = (%v, %v), want (true, false)", handled, validated)
 	}
@@ -233,7 +235,7 @@ func TestValidateDNSSECResponse_BogusNotEnforced(t *testing.T) {
 	w := newCaptureWriter("10.0.0.1", "udp")
 	r := newTestQuery(t, "example.com.", protocol.TypeA)
 
-	handled, validated := h.validateDNSSECResponse(context.Background(), w, r, "example.com.", fx.resp)
+	handled, validated, _ := h.validateDNSSECResponse(context.Background(), w, r, "example.com.", fx.resp)
 	if handled || validated {
 		t.Fatalf("bogus unenforced = (%v, %v), want (false, false)", handled, validated)
 	}
@@ -259,7 +261,7 @@ func TestValidateDNSSECResponse_IndeterminateEnforced(t *testing.T) {
 	w := newCaptureWriter("10.0.0.1", "udp")
 	r := newTestQuery(t, "example.com.", protocol.TypeA)
 
-	handled, validated := h.validateDNSSECResponse(context.Background(), w, r, "example.com.", fx.resp)
+	handled, validated, _ := h.validateDNSSECResponse(context.Background(), w, r, "example.com.", fx.resp)
 	if !handled || validated {
 		t.Fatalf("indeterminate enforced = (%v, %v), want (true, false)", handled, validated)
 	}
@@ -280,7 +282,7 @@ func TestValidateDNSSECResponse_IndeterminateNotEnforced(t *testing.T) {
 	w := newCaptureWriter("10.0.0.1", "udp")
 	r := newTestQuery(t, "example.com.", protocol.TypeA)
 
-	handled, validated := h.validateDNSSECResponse(context.Background(), w, r, "example.com.", fx.resp)
+	handled, validated, _ := h.validateDNSSECResponse(context.Background(), w, r, "example.com.", fx.resp)
 	if handled || validated {
 		t.Fatalf("indeterminate unenforced = (%v, %v), want (false, false)", handled, validated)
 	}
@@ -303,7 +305,7 @@ func TestValidateDNSSECResponse_InsecureNoAnchor(t *testing.T) {
 	w := newCaptureWriter("10.0.0.1", "udp")
 	r := newTestQuery(t, "example.com.", protocol.TypeA)
 
-	handled, validated := h.validateDNSSECResponse(context.Background(), w, r, "example.com.", fx.resp)
+	handled, validated, _ := h.validateDNSSECResponse(context.Background(), w, r, "example.com.", fx.resp)
 	if handled || validated {
 		t.Fatalf("insecure = (%v, %v), want (false, false)", handled, validated)
 	}

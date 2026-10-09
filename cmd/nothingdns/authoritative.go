@@ -3,10 +3,12 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/cache"
+	"github.com/nothingdns/nothingdns/internal/dnssec"
 	"github.com/nothingdns/nothingdns/internal/protocol"
 	"github.com/nothingdns/nothingdns/internal/server"
 	"github.com/nothingdns/nothingdns/internal/zone"
@@ -770,11 +772,18 @@ func (h *integratedHandler) resolveExternalCNAMETarget(w server.ResponseWriter, 
 			},
 		}
 
+		// Validate like the upstream stage (DO=1, then the validator): the
+		// answer was served and cached under the target's own key unchecked,
+		// so a forged answer for a signed name bypassed validation (F656).
+		outQuery := upstreamQuery
+		if h.validator != nil {
+			outQuery = withDOBit(upstreamQuery)
+		}
 		var resp *protocol.Message
 		if h.loadBalancer != nil {
-			resp, err = h.loadBalancer.Query(upstreamQuery)
+			resp, err = h.loadBalancer.Query(outQuery)
 		} else {
-			resp, err = h.upstream.Query(upstreamQuery)
+			resp, err = h.upstream.Query(outQuery)
 		}
 		if err != nil {
 			h.logger.Warnf("Upstream CNAME target query failed for %s: %v", targetName, err)
@@ -785,6 +794,17 @@ func (h *integratedHandler) resolveExternalCNAMETarget(w server.ResponseWriter, 
 		// from the pool, eventually starving upstream queries and forcing extra
 		// allocations under load.
 		defer resp.Release()
+		if h.validator != nil {
+			resp.Header.Flags.AD = false
+			result, valErr := h.validator.ValidateResponse(context.Background(), resp, targetName)
+			if valErr != nil {
+				h.logger.Warnf("DNSSEC validation error for CNAME target %s: %v", targetName, valErr)
+			}
+			if h.config.DNSSEC.Enabled && (result == dnssec.ValidationBogus || result == dnssec.ValidationIndeterminate) {
+				h.logger.Warnf("DNSSEC validation failed for CNAME target %s", targetName)
+				return nil
+			}
+		}
 
 		// Cache the upstream response. ApplyTTLPolicy clamps the response's answer
 		// record TTLs in place before caching and before we copy records for the

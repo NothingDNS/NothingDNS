@@ -194,9 +194,12 @@ func (m *CacheManager) saveToFile() {
 		return
 	}
 
+	// An empty cache is saved too: skipping it left the previous snapshot on
+	// disk, so entries flushed by an operator came back on the next start
+	// (F637).
 	entries := m.Cache.Save()
-	if len(entries) == 0 {
-		return
+	if entries == nil {
+		entries = []cache.CacheEntryJSON{}
 	}
 
 	data, err := json.Marshal(entries)
