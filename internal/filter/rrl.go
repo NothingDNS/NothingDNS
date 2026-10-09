@@ -255,6 +255,22 @@ func (rrl *RRL) SetEnabled(enabled bool) {
 	}
 }
 
+// SetLimits updates the rate, burst and bucket cap at runtime; non-positive
+// values keep the current setting (F639).
+func (rrl *RRL) SetLimits(rate float64, burst, maxBuckets int) {
+	rrl.mu.Lock()
+	defer rrl.mu.Unlock()
+	if rate > 0 {
+		rrl.rate = rate
+	}
+	if burst > 0 {
+		rrl.burst = burst
+	}
+	if maxBuckets > 0 {
+		rrl.maxBuckets = maxBuckets
+	}
+}
+
 func (rrl *RRL) startCleanup() {
 	rrl.startOnce.Do(func() {
 		go rrl.cleanup()

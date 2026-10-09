@@ -19,6 +19,42 @@ func sanitizeLogField(s string) string {
 	return s
 }
 
+// sanitizeLogToken escapes a single-token field of the space-separated
+// key=value line: spaces, control bytes and backslashes become RFC 1035 style
+// \DDD / \\ escapes (newline and CR keep their \n / \r form, NUL is
+// dropped). A query name is attacker-chosen and is not escaped by the wire
+// decoder, so a label such as "x client=6.6.6.6" forged fields (F642).
+func sanitizeLogToken(s string) string {
+	clean := true
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c <= ' ' || c == 0x7f || c == '\\' {
+			clean = false
+			break
+		}
+	}
+	if clean {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 8)
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case c == 0:
+		case c == '\n':
+			b.WriteString(`\n`)
+		case c == '\r':
+			b.WriteString(`\r`)
+		case c == '\\':
+			b.WriteString(`\\`)
+		case c <= ' ' || c == 0x7f:
+			fmt.Fprintf(&b, "\\%03d", c)
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
+}
+
 // QueryAuditEntry represents a single query audit log entry.
 type QueryAuditEntry struct {
 	RequestID string // Unique correlation ID for end-to-end tracing
@@ -348,9 +384,9 @@ func formatQueryAuditLine(e QueryAuditEntry) string {
 	return fmt.Sprintf("%s req=%s client=%s query=%s type=%s rcode=%s latency=%s cache=%s upstream=%s",
 		e.Timestamp,
 		reqID,
-		sanitizeLogField(e.ClientIP),
-		sanitizeLogField(e.QueryName),
-		sanitizeLogField(e.QueryType),
+		sanitizeLogToken(e.ClientIP),
+		sanitizeLogToken(e.QueryName),
+		sanitizeLogToken(e.QueryType),
 		e.Rcode,
 		e.Latency.Round(time.Microsecond),
 		cacheHit,
@@ -366,8 +402,8 @@ func formatAXFRAuditLine(e AXFRAuditEntry) string {
 	return fmt.Sprintf("%s req=%s client=%s zone=%s action=%s records=%d latency=%s",
 		e.Timestamp,
 		reqID,
-		sanitizeLogField(e.ClientIP),
-		sanitizeLogField(e.Zone),
+		sanitizeLogToken(e.ClientIP),
+		sanitizeLogToken(e.Zone),
 		e.Action,
 		e.RecordCount,
 		e.Latency.Round(time.Millisecond),
@@ -382,8 +418,8 @@ func formatIXFRAuditLine(e IXFRAuditEntry) string {
 	return fmt.Sprintf("%s req=%s client=%s zone=%s action=%s records=%d latency=%s",
 		e.Timestamp,
 		reqID,
-		sanitizeLogField(e.ClientIP),
-		sanitizeLogField(e.Zone),
+		sanitizeLogToken(e.ClientIP),
+		sanitizeLogToken(e.Zone),
 		e.Action,
 		e.RecordCount,
 		e.Latency.Round(time.Millisecond),
@@ -398,8 +434,8 @@ func formatNOTIFYAuditLine(e NOTIFYAuditEntry) string {
 	return fmt.Sprintf("%s req=%s client=%s zone=%s action=%s",
 		e.Timestamp,
 		reqID,
-		sanitizeLogField(e.ClientIP),
-		sanitizeLogField(e.Zone),
+		sanitizeLogToken(e.ClientIP),
+		sanitizeLogToken(e.Zone),
 		e.Action,
 	)
 }
@@ -412,8 +448,8 @@ func formatUpdateAuditLine(e UpdateAuditEntry) string {
 	return fmt.Sprintf("%s req=%s client=%s zone=%s action=%s rcode=%s added=%d deleted=%d",
 		e.Timestamp,
 		reqID,
-		sanitizeLogField(e.ClientIP),
-		sanitizeLogField(e.Zone),
+		sanitizeLogToken(e.ClientIP),
+		sanitizeLogToken(e.Zone),
 		e.Action,
 		e.Rcode,
 		e.Added,

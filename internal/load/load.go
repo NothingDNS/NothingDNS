@@ -186,7 +186,7 @@ func (r *Runner) sendQuery(conn net.Conn) {
 
 	// Send with deadline
 	_ = conn.SetDeadline(queryStart.Add(r.cfg.Timeout)) // best-effort; exchange() will timeout naturally
-	resp, err := r.exchange(conn, buf[:n])
+	resp, err := r.exchange(conn, buf[:n], msg.Header.ID)
 	latency := time.Since(queryStart)
 
 	if err != nil {
@@ -222,17 +222,26 @@ func (r *Runner) sendQuery(conn net.Conn) {
 	r.mu.Unlock()
 }
 
-func (r *Runner) exchange(conn net.Conn, query []byte) ([]byte, error) {
+// exchange sends query and returns the first reply carrying id. Replies with
+// another ID are skipped until the deadline (one too short to carry an ID is
+// returned so the caller reports it): a reply that arrived after its
+// query timed out stays queued on the connection, and reading it as the next
+// query's answer failed every later query of the worker (F643).
+func (r *Runner) exchange(conn net.Conn, query []byte, id uint16) ([]byte, error) {
 	if r.cfg.Protocol == "udp" {
 		if _, err := writePacket(conn, query); err != nil {
 			return nil, err
 		}
 		resp := make([]byte, 4096)
-		n, err := conn.Read(resp)
-		if err != nil {
-			return nil, err
+		for {
+			n, err := conn.Read(resp)
+			if err != nil {
+				return nil, err
+			}
+			if n < 2 || binary.BigEndian.Uint16(resp[:2]) == id {
+				return resp[:n], nil
+			}
 		}
-		return resp[:n], nil
 	}
 
 	if len(query) > 65535 {
@@ -246,18 +255,22 @@ func (r *Runner) exchange(conn net.Conn, query []byte) ([]byte, error) {
 	if err := util.WriteFull(conn, query); err != nil {
 		return nil, err
 	}
-	if _, err := io.ReadFull(conn, lenBuf[:]); err != nil {
-		return nil, err
+	for {
+		if _, err := io.ReadFull(conn, lenBuf[:]); err != nil {
+			return nil, err
+		}
+		respLen := int(binary.BigEndian.Uint16(lenBuf[:]))
+		if respLen == 0 {
+			return nil, fmt.Errorf("dns-over-tcp empty response")
+		}
+		resp := make([]byte, respLen)
+		if _, err := io.ReadFull(conn, resp); err != nil {
+			return nil, err
+		}
+		if respLen < 2 || binary.BigEndian.Uint16(resp[:2]) == id {
+			return resp, nil
+		}
 	}
-	respLen := int(binary.BigEndian.Uint16(lenBuf[:]))
-	if respLen == 0 {
-		return nil, fmt.Errorf("dns-over-tcp empty response")
-	}
-	resp := make([]byte, respLen)
-	if _, err := io.ReadFull(conn, resp); err != nil {
-		return nil, err
-	}
-	return resp, nil
 }
 
 func writePacket(conn net.Conn, data []byte) (int, error) {

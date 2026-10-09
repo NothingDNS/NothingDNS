@@ -84,6 +84,7 @@ type Server struct {
 	geoEngine      *geodns.Engine
 	slaveManager   *transfer.SlaveManager
 	rateLimiter    *filter.RateLimiter
+	rrl            *filter.RRL           // response-side RRL, toggled with rateLimiter (F638)
 	odohProxy      *odoh.ObliviousProxy  // ODoH proxy (RFC 9230)
 	odohTarget     *odoh.ObliviousTarget // ODoH target resolver (RFC 9230)
 	loginLimiter   *loginRateLimiter
@@ -689,6 +690,15 @@ func (s *Server) WithRateLimiter(rl *filter.RateLimiter) *Server {
 	s.runtimeMu.Lock()
 	defer s.runtimeMu.Unlock()
 	s.rateLimiter = rl
+	return s
+}
+
+// WithRRL sets the response-side rate limiter (RFC 8231) that PUT
+// /api/v1/config/rrl enables and disables together with the rate limiter.
+func (s *Server) WithRRL(rrl *filter.RRL) *Server {
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
+	s.rrl = rrl
 	return s
 }
 

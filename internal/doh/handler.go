@@ -384,10 +384,9 @@ func (rw *dohResponseWriter) Write(msg *protocol.Message) (int, error) {
 			}
 		}
 		if !hasOPT {
-			msg.Additionals = append(msg.Additionals, &protocol.ResourceRecord{
-				Type: protocol.TypeOPT,
-				Data: &protocol.RDataOPT{},
-			})
+			// SetEDNS0 gives the OPT its root owner name; a bare record with a
+			// nil Name failed to pack and turned the answer into HTTP 500 (F648).
+			msg.SetEDNS0(4096, false)
 		}
 		if padResponseMessage(msg, n) {
 			buf = make([]byte, msg.WireLength())

@@ -15,6 +15,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/nothingdns/nothingdns/internal/util"
 )
 
 // Entry represents a blocked domain entry.
@@ -128,12 +130,21 @@ func (bl *Blocklist) Close() error {
 	return nil
 }
 
-// Load loads all configured blocklist files and URLs.
+// Load loads all configured blocklist files and URLs. They are loaded while
+// the blocklist is disabled too (a disabled blocklist blocks nothing), so
+// enabling it at runtime applies the configured sources instead of an empty
+// list (F646). A load error while disabled is logged, not returned, so start
+// and reload never fail over sources that are not in use.
 func (bl *Blocklist) Load() error {
-	if !bl.enabled.Load() {
+	err := bl.load()
+	if err != nil && !bl.enabled.Load() {
+		util.Warnf("blocklist: %v (blocklist disabled)", err)
 		return nil
 	}
+	return err
+}
 
+func (bl *Blocklist) load() error {
 	bl.mu.Lock()
 	defer bl.mu.Unlock()
 

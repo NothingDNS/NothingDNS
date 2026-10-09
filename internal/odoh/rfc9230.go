@@ -76,8 +76,7 @@ func newODoHKeyPairWithSuite(suite hpkeSuite) (*odohKeyPair, error) {
 	cfg.Write(u16BE(uint16(len(pk))))
 	cfg.Write(pk)
 
-	// keyID = LabeledExtract("", "key_id", config_contents)  per RFC 9230 §4.1
-	keyID, err := suite.labeledExtract(nil, []byte("key_id"), cfg.Bytes(), labelKindHPKE)
+	keyID, err := suite.odohKeyID(cfg.Bytes())
 	if err != nil {
 		return nil, fmt.Errorf("odoh: key_id: %w", err)
 	}
@@ -189,7 +188,7 @@ func encryptQueryRFC9230(targetConfig []byte, dnsQuery []byte) (msgBytes []byte,
 		return nil, nil, err
 	}
 
-	keyID, err := suite.labeledExtract(nil, []byte("key_id"), targetConfig, labelKindHPKE)
+	keyID, err := suite.odohKeyID(targetConfig)
 	if err != nil {
 		return nil, nil, fmt.Errorf("odoh: key_id: %w", err)
 	}
@@ -510,6 +509,19 @@ func (s hpkeSuite) deriveResponseAEAD(qPlain, odohSecret, responseNonce []byte) 
 		return nil, nil, fmt.Errorf("odoh: response aead init: %w", err)
 	}
 	return gcm, nonce, nil
+}
+
+// odohKeyID is RFC 9230 §6.1: key_id = Expand(Extract("", config),
+// "odoh key id", Nh) with the suite's KDF. It was an HPKE LabeledExtract
+// ("HPKE-v1" || suite_id || "key_id"), so the target rejected every query
+// from a conformant client as "unknown key_id" (F649).
+func (s hpkeSuite) odohKeyID(config []byte) ([]byte, error) {
+	hash := s.hkdfHash()
+	prk, err := hkdf.Extract(hash, config, nil)
+	if err != nil {
+		return nil, err
+	}
+	return hkdf.Expand(hash, prk, "odoh key id", hash().Size())
 }
 
 func u16BE(v uint16) []byte {

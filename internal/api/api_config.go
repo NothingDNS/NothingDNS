@@ -196,6 +196,7 @@ func (s *Server) handleConfigRRL(w http.ResponseWriter, r *http.Request) {
 
 	s.runtimeMu.RLock()
 	rateLimiter := s.rateLimiter
+	rrl := s.rrl
 	s.runtimeMu.RUnlock()
 	if rateLimiter == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Rate limiter not available")
@@ -244,6 +245,12 @@ func (s *Server) handleConfigRRL(w http.ResponseWriter, r *http.Request) {
 
 	if req.Enabled != nil {
 		rateLimiter.SetEnabled(*req.Enabled)
+		// The response-side RRL follows the same rrl.enabled key at start and
+		// on reload; toggling only the client limiter left it in its start
+		// state until the next restart (F638).
+		if rrl != nil {
+			rrl.SetEnabled(*req.Enabled)
+		}
 	}
 	if req.Rate != nil && *req.Rate > 0 {
 		rateLimiter.SetRate(*req.Rate)
@@ -265,6 +272,22 @@ func (s *Server) handleConfigRRL(w http.ResponseWriter, r *http.Request) {
 			merged.Enabled = *req.Enabled
 		}
 		rateLimiter.Reload(merged)
+	}
+	if rrl != nil {
+		// The response-side RRL is rebuilt from the same values on restart and
+		// reload; apply them live too (F639).
+		var rate float64
+		var burst, maxBuckets int
+		if req.Rate != nil {
+			rate = *req.Rate
+		}
+		if req.Burst != nil {
+			burst = *req.Burst
+		}
+		if req.MaxBuckets != nil {
+			maxBuckets = *req.MaxBuckets
+		}
+		rrl.SetLimits(rate, burst, maxBuckets)
 	}
 
 	s.writeJSON(w, http.StatusOK, &MessageResponse{Message: "RRL configuration updated"})

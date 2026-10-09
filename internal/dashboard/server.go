@@ -585,6 +585,17 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	origins := cloneStrings(s.allowedOrigins)
 	s.mu.RUnlock()
 
+	// Refuse before upgrading once the connection limit is reached (F633);
+	// tryAddClient below re-checks for upgrades that raced past this.
+	s.mu.RLock()
+	full := len(s.clients) >= MaxWebSocketClients
+	s.mu.RUnlock()
+	if full {
+		util.Warnf("dashboard: WebSocket connection limit reached (%d)", MaxWebSocketClients)
+		http.Error(w, "too many WebSocket connections", http.StatusServiceUnavailable)
+		return
+	}
+
 	conn, err := websocket.Handshake(w, r, origins...)
 	if err != nil {
 		util.Warnf("dashboard: websocket handshake failed: %v", err)
@@ -602,7 +613,12 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		redactIPs: !admin,
 	}
 
-	s.AddClient(client)
+	if !s.tryAddClient(client) {
+		if err := conn.Close(); err != nil {
+			util.Warnf("dashboard: failed to close WebSocket client: %v", err)
+		}
+		return
+	}
 	s.ClientLoop(client)
 }
 
@@ -640,12 +656,19 @@ func (s *Server) RecordQuery(event *QueryEvent) {
 	}
 	s.stats.mu.Unlock()
 
-	// Broadcast to connected clients
-	select {
-	case s.broadcastChan <- storedEvent:
-	default:
-		// Channel full, drop event
+	// Broadcast to connected clients. Stop closes broadcastChan under s.mu
+	// and clears enabled; DoH/DoWS queries still reach here after that
+	// (F632), so check under the read lock instead of sending on a closed
+	// channel.
+	s.mu.RLock()
+	if s.enabled {
+		select {
+		case s.broadcastChan <- storedEvent:
+		default:
+			// Channel full, drop event
+		}
 	}
+	s.mu.RUnlock()
 }
 
 // UpdateStats updates dashboard statistics
@@ -677,16 +700,22 @@ type UpdateStatsRequest struct {
 
 // AddClient adds a WebSocket client if the connection limit hasn't been reached.
 func (s *Server) AddClient(client *Client) {
+	s.tryAddClient(client)
+}
+
+// tryAddClient is AddClient that reports whether the client was added.
+func (s *Server) tryAddClient(client *Client) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.clients) >= MaxWebSocketClients {
 		util.Warnf("dashboard: WebSocket connection limit reached (%d)", MaxWebSocketClients)
-		return
+		return false
 	}
 	s.clients[client] = struct{}{}
 	// Note: ActiveClients tracks distinct DNS query clients (see RecordQuery),
 	// NOT the number of dashboard WebSocket viewers — the two were previously
 	// conflated here.
+	return true
 }
 
 // RemoveClient removes a WebSocket client

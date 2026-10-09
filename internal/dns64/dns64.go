@@ -386,7 +386,14 @@ func (s *Synthesizer) IsExcluded(ip net.IP) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	isV4 := ip.To4() != nil
 	for _, ipnet := range s.excludeNets {
+		// An IPv6-form range never matches an IPv4 address: Contains maps an
+		// IPv4-mapped network such as ::ffff:0:0/96 (RFC 6147 §5.1.4) to
+		// 0.0.0.0/0, which excluded every A record (F640).
+		if isV4 && len(ipnet.Mask) == net.IPv6len {
+			continue
+		}
 		if ipnet.Contains(ip) {
 			return true
 		}

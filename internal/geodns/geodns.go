@@ -238,19 +238,22 @@ func (e *Engine) LookupContinent(ip net.IP) string {
 // decoded data-section record (always a typed map for GeoLite2/GeoIP2
 // databases). Returns nil on "not found" or any decode error.
 //
-// IPv4 lookups against an IPv6 database expand to the ::ffff:0:0/96
-// IPv4-mapped range per MaxMind convention (MMDB §1.4 "IPv4 in IPv6").
+// IPv4 lookups against an IPv6 database use ::a.b.c.d, where the MaxMind DB
+// spec ("IPv4 addresses in an IPv6 tree") stores IPv4 data. The ::ffff:0:0/96
+// form only works when the database adds the optional alias to that subtree;
+// without it every IPv4 client got whatever ::ffff:0:0/96 held (F647).
 func (e *Engine) mmdbLookup(ip net.IP) map[string]interface{} {
 	if ip == nil {
 		return nil
 	}
 
-	// Normalise: IPv4 in v6 DB → expand to 16-byte IPv4-mapped form.
+	// Normalise: IPv4 in v6 DB → 16-byte ::a.b.c.d.
 	var lookupIP net.IP
 	var bits int
 	if ip4 := ip.To4(); ip4 != nil {
 		if e.mmdbIPVersion == 6 {
-			lookupIP = ip.To16() // ::ffff:a.b.c.d
+			lookupIP = make(net.IP, net.IPv6len)
+			copy(lookupIP[12:], ip4)
 			bits = 128
 		} else {
 			lookupIP = ip4
