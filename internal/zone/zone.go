@@ -433,7 +433,7 @@ func (p *parser) handleControl(line string) error {
 		p.zone.DefaultTTL = ttl
 
 	case "$GENERATE":
-		return p.handleGenerate(fields[1:])
+		return p.handleGenerate(line, fields[1:])
 
 	case "$INCLUDE":
 		return p.handleInclude(fields[1:])
@@ -547,7 +547,7 @@ func (p *parser) handleInclude(args []string) error {
 // The '$' character in lhs and rhs is replaced by the current iteration value.
 // Modifiers: ${<offset>,<width>,<radix>} where offset is added to the iterator,
 // width is zero-padded field width, and radix is d (decimal), o (octal), or x (hex).
-func (p *parser) handleGenerate(args []string) error {
+func (p *parser) handleGenerate(line string, args []string) error {
 	if len(args) < 4 {
 		return fmt.Errorf("$GENERATE requires at least: range lhs type rhs")
 	}
@@ -567,8 +567,17 @@ func (p *parser) handleGenerate(args []string) error {
 		}
 	}
 
-	// Remaining args form a record template: lhs [ttl] [class] type rhs
-	template := strings.Join(args[1:], " ")
+	// The template is taken verbatim from the source line. The args slice
+	// comes from strings.Fields, which splits inside quoted character-strings,
+	// so rejoining it collapsed whitespace runs ("a  b" became "a b") and
+	// silently changed TXT values. The plain-record path is quote-aware
+	// (parseFields), so a template must reach parseRecordOwned with its
+	// original bytes (RFC 1035 §5.1); an inline comment is still stripped
+	// downstream by parseRecordOwned, exactly as for plain records.
+	template := templateAfterRange(line, args[0])
+	if template == "" {
+		template = strings.Join(args[1:], " ")
+	}
 
 	for i := start; i <= stop; i += step {
 		expanded, err := expandGenerate(template, i)
@@ -633,6 +642,27 @@ func parseGenerateRange(s string) (start, stop, step int, err error) {
 	}
 
 	return start, stop, step, nil
+}
+
+// templateAfterRange returns the part of a $GENERATE line that follows the
+// range token, verbatim: no whitespace is normalized, so whitespace inside
+// quoted character-strings reaches parseRecordOwned exactly as written
+// (RFC 1035 §5.1). It skips the directive word — whose case is preserved in
+// the source line — and the range token. An empty result means the tokens
+// could not be located (not expected, since args derives from the same
+// line); callers then fall back to the whitespace-normalizing field join.
+func templateAfterRange(line, rangeTok string) string {
+	rest := line
+	if idx := strings.IndexAny(rest, " \t"); idx < 0 {
+		return ""
+	}
+	rest = rest[strings.IndexAny(rest, " \t")+1:]
+	rest = strings.TrimLeft(rest, " \t")
+	if !strings.HasPrefix(rest, rangeTok) {
+		return ""
+	}
+	rest = strings.TrimLeft(rest[len(rangeTok):], " \t")
+	return rest
 }
 
 // expandGenerate replaces '$' tokens in a template with the iteration value.

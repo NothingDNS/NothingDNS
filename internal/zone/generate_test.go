@@ -374,6 +374,57 @@ func TestApplyGenerateModifierRejectsInvalidValues(t *testing.T) {
 	}
 }
 
+// TestGeneratePreservesQuotedWhitespace pins that a $GENERATE template
+// reaches the record parser verbatim: whitespace inside a quoted
+// character-string is content (RFC 1035 §5.1), not a field separator. The
+// template used to be rebuilt from strings.Fields output, collapsing
+// internal whitespace runs ("a  b" became "a b") and silently changing the
+// served TXT value — while the identical record written as a plain line
+// kept its spaces (quote-aware parseFields + round-040 re-quoting).
+func TestGeneratePreservesQuotedWhitespace(t *testing.T) {
+	input := `$ORIGIN example.com.
+$TTL 300
+$GENERATE 1-2 h$ IN TXT "a  b"
+$GENERATE 3-3 w$ IN TXT "x" "y"
+$GENERATE 4-4 c$ IN TXT "hi" ; trailing comment stays out of the value
+h9 IN TXT "a  b"
+`
+	z, err := ParseFile("test.zone", strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	// Control: the same content as a plain record line must keep its spaces.
+	if recs := z.Lookup("h9.example.com.", "TXT"); len(recs) != 1 || recs[0].RData != `"a  b"` {
+		t.Fatalf("control h9 RData = %q (n=%d), want %q", plainRData(recs), len(recs), `"a  b"`)
+	}
+
+	// Generated records: whitespace inside the quoted string is preserved.
+	for _, name := range []string{"h1.example.com.", "h2.example.com."} {
+		recs := z.Lookup(name, "TXT")
+		if len(recs) != 1 || recs[0].RData != `"a  b"` {
+			t.Fatalf("%s RData = %q (n=%d), want %q", name, plainRData(recs), len(recs), `"a  b"`)
+		}
+	}
+
+	// Character-string boundaries survive the template path: two strings.
+	if recs := z.Lookup("w3.example.com.", "TXT"); len(recs) != 1 || recs[0].RData != `"x" "y"` {
+		t.Fatalf("w3 RData = %q (n=%d), want %q", plainRData(recs), len(recs), `"x" "y"`)
+	}
+
+	// A trailing comment is stripped exactly as for plain records.
+	if recs := z.Lookup("c4.example.com.", "TXT"); len(recs) != 1 || recs[0].RData != `"hi"` {
+		t.Fatalf("c4 RData = %q (n=%d), want %q", plainRData(recs), len(recs), `"hi"`)
+	}
+}
+
+func plainRData(recs []Record) string {
+	if len(recs) == 0 {
+		return ""
+	}
+	return recs[0].RData
+}
+
 // helpers
 
 func fqdn(t *testing.T, format string, args ...interface{}) string {
