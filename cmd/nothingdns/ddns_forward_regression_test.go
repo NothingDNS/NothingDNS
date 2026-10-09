@@ -7,10 +7,12 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -56,6 +58,21 @@ const (
 // setting (F569).
 func ddnsFwdStartMode(t *testing.T, id, dnsAddr, bind, advertise, raftAddr, peerID, peerAddr, keys string, mode fwdMode) *ddnsFwdNode {
 	t.Helper()
+	node, err := ddnsFwdStartModeErr(t, id, dnsAddr, bind, advertise, raftAddr, peerID, peerAddr, keys, mode)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	return node
+}
+
+// ddnsFwdStartModeErr is ddnsFwdStartMode returning the environmental boot
+// errors (transfer manager, listener and cluster binds) so ddnsFwdPairMode
+// can retry when one of the four probe-released addresses was stolen between
+// ddnsFwdFreeAddr and the bind — the same close-then-rebind race hardened for
+// the NOTIFY tests (F568). Yaml/validate mistakes stay Fatalf: they are
+// deterministic input bugs, not races.
+func ddnsFwdStartModeErr(t *testing.T, id, dnsAddr, bind, advertise, raftAddr, peerID, peerAddr, keys string, mode fwdMode) (*ddnsFwdNode, error) {
+	t.Helper()
 	_, port, _ := net.SplitHostPort(dnsAddr)
 	_, rport, _ := net.SplitHostPort(raftAddr)
 	adv := ""
@@ -89,7 +106,7 @@ func ddnsFwdStartMode(t *testing.T, id, dnsAddr, bind, advertise, raftAddr, peer
 	lg := util.NewLogger(util.ERROR, util.TextFormat, nil)
 	tm, err := NewTransferManager(cfg, zones, nil, lg)
 	if err != nil {
-		t.Fatalf("setup: NewTransferManager: %v", err)
+		return nil, fmt.Errorf("setup: NewTransferManager: %w", err)
 	}
 	t.Cleanup(tm.Stop)
 	tm.SetZonesMu(&h.zonesMu)
@@ -97,17 +114,17 @@ func ddnsFwdStartMode(t *testing.T, id, dnsAddr, bind, advertise, raftAddr, peer
 	h.transfer = TransferComponents{AXFRServer: r.AXFRServer, IXFRServer: r.IXFRServer, NotifyHandler: r.NotifyHandler, DDNSHandler: r.DDNSHandler, SlaveManager: r.SlaveManager}
 	srv := server.NewTCPServerWithWorkers(dnsAddr, h, 2)
 	if err := srv.Listen(); err != nil {
-		t.Fatalf("setup: listen: %v", err)
+		return nil, fmt.Errorf("setup: listen: %w", err)
 	}
 	go func() { _ = srv.Serve() }()
 	t.Cleanup(func() { _ = srv.Stop() })
 	mgr, err := NewClusterManager(cfg, lg, nil, nil, zm)
 	if err != nil {
-		t.Fatalf("setup: NewClusterManager: %v", err)
+		return nil, fmt.Errorf("setup: NewClusterManager: %w", err)
 	}
 	t.Cleanup(mgr.Stop)
 	h.cluster = mgr.Cluster
-	return &ddnsFwdNode{id: id, dns: dnsAddr, zone: z, mgr: mgr}
+	return &ddnsFwdNode{id: id, dns: dnsAddr, zone: z, mgr: mgr}, nil
 }
 
 // ddnsFwdPair starts a two-node Raft cluster and returns (leader, follower)
@@ -118,13 +135,33 @@ func ddnsFwdPair(t *testing.T, keys, bind, advA, advB string) (*ddnsFwdNode, *dd
 }
 
 // ddnsFwdPairMode is ddnsFwdPair with cluster.forward_updates per mode on
-// both nodes (F569).
+// both nodes (F569). A boot that fails because one of the four probe-
+// released addresses was stolen before the bind (EADDRINUSE — the same
+// close-then-rebind race hardened for the NOTIFY tests) retries with fresh
+// addresses; any other boot error fails with its real cause.
 func ddnsFwdPairMode(t *testing.T, keys, bind, advA, advB string, mode fwdMode) (*ddnsFwdNode, *ddnsFwdNode) {
 	t.Helper()
-	dA, dB, rA, rB := ddnsFwdFreeAddr(t), ddnsFwdFreeAddr(t), ddnsFwdFreeAddr(t), ddnsFwdFreeAddr(t)
-	a := ddnsFwdStartMode(t, "fwd-a", dA, bind, advA, rA, "fwd-b", rB, keys, mode)
-	b := ddnsFwdStartMode(t, "fwd-b", dB, bind, advB, rB, "fwd-a", rA, keys, mode)
-	return ddnsFwdAwaitLeader(t, a, b)
+	const bootAttempts = 3
+	for attempt := 1; ; attempt++ {
+		dA, dB, rA, rB := ddnsFwdFreeAddr(t), ddnsFwdFreeAddr(t), ddnsFwdFreeAddr(t), ddnsFwdFreeAddr(t)
+		a, err := ddnsFwdStartModeErr(t, "fwd-a", dA, bind, advA, rA, "fwd-b", rB, keys, mode)
+		if err != nil {
+			if attempt < bootAttempts && errors.Is(err, syscall.EADDRINUSE) {
+				continue
+			}
+			t.Fatalf("%v", err)
+		}
+		b, err := ddnsFwdStartModeErr(t, "fwd-b", dB, bind, advB, rB, "fwd-a", rA, keys, mode)
+		if err != nil {
+			if attempt < bootAttempts && errors.Is(err, syscall.EADDRINUSE) {
+				// Node A of the failed attempt stays up until its test-end
+				// cleanup; the retry only needs fresh addresses.
+				continue
+			}
+			t.Fatalf("%v", err)
+		}
+		return ddnsFwdAwaitLeader(t, a, b)
+	}
 }
 
 // ddnsFwdAwaitLeader waits until one node leads, the other has learned it,
