@@ -768,6 +768,18 @@ func (lb *LoadBalancer) queryUDP(address string, msg *protocol.Message) (*protoc
 		resp.Release()
 		return nil, fmt.Errorf("response ID mismatch: got %d, want %d", responseID, msg.Header.ID)
 	}
+	// A reply must have QR=1 (RFC 1035 §4.1.1): a reflected query with the
+	// same ID and question was accepted as the answer (F650).
+	if !resp.Header.Flags.QR {
+		resp.Release()
+		return nil, fmt.Errorf("response QR bit not set")
+	}
+	// The question must match too, as in the Client paths (F93): a reply to
+	// another question with the right ID was accepted (F651).
+	if !responseMatchesQuestion(msg, resp) {
+		resp.Release()
+		return nil, fmt.Errorf("response question mismatch")
+	}
 
 	// Update latency for the target if it's a standalone server
 	for _, s := range lb.servers {
@@ -887,6 +899,18 @@ func (lb *LoadBalancer) queryTCP(address string, msg *protocol.Message) (*protoc
 	if responseID := resp.Header.ID; responseID != msg.Header.ID {
 		resp.Release()
 		return nil, fmt.Errorf("response ID mismatch: got %d, want %d", responseID, msg.Header.ID)
+	}
+	// A reply must have QR=1 (RFC 1035 §4.1.1): a reflected query with the
+	// same ID and question was accepted as the answer (F650).
+	if !resp.Header.Flags.QR {
+		resp.Release()
+		return nil, fmt.Errorf("response QR bit not set")
+	}
+	// The question must match too, as in the Client paths (F93): a reply to
+	// another question with the right ID was accepted (F651).
+	if !responseMatchesQuestion(msg, resp) {
+		resp.Release()
+		return nil, fmt.Errorf("response question mismatch")
 	}
 
 	// Update latency for the target

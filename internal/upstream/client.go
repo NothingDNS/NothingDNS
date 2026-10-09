@@ -557,6 +557,12 @@ func (c *Client) queryUDPBuf(server *Server, msg *protocol.Message, buf []byte) 
 		resp.Release()
 		return nil, fmt.Errorf("response ID mismatch: got %d, want %d", responseID, msg.Header.ID)
 	}
+	// A reply must have QR=1 (RFC 1035 §4.1.1): a reflected query with the
+	// same ID and question was accepted as the answer (F650).
+	if !resp.Header.Flags.QR {
+		resp.Release()
+		return nil, fmt.Errorf("response QR bit not set")
+	}
 	if !responseMatchesQuestion(msg, resp) {
 		resp.Release()
 		return nil, fmt.Errorf("response question mismatch")
@@ -736,6 +742,12 @@ func (c *Client) queryTCPBuf(server *Server, msg *protocol.Message, buf []byte) 
 	if responseID := resp.Header.ID; responseID != msg.Header.ID {
 		resp.Release()
 		return nil, fmt.Errorf("response ID mismatch: got %d, want %d", responseID, msg.Header.ID)
+	}
+	// A reply must have QR=1 (RFC 1035 §4.1.1): a reflected query with the
+	// same ID and question was accepted as the answer (F650).
+	if !resp.Header.Flags.QR {
+		resp.Release()
+		return nil, fmt.Errorf("response QR bit not set")
 	}
 	if !responseMatchesQuestion(msg, resp) {
 		resp.Release()

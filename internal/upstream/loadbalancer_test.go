@@ -2264,6 +2264,9 @@ func TestLoadBalancerQueryWithFailoverFailoverSuccessTCP(t *testing.T) {
 					respLen := uint16(lengthBuf[0])<<8 | uint16(lengthBuf[1])
 					buf := make([]byte, respLen)
 					c.Read(buf)
+					if len(buf) > 2 {
+						buf[2] |= 0x80 // reply, not a reflected query (F650)
+					}
 					c.Write(lengthBuf)
 					c.Write(buf)
 				}(conn)
@@ -2445,6 +2448,9 @@ func TestLoadBalancerQueryTCPMockServer(t *testing.T) {
 					respLen := uint16(lengthBuf[0])<<8 | uint16(lengthBuf[1])
 					buf := make([]byte, respLen)
 					c.Read(buf)
+					if len(buf) > 2 {
+						buf[2] |= 0x80 // reply, not a reflected query (F650)
+					}
 					c.Write(lengthBuf)
 					c.Write(buf)
 				}(conn)
@@ -2639,6 +2645,10 @@ func setupMockDNSServerLB(t *testing.T, response []byte) (string, func()) {
 				if len(response) > 0 {
 					conn.WriteToUDP(response, remote)
 				} else {
+					// Echo as a reply: QR=1, or the client rejects it (F650).
+					if n > 2 {
+						buf[2] |= 0x80
+					}
 					conn.WriteToUDP(buf[:n], remote)
 				}
 			}
@@ -2691,6 +2701,9 @@ func TestLoadBalancerQueryWithFailoverTCPSuccessAfterUDPFail(t *testing.T) {
 					respLen := uint16(lengthBuf[0])<<8 | uint16(lengthBuf[1])
 					buf := make([]byte, respLen)
 					c.Read(buf)
+					if len(buf) > 2 {
+						buf[2] |= 0x80 // reply, not a reflected query (F650)
+					}
 					c.Write(lengthBuf)
 					c.Write(buf)
 				}(conn)
@@ -2865,6 +2878,9 @@ func TestLoadBalancerQueryTCPSuccessWithMockServer(t *testing.T) {
 					respLen := uint16(lengthBuf[0])<<8 | uint16(lengthBuf[1])
 					buf := make([]byte, respLen)
 					c.Read(buf)
+					if len(buf) > 2 {
+						buf[2] |= 0x80 // reply, not a reflected query (F650)
+					}
 					c.Write(lengthBuf)
 					c.Write(buf)
 				}(conn)
