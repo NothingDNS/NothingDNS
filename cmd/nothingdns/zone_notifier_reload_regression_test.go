@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -215,7 +216,7 @@ func notifyReloadRead(pc net.PacketConn, want uint32, d time.Duration) (notifyRe
 	}
 }
 
-func notifyReloadBoot(t *testing.T, yaml, dir string) (chan os.Signal, string) {
+func notifyReloadBoot(t *testing.T, yaml, dir string) (chan os.Signal, string, <-chan error) {
 	t.Helper()
 	cfgPath := filepath.Join(dir, "cfg.yaml")
 	if err := os.WriteFile(cfgPath, []byte(yaml), 0o644); err != nil {
@@ -231,16 +232,75 @@ func notifyReloadBoot(t *testing.T, yaml, dir string) (chan os.Signal, string) {
 	sigCh := make(chan os.Signal, 1)
 	t.Cleanup(installFakeSignalHandler(sigCh))
 	done := make(chan error, 1)
-	go func() { done <- runWithContext(context.Background(), cfg) }()
+	exited := make(chan struct{})
+	go func() {
+		err := runWithContext(context.Background(), cfg)
+		done <- err
+		close(exited)
+	}()
 	t.Cleanup(func() {
 		sigCh <- syscall.SIGTERM
+		// Wait on exited, not done: a caller that already consumed done
+		// (the done-aware NOTIFY wait surfacing a boot failure) must not
+		// turn this cleanup into a 20s stall for a server known to have
+		// exited.
 		select {
-		case <-done:
+		case <-exited:
 		case <-time.After(20 * time.Second):
 			t.Errorf("server did not stop")
 		}
 	})
-	return sigCh, cfgPath
+	return sigCh, cfgPath, done
+}
+
+// notifyReloadWaitNotifyOrBoot is notifyReloadRead that also fails fast when
+// the server exits during startup: a boot failure (for example the port
+// picked by bootRestoreFreePort being stolen before the server binds it)
+// previously surfaced only as a blind full-window timeout with no diagnosis.
+// Reads are sliced into short deadlines so the boot-error channel is checked
+// between them without ever losing a queued datagram or leaving a stale
+// reader on pc.
+func notifyReloadWaitNotifyOrBoot(pc net.PacketConn, done <-chan error, want uint32, d time.Duration) (notifyReloadMsg, bool, error) {
+	deadline := time.Now().Add(d)
+	buf := make([]byte, 4096)
+	for {
+		select {
+		case err := <-done:
+			return notifyReloadMsg{}, false, err
+		default:
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return notifyReloadMsg{}, false, nil
+		}
+		slice := 100 * time.Millisecond
+		if remaining < slice {
+			slice = remaining
+		}
+		_ = pc.SetReadDeadline(time.Now().Add(slice))
+		n, _, err := pc.ReadFrom(buf)
+		if err != nil {
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				continue
+			}
+			return notifyReloadMsg{}, false, err
+		}
+		m, perr := protocol.UnpackMessage(buf[:n])
+		if perr != nil || m.Header.Flags.Opcode != protocol.OpcodeNotify || len(m.Answers) == 0 {
+			continue
+		}
+		soa, ok := m.Answers[0].Data.(*protocol.RDataSOA)
+		if !ok || (want != 0 && soa.Serial != want) {
+			continue
+		}
+		signed := false
+		for _, rr := range m.Additionals {
+			if rr != nil && rr.Type == protocol.TypeTSIG {
+				signed = true
+			}
+		}
+		return notifyReloadMsg{serial: soa.Serial, signed: signed}, true, nil
+	}
 }
 
 func notifyReloadWaitSerial(addr string, want uint32) bool {
@@ -255,6 +315,13 @@ func notifyReloadWaitSerial(addr string, want uint32) bool {
 }
 
 // F568 e2e: the real server sends NOTIFY for its zone after startup.
+//
+// bootAttempts bounds the one environmental failure this test cannot
+// prevent: bootRestoreFreePort releases the picked port before the server
+// binds it, so under a loaded suite another test's ephemeral bind can steal
+// it and the boot fails with EADDRINUSE. A stolen port retries with a fresh
+// port; any other boot error fails immediately with its real cause instead
+// of surfacing as a blind NOTIFY timeout.
 func TestF568_PrimaryNotifiesOnStartup(t *testing.T) {
 	dir := t.TempDir()
 	zoneFile := filepath.Join(dir, "example.com.zone")
@@ -266,13 +333,27 @@ func TestF568_PrimaryNotifiesOnStartup(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sec.Close()
-	dnsPort := bootRestoreFreePort(t, "udp")
-	notifyReloadBoot(t, notifyReloadCfg(dnsPort, dir, zoneFile, sec.LocalAddr().String(), false), dir)
-	if _, ok := notifyReloadRead(sec, 7, 15*time.Second); !ok {
-		t.Fatal("no NOTIFY serial 7 after startup")
-	}
-	if !notifyReloadWaitSerial(fmt.Sprintf("127.0.0.1:%d", dnsPort), 7) {
-		t.Fatal("server does not serve serial 7")
+
+	const bootAttempts = 3
+	for attempt := 1; ; attempt++ {
+		dnsPort := bootRestoreFreePort(t, "udp")
+		_, _, done := notifyReloadBoot(t, notifyReloadCfg(dnsPort, dir, zoneFile, sec.LocalAddr().String(), false), dir)
+		_, ok, bootErr := notifyReloadWaitNotifyOrBoot(sec, done, 7, 15*time.Second)
+		if bootErr != nil {
+			if attempt < bootAttempts && errors.Is(bootErr, syscall.EADDRINUSE) {
+				// The picked port was stolen between the free-port probe and
+				// the server's bind; the failed boot's cleanup already ran.
+				continue
+			}
+			t.Fatalf("server exited during startup: %v", bootErr)
+		}
+		if !ok {
+			t.Fatal("no NOTIFY serial 7 after startup")
+		}
+		if !notifyReloadWaitSerial(fmt.Sprintf("127.0.0.1:%d", dnsPort), 7) {
+			t.Fatal("server does not serve serial 7")
+		}
+		break
 	}
 }
 
@@ -295,13 +376,20 @@ func TestF567_ReloadAppliesAlsoNotifyAndKey(t *testing.T) {
 	}
 	defer secB.Close()
 	dnsPort := bootRestoreFreePort(t, "udp")
-	sigCh, cfgPath := notifyReloadBoot(t, notifyReloadCfg(dnsPort, dir, zoneFile, secA.LocalAddr().String(), false), dir)
+	sigCh, cfgPath, bootDone := notifyReloadBoot(t, notifyReloadCfg(dnsPort, dir, zoneFile, secA.LocalAddr().String(), false), dir)
 	addr := fmt.Sprintf("127.0.0.1:%d", dnsPort)
 	if !notifyReloadWaitSerial(addr, 1) {
+		select {
+		case err := <-bootDone:
+			t.Fatalf("setup: server exited during startup: %v", err)
+		default:
+		}
 		t.Fatal("setup: server never served serial 1")
 	}
 	// The startup NOTIFY (F568) reaches A, unsigned.
-	if got, ok := notifyReloadRead(secA, 1, 10*time.Second); !ok || got.signed {
+	if got, ok, bootErr := notifyReloadWaitNotifyOrBoot(secA, bootDone, 1, 10*time.Second); bootErr != nil {
+		t.Fatalf("startup NOTIFY to A: server exited: %v", bootErr)
+	} else if !ok || got.signed {
 		t.Fatalf("startup NOTIFY to A: got=%v signed=%v", ok, got.signed)
 	}
 

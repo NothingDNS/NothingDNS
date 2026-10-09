@@ -127,9 +127,14 @@ func TestF583_ReloadAppliesTSIGKeys(t *testing.T) {
 		keyReloadKeyYAML("rotated-key.", keyReloadRotOld, "") +
 		keyReloadKeyYAML("keep-key.", keyReloadKeep, keyReloadGrant) +
 		keyReloadKeyYAML("cidr-key.", keyReloadCIDR, "")
-	sigCh, cfgPath := notifyReloadBoot(t, keyReloadCfg(dnsPort, dir, zoneFile, before, ""), dir)
+	sigCh, cfgPath, bootDone := notifyReloadBoot(t, keyReloadCfg(dnsPort, dir, zoneFile, before, ""), dir)
 	addr := fmt.Sprintf("127.0.0.1:%d", dnsPort)
 	if !notifyReloadWaitSerial(addr, 1) {
+		select {
+		case err := <-bootDone:
+			t.Fatalf("setup: server exited during startup: %v", err)
+		default:
+		}
 		t.Fatal("setup: server never served serial 1")
 	}
 	removed, rotOld, rotNew := keyReloadKey("removed-key.", keyReloadRemoved), keyReloadKey("rotated-key.", keyReloadRotOld), keyReloadKey("rotated-key.", keyReloadRotNew)
@@ -234,9 +239,14 @@ func TestF584_ReloadAppliesSlaveKey(t *testing.T) {
 	}
 	keys := keyReloadKeyYAML("keep-key.", keyReloadKeep, "")
 	dnsPort := bootRestoreFreePort(t, "udp")
-	sigCh, cfgPath := notifyReloadBoot(t, keyReloadCfg(dnsPort, dir, zoneFile, keys, slaves(keyReloadRotOld)), dir)
+	sigCh, cfgPath, bootDone := notifyReloadBoot(t, keyReloadCfg(dnsPort, dir, zoneFile, keys, slaves(keyReloadRotOld)), dir)
 	addr := fmt.Sprintf("127.0.0.1:%d", dnsPort)
 	if !notifyReloadWaitSerial(addr, 1) {
+		select {
+		case err := <-bootDone:
+			t.Fatalf("setup: server exited during startup: %v", err)
+		default:
+		}
 		t.Fatal("setup: server never served serial 1")
 	}
 	if !keyReloadWaitSOA(addr, "slave.test.", 2, 15*time.Second) {
