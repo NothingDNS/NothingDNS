@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.19] — 2026-10-10
+
+### Added
+
+- **Authoritative answer cache**: answers from local zones (exact matches, wildcard expansions, NXDOMAIN and NODATA) are now cached and served as cache hits. Before this change they were rebuilt on every query and never counted as hits. Local zones still take priority: the cache sits inside the authoritative stage, so cached upstream data never shadows a zone. Entries are keyed by the zone's identity and content generation, so any record change (API, DDNS, AXFR/IXFR, reload) is served immediately and never stale. A reload whose zone file did not change keeps the zone's cached answers. Record TTLs are served as published. Entries are never persisted, prefetched or served stale. Answers signed on the fly for DO=1 clients and the signer's DNSKEY/NSEC3PARAM sets are not cached. In-zone CNAME chains are still answered without the cache.
+- **Management API client SDKs** for Python, TypeScript, Go, C# and Java under `sdk/`, with test suites.
+
+### Fixed
+
+Results of a multi-round evidence audit across every subsystem, including:
+
+- **Protocol**: legacy algorithm 1 key tags, URI RDATA wire format (RFC 7553), and SVCB/HTTPS and RDATA offset bounds.
+- **DNSSEC**: every RRSIG is tried before an RRset is called Bogus (RFC 4035 §5.3.3). NSEC chains are ordered in canonical wire order. Negative answers keep their denial proofs for DO=1 clients. Wildcard answers are signed at the wildcard owner and carry the no-closer-match proof. Fixes to the validator, signer and trust anchors.
+- **Request pipeline**: wildcard CNAMEs now apply to every query type. RPZ QNAME triggers now match CNAME targets. RPZ local data is answered as RRsets, QNAME policy priority is honoured, and NSDNAME/NSIP triggers are separate. Fixes to the DNS64 and resolver stages.
+- **Zone files**: `$GENERATE` templates keep quoted strings verbatim. Quoted parentheses no longer open continuations. An explicit zero SOA TTL is preserved.
+- **Zone transfer and DDNS**: journal entries survive serial rollover. DDNS side effects are ordered against shutdown and never dropped. Fixes to NOTIFY and TSIG.
+- **Upstream**: forwarded replies must carry the QR bit and the original question. The Windows connection liveness probe is deadline-bounded.
+- **Cluster**: fixes to gossip, Raft and zone replication. Raft refuses to boot when its persisted state is unreadable.
+- **Transports and auth**: fixes to DoH (extended rcodes in JSON), ODoH (RFC 9230 §6.2 response AEAD), QUIC, WebSocket (close-frame echo), mDNS and authentication.
+- **IDNA**: IDNA2008 conformance. ACE prefixes are matched case-insensitively.
+- **Configuration**: loading is stricter and consistent with runtime behaviour. `transfer.journal_dir` is now read.
+- **API and dashboard**: fixes to REST handlers, auth and contracts, and API RRL control. RPZ override data, config-defined users and record delete errors are fixed in the dashboard.
+- **OpenTelemetry**: response status survives a failed flush, and recorder draining is locked.
+
 ### Security
 
 - **Go 1.26.9 and golang.org/x/net v0.60.0**: the minimum Go version (root `go.mod`, Docker builder) is now 1.26.9, which fixes the net/http (HTTP/2), crypto/tls, mime/multipart and html/template advisories GO-2026-6599 through GO-2026-6617; x/net v0.60.0 fixes the HTTP/2 ones in the vendored HTTP/2 code (x/crypto, x/sys and x/text move with it). `govulncheck ./...` reports no reachable vulnerabilities.

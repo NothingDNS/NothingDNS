@@ -18,7 +18,7 @@ package util
 // leading "v" so a git-describe tag passed via -X ("v1.1.4") cannot
 // reintroduce the mixed-format reporting where release binaries printed
 // "v1.1.4" while images printed "1.1.4" (and the startup log "vv1.1.4").
-var Version = "1.2.18"
+var Version = "1.2.19"
 
 func init() {
 	Version = normalizeVersion(Version)
