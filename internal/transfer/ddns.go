@@ -105,6 +105,9 @@ type DynamicDNSHandler struct {
 	lifeMu    sync.RWMutex
 	consumers sync.WaitGroup
 	closed    bool
+	// hasConsumer: an UpdateEvents consumer drains the channel, so a full
+	// buffer applies backpressure instead of dropping the event (F667).
+	hasConsumer bool
 }
 
 // NewDynamicDNSHandler creates a new Dynamic DNS handler
@@ -229,6 +232,7 @@ func (h *DynamicDNSHandler) UpdateEvents() (events <-chan *UpdateRequest, done f
 		return h.updateChan, func() {}
 	}
 	h.consumers.Add(1)
+	h.hasConsumer = true
 	return h.updateChan, h.consumers.Done
 }
 
@@ -376,10 +380,17 @@ func (h *DynamicDNSHandler) handleUpdate(req *protocol.Message, clientIP net.IP,
 
 	// Notify update channel for post-apply side effects (IXFR journal,
 	// audit, persistence). The update is ALREADY applied above — consumers
-	// must never call ApplyUpdate again (non-blocking send).
-	select {
-	case h.updateChan <- updateReq:
-	default:
+	// must never call ApplyUpdate again. With a registered consumer the send
+	// waits for buffer space: dropping it lost the journal entry and the
+	// persistence of an acknowledged update (F667). Without one it stays
+	// non-blocking.
+	if h.hasConsumer {
+		h.updateChan <- updateReq
+	} else {
+		select {
+		case h.updateChan <- updateReq:
+		default:
+		}
 	}
 
 	// Return success response

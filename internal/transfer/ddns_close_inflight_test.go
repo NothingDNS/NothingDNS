@@ -3,6 +3,8 @@ package transfer
 import (
 	"fmt"
 	"net"
+	"runtime"
+	"strings"
 	"sync"
 	"testing"
 
@@ -99,4 +101,53 @@ func TestDDNSUpdateAcrossClose(t *testing.T) {
 			t.Fatalf("UPDATE applied after Close: applied=%v serial=%d", applied, serial)
 		}
 	})
+}
+
+// F667: with the event buffer full, an accepted UPDATE's event was dropped,
+// losing its journal entry and persistence. A registered consumer now gets
+// backpressure: every acknowledged update's event arrives.
+func TestDDNSUpdateEventsNotDroppedWhenBufferFull(t *testing.T) {
+	const updates = 101 // one more than the buffer
+	h, _, key := closeInflightHandler(t)
+	events, consumed := h.UpdateEvents()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < updates; i++ {
+			if rc := <-closeInflightUpdate(t, h, key, fmt.Sprintf("b%d.example.com.", i)); rc != "NOERROR" {
+				t.Errorf("update %d: %s", i, rc)
+			}
+		}
+	}()
+	// Start reading only once the burst finished or is parked on the full
+	// buffer (stack polling, no sleeps).
+	buf := make([]byte, 1<<20)
+	for parked := false; !parked; runtime.Gosched() {
+		select {
+		case <-done:
+			parked = true
+			continue
+		default:
+		}
+		n := runtime.Stack(buf, true)
+		parked = strings.Contains(string(buf[:n]), "chan send")
+	}
+	got := 0
+	for got < updates {
+		select {
+		case <-events:
+			got++
+		case <-done:
+			for len(events) > 0 {
+				<-events
+				got++
+			}
+			if got != updates {
+				t.Fatalf("%d events for %d acknowledged updates", got, updates)
+			}
+		}
+	}
+	<-done
+	consumed()
+	h.Close()
 }
