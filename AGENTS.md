@@ -18,7 +18,7 @@ go test ./internal/e2e/... -v                  # End-to-end tests
 ```bash
 staticcheck ./...
 errcheck -ignoretests -exclude .errcheck-excludes.txt ./...   # see note below
-GOTOOLCHAIN=go1.26.6 go-errorlint -test=false ./...          # production code only; GOTOOLCHAIN required, see note
+GOTOOLCHAIN=go1.26.9 go-errorlint -test=false ./...          # production code only; GOTOOLCHAIN required, see note
 govulncheck ./...                                             # Go stdlib + deps CVEs
 ```
 
@@ -33,9 +33,9 @@ When a new deliberate-ignore is genuinely safe and broadly applicable, add its
 signature here rather than scattering `_ =` — otherwise annotate the call site
 with `_ =` / `_, _ =`.
 
-**Go version**: 1.26.6+ (root `go.mod`). `CGO_ENABLED=0` for static builds.
+**Go version**: 1.26.9+ (root `go.mod`). `CGO_ENABLED=0` for static builds.
 
-**Docker**: Multi-stage `Dockerfile` builds both binaries from scratch — `golang:1.26.6-alpine` compiles with `CGO_ENABLED=0`, `-trimpath`, and stripped/static link flags, then copies to `FROM scratch`.
+**Docker**: Multi-stage `Dockerfile` builds both binaries from scratch — `golang:1.26.9-alpine` compiles with `CGO_ENABLED=0`, `-trimpath`, and stripped/static link flags, then copies to `FROM scratch`.
 
 ## Architecture Overview
 

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Go 1.26.9 and golang.org/x/net v0.60.0**: the minimum Go version (root `go.mod`, Docker builder) is now 1.26.9, which fixes the net/http (HTTP/2), crypto/tls, mime/multipart and html/template advisories GO-2026-6599 through GO-2026-6617; x/net v0.60.0 fixes the HTTP/2 ones in the vendored HTTP/2 code (x/crypto, x/sys and x/text move with it). `govulncheck ./...` reports no reachable vulnerabilities.
+- **Dashboard build**: `source-map-js` updated past GHSA-68fv-2mgg-jv7q (build-time dependency; the embedded dashboard is unchanged).
+
 ### Changed
 
 - **CI no longer runs on every push or pull request**: the Go, web, SDK and container workflows run only when triggered manually (`workflow_dispatch`) or when a `v*` release tag is pushed; the release workflow still runs when a GitHub release is published. Run the local checks before pushing. See `docs/TESTING.md` "CI Testing".

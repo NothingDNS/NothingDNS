@@ -8,11 +8,11 @@ NothingDNS follows a **minimal external dependencies** philosophy for the core s
 
 | Go Version | Support Status |
 |------------|----------------|
-| 1.26.5+ | **Required** (primary development) |
+| 1.26.9+ | **Required** (primary development; 1.26.9 fixes the net/http, crypto/tls, mime/multipart and html/template advisories GO-2026-6599…6617) |
 | 1.25.x | May work, not tested |
 | < 1.25 | Not supported |
 
-The `go` directive in the root `go.mod` and `web/go.mod` specifies `1.26.5`.
+The `go` directive in the root `go.mod` specifies `1.26.9`; `web/go.mod` (a module boundary with no Go code) specifies `1.26.6`.
 
 ## Direct Dependencies
 
@@ -38,7 +38,7 @@ These are the packages imported and used directly by NothingDNS:
 
 **Purpose**: Platform-specific socket operations
 
-**Version**: `v0.46.0`
+**Version**: `v0.48.0`
 
 **Why Required**: Certain DNS server features require OS-level access:
 - `SO_REUSEPORT` for multi-core UDP scalability on Linux
@@ -61,7 +61,7 @@ These packages are dependencies of `quic-go`:
 
 **Purpose**: Cryptographic operations for QUIC
 
-**Version**: `v0.53.0`
+**Version**: `v0.57.0`
 
 **Used For**:
 - TLS 1.3 connection encryption
@@ -71,7 +71,7 @@ These packages are dependencies of `quic-go`:
 
 **Purpose**: Network primitives for QUIC
 
-**Version**: `v0.56.0`
+**Version**: `v0.60.0`
 
 **Used For**:
 - HTTP/2 framing (used by QUIC internally)
@@ -216,9 +216,10 @@ go mod verify
 ```
 github.com/nothingdns/nothingdns
 ├── github.com/quic-go/quic-go v0.60.0
-├── golang.org/x/sys v0.46.0
-├── golang.org/x/crypto v0.53.0 (indirect)
-├── golang.org/x/net v0.56.0 (indirect)
+├── golang.org/x/sys v0.48.0
+├── golang.org/x/crypto v0.57.0 (indirect)
+├── golang.org/x/net v0.60.0 (indirect)
+├── golang.org/x/text v0.42.0 (indirect)
 └── go.uber.org/mock v0.6.0 (indirect, tests/tooling)
 ```
 
@@ -226,12 +227,12 @@ github.com/nothingdns/nothingdns
 
 | Feature | Go Version | Notes |
 |---------|------------|-------|
-| QUIC/DoQ | 1.26.5+ | Requires quic-go |
-| AES-GCM (cluster) | 1.26.5+ | stdlib crypto |
-| Ed25519 | 1.26.5+ | stdlib crypto |
-| RFC 8439 (chacha20) | 1.26.5+ | stdlib crypto |
-| SO_REUSEPORT | 1.26.5+ | x/sys Linux only |
-| Link-local IPv6 | 1.26.5+ | stdlib net |
+| QUIC/DoQ | 1.26.9+ | Requires quic-go |
+| AES-GCM (cluster) | 1.26.9+ | stdlib crypto |
+| Ed25519 | 1.26.9+ | stdlib crypto |
+| RFC 8439 (chacha20) | 1.26.9+ | stdlib crypto |
+| SO_REUSEPORT | 1.26.9+ | x/sys Linux only |
+| Link-local IPv6 | 1.26.9+ | stdlib net |
 
 ## License Compatibility
 
