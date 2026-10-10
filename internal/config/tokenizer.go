@@ -77,6 +77,16 @@ func (t *Tokenizer) Next() Token {
 
 	ch := t.peek()
 
+	// peek reports end of input as 0, so a NUL byte in the input must be
+	// consumed here: readScalar stops at it without advancing, and the
+	// tokenizer then yielded empty scalars forever (a flow sequence collected
+	// them without bound).
+	if ch == 0 {
+		line, col := t.line, t.col
+		t.next()
+		return Token{Type: TokenError, Value: fmt.Sprintf("NUL byte is not allowed in YAML input at line %d", line), Line: line, Col: col}
+	}
+
 	// Handle line breaks
 	if ch == '\n' || ch == '\r' {
 		return t.handleNewline()
