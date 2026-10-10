@@ -98,6 +98,10 @@ type DynamicDNSHandler struct {
 	// closeMu ensures Close runs once; the closed signal IS the channel
 	// being closed (range/recv stops). No separate bool needed.
 	closeMu sync.Once
+	// consumers counts the UpdateEvents consumers Close waits for (F665).
+	consumersMu sync.Mutex
+	consumers   sync.WaitGroup
+	closed      bool
 }
 
 // NewDynamicDNSHandler creates a new Dynamic DNS handler
@@ -161,11 +165,18 @@ func (h *DynamicDNSHandler) SetZonesMu(mu *sync.RWMutex) {
 	h.zonesMu = mu
 }
 
-// Close shuts down the handler, closing the update channel.
+// Close shuts down the handler, closing the update channel, and waits until
+// every UpdateEvents consumer has drained it: the post-apply side effects of
+// accepted updates (journal, persistence) must finish before shutdown
+// returns, or an acknowledged update is lost (F665).
 func (h *DynamicDNSHandler) Close() {
 	h.closeMu.Do(func() {
+		h.consumersMu.Lock()
+		h.closed = true
+		h.consumersMu.Unlock()
 		close(h.updateChan)
 	})
+	h.consumers.Wait()
 }
 
 // SetKeyStore sets the TSIG key store for authentication
@@ -203,6 +214,19 @@ func (h *DynamicDNSHandler) IsAllowed(zoneName string, clientIP net.IP) bool {
 // GetUpdateChannel returns the channel that receives update events
 func (h *DynamicDNSHandler) GetUpdateChannel() <-chan *UpdateRequest {
 	return h.updateChan
+}
+
+// UpdateEvents returns the update channel and registers the caller as a
+// consumer that Close waits for; the caller must call done once it has
+// drained the channel (F665).
+func (h *DynamicDNSHandler) UpdateEvents() (events <-chan *UpdateRequest, done func()) {
+	h.consumersMu.Lock()
+	defer h.consumersMu.Unlock()
+	if h.closed {
+		return h.updateChan, func() {}
+	}
+	h.consumers.Add(1)
+	return h.updateChan, h.consumers.Done
 }
 
 // HandleUpdate processes a Dynamic DNS UPDATE request and applies an

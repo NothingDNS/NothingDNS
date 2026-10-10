@@ -597,7 +597,13 @@ func (h *integratedHandler) ensureUpdateConsumer(ddns *transfer.DynamicDNSHandle
 		return
 	}
 	h.ddnsConsumer = ddns
-	go h.processUpdateEventsFrom(ddns.GetUpdateChannel())
+	// Registered so the handler's Close (shutdown, reload) waits for the
+	// queued side effects to finish (F665).
+	events, done := ddns.UpdateEvents()
+	go func() {
+		defer done()
+		h.processUpdateEventsFrom(events)
+	}()
 }
 
 // signUpdateResponse appends the TSIG RR for resp, the single-message
