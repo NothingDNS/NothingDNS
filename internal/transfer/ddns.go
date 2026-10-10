@@ -705,10 +705,19 @@ func ApplyUpdate(z *zone.Zone, update *UpdateRequest) error {
 	// unjournaled in-memory-only change that vanishes on restart and
 	// stays invisible to secondaries. Delete operations cannot fail
 	// here, so adds are the only pre-pass needed.
+	apex := normalizeZoneOwner(z.Origin, z.Origin)
 	for _, op := range update.Updates {
 		if op.Operation == UpdateOpAdd {
-			if err := zone.ValidateRecordData(normalizeZoneOwner(op.Name, z.Origin), op.RData); err != nil {
+			owner := normalizeZoneOwner(op.Name, z.Origin)
+			if err := zone.ValidateRecordData(owner, op.RData); err != nil {
 				return err
+			}
+			// applyAddToZone rejects an apex SOA it cannot parse. A wire SOA
+			// whose names carry characters the text form cannot round-trip
+			// (a space in a label) reaches that point after earlier
+			// operations were applied, so check it here.
+			if op.Type == protocol.TypeSOA && owner == apex && zone.ParseSOAFromRData(op.RData) == nil {
+				return fmt.Errorf("ddns: malformed SOA rdata")
 			}
 		}
 	}
