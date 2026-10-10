@@ -683,8 +683,8 @@ func (r *RDataNAPTR) String() string {
 	if r.Replacement != nil {
 		replacement = r.Replacement.String()
 	}
-	return fmt.Sprintf("%d %d \"%s\" \"%s\" \"%s\" %s",
-		r.Order, r.Preference, r.Flags, r.Service, r.Regexp, replacement)
+	return fmt.Sprintf("%d %d %s %s %s %s",
+		r.Order, r.Preference, presentationQuote(r.Flags), presentationQuote(r.Service), presentationQuote(r.Regexp), replacement)
 }
 
 // Len returns the wire length.

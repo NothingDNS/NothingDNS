@@ -274,12 +274,14 @@ func parseCAARData(rdata string) RData {
 		return nil
 	}
 	value := strings.Join(fields[2:], " ")
-	if strings.Contains(value, "\"") {
-		quoted, ok := parseQuotedRDataFields(value)
-		if !ok || len(quoted) != 1 {
+	if strings.Contains(rdata, "\"") {
+		// Scan the whole text: strings.Fields above collapsed whitespace
+		// inside the quoted value and cannot see escapes.
+		quoted, ok := parseQuotedRDataFields(rdata)
+		if !ok || len(quoted) != 3 {
 			return nil
 		}
-		value = quoted[0]
+		value = quoted[2]
 	}
 	return &RDataCAA{
 		Flags: uint8(flags),

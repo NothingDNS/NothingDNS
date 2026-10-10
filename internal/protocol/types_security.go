@@ -108,7 +108,7 @@ func (r *RDataCAA) String() string {
 	if r == nil {
 		return ""
 	}
-	return fmt.Sprintf("%d %s \"%s\"", r.Flags, r.Tag, r.Value)
+	return fmt.Sprintf("%d %s %s", r.Flags, r.Tag, presentationQuote(r.Value))
 }
 
 // Len returns the wire length.
