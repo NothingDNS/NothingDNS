@@ -21,22 +21,52 @@ import (
 	"github.com/nothingdns/nothingdns/internal/protocol"
 )
 
+// bootRestoreFreePort returns a loopback port that is free on both UDP and
+// TCP: the server binds both on the port a test picks, and a port that was
+// only probed on one network could be taken on the other (EADDRINUSE at the
+// server's TCP bind, seen in several boot tests). The probe still releases
+// the port before returning, so a later steal remains possible.
 func bootRestoreFreePort(t *testing.T, network string) int {
 	t.Helper()
-	if network == "udp" {
-		c, err := net.ListenPacket("udp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
+	for attempt := 0; attempt < 50; attempt++ {
+		var port int
+		if network == "udp" {
+			c, err := net.ListenPacket("udp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			port = c.LocalAddr().(*net.UDPAddr).Port
+			c.Close()
+		} else {
+			l, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			port = l.Addr().(*net.TCPAddr).Port
+			l.Close()
 		}
-		defer c.Close()
-		return c.LocalAddr().(*net.UDPAddr).Port
+		if bootRestorePortFreeOnBoth(port) {
+			return port
+		}
 	}
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	t.Fatal("no loopback port free on both UDP and TCP")
+	return 0
+}
+
+// bootRestorePortFreeOnBoth reports whether port can be bound on UDP and TCP.
+func bootRestorePortFreeOnBoth(port int) bool {
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	c, err := net.ListenPacket("udp", addr)
 	if err != nil {
-		t.Fatal(err)
+		return false
 	}
-	defer l.Close()
-	return l.Addr().(*net.TCPAddr).Port
+	defer c.Close()
+	l, err := net.Listen("tcp", addr)
+	if err != nil {
+		return false
+	}
+	l.Close()
+	return true
 }
 
 func bootRestoreQuery(addr, qname string) string {
