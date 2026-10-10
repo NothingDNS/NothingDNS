@@ -62,7 +62,7 @@ func (k *KVPersistence) Enable() {
 	manager.SetMutationHook(func(zoneName string, deleted bool) {
 		var err error
 		if deleted {
-			err = k.DeleteFromKV(zoneName)
+			err = k.deleteFromKVUnlessLive(zoneName)
 		} else {
 			err = k.PersistZone(zoneName)
 		}
@@ -174,6 +174,29 @@ func (k *KVPersistence) DeleteFromKV(zoneName string) error {
 
 	k.persistMu.Lock()
 	defer k.persistMu.Unlock()
+	return store.DeleteZone(zoneName)
+}
+
+// deleteFromKVUnlessLive is the delete hook's body. The hook runs after the
+// manager released its lock, so a zone created again under the same name may
+// already be live (and persisted by its own hook); deleting its KV copy would
+// lose it on the next start.
+func (k *KVPersistence) deleteFromKVUnlessLive(zoneName string) error {
+	k.mu.RLock()
+	manager := k.manager
+	store := k.store
+	enabled := k.enabled
+	k.mu.RUnlock()
+
+	if !enabled {
+		return nil
+	}
+
+	k.persistMu.Lock()
+	defer k.persistMu.Unlock()
+	if _, live := manager.Get(zoneName); live {
+		return nil
+	}
 	return store.DeleteZone(zoneName)
 }
 
