@@ -576,18 +576,24 @@ func (h *integratedHandler) buildNODATAResponse(query *protocol.Message, z *zone
 // the lesser of the SOA TTL and MINIMUM (RFC 2308 §3), which is how long
 // resolvers cache the negative answer.
 func (h *integratedHandler) addSOAAuthority(resp *protocol.Message, z *zone.Zone) {
+	// Read the SOA under the zone's read lock: every serial bump
+	// (IncrementSerial, DDNS, the record API) writes it under z.Lock.
+	z.RLock()
 	if z.SOA == nil {
+		z.RUnlock()
 		return
 	}
-	ttl := z.SOA.TTL
-	if z.SOA.Minimum < ttl {
-		ttl = z.SOA.Minimum
+	soa := *z.SOA
+	z.RUnlock()
+	ttl := soa.TTL
+	if soa.Minimum < ttl {
+		ttl = soa.Minimum
 	}
-	mname, err := protocol.ParseName(z.SOA.MName)
+	mname, err := protocol.ParseName(soa.MName)
 	if err != nil {
 		return
 	}
-	rname, err := protocol.ParseName(z.SOA.RName)
+	rname, err := protocol.ParseName(soa.RName)
 	if err != nil {
 		return
 	}
@@ -603,11 +609,11 @@ func (h *integratedHandler) addSOAAuthority(resp *protocol.Message, z *zone.Zone
 		Data: &protocol.RDataSOA{
 			MName:   mname,
 			RName:   rname,
-			Serial:  z.SOA.Serial,
-			Refresh: z.SOA.Refresh,
-			Retry:   z.SOA.Retry,
-			Expire:  z.SOA.Expire,
-			Minimum: z.SOA.Minimum,
+			Serial:  soa.Serial,
+			Refresh: soa.Refresh,
+			Retry:   soa.Retry,
+			Expire:  soa.Expire,
+			Minimum: soa.Minimum,
 		},
 	}
 	resp.Authorities = append(resp.Authorities, rr)
