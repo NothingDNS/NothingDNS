@@ -72,7 +72,7 @@ func (r *RDataHINFO) String() string {
 	if r == nil {
 		return ""
 	}
-	return fmt.Sprintf("%q %q", r.CPU, r.OS)
+	return presentationQuote(r.CPU) + " " + presentationQuote(r.OS)
 }
 
 // Len returns the wire length.
@@ -487,7 +487,7 @@ func (r *RDataURI) String() string {
 	if r == nil {
 		return ""
 	}
-	return fmt.Sprintf("%d %d %q", r.Priority, r.Weight, r.Target)
+	return fmt.Sprintf("%d %d %s", r.Priority, r.Weight, presentationQuote(r.Target))
 }
 
 // Len returns the wire length.

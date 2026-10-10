@@ -10,11 +10,13 @@ import (
 	"encoding/base32"
 	"encoding/base64"
 	"encoding/hex"
+	"fmt"
 	"net"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // RecordTypeFromText converts a record type mnemonic to its DNS type number.
@@ -949,6 +951,43 @@ func parseQuotedRDataFields(line string) ([]string, bool) {
 		fields = append(fields, current.String())
 	}
 	return fields, true
+}
+
+// presentationQuote renders a character-string in RFC 1035 §5.1 presentation
+// form: quoted, with \" and \\ for the two special characters and \DDD for
+// control octets and bytes that are not valid UTF-8. Valid UTF-8 stays as is
+// (parseQuotedRDataFields scans octets). strconv.Quote / %q wrote Go escapes
+// (\n, \t, \xNN, \uNNNN) that ParseRDataText reads back as the letter, so a
+// value changed after a DDNS update, a zone transfer or a reload.
+func presentationQuote(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for i := 0; i < len(s); {
+		c := s[i]
+		switch {
+		case c == '"' || c == '\\':
+			b.WriteByte('\\')
+			b.WriteByte(c)
+			i++
+		case c < 0x20 || c == 0x7f:
+			fmt.Fprintf(&b, "\\%03d", c)
+			i++
+		case c < 0x80:
+			b.WriteByte(c)
+			i++
+		default:
+			r, size := utf8.DecodeRuneInString(s[i:])
+			if r == utf8.RuneError && size == 1 {
+				fmt.Fprintf(&b, "\\%03d", c)
+				i++
+				continue
+			}
+			b.WriteString(s[i : i+size])
+			i += size
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
 }
 
 func isDecimalDigit(c byte) bool {

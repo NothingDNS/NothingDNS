@@ -6,7 +6,6 @@ package protocol
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 )
 
@@ -207,7 +206,7 @@ func (r *RDataTXT) String() string {
 	for _, s := range r.Strings {
 		// Quote strings that contain spaces or special chars
 		if strings.ContainsAny(s, " \t\n\r\"") {
-			s = strconv.Quote(s)
+			s = presentationQuote(s)
 		}
 		parts = append(parts, s)
 	}
