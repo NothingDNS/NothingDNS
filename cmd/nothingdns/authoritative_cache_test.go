@@ -3,6 +3,7 @@ package main
 import (
 	"testing"
 
+	"github.com/nothingdns/nothingdns/internal/dashboard"
 	"github.com/nothingdns/nothingdns/internal/dnssec"
 	"github.com/nothingdns/nothingdns/internal/protocol"
 	"github.com/nothingdns/nothingdns/internal/zone"
@@ -209,5 +210,35 @@ func TestCacheAuthoritative_DropsAnswerAfterTagMoved(t *testing.T) {
 	h.cacheAuthoritative(z, key, resp)
 	if h.cache.Get(key) != nil {
 		t.Fatal("answer cached under a tag the zone no longer holds")
+	}
+}
+
+// A repeated query answered from the authoritative cache is reported as
+// cached in the dashboard query log and live stream, like any cache hit.
+func TestAuthoritativeAnswer_CacheHitReportedToQueryLog(t *testing.T) {
+	h := newTestHandler()
+	ds := dashboard.NewServer()
+	h.dashboardServer = ds
+	addZoneRecords(t, h, "example.com.", []zone.Record{
+		{Name: "www.example.com.", TTL: 300, Class: "IN", Type: "A", RData: "192.0.2.1"},
+	})
+
+	for i := 0; i < 2; i++ {
+		w := newCaptureWriter("10.0.0.1", "udp")
+		h.ServeDNS(w, newTestQuery(t, "www.example.com.", protocol.TypeA))
+	}
+
+	queries, total := ds.GetStats().GetRecentQueries(0, 10)
+	if total != 2 || len(queries) != 2 {
+		t.Fatalf("dashboard query log: total=%d len=%d, want 2/2", total, len(queries))
+	}
+	cached := 0
+	for _, e := range queries {
+		if e.Cached {
+			cached++
+		}
+	}
+	if cached != 1 {
+		t.Errorf("%d of 2 events marked cached, want 1 (the repeat)", cached)
 	}
 }

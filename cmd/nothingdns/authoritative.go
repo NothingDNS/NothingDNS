@@ -18,8 +18,10 @@ import (
 // handleAuthoritative handles queries for authoritative zones.
 // It performs: delegation check → exact match → CNAME → wildcard → NXDOMAIN.
 // CNAME chasing is deferred to the caller (ServeDNS) which can resolve
-// across zones, cache, and upstream.
-func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseWriter, r *protocol.Message, q *protocol.Question, qname string) bool {
+// across zones, cache, and upstream. cacheHit, when non-nil, is set when the
+// answer came from the authoritative answer cache, so the query log, the
+// dashboard and tracing report it as cached.
+func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseWriter, r *protocol.Message, q *protocol.Question, qname string, cacheHit *bool) bool {
 	qtype := q.QType
 
 	// Check if client wants DNSSEC (DO bit in OPT record)
@@ -106,6 +108,9 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 	// GeoDNS run first on every query: GeoDNS answers depend on the client.
 	authKey := h.authoritativeCacheKey(z, qname, qtype, wantsDNSSEC)
 	if authKey != "" && h.serveAuthoritativeFromCache(authKey, w, r, q) {
+		if cacheHit != nil {
+			*cacheHit = true
+		}
 		return true
 	}
 

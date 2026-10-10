@@ -357,7 +357,7 @@ func splitHorizonStage(h *integratedHandler) Stage {
 				continue // F383
 			}
 			h.logger.Debugf("View %s: checking zone %s for %s", view.Name, m.Origin, q.qname)
-			if h.handleAuthoritative(m.Zone, w, q.msg, q.q, q.qname) {
+			if h.handleAuthoritative(m.Zone, w, q.msg, q.q, q.qname, &q.cacheHit) {
 				return true, nil
 			}
 		}
@@ -434,7 +434,7 @@ func authoritativeStage(h *integratedHandler) Stage {
 				continue // F383
 			}
 			h.logger.Debugf("Checking zone %s for %s", m.name, q.qname)
-			if h.handleAuthoritative(m.z, w, q.msg, q.q, q.qname) {
+			if h.handleAuthoritative(m.z, w, q.msg, q.q, q.qname, &q.cacheHit) {
 				return true, nil
 			}
 		}
