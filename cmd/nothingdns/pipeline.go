@@ -270,7 +270,8 @@ func NewPipeline(h *integratedHandler) *Pipeline {
 	// 8198) for a parent name — e.g. the root proving ".lan" or ".test" does
 	// not exist, or the public view of a split-horizon domain — otherwise
 	// shadows the server's own zones for every client allowed recursion.
-	// Authoritative answers are not cached, so nothing stale is served.
+	// Authoritative answers are cached by handleAuthoritative under keys tied
+	// to the zone's generation, so a zone change is never served stale.
 	p.AppendStage(splitHorizonStage(h))
 	p.AppendStage(authoritativeStage(h))
 	p.AppendStage(cnameStage(h))

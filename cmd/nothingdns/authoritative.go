@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"time"
 
@@ -99,6 +100,15 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 		}
 	}
 
+	// ── Step 1a: Answer cache ──
+	// Everything below is a function of the zone's content (plus the DO bit),
+	// so the answer is cached under the zone's CacheTag. Delegation and
+	// GeoDNS run first on every query: GeoDNS answers depend on the client.
+	authKey := h.authoritativeCacheKey(z, qname, qtype, wantsDNSSEC)
+	if authKey != "" && h.serveAuthoritativeFromCache(authKey, w, r, q) {
+		return true
+	}
+
 	// ── Step 1b: DNSKEY RRset from the zone's signing keys ──
 	// A zone signed from configured keys carries no DNSKEY records in its
 	// file, so the lookup below finds nothing and the query fell through to
@@ -139,6 +149,7 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 		} else {
 			resp = h.buildResponse(r, records)
 		}
+		h.cacheAuthoritative(z, authKey, resp)
 		if h.metrics != nil {
 			h.metrics.RecordResponse(protocol.RcodeSuccess)
 		}
@@ -171,6 +182,7 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 			if len(wcRecords) > 0 {
 				// Synthesize answer: wildcard records with the query name as owner
 				resp := h.buildWildcardResponse(r, z, wildcard, wcRecords, wantsDNSSEC)
+				h.cacheAuthoritative(z, authKey, resp)
 				if h.metrics != nil {
 					h.metrics.RecordResponse(protocol.RcodeSuccess)
 				}
@@ -190,6 +202,7 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 			}
 			// Wildcard exists but no records of the requested type → NODATA
 			resp := h.buildNODATAResponse(r, z, qname, wantsDNSSEC)
+			h.cacheAuthoritative(z, authKey, resp)
 			if h.metrics != nil {
 				h.metrics.RecordResponse(protocol.RcodeSuccess)
 			}
@@ -205,6 +218,7 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 
 		// Name doesn't exist and no wildcard → authoritative NXDOMAIN
 		resp := h.buildNXDOMAINResponse(r, z, qname, wantsDNSSEC)
+		h.cacheAuthoritative(z, authKey, resp)
 		if h.metrics != nil {
 			h.metrics.RecordResponse(protocol.RcodeNameError)
 		}
@@ -214,6 +228,7 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 
 	// ── Step 5: Name exists but no records of requested type → NODATA ──
 	resp := h.buildNODATAResponse(r, z, qname, wantsDNSSEC)
+	h.cacheAuthoritative(z, authKey, resp)
 	if h.metrics != nil {
 		h.metrics.RecordResponse(protocol.RcodeSuccess)
 	}
@@ -258,6 +273,78 @@ func (h *integratedHandler) answerWildcardCNAME(z *zone.Zone, w server.ResponseW
 	return true
 }
 
+// authoritativeCacheKey returns the cache key for an answer built from z, or
+// "" when the answer must not be cached. The key embeds the zone's CacheTag,
+// so any change to the zone makes earlier answers unreachable instead of
+// stale. The leading '|' keeps it disjoint from MakeKey's keys, which start
+// with a domain name, so the recursive cache stages never see these entries.
+//
+// Answers signed on the fly are not cached: their RRSIGs and the zone's
+// DNSKEY/NSEC3PARAM sets come from the signer, whose key rollovers the zone
+// generation does not track.
+func (h *integratedHandler) authoritativeCacheKey(z *zone.Zone, qname string, qtype uint16, wantsDNSSEC bool) string {
+	if h.cache == nil {
+		return ""
+	}
+	if wantsDNSSEC || qtype == protocol.TypeDNSKEY || qtype == protocol.TypeNSEC3PARAM {
+		h.zoneSignersMu.RLock()
+		_, signed := h.zoneSigners[z.Origin]
+		h.zoneSignersMu.RUnlock()
+		if signed {
+			return ""
+		}
+	}
+	return authoritativeCachePrefix(z) + cache.MakeKey(qname, qtype, wantsDNSSEC)
+}
+
+// authoritativeCachePrefix is the part of an authoritative cache key that
+// names the zone's current CacheTag.
+func authoritativeCachePrefix(z *zone.Zone) string {
+	id, gen := z.CacheTag()
+	var b strings.Builder
+	b.WriteString("|auth|")
+	b.WriteString(strconv.FormatUint(id, 10))
+	b.WriteByte('|')
+	b.WriteString(strconv.FormatUint(gen, 10))
+	b.WriteByte('|')
+	return b.String()
+}
+
+// serveAuthoritativeFromCache answers r from a cached authoritative answer.
+// Record TTLs are served as stored — an authority's TTLs do not age.
+func (h *integratedHandler) serveAuthoritativeFromCache(key string, w server.ResponseWriter, r *protocol.Message, q *protocol.Question) bool {
+	entry := h.cache.Get(key)
+	if entry == nil || entry.Message == nil {
+		if h.metrics != nil {
+			h.metrics.RecordCacheMiss()
+		}
+		return false
+	}
+	// COPY — reply() mutates in place. Every answer record of a cached
+	// authoritative answer is owned by the query name (exact or wildcard
+	// match), so restore this client's spelling of it (0x20 case).
+	resp := entry.Message.Copy()
+	resp.Header.ID = r.Header.ID
+	resp.Questions = r.Questions
+	for _, rr := range resp.Answers {
+		rr.Name = q.Name
+	}
+	if h.metrics != nil {
+		h.metrics.RecordCacheHit()
+		h.metrics.RecordResponse(resp.Header.Flags.RCODE)
+	}
+	if len(resp.Answers) > 0 {
+		if handled, err := h.checkRPZResponseIPWithError(w, r, q, resp); handled || err != nil {
+			if err != nil {
+				h.logger.Warnf("RPZ response write failed for %s: %v", q.Name.String(), err)
+			}
+			return true
+		}
+	}
+	reply(w, r, resp)
+	return true
+}
+
 // buildWildcardResponse answers the query with records synthesized from the
 // wildcard owner (RFC 4592). F512: for a DO=1 client of a signed zone the
 // RRset was signed as if QNAME existed (RRSIG Labels = QNAME labels) and the
@@ -295,6 +382,31 @@ func (h *integratedHandler) buildWildcardResponse(r *protocol.Message, z *zone.Z
 		}
 	}
 	return resp
+}
+
+// cacheAuthoritative stores an authoritative answer under key (see
+// authoritativeCacheKey). Positive answers live for their shortest record
+// TTL, negative ones for the RFC 2308 negative TTL of the SOA they carry.
+//
+// The answer is dropped when z's CacheTag moved while it was being built: a
+// mutation or a reload that handed the tag to a new Zone (InheritCacheTag)
+// means resp may hold data the tag in key no longer names.
+func (h *integratedHandler) cacheAuthoritative(z *zone.Zone, key string, resp *protocol.Message) {
+	if key == "" || resp == nil || !strings.HasPrefix(key, authoritativeCachePrefix(z)) {
+		return
+	}
+	var ttl uint32
+	if len(resp.Answers) > 0 {
+		ttl = resp.Answers[0].TTL
+		for _, rr := range resp.Answers[1:] {
+			if rr.TTL < ttl {
+				ttl = rr.TTL
+			}
+		}
+	} else if negTTL, ok := negativeCacheTTL(resp); ok {
+		ttl = negTTL
+	}
+	h.cache.SetAuthoritative(key, resp, ttl)
 }
 
 // buildReferralResponse constructs a delegation (referral) response.

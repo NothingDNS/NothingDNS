@@ -8,9 +8,11 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // maxIncludeDepth is the maximum nesting depth for $INCLUDE directives
@@ -71,7 +73,19 @@ type Zone struct {
 	// mu protects Records, SOA, NS, ZONEMD, and the ENT index from
 	// concurrent access.
 	mu sync.RWMutex
+
+	// cacheID and generation identify the zone's current content for answer
+	// caching (see CacheTag). cacheID is assigned on first use; generation
+	// advances on every exported Unlock, which every in-place mutation path
+	// (record API, DDNS, serial bumps) goes through. Zones replaced
+	// wholesale (reload, AXFR/IXFR) are new objects with a new cacheID,
+	// unless a reload finds the content unchanged (InheritCacheTag).
+	cacheID    atomic.Uint64
+	generation atomic.Uint64
 }
+
+// zoneCacheIDs hands out process-unique zone cache identities.
+var zoneCacheIDs atomic.Uint64
 
 // Record represents a single DNS resource record in a zone.
 type Record struct {
@@ -169,9 +183,72 @@ func (z *Zone) Lock() {
 	z.mu.Lock()
 }
 
-// Unlock releases the zone's write lock.
+// Unlock releases the zone's write lock. Callers take the write lock to
+// mutate the zone, so releasing it advances the zone's cache generation —
+// before the release, so a reader that observes the new data also observes
+// the new generation.
 func (z *Zone) Unlock() {
+	z.generation.Add(1)
 	z.mu.Unlock()
+}
+
+// CacheTag identifies the zone's current content: answers built from the zone
+// may be cached under it, and any change to the zone (or its replacement by a
+// new Zone) yields a different tag. Read it before looking records up, so an
+// answer is never filed under a newer tag than the data it was built from.
+func (z *Zone) CacheTag() (id, generation uint64) {
+	id = z.cacheID.Load()
+	if id == 0 {
+		z.cacheID.CompareAndSwap(0, zoneCacheIDs.Add(1))
+		id = z.cacheID.Load()
+	}
+	return id, z.generation.Load()
+}
+
+// InheritCacheTag hands old's cache identity to z when both hold the same
+// content, so answers cached from old stay valid for z: a reload of an
+// unchanged zone file does not empty the answer cache. old is given a fresh
+// identity, so nothing still reading the retired object can file answers
+// under the tag z now owns. Call it before z is published. It reports
+// whether the tag was inherited.
+func (z *Zone) InheritCacheTag(old *Zone) bool {
+	if old == nil || old == z || old.cacheID.Load() == 0 || !z.sameContent(old) {
+		return false
+	}
+	id, gen := old.CacheTag()
+	old.cacheID.Store(zoneCacheIDs.Add(1))
+	z.cacheID.Store(id)
+	z.generation.Store(gen)
+	return true
+}
+
+// sameContent reports whether z and o serve identical data. Record source
+// line numbers are ignored; record order is not, since it is answer order.
+func (z *Zone) sameContent(o *Zone) bool {
+	z.mu.RLock()
+	defer z.mu.RUnlock()
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+
+	if z.Origin != o.Origin || z.DefaultTTL != o.DefaultTTL ||
+		!reflect.DeepEqual(z.SOA, o.SOA) || !reflect.DeepEqual(z.NS, o.NS) ||
+		!reflect.DeepEqual(z.ZONEMD, o.ZONEMD) || len(z.Records) != len(o.Records) {
+		return false
+	}
+	for name, recs := range z.Records {
+		other, ok := o.Records[name]
+		if !ok || len(recs) != len(other) {
+			return false
+		}
+		for i := range recs {
+			a, b := recs[i], other[i]
+			a.Line, b.Line = 0, 0
+			if a != b {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // RLock acquires the the zone's read lock.

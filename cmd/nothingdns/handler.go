@@ -1309,6 +1309,12 @@ func (h *integratedHandler) applyReloadViews(plan *viewReloadPlan) {
 	}
 	h.runtimeMu.Lock()
 	defer h.runtimeMu.Unlock()
+	// A view zone whose file did not change keeps its cached answers.
+	for view, zones := range plan.viewZones {
+		for origin, vz := range zones {
+			vz.InheritCacheTag(h.viewZones[view][origin])
+		}
+	}
 	h.splitHorizon = plan.splitHorizon
 	h.viewZones = plan.viewZones
 }

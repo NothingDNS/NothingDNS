@@ -45,6 +45,11 @@ type Entry struct {
 	IsNegative bool // True for NXDOMAIN/NODATA entries
 	IsStale    bool // True when serving a stale entry (RFC 8767)
 
+	// authoritative marks an answer built from this server's own zone data
+	// (SetAuthoritative). Such entries are keyed by zone generation, so they
+	// are never persisted, prefetched or served stale.
+	authoritative bool
+
 	// touched is set atomically by Get on first access so that the very
 	// first cache hit always promotes the entry to MRU. Subsequent hits use
 	// probabilistic promotion (see Cache.Get).
@@ -437,7 +442,7 @@ func (c *Cache) Get(key string) *Entry {
 		// retained for stale serving used to bump it on EVERY Get during
 		// the grace window, inflating the metric per-lookup.
 		if e, ok := s.entries[key]; ok && e == entry {
-			if c.config().ServeStale {
+			if c.config().ServeStale && !entry.authoritative {
 				if staleDeadlineReached(now, entry, c.config().StaleGrace) {
 					s.removeEntry(entry)
 					atomic.AddUint64(&s.expirations, 1)
@@ -522,7 +527,7 @@ func (c *Cache) GetStale(key string) *Entry {
 	s.mu.Lock()
 
 	entry, exists := s.entries[key]
-	if !exists {
+	if !exists || entry.authoritative {
 		s.mu.Unlock()
 		return nil
 	}
@@ -649,6 +654,36 @@ func (c *Cache) Set(key string, msg *protocol.Message, ttl uint32) {
 	defer s.mu.Unlock()
 
 	c.setInternal(s, key, msg, ttl, false)
+}
+
+// SetAuthoritative caches an answer built from this server's own zone data.
+//
+// Unlike Set, the message's record TTLs are stored exactly as the zone
+// publishes them — max_ttl bounds how long this server holds forwarded data,
+// not what an authority hands out — and the entry is never prefetched,
+// persisted or served stale: the caller keys it by zone generation, so it
+// stops being reachable as soon as the zone changes, and only zone data can
+// rebuild it. ttl bounds the entry's lifetime; a zero ttl is not cached.
+func (c *Cache) SetAuthoritative(key string, msg *protocol.Message, ttl uint32) {
+	if ttl == 0 || msg == nil {
+		return
+	}
+	msg = msg.Copy()
+
+	s := c.shardOf(key)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := c.now()
+	s.addEntry(key, &Entry{
+		Key:           key,
+		Message:       msg,
+		RCode:         msg.Header.Flags.RCODE,
+		TTL:           ttl,
+		ExpireTime:    now.Add(time.Duration(ttl) * time.Second),
+		insertedAt:    now,
+		authoritative: true,
+	})
 }
 
 // SetNegative adds a negative cache entry (NXDOMAIN or NODATA).
@@ -1246,6 +1281,11 @@ func (c *Cache) Save() []CacheEntryJSON {
 			}
 			// Skip negative entries (short TTL, low value on restart)
 			if entry.IsNegative {
+				continue
+			}
+			// Skip authoritative answers: their keys name this process's
+			// zone generations and can never be hit after a restart.
+			if entry.authoritative {
 				continue
 			}
 			// Skip entries without a message (shouldn't happen)

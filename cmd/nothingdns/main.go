@@ -151,6 +151,11 @@ func applyConfiguredZoneFiles(handler *integratedHandler, zoneManager *zone.Mana
 	// preserved.
 	zoneManager.RemoveZones(staleOrigins...)
 	handler.zonesMu.Lock()
+	// A zone whose file did not change keeps its cached answers: the new
+	// object takes over the old one's cache tag before it is published.
+	for _, item := range loaded {
+		item.zone.InheritCacheTag(handler.zones[item.zone.Origin])
+	}
 	for _, origin := range staleOrigins {
 		delete(handler.zones, origin)
 		delete(zoneFiles, origin)
