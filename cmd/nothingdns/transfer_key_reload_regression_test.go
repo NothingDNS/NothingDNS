@@ -9,6 +9,7 @@ package main
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -47,6 +48,41 @@ const keyReloadGrant = "      allow_update:\n        - example.com.\n"
 func keyReloadCfg(dnsPort int, dir, zoneFile, keys, slaves string) string {
 	return fmt.Sprintf("server:\n  udp_bind:\n    - 127.0.0.1:%d\n  tcp_bind:\n    - 127.0.0.1:%d\nlogging:\n  level: error\nmetrics:\n  enabled: false\nstorage:\n  data_dir: %s\nzones:\n  - %s\ntransfer:\n  allow_list:\n    - 127.0.0.0/8\n  require_tsig: true\n  tsig_keys:\n%s%s",
 		dnsPort, dnsPort, filepath.Join(dir, "data"), zoneFile, keys, slaves)
+}
+
+// keyReloadBoot boots the server with cfg(port) on a fresh port and waits
+// until it serves serial 1. The server binds UDP and TCP on the port that
+// bootRestoreFreePort released, and that TCP bind could fail with
+// EADDRINUSE under a loaded suite (seen in TestF583); such a boot retries
+// with a fresh port, as TestF568 does. Any other boot failure is fatal.
+func keyReloadBoot(t *testing.T, dir string, cfg func(port int) string) (chan os.Signal, string, int) {
+	t.Helper()
+	const bootAttempts = 3
+	for attempt := 1; ; attempt++ {
+		dnsPort := bootRestoreFreePort(t, "udp")
+		sigCh, cfgPath, bootDone := notifyReloadBoot(t, cfg(dnsPort), dir)
+		addr := fmt.Sprintf("127.0.0.1:%d", dnsPort)
+		deadline := time.Now().Add(15 * time.Second)
+		for {
+			if s, err := notifyE2ESOASerial(addr); err == nil && s == 1 {
+				return sigCh, cfgPath, dnsPort
+			}
+			select {
+			case err := <-bootDone:
+				if attempt < bootAttempts && errors.Is(err, syscall.EADDRINUSE) {
+					break // the failed boot's cleanup runs at test end
+				}
+				t.Fatalf("setup: server exited during startup: %v", err)
+			default:
+				if time.Now().After(deadline) {
+					t.Fatal("setup: server never served serial 1")
+				}
+				time.Sleep(50 * time.Millisecond) // polling server readiness, not ordering
+				continue
+			}
+			break
+		}
+	}
 }
 
 func keyReloadAXFR(addr string, key *transfer.TSIGKey) bool {
@@ -122,21 +158,12 @@ func TestF583_ReloadAppliesTSIGKeys(t *testing.T) {
 	if err := os.WriteFile(zoneFile, []byte(fmt.Sprintf(notifyE2EZone, 1)), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	dnsPort := bootRestoreFreePort(t, "udp")
 	before := keyReloadKeyYAML("removed-key.", keyReloadRemoved, keyReloadGrant) +
 		keyReloadKeyYAML("rotated-key.", keyReloadRotOld, "") +
 		keyReloadKeyYAML("keep-key.", keyReloadKeep, keyReloadGrant) +
 		keyReloadKeyYAML("cidr-key.", keyReloadCIDR, "")
-	sigCh, cfgPath, bootDone := notifyReloadBoot(t, keyReloadCfg(dnsPort, dir, zoneFile, before, ""), dir)
+	sigCh, cfgPath, dnsPort := keyReloadBoot(t, dir, func(port int) string { return keyReloadCfg(port, dir, zoneFile, before, "") })
 	addr := fmt.Sprintf("127.0.0.1:%d", dnsPort)
-	if !notifyReloadWaitSerial(addr, 1) {
-		select {
-		case err := <-bootDone:
-			t.Fatalf("setup: server exited during startup: %v", err)
-		default:
-		}
-		t.Fatal("setup: server never served serial 1")
-	}
 	removed, rotOld, rotNew := keyReloadKey("removed-key.", keyReloadRemoved), keyReloadKey("rotated-key.", keyReloadRotOld), keyReloadKey("rotated-key.", keyReloadRotNew)
 	keep, cidr := keyReloadKey("keep-key.", keyReloadKeep), keyReloadKey("cidr-key.", keyReloadCIDR)
 	if !keyReloadAXFR(addr, removed) || !keyReloadIXFR(addr, removed) || !keyReloadAXFR(addr, rotOld) || !keyReloadAXFR(addr, cidr) {
@@ -238,17 +265,8 @@ func TestF584_ReloadAppliesSlaveKey(t *testing.T) {
 		return fmt.Sprintf("slave_zones:\n  - zone_name: slave.test.\n    transfer_type: axfr\n    masters:\n      - %s\n    tsig_key_name: slave-key.\n    tsig_secret: \"%s\"\n", maddr, base64.StdEncoding.EncodeToString(secret))
 	}
 	keys := keyReloadKeyYAML("keep-key.", keyReloadKeep, "")
-	dnsPort := bootRestoreFreePort(t, "udp")
-	sigCh, cfgPath, bootDone := notifyReloadBoot(t, keyReloadCfg(dnsPort, dir, zoneFile, keys, slaves(keyReloadRotOld)), dir)
+	sigCh, cfgPath, dnsPort := keyReloadBoot(t, dir, func(port int) string { return keyReloadCfg(port, dir, zoneFile, keys, slaves(keyReloadRotOld)) })
 	addr := fmt.Sprintf("127.0.0.1:%d", dnsPort)
-	if !notifyReloadWaitSerial(addr, 1) {
-		select {
-		case err := <-bootDone:
-			t.Fatalf("setup: server exited during startup: %v", err)
-		default:
-		}
-		t.Fatal("setup: server never served serial 1")
-	}
 	if !keyReloadWaitSOA(addr, "slave.test.", 2, 15*time.Second) {
 		t.Fatal("setup: keyed slave zone never transferred serial 2")
 	}
