@@ -73,6 +73,20 @@ type UpdateRequest struct {
 	// consumers can journal the change without re-applying the update.
 	OldSerial uint32
 	NewSerial uint32
+
+	// Diff is the record-level change ApplyUpdate actually made (SOA
+	// excluded), or nil when the update was not applied through ApplyUpdate.
+	// The operations above are not the change: an RRset or name delete
+	// carries no RDATA, and adds that RFC 2136 rules ignore (CNAME conflicts,
+	// duplicates) changed nothing, so an IXFR journal built from them
+	// misses deletions and invents additions.
+	Diff *UpdateDiff
+}
+
+// UpdateDiff is the net record change of one applied UPDATE.
+type UpdateDiff struct {
+	Removed []zone.Record
+	Added   []zone.Record
 }
 
 // UpdateResponse represents the result of an update request
@@ -722,17 +736,79 @@ func ApplyUpdate(z *zone.Zone, update *UpdateRequest) error {
 		}
 	}
 
+	// Remember the owners the operations touch, to report the net change.
+	touched := make(map[string][]zone.Record)
+	for _, op := range update.Updates {
+		name := normalizeZoneOwner(op.Name, z.Origin)
+		if _, seen := touched[name]; !seen {
+			touched[name] = append([]zone.Record(nil), z.Records[name]...)
+		}
+	}
+
 	// Apply each update operation
 	for _, op := range update.Updates {
 		if err := applyOperationToZone(z, op); err != nil {
 			return err
 		}
 	}
+	update.Diff = diffTouchedOwners(z, touched)
 
 	// Bump SOA serial after successful mutation (RFC 2136 §3.7)
 	zone.IncrementSerial(z)
 
 	return nil
+}
+
+// diffTouchedOwners returns the records that left and entered the given
+// owners (before holds each owner's records prior to the update). SOA records
+// are skipped: the journal carries the serial change itself. Caller holds
+// z.Lock().
+func diffTouchedOwners(z *zone.Zone, before map[string][]zone.Record) *UpdateDiff {
+	key := func(r zone.Record) string {
+		class := strings.ToUpper(r.Class)
+		if class == "" {
+			class = "IN"
+		}
+		return fmt.Sprintf("%s\x00%s\x00%d\x00%s", strings.ToUpper(r.Type), class, r.TTL, r.RData)
+	}
+	diff := &UpdateDiff{}
+	names := make([]string, 0, len(before))
+	for name := range before {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		old, cur := before[name], z.Records[name]
+		oldCount := make(map[string]int, len(old))
+		for _, r := range old {
+			oldCount[key(r)]++
+		}
+		curCount := make(map[string]int, len(cur))
+		for _, r := range cur {
+			curCount[key(r)]++
+		}
+		for _, r := range old {
+			if strings.EqualFold(r.Type, "SOA") {
+				continue
+			}
+			if k := key(r); curCount[k] > 0 {
+				curCount[k]--
+			} else {
+				diff.Removed = append(diff.Removed, r)
+			}
+		}
+		for _, r := range cur {
+			if strings.EqualFold(r.Type, "SOA") {
+				continue
+			}
+			if k := key(r); oldCount[k] > 0 {
+				oldCount[k]--
+			} else {
+				diff.Added = append(diff.Added, r)
+			}
+		}
+	}
+	return diff
 }
 
 func validateUpdateWithinZone(z *zone.Zone, update *UpdateRequest) error {

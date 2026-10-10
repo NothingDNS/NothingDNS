@@ -996,18 +996,31 @@ func (h *integratedHandler) processUpdateEventsFrom(updateChan <-chan *transfer.
 		// Record the change in the IXFR journal
 		if h.transfer.IXFRServer != nil && req.NewSerial != req.OldSerial {
 			var added, deleted []zone.RecordChange
-			for _, op := range req.Updates {
-				change := zone.RecordChange{
-					Name:  op.Name,
-					Type:  op.Type,
-					TTL:   op.TTL,
-					RData: op.RData,
+			if req.Diff != nil {
+				// The change ApplyUpdate actually made: RRset and name
+				// deletes carry no RDATA and ignored adds changed nothing, so
+				// the operations below cannot describe it (IXFR dropped
+				// those deletions and secondaries kept the records).
+				for _, r := range req.Diff.Removed {
+					deleted = append(deleted, zone.RecordChange{Name: r.Name, Type: protocol.StringToType[strings.ToUpper(r.Type)], TTL: r.TTL, RData: r.RData})
 				}
-				switch op.Operation {
-				case transfer.UpdateOpAdd:
-					added = append(added, change)
-				case transfer.UpdateOpDelete, transfer.UpdateOpDeleteRRSet, transfer.UpdateOpDeleteName:
-					deleted = append(deleted, change)
+				for _, r := range req.Diff.Added {
+					added = append(added, zone.RecordChange{Name: r.Name, Type: protocol.StringToType[strings.ToUpper(r.Type)], TTL: r.TTL, RData: r.RData})
+				}
+			} else {
+				for _, op := range req.Updates {
+					change := zone.RecordChange{
+						Name:  op.Name,
+						Type:  op.Type,
+						TTL:   op.TTL,
+						RData: op.RData,
+					}
+					switch op.Operation {
+					case transfer.UpdateOpAdd:
+						added = append(added, change)
+					case transfer.UpdateOpDelete, transfer.UpdateOpDeleteRRSet, transfer.UpdateOpDeleteName:
+						deleted = append(deleted, change)
+					}
 				}
 			}
 			h.recordZoneChange(req.ZoneName, req.OldSerial, req.NewSerial, added, deleted)
