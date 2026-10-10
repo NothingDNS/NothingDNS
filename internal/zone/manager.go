@@ -318,7 +318,13 @@ func (m *Manager) Reload(name string) error {
 		return fmt.Errorf("zone %s not found", name)
 	}
 
-	return m.Load(name, path)
+	if err := m.Load(name, path); err != nil {
+		return err
+	}
+	// Load swapped in a new Zone object: tell the hook (query routing, KV
+	// persistence) like every other mutation, or the old object keeps serving.
+	m.notifyMutation(name, false)
+	return nil
 }
 
 // Remove removes a zone.
