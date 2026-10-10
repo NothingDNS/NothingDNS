@@ -22,6 +22,13 @@ type KVPersistence struct {
 	store   *storage.ZoneStore
 	mu      sync.RWMutex
 	enabled bool
+
+	// persistMu orders PersistZone's look-up/snapshot/save against
+	// DeleteFromKV and against other persists: without it a persist that had
+	// already fetched a zone saved it again after the zone's deletion (the
+	// zone came back from the KV store on the next start), and two persists of
+	// one zone could land out of order.
+	persistMu sync.Mutex
 }
 
 // NewKVPersistence creates a new KVPersistence wrapper around a Manager.
@@ -77,6 +84,9 @@ func (k *KVPersistence) PersistZone(zoneName string) error {
 	if !enabled {
 		return nil
 	}
+
+	k.persistMu.Lock()
+	defer k.persistMu.Unlock()
 
 	z, ok := manager.Get(zoneName)
 	if !ok {
@@ -162,6 +172,8 @@ func (k *KVPersistence) DeleteFromKV(zoneName string) error {
 		return nil
 	}
 
+	k.persistMu.Lock()
+	defer k.persistMu.Unlock()
 	return store.DeleteZone(zoneName)
 }
 
