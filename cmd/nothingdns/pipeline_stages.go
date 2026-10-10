@@ -579,11 +579,12 @@ func resolverStage(h *integratedHandler) Stage {
 		// Validate DNSSEC on recursively-resolved answers, exactly like the
 		// upstream path — recursion without validation would silently skip
 		// the validator for every query the resolver handles.
-		if handled, _, _ := h.validateDNSSECResponse(ctx, q.currentWriter, q.msg, q.qname, resp); handled {
+		handled, dnssecValidated, dnssecBogus := h.validateDNSSECResponse(ctx, q.currentWriter, q.msg, q.qname, resp)
+		if handled {
 			return true, nil
 		}
 
-		handled, err := h.applyRPZResponsePolicyWithError(w, q.msg, q.q, resp, q.qname)
+		handled, err = h.applyRPZResponsePolicyWithError(w, q.msg, q.q, resp, q.qname)
 		if handled || err != nil {
 			return handled, err
 		}
@@ -595,11 +596,46 @@ func resolverStage(h *integratedHandler) Stage {
 			return true, nil
 		}
 
+		// Cached under the pipeline key like forwarded answers: the
+		// resolver's own entries use other keys, so without this the cache
+		// stage never hit and serve-stale never found an entry (F669).
+		h.cachePipelineResponse(q, resp, dnssecValidated, dnssecBogus)
+
 		if h.metrics != nil {
 			h.metrics.RecordResponse(resp.Header.Flags.RCODE)
 		}
 		reply(q.currentWriter, q.msg, resp)
 		return true, nil
+	}
+}
+
+// cachePipelineResponse caches a validated, policy-checked answer under the
+// query's pipeline key (Set deep-copies internally). Bogus data served to a
+// CD=1 client is never cached (F662).
+func (h *integratedHandler) cachePipelineResponse(q *query, resp *protocol.Message, dnssecValidated, dnssecBogus bool) {
+	if dnssecBogus {
+		return
+	}
+	if resp.Header.Flags.RCODE == protocol.RcodeSuccess && len(resp.Answers) > 0 {
+		ttl := extractTTL(resp)
+		// Bound resp's own TTLs by the cache policy BEFORE Set copies it,
+		// so the client and the cached entry agree on how long this answer
+		// is good for. Skipping this left the miss response — the one that
+		// seeds every downstream cache — carrying the raw upstream TTL.
+		h.cache.ApplyTTLPolicy(resp, ttl)
+		h.cache.Set(q.cacheKey, resp, ttl)
+	} else if resp.Header.Flags.RCODE == protocol.RcodeNameError ||
+		(resp.Header.Flags.RCODE == protocol.RcodeSuccess && len(resp.Answers) == 0) {
+		// Store the full message so negative cache hits can serve the
+		// SOA (RFC 2308) and any NSEC/NSEC3 proofs back to the client.
+		// negTTL==0 falls back to the cache's configured negative TTL.
+		negTTL, _ := negativeCacheTTL(resp)
+		h.cache.SetNegativeMessage(q.cacheKey, resp.Header.Flags.RCODE, resp, negTTL)
+		h.logger.Debugf("Cached negative response for %s (rcode=%d, negTTL=%d)", q.qname, resp.Header.Flags.RCODE, negTTL)
+
+		if h.nsecCache != nil && resp.Header.Flags.RCODE == protocol.RcodeNameError {
+			h.nsecCache.AddFromResponse(resp, dnssecValidated)
+		}
 	}
 }
 
@@ -719,29 +755,7 @@ func upstreamStage(h *integratedHandler) Stage {
 			return true, nil
 		}
 
-		// Cache the response (Set deep-copies internally). Bogus data served
-		// to a CD=1 client is never cached (F662).
-		if !dnssecBogus && resp.Header.Flags.RCODE == protocol.RcodeSuccess && len(resp.Answers) > 0 {
-			ttl := extractTTL(resp)
-			// Bound resp's own TTLs by the cache policy BEFORE Set copies it,
-			// so the client and the cached entry agree on how long this answer
-			// is good for. Skipping this left the miss response — the one that
-			// seeds every downstream cache — carrying the raw upstream TTL.
-			h.cache.ApplyTTLPolicy(resp, ttl)
-			h.cache.Set(q.cacheKey, resp, ttl)
-		} else if !dnssecBogus && (resp.Header.Flags.RCODE == protocol.RcodeNameError ||
-			(resp.Header.Flags.RCODE == protocol.RcodeSuccess && len(resp.Answers) == 0)) {
-			// Store the full message so negative cache hits can serve the
-			// SOA (RFC 2308) and any NSEC/NSEC3 proofs back to the client.
-			// negTTL==0 falls back to the cache's configured negative TTL.
-			negTTL, _ := negativeCacheTTL(resp)
-			h.cache.SetNegativeMessage(q.cacheKey, resp.Header.Flags.RCODE, resp, negTTL)
-			h.logger.Debugf("Cached negative response for %s (rcode=%d, negTTL=%d)", q.qname, resp.Header.Flags.RCODE, negTTL)
-
-			if h.nsecCache != nil && resp.Header.Flags.RCODE == protocol.RcodeNameError {
-				h.nsecCache.AddFromResponse(resp, dnssecValidated)
-			}
-		}
+		h.cachePipelineResponse(q, resp, dnssecValidated, dnssecBogus)
 
 		if h.metrics != nil {
 			h.metrics.RecordResponse(resp.Header.Flags.RCODE)
