@@ -66,6 +66,10 @@ type Rule struct {
 	PolicyName string
 	// Priority for rule ordering (lower = higher priority).
 	Priority int
+	// Additional holds the further local-data records (ActionOverride) of
+	// the same owner in the same policy zone: local data is an RRset, so
+	// "x A …" plus "x AAAA …" or two A records all answer (F668).
+	Additional []*Rule
 }
 
 // Engine implements RPZ policy evaluation.
@@ -245,6 +249,13 @@ func (e *Engine) loadFile(filename string) error {
 		}
 		if rule == nil {
 			continue // SOA, NS, or other non-policy records
+		}
+		if rule.Trigger == TriggerQNAME && rule.Action == ActionOverride {
+			if existing, ok := e.qnameRules[strings.ToLower(rule.Pattern)]; ok &&
+				existing.Action == ActionOverride && existing.PolicyName == rule.PolicyName {
+				existing.Additional = append(existing.Additional, rule)
+				continue
+			}
 		}
 
 		e.addRule(rule)

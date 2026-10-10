@@ -987,12 +987,9 @@ func (h *integratedHandler) applyRPZRuleWithError(w server.ResponseWriter, r *pr
 		_, err := w.Write(resp)
 		return true, err
 	case rpz.ActionOverride:
-		// Return override IP
-		overrideIP := net.ParseIP(rule.OverrideData)
-		if overrideIP == nil {
-			h.logger.Warnf("RPZ override invalid IP: %s", rule.OverrideData)
-			return false, nil
-		}
+		// Local data is an RRset: answer every record of the query's type
+		// (F668), and only its own type — an A override for an AAAA or MX
+		// query is NODATA, not an A record under that question (F654).
 		resp := &protocol.Message{
 			Header: protocol.Header{
 				ID:    r.Header.ID,
@@ -1000,36 +997,44 @@ func (h *integratedHandler) applyRPZRuleWithError(w server.ResponseWriter, r *pr
 			},
 			Questions: r.Questions,
 		}
-		// Local data answers only its own type: an A override for an AAAA
-		// or MX query is NODATA, not an A record under that question (F654).
-		overrideType := uint16(protocol.TypeAAAA)
-		if overrideIP.To4() != nil {
-			overrideType = protocol.TypeA
-		}
-		if q.QType != overrideType && q.QType != protocol.TypeANY {
-			_, err := w.Write(resp)
-			return true, err
-		}
-		if ip4 := overrideIP.To4(); ip4 != nil {
-			var addr [4]byte
-			copy(addr[:], ip4)
-			resp.AddAnswer(&protocol.ResourceRecord{
-				Name:  q.Name,
-				Type:  protocol.TypeA,
-				Class: protocol.ClassIN,
-				TTL:   rule.TTL,
-				Data:  &protocol.RDataA{Address: addr},
-			})
-		} else {
+		valid := 0
+		for _, rr := range append([]*rpz.Rule{rule}, rule.Additional...) {
+			overrideIP := net.ParseIP(rr.OverrideData)
+			if overrideIP == nil {
+				h.logger.Warnf("RPZ override invalid IP: %s", rr.OverrideData)
+				continue
+			}
+			valid++
+			if ip4 := overrideIP.To4(); ip4 != nil {
+				if q.QType != protocol.TypeA && q.QType != protocol.TypeANY {
+					continue
+				}
+				var addr [4]byte
+				copy(addr[:], ip4)
+				resp.AddAnswer(&protocol.ResourceRecord{
+					Name:  q.Name,
+					Type:  protocol.TypeA,
+					Class: protocol.ClassIN,
+					TTL:   rr.TTL,
+					Data:  &protocol.RDataA{Address: addr},
+				})
+				continue
+			}
+			if q.QType != protocol.TypeAAAA && q.QType != protocol.TypeANY {
+				continue
+			}
 			var addr [16]byte
 			copy(addr[:], overrideIP.To16())
 			resp.AddAnswer(&protocol.ResourceRecord{
 				Name:  q.Name,
 				Type:  protocol.TypeAAAA,
 				Class: protocol.ClassIN,
-				TTL:   rule.TTL,
+				TTL:   rr.TTL,
 				Data:  &protocol.RDataAAAA{Address: addr},
 			})
+		}
+		if valid == 0 {
+			return false, nil
 		}
 		_, err := w.Write(resp)
 		return true, err
