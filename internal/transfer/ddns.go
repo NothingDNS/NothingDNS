@@ -99,9 +99,12 @@ type DynamicDNSHandler struct {
 	// being closed (range/recv stops). No separate bool needed.
 	closeMu sync.Once
 	// consumers counts the UpdateEvents consumers Close waits for (F665).
-	consumersMu sync.Mutex
-	consumers   sync.WaitGroup
-	closed      bool
+	// lifeMu guards closed: an update holds it (read) from the closed
+	// check through its event send, Close takes it to close the channel,
+	// so no update is applied without its event or sends after Close (F666).
+	lifeMu    sync.RWMutex
+	consumers sync.WaitGroup
+	closed    bool
 }
 
 // NewDynamicDNSHandler creates a new Dynamic DNS handler
@@ -171,10 +174,10 @@ func (h *DynamicDNSHandler) SetZonesMu(mu *sync.RWMutex) {
 // returns, or an acknowledged update is lost (F665).
 func (h *DynamicDNSHandler) Close() {
 	h.closeMu.Do(func() {
-		h.consumersMu.Lock()
+		h.lifeMu.Lock()
 		h.closed = true
-		h.consumersMu.Unlock()
 		close(h.updateChan)
+		h.lifeMu.Unlock()
 	})
 	h.consumers.Wait()
 }
@@ -220,8 +223,8 @@ func (h *DynamicDNSHandler) GetUpdateChannel() <-chan *UpdateRequest {
 // consumer that Close waits for; the caller must call done once it has
 // drained the channel (F665).
 func (h *DynamicDNSHandler) UpdateEvents() (events <-chan *UpdateRequest, done func()) {
-	h.consumersMu.Lock()
-	defer h.consumersMu.Unlock()
+	h.lifeMu.Lock()
+	defer h.lifeMu.Unlock()
 	if h.closed {
 		return h.updateChan, func() {}
 	}
@@ -345,6 +348,13 @@ func (h *DynamicDNSHandler) handleUpdate(req *protocol.Message, clientIP net.IP,
 	// concurrent UPDATEs with mutually-exclusive prereqs can't both
 	// pass. Prereq failures return ErrPrereqFailed → NXRRSET RCODE;
 	// any other error → ServFail.
+	h.lifeMu.RLock()
+	defer h.lifeMu.RUnlock()
+	if h.closed {
+		// Shutting down: an update applied now would never reach the
+		// journal or disk (F666).
+		return h.createUpdateResponse(req, protocol.RcodeServerFailure), key, nil
+	}
 	h.zonesMu.Lock()
 	z.RLock()
 	if z.SOA != nil {
