@@ -497,7 +497,10 @@ func (p *parser) handleControl(line string) error {
 		if len(fields) < 2 {
 			return fmt.Errorf("$ORIGIN requires a domain name")
 		}
-		p.zone.Origin = canonicalize(fields[1])
+		// Lower-case: owner names are keyed in lower case, and the manager
+		// and API look zones up by lower-cased name; a mixed-case origin made
+		// the zone unfindable and Records[z.Origin] miss its own apex.
+		p.zone.Origin = strings.ToLower(canonicalize(fields[1]))
 
 	case "$TTL":
 		if len(fields) < 2 {
@@ -588,7 +591,7 @@ func (p *parser) handleInclude(args []string) error {
 
 	// If an origin override was specified, apply it for the included file
 	if len(args) >= 2 {
-		p.zone.Origin = canonicalize(args[1])
+		p.zone.Origin = strings.ToLower(canonicalize(args[1]))
 	}
 
 	f, err := os.Open(includeFile)
