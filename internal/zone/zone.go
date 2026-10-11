@@ -327,6 +327,7 @@ type parser struct {
 	lineStart      int    // Line number where the current multi-line record started
 	recordIndented bool   // Whether the current multi-line record's opening line was indented (owner inherited)
 	includeDepth   int    // Current $INCLUDE nesting depth (0 = top-level file)
+	apex           string // The zone's own origin: the first $ORIGIN of the top-level file
 }
 
 // parse performs the actual parsing.
@@ -483,6 +484,9 @@ func (p *parser) parse() (*Zone, error) {
 		return nil, fmt.Errorf("%s:%d: unclosed parenthesis", p.filename, p.lineStart)
 	}
 
+	if p.apex != "" && p.includeDepth == 0 {
+		p.zone.Origin = p.apex
+	}
 	return p.zone, nil
 }
 
@@ -503,7 +507,16 @@ func (p *parser) handleControl(line string) error {
 		// Lower-case: owner names are keyed in lower case, and the manager
 		// and API look zones up by lower-cased name; a mixed-case origin made
 		// the zone unfindable and Records[z.Origin] miss its own apex.
-		p.zone.Origin = strings.ToLower(canonicalize(fields[1]))
+		//
+		// zone.Origin is also the origin names are resolved against while
+		// parsing, so a later $ORIGIN (a sub-delegation section) changes it
+		// for the lines that follow; the zone's own origin is the first one
+		// and is put back when the file ends. A relative $ORIGIN is relative
+		// to the current one (RFC 1035 §5.1).
+		p.zone.Origin = strings.ToLower(makeAbsolute(fields[1], p.zone.Origin))
+		if p.apex == "" && p.includeDepth == 0 {
+			p.apex = p.zone.Origin
+		}
 
 	case "$TTL":
 		if len(fields) < 2 {
