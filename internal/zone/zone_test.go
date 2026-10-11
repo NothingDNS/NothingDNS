@@ -61,7 +61,14 @@ func TestParseTTL(t *testing.T) {
 		{"1W", 604800, false},
 		{"1M", 60, false},
 		{"1S", 1, false},
-		{"2h30m", 0, true}, // Not supported in basic parser
+		{"2h30m", 9000, false}, // BIND combined units (F686)
+		{"1w2d3h4m5s", 788645, false},
+		{"1h30", 3630, false}, // trailing bare number = seconds
+		{"1x", 0, true},
+		{"h", 0, true},
+		{"1h-5", 0, true},
+		{"4294967295s", 4294967295, false},
+		{"4294967295s1", 0, true},
 		{"", 0, true},
 		{"invalid", 0, true},
 		// Overflow test: 4294967295 * 3600 (1H) exceeds uint32 max

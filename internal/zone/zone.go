@@ -972,6 +972,7 @@ func (p *parser) parseRecordOwned(line string, ownerInherited bool) error {
 		// with a space inside it (RFC 6376 §3.6.1). Re-quote each field so the
 		// stored text keeps the boundaries.
 		quoteCharacterStringFields(record.Type, fields[fieldIdx:])
+		normalizeSOATimers(record.Type, fields[fieldIdx:])
 		record.RData = strings.Join(fields[fieldIdx:], " ")
 	}
 
@@ -1051,6 +1052,22 @@ func quoteCharacterStringFields(rtype string, rdataFields []string) {
 	}
 	for i, f := range rdataFields {
 		rdataFields[i] = quoteZoneCharacterString(f)
+	}
+}
+
+// normalizeSOATimers rewrites the refresh/retry/expire/minimum fields of an SOA
+// from the BIND unit spelling (`3H 1H 1W 1D`) to plain seconds. The stored text
+// is what protocol.ParseRDataText reads back, and it only knows seconds: left as
+// written, the apex SOA RR could not be parsed and `SOA example.com.` was
+// answered with an empty NOERROR.
+func normalizeSOATimers(rtype string, rdataFields []string) {
+	if rtype != "SOA" || len(rdataFields) != 7 {
+		return
+	}
+	for i := 3; i < 7; i++ {
+		if v, err := parseTTL(rdataFields[i]); err == nil {
+			rdataFields[i] = strconv.FormatUint(uint64(v), 10)
+		}
 	}
 }
 
@@ -1315,46 +1332,51 @@ func isClass(field string) bool {
 	return recordClasses[strings.ToUpper(field)]
 }
 
-// parseTTL parses a TTL value (integer or with suffix like 1h, 1d, 1w).
+// parseTTL parses a TTL value: seconds, or a sequence of number+unit parts
+// (S, M, H, D, W) such as 1h, 90m or the BIND combined form 1w2d3h4m5s.
 func parseTTL(s string) (uint32, error) {
 	s = strings.ToUpper(strings.TrimSpace(s))
 	if s == "" {
 		return 0, fmt.Errorf("empty TTL")
 	}
 
-	// Check for suffix
-	multiplier := uint32(1)
-	if len(s) > 0 {
-		switch s[len(s)-1] {
-		case 'S':
-			s = s[:len(s)-1]
-		case 'M':
-			multiplier = 60
-			s = s[:len(s)-1]
-		case 'H':
-			multiplier = 3600
-			s = s[:len(s)-1]
-		case 'D':
-			multiplier = 86400
-			s = s[:len(s)-1]
-		case 'W':
-			multiplier = 604800
-			s = s[:len(s)-1]
+	var total uint64
+	for rest := s; rest != ""; {
+		i := 0
+		for i < len(rest) && isDigit(rest[i]) {
+			i++
+		}
+		if i == 0 {
+			return 0, fmt.Errorf("invalid TTL %q", s)
+		}
+		val, err := strconv.ParseUint(rest[:i], 10, 32)
+		if err != nil {
+			return 0, err
+		}
+		multiplier := uint64(1)
+		rest = rest[i:]
+		if rest != "" {
+			switch rest[0] {
+			case 'S':
+			case 'M':
+				multiplier = 60
+			case 'H':
+				multiplier = 3600
+			case 'D':
+				multiplier = 86400
+			case 'W':
+				multiplier = 604800
+			default:
+				return 0, fmt.Errorf("invalid TTL %q", s)
+			}
+			rest = rest[1:]
+		}
+		total += val * multiplier
+		if total > 1<<32-1 {
+			return 0, fmt.Errorf("TTL overflow: %q exceeds uint32 max", s)
 		}
 	}
-
-	val, err := strconv.ParseUint(s, 10, 32)
-	if err != nil {
-		return 0, err
-	}
-
-	// Check for overflow: val * multiplier could exceed uint32 max
-	maxVal := uint64(1<<32 - 1)
-	if val > 0 && multiplier > 0 && val > maxVal/uint64(multiplier) {
-		return 0, fmt.Errorf("TTL overflow: %d * %d exceeds uint32 max", val, multiplier)
-	}
-
-	return uint32(val) * multiplier, nil
+	return uint32(total), nil
 }
 
 // Lookup finds records for a given name and type.
