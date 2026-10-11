@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // WriteZone serializes a Zone to BIND format string.
@@ -192,12 +193,20 @@ func quoteZoneCharacterString(s string) string {
 	var b strings.Builder
 	b.Grow(len(s) + 2)
 	b.WriteByte('"')
-	for _, r := range s {
-		switch r {
-		case '\\', '"':
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		switch {
+		case r == '\\' || r == '"':
 			b.WriteByte('\\')
+			b.WriteByte(s[i])
+		case (r == utf8.RuneError && size == 1) || r < 0x20 || r == 0x7f:
+			// RFC 1035 §5.1 \DDD: an octet that is not printable text
+			// (a raw one would end the line or become U+FFFD).
+			fmt.Fprintf(&b, "\\%03d", s[i])
+		default:
+			b.WriteString(s[i : i+size])
 		}
-		b.WriteRune(r)
+		i += size
 	}
 	b.WriteByte('"')
 	return b.String()

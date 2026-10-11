@@ -75,7 +75,7 @@ func TestRound038RelativeRDataNamesResolvedAgainstOrigin(t *testing.T) {
 		{"svc.example.com.", "SVCB", "1 backend.example.com."},
 		{"sig.example.com.", "RRSIG", "A 8 2 3600 20300101000000 20200101000000 12345 signer.example.com. abc"},
 		{"hip.example.com.", "HIP", "2 00112233445566778899aabbccddeeff AAAA rvs1.example.com. rvs2.example.com."},
-		{"naptr.example.com.", "NAPTR", "100 10 u E2U+sip !^.*$!sip:info@example.com! ."},
+		{"naptr.example.com.", "NAPTR", `100 10 "u" "E2U+sip" "!^.*$!sip:info@example.com!" .`},
 		{"example.com.", "SOA", "ns1.example.com. hostmaster.example.com. 2024010101 3600 900 604800 86400"},
 		// Controls: absolute names, the root name, and name-free RDATA.
 		{"abs.example.com.", "CNAME", "target.example.com."},

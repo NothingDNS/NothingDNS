@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unicode/utf8"
 )
 
 // maxIncludeDepth is the maximum nesting depth for $INCLUDE directives
@@ -1011,6 +1012,18 @@ var characterStringRDataTypes = map[string]bool{
 	"TXT": true, "SPF": true, "DKIM": true,
 }
 
+// quotedRDataFields describes the types that mix numbers, names and
+// character-strings: the RDATA field count of the documented shape and which
+// fields are character-strings. parseFields drops their quotes too, so a value
+// with a space (`HINFO "a b" c`, a NAPTR regexp) would otherwise be stored as
+// several fields.
+var quotedRDataFields = map[string]struct {
+	count int
+	idx   []int
+}{
+	"HINFO": {2, []int{0, 1}}, "URI": {3, []int{2}}, "CAA": {3, []int{2}}, "NAPTR": {6, []int{2, 3, 4}},
+}
+
 // quoteCharacterStringFields re-quotes each RDATA field of a character-string
 // record type in place, so a value spanning several strings keeps its string
 // boundaries in the stored text that protocol.ParseRDataText reads back.
@@ -1024,6 +1037,15 @@ var characterStringRDataTypes = map[string]bool{
 // The escaping is quoteZoneCharacterString (writer.go), so a zone written by
 // WriteZone and read back by this parser round-trips unchanged.
 func quoteCharacterStringFields(rtype string, rdataFields []string) {
+	if q, ok := quotedRDataFields[rtype]; ok {
+		if len(rdataFields) != q.count {
+			return
+		}
+		for _, i := range q.idx {
+			rdataFields[i] = quoteZoneCharacterString(rdataFields[i])
+		}
+		return
+	}
 	if !characterStringRDataTypes[rtype] {
 		return
 	}
@@ -1168,10 +1190,28 @@ func parseFields(line string) []string {
 	escaped := false
 	inlineQuote := false
 
-	for _, r := range line {
-		if inQuotes && escaped {
-			current.WriteRune(r)
+	for i := 0; i < len(line); {
+		r, size := utf8.DecodeRuneInString(line[i:])
+		if r == utf8.RuneError && size == 1 {
+			// A byte that is not UTF-8 is data (a TXT value may carry any
+			// octet); WriteRune would turn it into U+FFFD.
+			current.WriteByte(line[i])
 			escaped = false
+			i++
+			continue
+		}
+		i += size
+		if inQuotes && escaped {
+			escaped = false
+			// RFC 1035 §5.1 \DDD: a decimal octet, not the digits themselves.
+			if r >= '0' && r <= '9' && i+1 < len(line) && isDigit(line[i]) && isDigit(line[i+1]) {
+				if v := int(r-'0')*100 + int(line[i]-'0')*10 + int(line[i+1]-'0'); v <= 255 {
+					current.WriteByte(byte(v))
+					i += 2
+					continue
+				}
+			}
+			current.WriteRune(r)
 			continue
 		}
 		switch r {
@@ -1733,3 +1773,5 @@ func (z *Zone) Validate() error {
 
 	return nil
 }
+
+func isDigit(c byte) bool { return c >= '0' && c <= '9' }
