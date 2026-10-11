@@ -328,6 +328,17 @@ type parser struct {
 	recordIndented bool   // Whether the current multi-line record's opening line was indented (owner inherited)
 	includeDepth   int    // Current $INCLUDE nesting depth (0 = top-level file)
 	apex           string // The zone's own origin: the first $ORIGIN of the top-level file
+	sawTTL         bool   // A $TTL directive was seen
+	lastTTL        uint32 // TTL of the last record that stated one (no-$TTL files)
+	haveLastTTL    bool
+	pendingTTL     []pendingTTL // records that got no TTL from anywhere yet
+}
+
+// pendingTTL names a record stored with no TTL available (no $TTL, no earlier
+// explicit TTL): it takes the SOA minimum once the file has been read.
+type pendingTTL struct {
+	name string
+	idx  int
 }
 
 // parse performs the actual parsing.
@@ -487,6 +498,20 @@ func (p *parser) parse() (*Zone, error) {
 	if p.apex != "" && p.includeDepth == 0 {
 		p.zone.Origin = p.apex
 	}
+	if p.includeDepth == 0 && len(p.pendingTTL) > 0 && p.zone.SOA != nil {
+		min := p.zone.SOA.Minimum
+		for _, pt := range p.pendingTTL {
+			if recs := p.zone.Records[pt.name]; pt.idx < len(recs) {
+				recs[pt.idx].TTL = min
+				if recs[pt.idx].Type == "SOA" {
+					p.zone.SOA.TTL = min
+				}
+			}
+		}
+		if p.zone.DefaultTTL == 0 {
+			p.zone.DefaultTTL = min
+		}
+	}
 	return p.zone, nil
 }
 
@@ -527,6 +552,7 @@ func (p *parser) handleControl(line string) error {
 			return fmt.Errorf("invalid $TTL: %w", err)
 		}
 		p.zone.DefaultTTL = ttl
+		p.sawTTL = true
 
 	case "$GENERATE":
 		return p.handleGenerate(line, fields[1:])
@@ -625,12 +651,17 @@ func (p *parser) handleInclude(args []string) error {
 		zone:         p.zone,
 		lastOwner:    p.lastOwner,
 		includeDepth: p.includeDepth + 1,
+		sawTTL:       p.sawTTL,
+		lastTTL:      p.lastTTL,
+		haveLastTTL:  p.haveLastTTL,
 	}
 
 	if _, err := child.parse(); err != nil {
 		p.zone.Origin = savedOrigin
 		return err
 	}
+	p.pendingTTL = append(p.pendingTTL, child.pendingTTL...)
+	p.lastTTL, p.haveLastTTL = child.lastTTL, child.haveLastTTL
 
 	// Restore the origin after the included file has been parsed
 	p.zone.Origin = savedOrigin
@@ -996,8 +1027,20 @@ func (p *parser) parseRecordOwned(line string, ownerInherited bool) error {
 	// Use the zone default TTL only when no TTL field was present on the record.
 	// An explicit TTL of 0 (RFC 2181 §8 — "do not cache") is a deliberate value
 	// and must be preserved, not silently replaced by $TTL.
-	if !ttlSet {
+	//
+	// Without a $TTL, RFC 1035 §5.1 gives the last stated TTL, and the first
+	// records take the SOA minimum (what BIND does): a file with no $TTL used
+	// to serve every record with TTL 0, i.e. uncacheable.
+	implicit := false
+	switch {
+	case ttlSet:
+		p.lastTTL, p.haveLastTTL = record.TTL, true
+	case p.sawTTL || p.zone.DefaultTTL != 0:
 		record.TTL = p.zone.DefaultTTL
+	case p.haveLastTTL:
+		record.TTL = p.lastTTL
+	default:
+		implicit = true
 	}
 
 	// Make name absolute and lowercase
@@ -1013,6 +1056,9 @@ func (p *parser) parseRecordOwned(line string, ownerInherited bool) error {
 
 	// Store the record
 	p.zone.Records[absName] = append(p.zone.Records[absName], record)
+	if implicit {
+		p.pendingTTL = append(p.pendingTTL, pendingTTL{absName, len(p.zone.Records[absName]) - 1})
+	}
 
 	// Handle special records
 	if err := p.handleSpecialRecord(absName, record); err != nil {
