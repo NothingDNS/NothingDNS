@@ -204,8 +204,11 @@ func (r *RDataTXT) String() string {
 	}
 	var parts []string
 	for _, s := range r.Strings {
-		// Quote strings that contain spaces or special chars
-		if strings.ContainsAny(s, " \t\n\r\"") {
+		// Quote strings that contain spaces or special chars. With several
+		// strings every one is quoted: bare `a b` reads back as the single
+		// string "a b", which would put a space into a value split across
+		// character-strings (a long DKIM key).
+		if len(r.Strings) > 1 || strings.ContainsAny(s, " \t\n\r\"") {
 			s = presentationQuote(s)
 		}
 		parts = append(parts, s)
