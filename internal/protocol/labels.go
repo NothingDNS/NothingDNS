@@ -156,6 +156,10 @@ func ParseName(s string) (*Name, error) {
 
 	// Validate each label
 	for i, label := range labels {
+		// F693: an empty label is only the root terminator, never part of a name.
+		if label == "" {
+			return nil, fmt.Errorf("invalid label %d: %w", i, ErrInvalidLabel)
+		}
 		if err := ValidateLabel(label); err != nil {
 			return nil, fmt.Errorf("invalid label %d: %w", i, err)
 		}

@@ -55,13 +55,13 @@ func round008Seed(t *testing.T, zone string, chain [][2]string) *NSECCache {
 	nc := NewNSECCache(100)
 
 	auths := []*protocol.ResourceRecord{{
-		Name:  mustNameRound008(t, zone+"."),
+		Name:  mustNameRound008(t, zone),
 		Type:  protocol.TypeSOA,
 		Class: protocol.ClassIN,
 		TTL:   3600,
 		Data: &protocol.RDataSOA{
-			MName:   mustNameRound008(t, "ns1."+zone+"."),
-			RName:   mustNameRound008(t, "hostmaster."+zone+"."),
+			MName:   mustNameRound008(t, "ns1."+zone),
+			RName:   mustNameRound008(t, "hostmaster."+zone),
 			Minimum: 300,
 		},
 	}}
