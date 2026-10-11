@@ -939,8 +939,10 @@ func (p *parser) parseRecordOwned(line string, ownerInherited bool) error {
 			continue
 		}
 
-		// Unknown field
-		fieldIdx++
+		// Neither a TTL, a class nor a type: an unsupported mnemonic (CSYNC,
+		// NID, ...). Skipping it let a later token that happens to spell a type
+		// (the `A` in a bitmap) become the record's type and the rest its RDATA.
+		return fmt.Errorf("unknown record type or field %q", field)
 	}
 
 	// Next field should be the type

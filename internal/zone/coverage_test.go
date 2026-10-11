@@ -792,17 +792,14 @@ func TestParseFileContinuationLineIntegration(t *testing.T) {
 func TestParseRecordWithUnknownFieldBeforeType(t *testing.T) {
 	p := newParserWithScanner("www xyz IN A 192.0.2.1", &Zone{Origin: "example.com.", Records: make(map[string][]Record)})
 	// "xyz" is neither a valid TTL, a valid class, nor a valid record type.
-	// The loop should consume it as an unknown field and continue.
+	// It used to be skipped silently (F689); an unsupported mnemonic then let a
+	// later token that spells a type become the record's type. It is an error.
 	err := p.parseRecord("www xyz IN A 192.0.2.1")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err == nil {
+		t.Fatal("unknown field before the type was accepted")
 	}
-	records := p.zone.Records["www.example.com."]
-	if len(records) != 1 {
-		t.Fatalf("expected 1 record, got %d", len(records))
-	}
-	if records[0].Type != "A" {
-		t.Errorf("expected type A, got %s", records[0].Type)
+	if got := p.zone.Records["www.example.com."]; len(got) != 0 {
+		t.Fatalf("a record was stored: %+v", got)
 	}
 }
 
