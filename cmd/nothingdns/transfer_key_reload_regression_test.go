@@ -419,11 +419,13 @@ func TestApplyTransferKeys_F583(t *testing.T) {
 		t.Fatalf("setup UPDATE = %s", got)
 	}
 	old := h.currentDDNSHandler()
-	h.ddnsConsumerMu.Lock()
-	if h.ddnsConsumer != old {
-		t.Error("no consumer started for the startup DDNS handler")
-	}
-	h.ddnsConsumerMu.Unlock()
+	// The consumer is started after the UPDATE response is written
+	// (ensureUpdateConsumer), so the client can see NOERROR first.
+	keyReloadWaitFor(t, "a consumer for the startup DDNS handler", func() bool {
+		h.ddnsConsumerMu.Lock()
+		defer h.ddnsConsumerMu.Unlock()
+		return h.ddnsConsumer == old
+	})
 
 	newKey := keyReloadKey("new-key.", keyReloadRotNew)
 	applyTransferKeys(h, keyReloadPlan(t, keyReloadYAML(dir, keyReloadKeyYAML("keep-key.", keyReloadKeep, "")+keyReloadKeyYAML("new-key.", keyReloadRotNew, keyReloadGrant))), util.NewLogger(util.ERROR, util.TextFormat, nil))
