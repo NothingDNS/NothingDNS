@@ -208,7 +208,10 @@ func (r *RDataTXT) String() string {
 		// strings every one is quoted: bare `a b` reads back as the single
 		// string "a b", which would put a space into a value split across
 		// character-strings (a long DKIM key).
-		if len(r.Strings) > 1 || strings.ContainsAny(s, " \t\n\r\"") {
+		//
+		// A control octet (NUL especially) is quoted too, so it leaves as \DDD:
+		// stored raw, the zone writer's control-character guard dropped it.
+		if len(r.Strings) > 1 || strings.ContainsAny(s, " \t\n\r\"") || hasControlOctet(s) {
 			s = presentationQuote(s)
 		}
 		parts = append(parts, s)
@@ -238,4 +241,14 @@ func (r *RDataTXT) Copy() RData {
 	copyR := rdataTXTPool.Get().(*RDataTXT)
 	copyR.Strings = stringsCopy
 	return copyR
+}
+
+// hasControlOctet reports whether s holds an octet below 0x20 or DEL.
+func hasControlOctet(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] == 0x7f {
+			return true
+		}
+	}
+	return false
 }
