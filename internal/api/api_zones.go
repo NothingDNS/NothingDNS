@@ -465,7 +465,7 @@ func (s *Server) currentRecordTTL(zoneName, name, rtype, oldData string) (uint32
 		return 0, false
 	}
 	for _, rec := range records {
-		if strings.EqualFold(rec.Type, rtype) && strings.EqualFold(rec.RData, oldData) {
+		if strings.EqualFold(rec.Type, rtype) && (strings.EqualFold(rec.RData, oldData) || zone.RDataEqual(rtype, rec.RData, oldData)) {
 			return rec.TTL, true
 		}
 	}
@@ -599,7 +599,7 @@ func recordsHaveType(records []zone.Record, rtype string) bool {
 func (s *Server) recordExists(zoneName, name, rtype, data string) bool {
 	records, _ := s.zoneManager.GetRecords(zoneName, name)
 	for _, rec := range records {
-		if strings.EqualFold(rec.Type, rtype) && strings.TrimSpace(rec.RData) == strings.TrimSpace(data) {
+		if strings.EqualFold(rec.Type, rtype) && zone.RDataEqual(rtype, rec.RData, data) { // F695
 			return true
 		}
 	}
@@ -619,7 +619,7 @@ func (s *Server) checkRecordAddConflict(zoneName, name, rtype, data string) (int
 	}
 	for _, rec := range existing {
 		recType := strings.ToUpper(rec.Type)
-		if recType == rtype && strings.TrimSpace(rec.RData) == strings.TrimSpace(data) {
+		if recType == rtype && zone.RDataEqual(rtype, rec.RData, data) { // F695
 			return http.StatusConflict, fmt.Sprintf("record already exists: %s %s %s", name, rtype, data)
 		}
 		if rtype == "CNAME" && !cnameCompatible(recType) {

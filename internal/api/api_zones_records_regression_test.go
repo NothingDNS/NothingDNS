@@ -170,3 +170,20 @@ func TestZoneRecordAPI_F270_CNAMEExclusivityAndNoDuplicateRRs(t *testing.T) {
 	}
 	f.zoneFileParses()
 }
+
+// F695: the duplicate-RR guard compared RDATA text, so the same address
+// spelled differently was accepted as a second RR (RFC 2181 §5).
+func TestZoneRecordAPI_F695_DuplicateBySpelling(t *testing.T) {
+	f := newZoneRecordAPIFixture(t)
+	f.expect("AAAA", f.do(http.MethodPost, map[string]any{"name": "v6", "type": "AAAA", "data": "2001:db8::1"}), http.StatusCreated)
+	f.expect("AAAA full form", f.do(http.MethodPost, map[string]any{"name": "v6", "type": "AAAA", "data": "2001:0DB8:0:0:0:0:0:1"}), http.StatusConflict)
+	f.expect("other AAAA (control)", f.do(http.MethodPost, map[string]any{"name": "v6", "type": "AAAA", "data": "2001:db8::2"}), http.StatusCreated)
+	f.expect("TLSA", f.do(http.MethodPost, map[string]any{"name": "t", "type": "TLSA", "data": "3 1 1 abcd"}), http.StatusCreated)
+	f.expect("TLSA upper hex", f.do(http.MethodPost, map[string]any{"name": "t", "type": "TLSA", "data": "3 1 1 ABCD"}), http.StatusConflict)
+	f.expect("PUT onto sibling spelling", f.do(http.MethodPut, map[string]any{"name": "v6", "type": "AAAA", "old_data": "2001:db8::2", "data": "2001:0db8::1"}), http.StatusConflict)
+	if n := len(f.records("v6")); n != 2 {
+		t.Fatalf("records at v6 = %d, want 2", n)
+	}
+	// old_data in another spelling still selects the record
+	f.expect("PUT by spelling", f.do(http.MethodPut, map[string]any{"name": "v6", "type": "AAAA", "old_data": "2001:0DB8::2", "data": "2001:db8::9"}), http.StatusOK)
+}

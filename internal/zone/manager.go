@@ -800,7 +800,7 @@ func (m *Manager) UpdateRecord(zoneName string, name, rtype, oldData string, new
 
 	found := false
 	for i, r := range records {
-		if strings.ToUpper(r.Type) == rtype && strings.EqualFold(r.RData, oldData) {
+		if strings.ToUpper(r.Type) == rtype && (strings.EqualFold(r.RData, oldData) || RDataEqual(rtype, r.RData, oldData)) {
 			records[i] = newRecord
 			found = true
 			break
