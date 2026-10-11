@@ -577,6 +577,12 @@ func validateRecordRoundTrip(rtype, data string) error {
 	if n != 1 {
 		return fmt.Errorf("unsupported record type or data: %s %s", rtype, data)
 	}
+	// F692: the zone parser tolerates trailing fields and comments, but the
+	// stored text is served through ParseRDataText, which does not: a record it
+	// rejects is silently never answered.
+	if protocol.ParseRDataText(rtype, data) == nil {
+		return fmt.Errorf("unsupported record type or data: %s %s", rtype, data)
+	}
 	return nil
 }
 
