@@ -1046,7 +1046,7 @@ func applyAddToZone(z *zone.Zone, name string, op UpdateOperation) error {
 
 	// Duplicate suppression: identical RDATA updates the TTL only.
 	for i, r := range existing {
-		if r.Type == typeStr && r.RData == op.RData {
+		if r.Type == typeStr && sameRDataValue(op.Type, r.RData, op.RData) {
 			existing[i].TTL = op.TTL
 			return nil
 		}
@@ -1103,7 +1103,19 @@ func updateRDataEqual(rrType uint16, stored, requested string) bool {
 	if rrType == protocol.TypeTXT {
 		return stored == requested
 	}
-	return strings.EqualFold(stored, requested)
+	return strings.EqualFold(stored, requested) || sameRDataValue(rrType, stored, requested)
+}
+
+// sameRDataValue reports whether two RDATA texts parse to the same value.
+// F694: stored text is the zone file's spelling ("2001:0DB8::0001"), the
+// requested text is rendered from wire RDATA ("2001:db8::1").
+func sameRDataValue(rrType uint16, a, b string) bool {
+	if a == b {
+		return true
+	}
+	ra := protocol.ParseRDataText(protocol.TypeString(rrType), a)
+	rb := protocol.ParseRDataText(protocol.TypeString(rrType), b)
+	return ra != nil && rb != nil && ra.String() == rb.String()
 }
 
 // zoneRecordExists checks if a specific record exists
