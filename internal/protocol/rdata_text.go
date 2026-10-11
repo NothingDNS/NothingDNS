@@ -42,6 +42,9 @@ func RecordTypeFromText(s string) uint16 {
 // ParseRDataText parses presentation-format RData based on record type.
 // It returns nil if the RData cannot be parsed.
 func ParseRDataText(rtype, rdata string) RData {
+	if strings.HasPrefix(strings.TrimSpace(rdata), `\#`) {
+		return parseGenericRData(rtype, rdata)
+	}
 	switch strings.ToUpper(rtype) {
 	case "A":
 		ip := net.ParseIP(rdata)
@@ -1646,4 +1649,34 @@ func parseUintField(s string, bitSize int) (uint64, bool) {
 		return 0, false
 	}
 	return v, true
+}
+
+// parseGenericRData parses the RFC 3597 §5 form `\# <length> <hex>`, which any
+// record type may use and which is how RDataRaw prints a type the server does
+// not model (so a slave can store and serve it). A modelled type is decoded
+// from the octets into its own RDATA; others stay opaque.
+func parseGenericRData(rtype, rdata string) RData {
+	fields := strings.Fields(rdata)
+	if len(fields) < 2 || fields[0] != `\#` {
+		return nil
+	}
+	length, err := strconv.ParseUint(fields[1], 10, 16)
+	if err != nil {
+		return nil
+	}
+	data, err := hex.DecodeString(strings.Join(fields[2:], ""))
+	if err != nil || uint64(len(data)) != length {
+		return nil
+	}
+	tp := RecordTypeFromText(rtype)
+	if tp == 0 {
+		return nil
+	}
+	if rd := createRData(tp); rd != nil {
+		if n, err := rd.Unpack(data, 0, uint16(len(data))); err != nil || n != len(data) {
+			return nil
+		}
+		return rd
+	}
+	return &RDataRaw{TypeVal: tp, Data: data}
 }

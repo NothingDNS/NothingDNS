@@ -14,6 +14,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"unicode/utf8"
+
+	"github.com/nothingdns/nothingdns/internal/protocol"
 )
 
 // maxIncludeDepth is the maximum nesting depth for $INCLUDE directives
@@ -945,7 +947,7 @@ func (p *parser) parseRecordOwned(line string, ownerInherited bool) error {
 	if fieldIdx >= len(fields) {
 		return fmt.Errorf("missing record type")
 	}
-	record.Type = strings.ToUpper(fields[fieldIdx])
+	record.Type = canonicalTypeName(fields[fieldIdx])
 	fieldIdx++
 
 	// Remaining fields are RData. Domain names inside RDATA obey the same
@@ -1319,8 +1321,28 @@ var recordTypes = map[string]bool{
 	"SVCB": true, "HTTPS": true, "URI": true, "ZONEMD": true,
 }
 
+// canonicalTypeName upper-cases a record type and spells a TYPE<n> form of a
+// type that has a mnemonic (TYPE1) with it (A), so one type has one name.
+func canonicalTypeName(field string) string {
+	upper := strings.ToUpper(field)
+	if !recordTypes[upper] && isType(upper) {
+		n, _ := strconv.ParseUint(upper[4:], 10, 16)
+		return protocol.TypeString(uint16(n))
+	}
+	return upper
+}
+
 func isType(field string) bool {
-	return recordTypes[strings.ToUpper(field)]
+	upper := strings.ToUpper(field)
+	if recordTypes[upper] {
+		return true
+	}
+	// RFC 3597 §5: TYPE<n> names a type with no mnemonic (its RDATA is `\# n hex`).
+	if strings.HasPrefix(upper, "TYPE") {
+		n, err := strconv.ParseUint(upper[4:], 10, 16)
+		return err == nil && n != 0 && isDigit(upper[4])
+	}
+	return false
 }
 
 var recordClasses = map[string]bool{
