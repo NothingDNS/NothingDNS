@@ -600,6 +600,11 @@ func verifyTSIGDigest(msg *protocol.Message, key *TSIGKey, digest func(*TSIGReco
 	if err != nil {
 		return nil, fmt.Errorf("finding TSIG record: %w", err)
 	}
+	// RFC 8945 §4.2: CLASS is ANY and TTL is 0. The MAC digests those
+	// constants, not the received fields, so they must be checked here (F710).
+	if tsigRR.Class != protocol.ClassANY || tsigRR.TTL != 0 {
+		return nil, fmt.Errorf("TSIG record must have CLASS ANY and TTL 0 (got class %d, ttl %d)", tsigRR.Class, tsigRR.TTL)
+	}
 
 	// Unpack TSIG data from either in-memory representation.
 	raw, err := tsigWireData(tsigRR.Data)
