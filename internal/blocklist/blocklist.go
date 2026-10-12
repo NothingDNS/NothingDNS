@@ -320,11 +320,12 @@ func (bl *Blocklist) loadURL(url string) error {
 			continue
 		}
 
-		// Parse hosts file format: IP domain [comment]
-		fields := strings.Fields(line)
+		// Parse hosts file format: IP domain [comment]. F697: the inline
+		// comment is not data ("ads.example.com # x" is one domain).
+		fields := strings.Fields(stripInlineComment(line))
 		if len(fields) < 2 {
 			// Also accept just domain per line (no IP)
-			if len(fields) == 1 {
+			if len(fields) == 1 && net.ParseIP(fields[0]) == nil {
 				entryCount++
 				if entryCount > maxEntries {
 					return fmt.Errorf("blocklist %s exceeds maximum entry count of %d", url, maxEntries)
@@ -408,10 +409,13 @@ func (bl *Blocklist) loadFile(path string) error {
 		// plain domain lists (oisd, hagezi, …) are at least as common
 		// as hosts files. Silently skipping single-field lines loaded
 		// such files as 0 entries with no error.
-		fields := strings.Fields(line)
+		fields := strings.Fields(stripInlineComment(line))
 		var domain string
 		switch {
 		case len(fields) == 1:
+			if net.ParseIP(fields[0]) != nil {
+				continue // a lone address (its domain was a comment)
+			}
 			domain = normalizeDomain(fields[0])
 		case len(fields) >= 2:
 			// fields[0] is IP (127.0.0.1, 0.0.0.0, etc.)
@@ -768,4 +772,12 @@ func (bl *Blocklist) ListFiles() []string {
 // entry silently never blocked anything.
 func normalizeDomain(s string) string {
 	return strings.ToLower(strings.TrimSuffix(s, "."))
+}
+
+// stripInlineComment drops a trailing "# comment" from a blocklist line.
+func stripInlineComment(line string) string {
+	if idx := strings.Index(line, "#"); idx != -1 {
+		return line[:idx]
+	}
+	return line
 }
