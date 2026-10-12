@@ -64,7 +64,9 @@ type integratedHandler struct {
 	validator       *dnssec.Validator
 	zoneSigners     map[string]*dnssec.Signer
 	zoneSignersMu   sync.RWMutex
-	nsec3Memo       nsec3HashMemo   // F488: NSEC3 owner hashes for online denial
+	nsec3Memo       nsec3HashMemo               // F488: NSEC3 owner hashes for online denial
+	denialChains    map[string]denialChainEntry // F706: per-zone denial chain snapshots
+	denialChainsMu  sync.Mutex
 	zoneTree        *zone.RadixTree // Radix tree for O(log n) zone matching
 	cluster         *cluster.Cluster
 	splitHorizon    *filter.SplitHorizon

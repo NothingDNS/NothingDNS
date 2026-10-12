@@ -20,6 +20,7 @@ package main
 import (
 	"encoding/base32"
 	"encoding/hex"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -54,6 +55,37 @@ type denialChain struct {
 	nsec3  *nsec3Params
 	hashes map[string][]byte // NSEC3 only: chain member -> hash
 	memo   *nsec3HashMemo
+
+	// Neighbour lookups binary-search these (F706); built once on first use.
+	orderOnce   sync.Once
+	sortedNodes []string          // nodes in canonical order
+	sortedHash  []string          // NSEC3 chain hashes, ascending
+	hashMember  map[string]string // string(hash) -> chain member
+}
+
+// order builds the sorted views used by nsecData, nsecCovering, nsec3Record
+// and nsec3Covering. The chain is read-only after buildDenialChain, so it can
+// be shared between queries.
+func (c *denialChain) order() {
+	c.orderOnce.Do(func() {
+		c.sortedNodes = make([]string, 0, len(c.nodes))
+		for n := range c.nodes {
+			c.sortedNodes = append(c.sortedNodes, n)
+		}
+		sort.Slice(c.sortedNodes, func(i, j int) bool {
+			return canonicalNameCompare(c.sortedNodes[i], c.sortedNodes[j]) < 0
+		})
+		c.sortedHash = make([]string, 0, len(c.hashes))
+		c.hashMember = make(map[string]string, len(c.hashes))
+		for member, h := range c.hashes {
+			k := string(h)
+			if _, dup := c.hashMember[k]; !dup {
+				c.sortedHash = append(c.sortedHash, k)
+			}
+			c.hashMember[k] = member
+		}
+		sort.Strings(c.sortedHash)
+	})
 }
 
 // buildDenialChain snapshots z's authoritative nodes. params selects NSEC3
@@ -202,11 +234,12 @@ func (c *denialChain) nsecTypes(name string) []string {
 }
 
 func (c *denialChain) nsecData(owner string) zone.NSECRecordData {
+	c.order()
 	next := c.origin
-	for node := range c.nodes {
-		if canonicalNameCompare(node, owner) > 0 && (next == c.origin || canonicalNameCompare(node, next) < 0) {
-			next = node
-		}
+	if i := sort.Search(len(c.sortedNodes), func(i int) bool {
+		return canonicalNameCompare(c.sortedNodes[i], owner) > 0
+	}); i < len(c.sortedNodes) {
+		next = c.sortedNodes[i]
 	}
 	return zone.NSECRecordData{Owner: owner, Next: next, Types: c.nsecTypes(owner)}
 }
@@ -223,17 +256,15 @@ func (c *denialChain) nsecFor(name string) (zone.NSECRecordData, bool) {
 // nsecCovering returns the NSEC whose span covers name (RFC 4034 §4.1.1).
 func (c *denialChain) nsecCovering(name string) zone.NSECRecordData {
 	name = canonicalize(name)
-	prev, last := "", c.origin
-	for node := range c.nodes {
-		if canonicalNameCompare(node, name) < 0 && (prev == "" || canonicalNameCompare(node, prev) > 0) {
-			prev = node
+	c.order()
+	prev := c.origin
+	if n := len(c.sortedNodes); n > 0 {
+		prev = c.sortedNodes[n-1] // before every node: the last one wraps
+		if i := sort.Search(n, func(i int) bool {
+			return canonicalNameCompare(c.sortedNodes[i], name) >= 0
+		}); i > 0 {
+			prev = c.sortedNodes[i-1]
 		}
-		if canonicalNameCompare(node, last) > 0 {
-			last = node
-		}
-	}
-	if prev == "" {
-		prev = last
 	}
 	return c.nsecData(prev)
 }
@@ -290,19 +321,15 @@ func (c *denialChain) nsec3Types(name string) []uint16 {
 }
 
 func (c *denialChain) nsec3Record(owner string, ttl uint32) *protocol.ResourceRecord {
+	c.order()
 	h := c.hashes[owner]
 	var next []byte
-	for _, other := range c.hashes {
-		if string(other) > string(h) && (next == nil || string(other) < string(next)) {
-			next = other
+	if n := len(c.sortedHash); n > 0 {
+		k := c.sortedHash[0] // last in the chain: wrap to the smallest hash
+		if i := sort.Search(n, func(i int) bool { return c.sortedHash[i] > string(h) }); i < n {
+			k = c.sortedHash[i]
 		}
-	}
-	if next == nil { // last in the chain: wrap to the smallest hash
-		for _, other := range c.hashes {
-			if next == nil || string(other) < string(next) {
-				next = other
-			}
-		}
+		next = []byte(k)
 	}
 	name, err := protocol.ParseName(strings.ToLower(nsec3Base32.EncodeToString(h)) + "." + c.origin)
 	if err != nil {
@@ -341,20 +368,13 @@ func (c *denialChain) nsec3Covering(name string) (string, bool) {
 	if !ok || len(c.hashes) == 0 {
 		return "", false
 	}
-	var prev, last string
-	var prevH, lastH []byte
-	for member, mh := range c.hashes {
-		if string(mh) < string(h) && (prevH == nil || string(mh) > string(prevH)) {
-			prev, prevH = member, mh
-		}
-		if lastH == nil || string(mh) > string(lastH) {
-			last, lastH = member, mh
-		}
+	c.order()
+	n := len(c.sortedHash)
+	k := c.sortedHash[n-1] // before every hash: the last one wraps
+	if i := sort.Search(n, func(i int) bool { return c.sortedHash[i] >= string(h) }); i > 0 {
+		k = c.sortedHash[i-1]
 	}
-	if prevH == nil {
-		return last, true
-	}
-	return prev, true
+	return c.hashMember[k], true
 }
 
 // nextCloser is the ancestor of name one label longer than encloser.
@@ -421,7 +441,38 @@ func (h *integratedHandler) denialChainFor(z *zone.Zone) *denialChain {
 	if params != nil {
 		apexExtra = append(apexExtra, protocol.TypeNSEC3PARAM)
 	}
-	return buildDenialChain(z, apexExtra, params, &h.nsec3Memo)
+	// F706: the chain depends only on the zone's content and these settings,
+	// so one snapshot serves every query until the zone changes. The tag is
+	// read before the build: a zone edited meanwhile stores the older tag and
+	// is rebuilt by the next query.
+	key := z.Origin + "|" + fmt.Sprint(apexExtra)
+	if params != nil {
+		key += "|" + strconv.Itoa(int(params.iterations)) + "/" + hex.EncodeToString(params.salt) + "/" + strconv.FormatBool(params.optOut)
+	}
+	id, gen := z.CacheTag()
+	h.denialChainsMu.Lock()
+	if e, ok := h.denialChains[key]; ok && e.id == id && e.gen == gen {
+		h.denialChainsMu.Unlock()
+		return e.chain
+	}
+	h.denialChainsMu.Unlock()
+	c := buildDenialChain(z, apexExtra, params, &h.nsec3Memo)
+	h.denialChainsMu.Lock()
+	if h.denialChains == nil || len(h.denialChains) > maxCachedDenialChains {
+		h.denialChains = make(map[string]denialChainEntry)
+	}
+	h.denialChains[key] = denialChainEntry{id: id, gen: gen, chain: c}
+	h.denialChainsMu.Unlock()
+	return c
+}
+
+// maxCachedDenialChains bounds the per-handler chain cache (one entry per
+// zone and denial configuration); stale entries are replaced on use.
+const maxCachedDenialChains = 1024
+
+type denialChainEntry struct {
+	id, gen uint64
+	chain   *denialChain
 }
 
 // nsec3ParamsFor returns the configured NSEC3 parameters, or nil for NSEC.
