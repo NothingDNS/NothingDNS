@@ -37,7 +37,7 @@ func cmdRecord(args []string) error {
 			if rm, ok := r.(map[string]interface{}); ok {
 				name, _ := rm["name"].(string)
 				rtype, _ := rm["type"].(string)
-				ttl := fmt.Sprintf("%v", rm["ttl"])
+				ttl := jsonValueString(rm["ttl"])
 				data, _ := rm["data"].(string)
 				fmt.Printf("%-40s %-8s %-8s %s\n", name, rtype, ttl, data)
 			}

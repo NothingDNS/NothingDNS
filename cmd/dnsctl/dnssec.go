@@ -118,8 +118,8 @@ func cmdDNSSECKeys(_ []string) error {
 			continue
 		}
 		zone, _ := k["zone"].(string)
-		keyTag := fmt.Sprintf("%v", k["key_tag"])
-		algo := fmt.Sprintf("%v", k["algorithm"])
+		keyTag := jsonValueString(k["key_tag"])
+		algo := jsonValueString(k["algorithm"])
 		ksk := fmt.Sprintf("%v", k["is_ksk"])
 		zsk := fmt.Sprintf("%v", k["is_zsk"])
 		fmt.Printf("%-30s %-8s %-9s %-5s %-5s\n", zone, keyTag, algo, ksk, zsk)

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -139,6 +140,16 @@ func printJSON(key string, val interface{}, indent string) {
 			printJSON(fmt.Sprintf("[%d]", i), vv, indent+"  ")
 		}
 	default:
-		fmt.Printf("%s%s: %v\n", indent, key, val)
+		fmt.Printf("%s%s: %s\n", indent, key, jsonValueString(val))
 	}
+}
+
+// jsonValueString formats a decoded JSON scalar. Numbers arrive as float64,
+// which "%v" prints in exponent form from seven digits up (2.024010101e+09);
+// they are written as plain decimals instead (F712).
+func jsonValueString(v interface{}) string {
+	if f, ok := v.(float64); ok {
+		return strconv.FormatFloat(f, 'f', -1, 64)
+	}
+	return fmt.Sprintf("%v", v)
 }

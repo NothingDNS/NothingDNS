@@ -41,7 +41,7 @@ func cmdCluster(args []string) error {
 			if nm, ok := n.(map[string]interface{}); ok {
 				id, _ := nm["id"].(string)
 				addr, _ := nm["addr"].(string)
-				port := fmt.Sprintf("%v", nm["port"])
+				port := jsonValueString(nm["port"])
 				state, _ := nm["state"].(string)
 				region, _ := nm["region"].(string)
 				fmt.Printf("%-36s %-20s %-6s %-10s %-10s\n", id, addr, port, state, region)
