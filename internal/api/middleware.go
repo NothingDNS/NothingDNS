@@ -20,7 +20,7 @@ func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
 		// Apply rate limit to all /api/ requests regardless of auth status.
 		// DoWS has its own in-path rate limit (see authMiddleware).
 		if strings.HasPrefix(r.URL.Path, "/api/") {
-			ip := s.clientIP(r)
+			ip := limiterIPKey(s.clientIP(r))
 			if s.apiRateLimiter.checkRateLimit(ip) {
 				resetTime := s.apiRateLimiter.getResetTime(ip)
 				w.Header().Set("Retry-After", retryAfterSeconds(resetTime))

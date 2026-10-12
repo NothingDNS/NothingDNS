@@ -1654,6 +1654,20 @@ func (s *Server) isRequestSecure(r *http.Request) bool {
 	return strings.EqualFold(strings.TrimSpace(proto), "https")
 }
 
+// limiterIPKey maps a client address to its rate-limit / lockout key: IPv4
+// as is, IPv6 as its /64 (F708) — one IPv6 line holds 2^64 addresses, so a
+// per-address key lets a brute-force client rotate its way past every limit.
+func limiterIPKey(ip string) string {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return ip
+	}
+	if v4 := parsed.To4(); v4 != nil {
+		return v4.String()
+	}
+	return parsed.Mask(net.CIDRMask(64, 128)).String() + "/64"
+}
+
 // ipInNets reports whether ip (string form) falls within any of nets.
 func ipInNets(ip string, nets []*net.IPNet) bool {
 	parsed := net.ParseIP(ip)

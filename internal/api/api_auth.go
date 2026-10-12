@@ -24,7 +24,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	// Check IP-based rate limit and reserve the IP's single in-flight
 	// credential check (F272).
-	ip := s.clientIP(r)
+	ip := limiterIPKey(s.clientIP(r))
 	rejected, delay, done := s.loginLimiter.beginAttempt(ip)
 	if rejected {
 		w.Header().Set("Retry-After", retryAfterSeconds(delay))
@@ -237,10 +237,11 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		}
 		// The OldPassword check is a credential oracle: throttle it with
 		// the same limiter as /auth/login (F273).
-		rejected, delay, done := s.loginLimiter.beginAttempt(ip)
+		limitKey := limiterIPKey(ip)
+		rejected, delay, done := s.loginLimiter.beginAttempt(limitKey)
 		if !rejected {
 			defer done()
-			rejected, delay = s.loginLimiter.checkUserRateLimit(ip, req.Username)
+			rejected, delay = s.loginLimiter.checkUserRateLimit(limitKey, req.Username)
 		}
 		if rejected {
 			w.Header().Set("Retry-After", retryAfterSeconds(delay))
@@ -248,11 +249,11 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !authStore.VerifyUserPassword(req.Username, req.OldPassword) {
-			s.loginLimiter.recordFailedAttempt(ip, req.Username)
+			s.loginLimiter.recordFailedAttempt(limitKey, req.Username)
 			s.writeError(w, http.StatusUnauthorized, "Invalid old password")
 			return
 		}
-		s.loginLimiter.recordSuccess(ip, req.Username)
+		s.loginLimiter.recordSuccess(limitKey, req.Username)
 		user, err = authStore.UpdateUser(req.Username, req.Password, "")
 		if err != nil {
 			s.writeUserStoreError(w, err)
