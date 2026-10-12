@@ -51,7 +51,15 @@ func digQueryTCP(addr string, query []byte) (*protocol.Message, error) {
 	if _, err := io.ReadFull(conn, respBuf); err != nil {
 		return nil, fmt.Errorf("read tcp body: %w", err)
 	}
-	return protocol.UnpackMessage(respBuf)
+	m, err := protocol.UnpackMessage(respBuf)
+	if err != nil {
+		return nil, err
+	}
+	if len(query) >= 2 && m.Header.ID != binary.BigEndian.Uint16(query[:2]) {
+		m.Release()
+		return nil, fmt.Errorf("tcp response ID %d does not match query", m.Header.ID)
+	}
+	return m, nil
 }
 
 // digServerAddr returns the host:port to dial for a dig "@server" argument,
@@ -188,16 +196,25 @@ func cmdDig(args []string) error {
 	}
 
 	// Read response
+	// F698: only a datagram that answers this query counts; a stray or
+	// spoofed one (other ID, not a response) is skipped until the deadline.
+	queryID := uint16(binary.BigEndian.Uint16(buf[:2]))
 	respBuf := make([]byte, 65535)
-	respN, err := conn.Read(respBuf)
-	if err != nil {
-		return fmt.Errorf("reading response: %w", err)
-	}
-
-	// Unpack response
-	resp, err := protocol.UnpackMessage(respBuf[:respN])
-	if err != nil {
-		return fmt.Errorf("unpacking response: %w", err)
+	var resp *protocol.Message
+	for resp == nil {
+		respN, err := conn.Read(respBuf)
+		if err != nil {
+			return fmt.Errorf("reading response: %w", err)
+		}
+		m, err := protocol.UnpackMessage(respBuf[:respN])
+		if err != nil {
+			continue
+		}
+		if m.Header.ID != queryID || !m.Header.Flags.QR {
+			m.Release()
+			continue
+		}
+		resp = m
 	}
 
 	// RFC 1035 §4.2.1: if the UDP response has TC=1, the answer was
