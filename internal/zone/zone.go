@@ -903,6 +903,26 @@ func stripZoneComment(line string) string {
 	return line
 }
 
+// hasUnterminatedQuote reports whether line (comment already stripped) ends
+// inside a quoted string, using the same quote and escape rules as
+// stripZoneComment.
+func hasUnterminatedQuote(line string) bool {
+	inQuote := false
+	escape := false
+	for i := 0; i < len(line); i++ {
+		c := line[i]
+		switch {
+		case escape:
+			escape = false
+		case c == '\\':
+			escape = true
+		case c == '"':
+			inQuote = !inQuote
+		}
+	}
+	return inQuote
+}
+
 // parseRecord parses a single resource record line, inferring owner-name
 // inheritance from the current scanner line's leading whitespace. This wrapper
 // preserves the historical signature for direct callers (tests). Production
@@ -932,6 +952,9 @@ func (p *parser) parseRecordOwned(line string, ownerInherited bool) error {
 	line = strings.TrimSpace(line)
 	if line == "" {
 		return nil
+	}
+	if hasUnterminatedQuote(line) {
+		return fmt.Errorf("unterminated quoted string")
 	}
 
 	// Split into fields
