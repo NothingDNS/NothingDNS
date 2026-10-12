@@ -329,7 +329,7 @@ func TestDoQRemoteIP(t *testing.T) {
 	}{
 		{name: "nil", addr: nil, want: "unknown"},
 		{name: "udp", addr: &net.UDPAddr{IP: net.ParseIP("192.0.2.10"), Port: 853}, want: "192.0.2.10"},
-		{name: "tcp hostport", addr: &net.TCPAddr{IP: net.ParseIP("2001:db8::1"), Port: 853}, want: "2001:db8::1"},
+		{name: "tcp hostport", addr: &net.TCPAddr{IP: net.ParseIP("2001:db8::1"), Port: 853}, want: "2001:db8::/64"},
 		{name: "custom hostport", addr: stringAddr("198.51.100.20:853"), want: "198.51.100.20"},
 		{name: "custom opaque", addr: stringAddr("opaque-peer"), want: "opaque-peer"},
 	}
@@ -592,5 +592,15 @@ func TestDoQServerConnLimitUsesExcessiveLoad(t *testing.T) {
 	}
 	if code := waitAppClose(t, dialDoQTest(t, addr)); code != 0x4 {
 		t.Fatalf("over-limit close code = %#x, want 0x4 (DOQ_EXCESSIVE_LOAD)", code)
+	}
+}
+
+// F709: the per-IP DoQ connection cap keys on the /64 for IPv6.
+func TestDoQRemoteIPAggregatesIPv6Prefix(t *testing.T) {
+	a := doqRemoteIP(&net.UDPAddr{IP: net.ParseIP("2001:db8:1:2::1"), Port: 1})
+	b := doqRemoteIP(&net.UDPAddr{IP: net.ParseIP("2001:db8:1:2:9::7"), Port: 2})
+	c := doqRemoteIP(&net.UDPAddr{IP: net.ParseIP("2001:db8:1:3::1"), Port: 3})
+	if a != b || a == c {
+		t.Errorf("keys: %q %q %q", a, b, c)
 	}
 }

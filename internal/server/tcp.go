@@ -615,5 +615,8 @@ func getIP(addr net.Addr) string {
 	if err != nil {
 		return addr.String()
 	}
+	if parsed := net.ParseIP(ip); parsed != nil {
+		return util.IPLimitKey(parsed) // F709: IPv6 clients count per /64
+	}
 	return ip
 }

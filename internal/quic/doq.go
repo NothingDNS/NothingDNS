@@ -384,12 +384,15 @@ func doqRemoteIP(addr net.Addr) string {
 	}
 	if udpAddr, ok := addr.(*net.UDPAddr); ok {
 		if udpAddr.IP != nil {
-			return udpAddr.IP.String()
+			return util.IPLimitKey(udpAddr.IP) // F709: IPv6 clients count per /64
 		}
 		return udpAddr.String()
 	}
 	host, _, err := net.SplitHostPort(addr.String())
 	if err == nil && host != "" {
+		if parsed := net.ParseIP(host); parsed != nil {
+			return util.IPLimitKey(parsed)
+		}
 		return host
 	}
 	return addr.String()
