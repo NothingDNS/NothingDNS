@@ -1198,6 +1198,10 @@ func (p *parser) absolutizeRDataNames(rtype string, rdataFields []string) {
 func (p *parser) handleSpecialRecord(name string, record Record) error {
 	switch record.Type {
 	case "SOA":
+		// F701: the zone has one SOA, at its apex (BIND: "SOA not at top of zone").
+		if p.apex != "" && !strings.EqualFold(canonicalize(name), canonicalize(p.apex)) {
+			return fmt.Errorf("SOA record for %s is not at the zone apex %s", name, p.apex)
+		}
 		if err := p.parseSOA(name, record); err != nil {
 			return fmt.Errorf("parsing SOA: %w", err)
 		}
