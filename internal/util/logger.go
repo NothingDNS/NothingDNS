@@ -213,8 +213,7 @@ func (l *Logger) formatText(fields Fields) string {
 	// Sanitize the message with the same CR/LF replacement as field values:
 	// upstream error strings can carry attacker-controlled newlines that
 	// forge fake log entries in the text format.
-	msg = strings.ReplaceAll(msg, "\r", " ")
-	msg = strings.ReplaceAll(msg, "\n", " ")
+	msg = sanitizeLogText(msg)
 
 	result := fmt.Sprintf("[%s] %s: %s", timestamp, level, msg)
 
@@ -224,13 +223,49 @@ func (l *Logger) formatText(fields Fields) string {
 			// Sanitize value to prevent log injection attacks
 			// Replace CR/LF with spaces to prevent fake log entries
 			val := fmt.Sprintf("%v", v)
-			val = strings.ReplaceAll(val, "\r", " ")
-			val = strings.ReplaceAll(val, "\n", " ")
+			val = sanitizeLogText(val)
 			result += fmt.Sprintf(" %s=%s", k, val)
 		}
 	}
 
 	return result
+}
+
+// sanitizeLogText keeps a text-format log entry on one line and free of
+// terminal control sequences (F705): CR/LF become spaces, and every other
+// control character (C0 other than tab, DEL, C1 including NEL, U+2028/2029)
+// is written as \xNN / \uNNNN so an attacker-chosen name cannot forge lines
+// or drive the operator's terminal.
+func sanitizeLogText(s string) string {
+	clean := true
+	for _, r := range s {
+		if isLogControl(r) {
+			clean = false
+			break
+		}
+	}
+	if clean {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 8)
+	for _, r := range s {
+		switch {
+		case r == '\r' || r == '\n':
+			b.WriteByte(' ')
+		case r < 0x100 && isLogControl(r):
+			fmt.Fprintf(&b, "\\x%02x", r)
+		case isLogControl(r):
+			fmt.Fprintf(&b, "\\u%04x", r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func isLogControl(r rune) bool {
+	return (r < 0x20 && r != '\t') || r == 0x7f || (r >= 0x80 && r <= 0x9f) || r == 0x2028 || r == 0x2029
 }
 
 // Debug logs a debug message.
