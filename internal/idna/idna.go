@@ -372,6 +372,12 @@ func decodeLabel(punycode string) (string, error) {
 func mapLabel(label string) string {
 	var result strings.Builder
 	for _, r := range label {
+		if r == 0x130 {
+			// F704: full case mapping (SpecialCasing); unicode.ToLower
+			// gives the simple mapping, a plain "i".
+			result.WriteString("i\u0307")
+			continue
+		}
 		result.WriteRune(unicode.ToLower(r))
 	}
 	return nfc(result.String())
