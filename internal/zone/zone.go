@@ -829,7 +829,7 @@ func expandGenerate(template string, iter int) (string, error) {
 // applyGenerateModifier handles ${offset,width,radix} syntax.
 // offset: integer added to the iterator value
 // width: minimum field width (zero-padded)
-// radix: d=decimal, o=octal, x=hex (default: d)
+// radix: d=decimal, o=octal, x/X=lower/upper-case hex (default: d)
 func applyGenerateModifier(iter int, modifier string) (string, error) {
 	parts := strings.SplitN(modifier, ",", 3)
 
@@ -855,7 +855,7 @@ func applyGenerateModifier(iter int, modifier string) (string, error) {
 		width = v
 	}
 	if len(parts) >= 3 && parts[2] != "" {
-		radix = strings.ToLower(parts[2])
+		radix = parts[2] // "X" is upper-case hex
 	}
 
 	val := iter + offset
@@ -866,6 +866,8 @@ func applyGenerateModifier(iter int, modifier string) (string, error) {
 		format = fmt.Sprintf("%%0%do", width)
 	case "x":
 		format = fmt.Sprintf("%%0%dx", width)
+	case "X":
+		format = fmt.Sprintf("%%0%dX", width)
 	case "d":
 		format = fmt.Sprintf("%%0%dd", width)
 	default:
