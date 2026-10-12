@@ -1679,6 +1679,11 @@ func (t *StdioTransport) queryUDP(ctx context.Context, msg *protocol.Message, ad
 		resp.Release()
 		return nil, fmt.Errorf("resolver: UDP ID mismatch")
 	}
+	// F699: a reflected query (QR=0) is not an answer.
+	if !resp.Header.Flags.QR {
+		resp.Release()
+		return nil, fmt.Errorf("resolver: UDP response QR bit not set")
+	}
 	// The response must answer the question we asked. Matching only the
 	// transaction ID lets a buggy/malicious nameserver in the delegation chain
 	// return data for a DIFFERENT name/type that would be cached under the
@@ -1742,6 +1747,10 @@ func (t *StdioTransport) queryTCP(ctx context.Context, msg *protocol.Message, ad
 	if resp.Header.ID != msg.Header.ID {
 		resp.Release()
 		return nil, fmt.Errorf("resolver: TCP ID mismatch")
+	}
+	if !resp.Header.Flags.QR {
+		resp.Release()
+		return nil, fmt.Errorf("resolver: TCP response QR bit not set")
 	}
 	if !questionMatches(msg, resp) {
 		resp.Release()
