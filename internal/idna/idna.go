@@ -60,6 +60,11 @@ const MaxLabelLength = 63
 // MaxNameLength is the maximum length of a domain name (255 bytes per RFC 5891).
 const MaxNameLength = 255
 
+// maxPresentationLength is the longest name string (no trailing dot) whose
+// wire form fits MaxNameLength: one length byte per label plus the root byte
+// add 2 (F703).
+const maxPresentationLength = MaxNameLength - 2
+
 // ACEPrefix is the ASCII-compatible encoding prefix for punycode.
 const ACEPrefix = "xn--"
 
@@ -131,7 +136,7 @@ func (p Profile) ToASCII(domain string) (string, error) {
 		// (cache key sizing, zone radix tree, NSEC bitmap) to discover
 		// the violation later. The non-ASCII path already checked total
 		// length at the end; harmonize the rules across both paths.
-		if len(domain) > MaxNameLength {
+		if len(domain) > maxPresentationLength {
 			return "", ErrNameTooLong
 		}
 		labels := strings.Split(domain, ".")
@@ -211,7 +216,7 @@ func (p Profile) ToASCII(domain string) (string, error) {
 
 	// Check total length
 	asciiDomain := strings.Join(result, ".")
-	if len(asciiDomain) > MaxNameLength {
+	if len(asciiDomain) > maxPresentationLength {
 		return "", ErrNameTooLong
 	}
 	if err := p.checkULabels(ulabels); err != nil {
@@ -486,7 +491,7 @@ func ValidateDomain(domain string) error {
 		return nil
 	}
 
-	if len(domain) > MaxNameLength {
+	if len(domain) > maxPresentationLength {
 		return ErrNameTooLong
 	}
 
