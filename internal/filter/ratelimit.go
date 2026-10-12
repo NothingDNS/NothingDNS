@@ -71,7 +71,7 @@ func (rl *RateLimiter) Allow(clientIP net.IP) bool {
 		return true
 	}
 
-	key := clientIP.String()
+	key := limiterKey(clientIP)
 
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
@@ -106,6 +106,19 @@ func (rl *RateLimiter) Allow(clientIP net.IP) bool {
 
 	b.tokens--
 	return true
+}
+
+// limiterKey is the bucket key for a client: the address for IPv4, the /64
+// for IPv6 (F707) — one IPv6 subscriber line holds 2^64 addresses, so a
+// per-address bucket never limited it.
+func limiterKey(ip net.IP) string {
+	if v4 := ip.To4(); v4 != nil {
+		return v4.String()
+	}
+	if v6 := ip.To16(); v6 != nil {
+		return v6.Mask(net.CIDRMask(64, 128)).String() + "/64"
+	}
+	return ip.String()
 }
 
 func elapsedSecondsSince(lastTime, now time.Time) float64 {

@@ -92,7 +92,7 @@ type RRLConfig struct {
 	// Enable rate limiting
 	Enabled bool `yaml:"enabled"`
 
-	// Rate limit: responses per second per subnet
+	// Rate limit: queries per second per client (IPv4 address or IPv6 /64)
 	Rate int `yaml:"rate"`
 
 	// Burst allowance

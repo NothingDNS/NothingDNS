@@ -52,7 +52,7 @@ type RRL struct {
 
 // rrlKey builds a unique key for a response bucket.
 func rrlKey(clientIP net.IP, qtype uint16, rcode uint8) string {
-	return clientIP.String() + ":" + itoa16(qtype) + ":" + itoa8(rcode)
+	return limiterKey(clientIP) + ":" + itoa16(qtype) + ":" + itoa8(rcode)
 }
 
 // itoa16 formats a uint16 as a decimal string (no allocation).
