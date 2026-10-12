@@ -277,6 +277,7 @@ func parseCAARData(rdata string) RData {
 		return nil
 	}
 	value := strings.Join(fields[2:], " ")
+	tag := fields[1]
 	if strings.Contains(rdata, "\"") {
 		// Scan the whole text: strings.Fields above collapsed whitespace
 		// inside the quoted value and cannot see escapes.
@@ -284,11 +285,21 @@ func parseCAARData(rdata string) RData {
 		if !ok || len(quoted) != 3 {
 			return nil
 		}
-		value = quoted[2]
+		tag, value = quoted[1], quoted[2]
+	}
+	// RFC 8659 §4.1.1: the tag is one or more ASCII letters and digits.
+	if tag == "" {
+		return nil
+	}
+	for i := 0; i < len(tag); i++ {
+		c := tag[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') {
+			return nil
+		}
 	}
 	return &RDataCAA{
 		Flags: uint8(flags),
-		Tag:   fields[1],
+		Tag:   tag,
 		Value: value,
 	}
 }
