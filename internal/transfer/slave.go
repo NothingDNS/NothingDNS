@@ -662,6 +662,10 @@ func (sm *SlaveManager) applyFullZone(slaveZone *SlaveZone, records []*protocol.
 			continue
 		}
 		rec := recordFromRR(rr)
+		if !ownerInZone(rec.Name, newZone.Origin) {
+			util.Warnf("slave: dropping out-of-zone record %s %s from transfer of %s", rec.Name, rec.Type, newZone.Origin)
+			continue
+		}
 		newZone.Records[rec.Name] = append(newZone.Records[rec.Name], rec)
 	}
 
@@ -746,6 +750,10 @@ func (sm *SlaveManager) applyIncrementalIXFR(slaveZone *SlaveZone, base *zone.Zo
 			continue
 		}
 		rec := recordFromRR(rr)
+		if !ownerInZone(rec.Name, newZone.Origin) {
+			util.Warnf("slave: dropping out-of-zone record %s %s from transfer of %s", rec.Name, rec.Type, newZone.Origin)
+			continue
+		}
 		if deleting {
 			removeZoneRecord(newZone, rec)
 		} else {
@@ -782,6 +790,16 @@ func setSlaveZoneSOA(z *zone.Zone, rr *protocol.ResourceRecord, soa *protocol.RD
 		}
 	}
 	z.Records[z.Origin] = apex
+}
+
+// ownerInZone reports whether owner is origin or a name below it (label
+// boundary aware: "notexample.com." is outside "example.com.").
+func ownerInZone(owner, origin string) bool {
+	owner, origin = strings.ToLower(owner), strings.ToLower(origin)
+	if origin == "." {
+		return true
+	}
+	return owner == origin || strings.HasSuffix(owner, "."+origin)
 }
 
 // recordFromRR converts a wire RR into a zone.Record, normalizing the owner
