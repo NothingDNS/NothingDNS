@@ -933,6 +933,15 @@ func (c *Config) validateCluster() []string {
 		if c.Cluster.RPC.TLSKeyFile == "" {
 			errors = append(errors, "cluster.rpc: tls_key_file is required when TLS is enabled")
 		}
+		// Without a cluster CA the listener keeps ClientAuth=NoClientCert (any
+		// host that can dial the RPC port can speak Raft consensus) and peer
+		// dials fall back to the system trust store, where a public-CA
+		// certificate whose SAN matches a peer address can impersonate that
+		// peer — the exact vector NewTLSConfig's comment documents. Deny at
+		// load, like the XoT surface's deny-by-default contract.
+		if c.Cluster.RPC.TLSCACertFile == "" {
+			errors = append(errors, "cluster.rpc: tls_ca_cert_file is required when TLS is enabled: without a cluster CA, inbound Raft RPC accepts unauthenticated clients and outbound peer dials trust the system CA store (peer impersonation)")
+		}
 		if c.Cluster.RPC.MinTLSVersion != 0 && c.Cluster.RPC.MinTLSVersion != 12 && c.Cluster.RPC.MinTLSVersion != 13 {
 			errors = append(errors, fmt.Sprintf("cluster.rpc: invalid min_tls_version %d (must be 12 or 13)", c.Cluster.RPC.MinTLSVersion))
 		}

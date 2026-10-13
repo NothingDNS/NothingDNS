@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"reflect"
 )
 
 const maxRPCCACertFileSize = 1 << 20
@@ -187,18 +188,30 @@ func unmarshalCluster(node *Node, cfg *ClusterConfig) error {
 		}
 	}
 
-	// Raft data directory and peer list.
+	// Raft data directory and peer list. listItems makes a mis-shaped
+	// peers section a load error (AGENTS.md: strict loading, never silent
+	// defaults), and a peer entry without node_id is rejected: both
+	// previously vanished silently, shrinking the configured Raft peer
+	// set with no config error — initRaft only rejects a completely empty
+	// peer list (internal/cluster/cluster.go "raft consensus requires at
+	// least one peer"), so the survivors silently formed a smaller quorum
+	// than the operator documented. dnssec.signing.keys, rpz.zones,
+	// geodns.rules and upstream.anycast_groups already go through
+	// listItems; cluster.peers now does too.
 	cfg.DataDir = node.GetString("data_dir")
-	if peersNode := node.Get("peers"); peersNode != nil && peersNode.Type == NodeSequence {
-		for _, pn := range peersNode.Children {
-			p := ClusterPeerConfig{
-				NodeID: pn.GetString("node_id"),
-				Addr:   pn.GetString("addr"),
-			}
-			if p.NodeID != "" {
-				cfg.Peers = append(cfg.Peers, p)
-			}
+	peerItems, err := listItems(node, "peers", reflect.TypeOf(ClusterPeerConfig{}))
+	if err != nil {
+		return fmt.Errorf("cluster: %w", err)
+	}
+	for i, peerNode := range peerItems {
+		p := ClusterPeerConfig{
+			NodeID: peerNode.GetString("node_id"),
+			Addr:   peerNode.GetString("addr"),
 		}
+		if p.NodeID == "" {
+			return fmt.Errorf("peers[%d]: node_id is required for every cluster peer", i)
+		}
+		cfg.Peers = append(cfg.Peers, p)
 	}
 
 	return nil

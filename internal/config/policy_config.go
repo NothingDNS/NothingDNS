@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"reflect"
 )
 
 // BlocklistConfig holds blocklist configuration.
@@ -72,19 +73,26 @@ func unmarshalRPZ(node *Node, cfg *RPZConfig) error {
 	cfg.Enabled = getBool(node, "enabled", cfg.Enabled)
 	cfg.Files = getStringSlice(node, "files", cfg.Files)
 
-	if zonesNode := node.Get("zones"); zonesNode != nil && zonesNode.Type == NodeSequence {
-		for _, zoneNode := range zonesNode.Children {
-			if zoneNode.Type == NodeMapping {
-				var pz RPZPolicyZone
-				pz.Name = zoneNode.GetString("name")
-				pz.File = zoneNode.GetString("file")
-				var err error
-				if pz.Priority, err = getRequiredInt(zoneNode, "priority", 0); err != nil {
-					return fmt.Errorf("zones: %w", err)
-				}
-				cfg.Zones = append(cfg.Zones, pz)
-			}
+	// listItems makes a mis-shaped zones section a load error (AGENTS.md:
+	// strict loading, never silent defaults). The previous manual loop
+	// required NodeSequence and skipped any non-mapping item, so a zones
+	// mapping (missing "- ") or a scalar entry vanished: RPZ loaded enabled
+	// with zero policy zones and validateRPZ passed over the emptied list.
+	// dnssec.signing.keys already goes through listItems; rpz.zones now
+	// gets the same loud errors.
+	zoneItems, err := listItems(node, "zones", reflect.TypeOf(RPZPolicyZone{}))
+	if err != nil {
+		return fmt.Errorf("rpz: %w", err)
+	}
+	for _, zoneNode := range zoneItems {
+		var pz RPZPolicyZone
+		pz.Name = zoneNode.GetString("name")
+		pz.File = zoneNode.GetString("file")
+		var err error
+		if pz.Priority, err = getRequiredInt(zoneNode, "priority", 0); err != nil {
+			return fmt.Errorf("zones: %w", err)
 		}
+		cfg.Zones = append(cfg.Zones, pz)
 	}
 
 	return nil
@@ -98,36 +106,43 @@ func unmarshalGeoDNS(node *Node, cfg *GeoDNSConfig) error {
 	cfg.Enabled = getBool(node, "enabled", cfg.Enabled)
 	cfg.MMDBFile = node.GetString("mmdb_file")
 
-	if rulesNode := node.Get("rules"); rulesNode != nil && rulesNode.Type == NodeSequence {
-		for _, ruleNode := range rulesNode.Children {
-			if ruleNode.Type == NodeMapping {
-				var rule GeoDNSRule
-				rule.Domain = ruleNode.GetString("domain")
-				rule.Type = ruleNode.GetString("type")
-				rule.Default = ruleNode.GetString("default")
-				// Parse records from the documented nested records map,
-				// while keeping the older flat US/DE keys compatible.
-				rule.Records = make(map[string]string)
-				if recordsNode := ruleNode.Get("records"); recordsNode != nil && recordsNode.Type == NodeMapping {
-					for i := 0; i+1 < len(recordsNode.Children); i += 2 {
-						key := recordsNode.Children[i].Value
-						value := recordsNode.Children[i+1]
-						if key != "" && value.Type == NodeScalar && value.Value != "" {
-							rule.Records[key] = value.Value
-						}
-					}
-				}
-				for _, key := range []string{"US", "CA", "DE", "FR", "GB", "JP", "CN", "AU",
-					"BR", "IN", "RU", "KR", "MX", "IT", "ES", "NL", "SE", "PL", "NO",
-					"NA", "EU", "AS", "SA", "OC", "AF"} {
-					if v := ruleNode.GetString(key); v != "" {
-						rule.Records[key] = v
-					}
-				}
-				if len(rule.Records) > 0 || rule.Default != "" {
-					cfg.Rules = append(cfg.Rules, rule)
+	// listItems makes a mis-shaped rules section a load error (AGENTS.md:
+	// strict loading, never silent defaults). The previous manual loop
+	// required NodeSequence and skipped any non-mapping item, so a rules
+	// mapping (missing "- ") or a scalar entry vanished: GeoDNS loaded
+	// enabled with zero rules and every domain resolved without geo data.
+	// dnssec.signing.keys and rpz.zones already go through listItems;
+	// geodns.rules now gets the same loud errors.
+	ruleItems, err := listItems(node, "rules", reflect.TypeOf(GeoDNSRule{}))
+	if err != nil {
+		return fmt.Errorf("geodns: %w", err)
+	}
+	for _, ruleNode := range ruleItems {
+		var rule GeoDNSRule
+		rule.Domain = ruleNode.GetString("domain")
+		rule.Type = ruleNode.GetString("type")
+		rule.Default = ruleNode.GetString("default")
+		// Parse records from the documented nested records map,
+		// while keeping the older flat US/DE keys compatible.
+		rule.Records = make(map[string]string)
+		if recordsNode := ruleNode.Get("records"); recordsNode != nil && recordsNode.Type == NodeMapping {
+			for i := 0; i+1 < len(recordsNode.Children); i += 2 {
+				key := recordsNode.Children[i].Value
+				value := recordsNode.Children[i+1]
+				if key != "" && value.Type == NodeScalar && value.Value != "" {
+					rule.Records[key] = value.Value
 				}
 			}
+		}
+		for _, key := range []string{"US", "CA", "DE", "FR", "GB", "JP", "CN", "AU",
+			"BR", "IN", "RU", "KR", "MX", "IT", "ES", "NL", "SE", "PL", "NO",
+			"NA", "EU", "AS", "SA", "OC", "AF"} {
+			if v := ruleNode.GetString(key); v != "" {
+				rule.Records[key] = v
+			}
+		}
+		if len(rule.Records) > 0 || rule.Default != "" {
+			cfg.Rules = append(cfg.Rules, rule)
 		}
 	}
 

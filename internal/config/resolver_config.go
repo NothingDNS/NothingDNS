@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"reflect"
 )
 
 // ResolutionConfig contains DNS resolution settings.
@@ -155,37 +156,47 @@ func unmarshalUpstream(node *Node, cfg *UpstreamConfig) error {
 		}
 	}
 
-	// Parse anycast groups
-	if anycastNode := node.Get("anycast_groups"); anycastNode != nil && anycastNode.Type == NodeSequence {
-		for _, groupNode := range anycastNode.Children {
-			if groupNode.Type == NodeMapping {
-				var group AnycastGroupConfig
-				group.AnycastIP = groupNode.GetString("anycast_ip")
-				group.HealthCheck = groupNode.GetString("health_check")
+	// Parse anycast groups. listItems makes a mis-shaped section or item a
+	// load error (AGENTS.md: strict loading, never silent defaults). The
+	// previous manual loops required NodeSequence at both levels and
+	// skipped any non-mapping item, so a mapping-shaped anycast_groups
+	// section, a scalar group item, a mapping-shaped backends list or a
+	// scalar backend entry all vanished: upstream load balancing silently
+	// ran without the configured anycast topology (or startup failed with
+	// the misleading "no upstream servers configured" when anycast was
+	// the only upstream source). dnssec.signing.keys, rpz.zones and
+	// geodns.rules already go through listItems; anycast_groups now does
+	// too, one level deep for backends.
+	groupItems, err := listItems(node, "anycast_groups", reflect.TypeOf(AnycastGroupConfig{}))
+	if err != nil {
+		return fmt.Errorf("upstream: %w", err)
+	}
+	for _, groupNode := range groupItems {
+		var group AnycastGroupConfig
+		group.AnycastIP = groupNode.GetString("anycast_ip")
+		group.HealthCheck = groupNode.GetString("health_check")
 
-				// Parse backends
-				if backendsNode := groupNode.Get("backends"); backendsNode != nil && backendsNode.Type == NodeSequence {
-					for _, backendNode := range backendsNode.Children {
-						if backendNode.Type == NodeMapping {
-							var backend AnycastBackendConfig
-							backend.PhysicalIP = backendNode.GetString("physical_ip")
-							var err error
-							if backend.Port, err = getRequiredInt(backendNode, "port", 53); err != nil {
-								return fmt.Errorf("anycast_groups backend: %w", err)
-							}
-							backend.Region = backendNode.GetString("region")
-							backend.Zone = backendNode.GetString("zone")
-							if backend.Weight, err = getRequiredInt(backendNode, "weight", 100); err != nil {
-								return fmt.Errorf("anycast_groups backend: %w", err)
-							}
-							group.Backends = append(group.Backends, backend)
-						}
-					}
-				}
-
-				cfg.AnycastGroups = append(cfg.AnycastGroups, group)
-			}
+		// Parse backends (same strict contract, one level deeper).
+		backendItems, err := listItems(groupNode, "backends", reflect.TypeOf(AnycastBackendConfig{}))
+		if err != nil {
+			return fmt.Errorf("anycast_groups: %w", err)
 		}
+		for _, backendNode := range backendItems {
+			var backend AnycastBackendConfig
+			backend.PhysicalIP = backendNode.GetString("physical_ip")
+			var err error
+			if backend.Port, err = getRequiredInt(backendNode, "port", 53); err != nil {
+				return fmt.Errorf("anycast_groups backend: %w", err)
+			}
+			backend.Region = backendNode.GetString("region")
+			backend.Zone = backendNode.GetString("zone")
+			if backend.Weight, err = getRequiredInt(backendNode, "weight", 100); err != nil {
+				return fmt.Errorf("anycast_groups backend: %w", err)
+			}
+			group.Backends = append(group.Backends, backend)
+		}
+
+		cfg.AnycastGroups = append(cfg.AnycastGroups, group)
 	}
 
 	return nil
