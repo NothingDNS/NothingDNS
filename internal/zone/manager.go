@@ -240,17 +240,34 @@ func (m *Manager) Load(name, path string) error {
 	m.zones[z.Origin] = z
 	m.files[z.Origin] = path
 
-	// Compute ZONEMD if enabled
-	if m.onemdEnabled {
-		zonemd, err := ComputeZoneMD(z, ZONEMDSHA384)
-		if err != nil {
-			m.warnf("zone: failed to compute ZONEMD for %s: %v", z.Origin, err)
-		} else {
-			z.ZONEMD = zonemd
-		}
-	}
+	m.attachZONEMD(z)
 
 	return nil
+}
+
+// attachZONEMD marks z as carrying a ZONEMD (RFC 8976) when digests are
+// enabled: z.ZONEMD is what makes AXFR/XoT stream one, re-digested per transfer
+// (F713). Every way a zone enters the manager needs it — Load, LoadZone (start,
+// reload, Raft snapshot, gossip) and CreateZone — not only Load, which the
+// server's own start-up path never calls (F720). A zone whose file already
+// holds its own apex ZONEMD RR keeps that one: a second RR with the same
+// scheme/algorithm is invalid (RFC 8976 §2.2) and the file's may be signed.
+// Caller holds m.mu and z is not yet shared.
+func (m *Manager) attachZONEMD(z *Zone) {
+	if !m.onemdEnabled || z == nil {
+		return
+	}
+	for _, r := range z.Records[z.Origin] {
+		if strings.EqualFold(r.Type, "ZONEMD") {
+			return
+		}
+	}
+	zonemd, err := ComputeZoneMD(z, ZONEMDSHA384)
+	if err != nil {
+		m.warnf("zone: failed to compute ZONEMD for %s: %v", z.Origin, err)
+		return
+	}
+	z.ZONEMD = zonemd
 }
 
 // LoadZone loads a zone directly without validation.
@@ -278,6 +295,7 @@ func (m *Manager) LoadZone(z *Zone, path string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	m.attachZONEMD(z)
 	m.zones[z.Origin] = z
 	m.files[z.Origin] = path
 }
@@ -428,6 +446,7 @@ func (m *Manager) CreateZone(origin string, defaultTTL uint32, soa *SOARecord, n
 		})
 	}
 
+	m.attachZONEMD(z)
 	m.zones[origin] = z
 
 	// Write zone file if zoneDir is set
