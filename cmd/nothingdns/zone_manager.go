@@ -111,20 +111,6 @@ func NewZoneManager(cfg *config.Config, logger *util.Logger) (*ZoneManager, erro
 		logger.Infof("Loaded zone %s with %d records", result.zone.Origin, len(result.zone.Records))
 	}
 
-	// Initialize zone signers if DNSSEC signing is enabled
-	if cfg.DNSSEC.Enabled && cfg.DNSSEC.Signing.Enabled {
-		for origin, z := range mgr.result.Zones {
-			signer, err := loadZoneSigner(z, cfg.DNSSEC.Signing)
-			if err != nil {
-				return nil, fmt.Errorf("loading zone signer for %s: %w", origin, err)
-			}
-			if signer != nil {
-				mgr.result.Signers[origin] = signer
-				logger.Infof("Zone signer loaded for %s (%d keys)", origin, len(signer.GetKeys()))
-			}
-		}
-	}
-
 	mgr.result.Manager = zoneManager
 
 	// Initialize the embedded persistent zone database.
@@ -161,6 +147,22 @@ func NewZoneManager(cfg *config.Config, logger *util.Logger) (*ZoneManager, erro
 			logger.Infof("Persistent zone database initialized at %s (AES-256-GCM at rest)", filepath.Join(dbDataDir, storage.DataFile))
 		} else {
 			logger.Infof("Persistent zone database initialized at %s", filepath.Join(dbDataDir, storage.DataFile))
+		}
+	}
+
+	// Initialize zone signers if DNSSEC signing is enabled. After the persistent
+	// database sync, so zones that only it holds (API-created before a restart)
+	// are signed like file-backed ones instead of silently served unsigned (F721).
+	if cfg.DNSSEC.Enabled && cfg.DNSSEC.Signing.Enabled {
+		for origin, z := range mgr.result.Zones {
+			signer, err := loadZoneSigner(z, cfg.DNSSEC.Signing)
+			if err != nil {
+				return nil, fmt.Errorf("loading zone signer for %s: %w", origin, err)
+			}
+			if signer != nil {
+				mgr.result.Signers[origin] = signer
+				logger.Infof("Zone signer loaded for %s (%d keys)", origin, len(signer.GetKeys()))
+			}
 		}
 	}
 
