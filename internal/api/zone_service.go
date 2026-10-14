@@ -1,6 +1,8 @@
 package api
 
 import (
+	"strings"
+
 	"github.com/nothingdns/nothingdns/internal/zone"
 )
 
@@ -103,9 +105,20 @@ func (s *ZoneService) GetZone(name string) (*ZoneDetailResponse, bool) {
 		}
 	}
 
+	// Records is the source of truth (as in the zone writer): transferred,
+	// API-edited and KV-loaded zones carry their apex NS there while z.NS
+	// stays empty, and z.NS also lists delegation NS (F715). z.NS remains
+	// the fallback for zones built without apex NS records.
 	var nsList []string
-	for _, ns := range z.NS {
-		nsList = append(nsList, ns.NSDName)
+	for _, r := range z.Records[z.Origin] {
+		if strings.EqualFold(r.Type, "NS") {
+			nsList = append(nsList, r.RData)
+		}
+	}
+	if len(nsList) == 0 {
+		for _, ns := range z.NS {
+			nsList = append(nsList, ns.NSDName)
+		}
 	}
 	result.Nameservers = nsList
 
