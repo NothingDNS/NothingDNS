@@ -140,10 +140,18 @@ func reloadConfig(configPath string, s *reloadableState) (reloadedZones int, err
 	}
 
 	// 2. Prepare zone files.
-	zonePlan, err := prepareConfiguredZoneFiles(newCfg.Zones, loadZoneFile)
+	// The same file set as start-up: configured zones plus every *.zone in
+	// zone_dir. Reloading only newCfg.Zones dropped each zone_dir zone from the
+	// running server on every SIGHUP (F724).
+	zoneFileList, err := discoverStartupZoneFiles(newCfg)
 	if err != nil {
 		return 0, fmt.Errorf("loading zone files: %w", err)
 	}
+	zonePlan, err := prepareConfiguredZoneFiles(zoneFileList, loadZoneFile)
+	if err != nil {
+		return 0, fmt.Errorf("loading zone files: %w", err)
+	}
+	zonePlan = firstZonePerOrigin(zonePlan, s.logger)
 
 	// 3. Prepare split-horizon views.
 	viewPlan, _, err := prepareConfiguredViews(s.handler, newCfg.Views, loadZoneFile)
@@ -213,6 +221,26 @@ func reloadConfig(configPath string, s *reloadableState) (reloadedZones int, err
 	*s.dnssecManager = upstreamPlan.dnssecManager
 
 	return len(zonePlan), nil
+}
+
+// firstZonePerOrigin keeps the first file for each $ORIGIN, as start-up does: a
+// second file for the same zone (a stray backup copy in zone_dir) must not
+// replace the one loaded first.
+func firstZonePerOrigin(loaded []loadedZoneFile, logger *util.Logger) []loadedZoneFile {
+	seen := make(map[string]string, len(loaded))
+	out := loaded[:0:0]
+	for _, item := range loaded {
+		if item.zone == nil {
+			continue
+		}
+		if first, ok := seen[item.zone.Origin]; ok {
+			logger.Warnf("Skipping zone file %s: zone %s already loaded from %s", item.file, item.zone.Origin, first)
+			continue
+		}
+		seen[item.zone.Origin] = item.file
+		out = append(out, item)
+	}
+	return out
 }
 
 // buildIterativeResolver builds the iterative resolver for cfg exactly as
