@@ -324,7 +324,13 @@ func (s *AXFRServer) generateAXFRRecordsLocked(z *zone.Zone) ([]*protocol.Resour
 		if z.SOA != nil {
 			zonemdSerial = z.SOA.Serial
 		}
-		zonemdRR, err := s.createZONEMDRR(z.ZONEMD, origin, zonemdSerial)
+		// z.ZONEMD is computed at load; an UPDATE or API edit since then
+		// leaves it stale, so re-digest the snapshot being streamed (F713).
+		fresh, err := zone.ComputeZoneMD(z, zone.ZONEMDAlgorithm(z.ZONEMD.Algorithm))
+		var zonemdRR *protocol.ResourceRecord
+		if err == nil {
+			zonemdRR, err = s.createZONEMDRR(fresh, origin, zonemdSerial)
+		}
 		if err != nil {
 			util.Warnf("axfr: failed to create ZONEMD record: %v", err)
 		} else {
