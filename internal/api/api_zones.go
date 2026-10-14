@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -370,6 +371,10 @@ func (s *Server) handleAddRecord(w http.ResponseWriter, r *http.Request, zoneNam
 			return
 		}
 	} else if err := s.zoneManager.AddRecord(zoneName, record); err != nil {
+		if errors.Is(err, zone.ErrRecordExists) { // F718: lost a race with an identical add
+			s.writeError(w, http.StatusConflict, fmt.Sprintf("record already exists: %s %s %s", record.Name, record.Type, record.RData))
+			return
+		}
 		s.writeError(w, http.StatusNotFound, sanitizeError(err, "Not found"))
 		return
 	}

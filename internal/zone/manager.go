@@ -2,6 +2,7 @@ package zone
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,6 +19,10 @@ const (
 	// Serial numbers more than this apart are considered to have rolled over.
 	SerialHalfRange = uint32(1 << 31)
 )
+
+// ErrRecordExists is returned by AddRecord when the RRset already holds an RR
+// with the same RDATA (RFC 2181 §5: an RRset has no duplicate RRs).
+var ErrRecordExists = errors.New("record already exists")
 
 // reservedZoneNames cannot be created via the API.
 //
@@ -568,6 +573,15 @@ func (m *Manager) AddRecord(zoneName string, record Record) error {
 	if !nameInZone(record.Name, z.Origin) {
 		z.Unlock()
 		return fmt.Errorf("record owner %s is outside zone %s", record.Name, z.Origin)
+	}
+	// Callers pre-check for a duplicate, but only here, under the zone lock, is
+	// the check atomic: a replayed gossip add or a racing API request would
+	// otherwise store the same RR twice (F718).
+	for _, existing := range z.Records[record.Name] {
+		if strings.EqualFold(existing.Type, record.Type) && RDataEqual(record.Type, existing.RData, record.RData) {
+			z.Unlock()
+			return fmt.Errorf("%w: %s %s %s", ErrRecordExists, record.Name, record.Type, record.RData)
+		}
 	}
 	z.Records[record.Name] = append(z.Records[record.Name], record)
 	IncrementSerial(z)
