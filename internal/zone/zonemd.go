@@ -3,7 +3,6 @@
 package zone
 
 import (
-	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/binary"
 	"fmt"
@@ -26,10 +25,13 @@ type ZONEMD struct {
 type ZONEMDAlgorithm uint8
 
 const (
-	// ZONEMDSHA256 is the SHA-256 algorithm for zone digests.
-	ZONEMDSHA256 ZONEMDAlgorithm = 1
-	// ZONEMDSHA384 is the SHA-384 algorithm for zone digests.
-	ZONEMDSHA384 ZONEMDAlgorithm = 2
+	// ZONEMDSHA384 is hash algorithm 1 of the IANA ZONEMD Hash Algorithms
+	// registry (RFC 8976 §2.2.3): SHA-384, a 48-octet digest. Earlier code
+	// numbered SHA-256 as 1 and SHA-384 as 2, so every digest it published
+	// carried the wrong algorithm number (F719).
+	ZONEMDSHA384 ZONEMDAlgorithm = 1
+	// ZONEMDSHA512 is hash algorithm 2: SHA-512, a 64-octet digest.
+	ZONEMDSHA512 ZONEMDAlgorithm = 2
 )
 
 // ZoneMDError represents errors during ZONEMD computation.
@@ -64,14 +66,14 @@ func ComputeZoneMD(z *Zone, algo ZONEMDAlgorithm) (*ZONEMD, error) {
 	// Compute hash over sorted RRsets
 	var hash []byte
 	switch algo {
-	case ZONEMDSHA384:
-		h := sha512.New384()
+	case ZONEMDSHA512:
+		h := sha512.New()
 		for _, rrset := range rrsets {
 			h.Write(rrset)
 		}
 		hash = h.Sum(nil)
-	case ZONEMDSHA256, ZONEMDAlgorithm(0):
-		h := sha256.New()
+	case ZONEMDSHA384, ZONEMDAlgorithm(0):
+		h := sha512.New384()
 		for _, rrset := range rrsets {
 			h.Write(rrset)
 		}

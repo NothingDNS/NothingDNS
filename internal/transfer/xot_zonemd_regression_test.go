@@ -24,7 +24,7 @@ func TestF717XoTStreamsZONEMD(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	zm, err := zone.ComputeZoneMD(z, zone.ZONEMDSHA256)
+	zm, err := zone.ComputeZoneMD(z, zone.ZONEMDSHA384)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func f717Zone(t *testing.T, withZONEMD bool) *zone.Zone {
 		t.Fatal(err)
 	}
 	if withZONEMD {
-		zm, _ := zone.ComputeZoneMD(z, zone.ZONEMDSHA256)
+		zm, _ := zone.ComputeZoneMD(z, zone.ZONEMDSHA384)
 		z.ZONEMD = zm
 	}
 	return z
@@ -76,7 +76,7 @@ func TestF717XoTZONEMDPlacementFreshnessAndAbsence(t *testing.T) {
 	if recs[n-2].Type != protocol.TypeZONEMD || !ok || recs[n-1].Type != protocol.TypeSOA {
 		t.Fatalf("ZONEMD must sit just before the closing SOA")
 	}
-	want, _ := zone.ComputeZoneMD(z, zone.ZONEMDSHA256)
+	want, _ := zone.ComputeZoneMD(z, zone.ZONEMDSHA384)
 	if string(zm.Digest) != string(want.Hash) || zm.Serial != 2 {
 		t.Fatalf("stale ZONEMD over XoT: serial=%d", zm.Serial)
 	}

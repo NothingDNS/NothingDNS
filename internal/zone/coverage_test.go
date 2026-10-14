@@ -2177,7 +2177,7 @@ func TestZoneMDError_Error(t *testing.T) {
 }
 
 func TestComputeZoneMD_NilZone(t *testing.T) {
-	_, err := ComputeZoneMD(nil, ZONEMDSHA256)
+	_, err := ComputeZoneMD(nil, ZONEMDSHA384)
 	if err == nil {
 		t.Fatal("expected error for nil zone")
 	}
@@ -2189,13 +2189,13 @@ func TestComputeZoneMD_NilZone(t *testing.T) {
 
 func TestComputeZoneMD_EmptyOrigin(t *testing.T) {
 	z := &Zone{Origin: "", Records: make(map[string][]Record)}
-	_, err := ComputeZoneMD(z, ZONEMDSHA256)
+	_, err := ComputeZoneMD(z, ZONEMDSHA384)
 	if err == nil {
 		t.Fatal("expected error for empty origin")
 	}
 }
 
-func TestComputeZoneMD_SHA256(t *testing.T) {
+func TestComputeZoneMD_SHA384Registered(t *testing.T) {
 	z := &Zone{
 		Origin: "example.com.",
 		SOA: &SOARecord{
@@ -2208,9 +2208,9 @@ func TestComputeZoneMD_SHA256(t *testing.T) {
 			},
 		},
 	}
-	zmd, err := ComputeZoneMD(z, ZONEMDSHA256)
+	zmd, err := ComputeZoneMD(z, ZONEMDSHA384)
 	if err != nil {
-		t.Fatalf("ComputeZoneMD SHA256: %v", err)
+		t.Fatalf("ComputeZoneMD SHA384: %v", err)
 	}
 	if zmd == nil {
 		t.Fatal("ZONEMD should not be nil")
@@ -2218,15 +2218,16 @@ func TestComputeZoneMD_SHA256(t *testing.T) {
 	if zmd.ZoneName != "example.com." {
 		t.Errorf("ZoneName = %q, want example.com.", zmd.ZoneName)
 	}
+	// RFC 8976 §2.2.3: algorithm 1 is SHA-384 (F719).
 	if zmd.Algorithm != 1 {
-		t.Errorf("Algorithm = %d, want 1 (SHA256)", zmd.Algorithm)
+		t.Errorf("Algorithm = %d, want 1 (SHA384)", zmd.Algorithm)
 	}
-	if len(zmd.Hash) != 32 {
-		t.Errorf("SHA256 hash len = %d, want 32", len(zmd.Hash))
+	if len(zmd.Hash) != 48 {
+		t.Errorf("SHA384 hash len = %d, want 48", len(zmd.Hash))
 	}
 }
 
-func TestComputeZoneMD_SHA384(t *testing.T) {
+func TestComputeZoneMD_SHA512(t *testing.T) {
 	z := &Zone{
 		Origin: "example.com.",
 		SOA: &SOARecord{
@@ -2235,15 +2236,15 @@ func TestComputeZoneMD_SHA384(t *testing.T) {
 		},
 		Records: map[string][]Record{},
 	}
-	zmd, err := ComputeZoneMD(z, ZONEMDSHA384)
+	zmd, err := ComputeZoneMD(z, ZONEMDSHA512)
 	if err != nil {
-		t.Fatalf("ComputeZoneMD SHA384: %v", err)
+		t.Fatalf("ComputeZoneMD SHA512: %v", err)
 	}
 	if zmd.Algorithm != 2 {
-		t.Errorf("Algorithm = %d, want 2 (SHA384)", zmd.Algorithm)
+		t.Errorf("Algorithm = %d, want 2 (SHA512)", zmd.Algorithm)
 	}
-	if len(zmd.Hash) != 48 {
-		t.Errorf("SHA384 hash len = %d, want 48", len(zmd.Hash))
+	if len(zmd.Hash) != 64 {
+		t.Errorf("SHA512 hash len = %d, want 64", len(zmd.Hash))
 	}
 }
 
@@ -2264,7 +2265,7 @@ func TestComputeZoneMD_NilSOA(t *testing.T) {
 		Origin:  "example.com.",
 		Records: map[string][]Record{},
 	}
-	zmd, err := ComputeZoneMD(z, ZONEMDSHA256)
+	zmd, err := ComputeZoneMD(z, ZONEMDSHA384)
 	if err != nil {
 		t.Fatalf("ComputeZoneMD without SOA: %v", err)
 	}
@@ -2295,12 +2296,12 @@ func TestComputeZoneMD_WithVariousRecordTypes(t *testing.T) {
 			},
 		},
 	}
-	zmd, err := ComputeZoneMD(z, ZONEMDSHA256)
+	zmd, err := ComputeZoneMD(z, ZONEMDSHA384)
 	if err != nil {
 		t.Fatalf("ComputeZoneMD: %v", err)
 	}
-	if len(zmd.Hash) != 32 {
-		t.Errorf("hash len = %d, want 32", len(zmd.Hash))
+	if len(zmd.Hash) != 48 {
+		t.Errorf("hash len = %d, want 48", len(zmd.Hash))
 	}
 }
 
@@ -2749,7 +2750,7 @@ func TestComputeZoneMDRejectsOversizedRData(t *testing.T) {
 		},
 	}
 
-	_, err := ComputeZoneMD(z, ZONEMDSHA256)
+	_, err := ComputeZoneMD(z, ZONEMDSHA384)
 	if err == nil {
 		t.Fatal("expected ComputeZoneMD to reject oversized RDATA")
 	}

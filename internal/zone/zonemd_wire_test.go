@@ -54,7 +54,7 @@ func TestComputeZoneMD_ExcludesRRSIGCoveringZONEMD(t *testing.T) {
 	}
 
 	z1 := base()
-	d1, err := ComputeZoneMD(z1, ZONEMDSHA256)
+	d1, err := ComputeZoneMD(z1, ZONEMDSHA384)
 	if err != nil {
 		t.Fatalf("ComputeZoneMD z1: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestComputeZoneMD_ExcludesRRSIGCoveringZONEMD(t *testing.T) {
 	z2 := base()
 	z2.Records["example.com."] = append(z2.Records["example.com."],
 		Record{Name: "example.com.", Type: "RRSIG", TTL: 3600, RData: "ZONEMD 13 2 3600 20260101000000 20250101000000 12345 example.com. AAAAAAAA"})
-	d2, err := ComputeZoneMD(z2, ZONEMDSHA256)
+	d2, err := ComputeZoneMD(z2, ZONEMDSHA384)
 	if err != nil {
 		t.Fatalf("ComputeZoneMD z2: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestComputeZoneMD_ExcludesRRSIGCoveringZONEMD(t *testing.T) {
 	z3 := base()
 	z3.Records["www.example.com."] = append(z3.Records["www.example.com."],
 		Record{Name: "www.example.com.", Type: "RRSIG", TTL: 3600, RData: "A 13 3 3600 20260101000000 20250101000000 12345 example.com. AAAAAAAA"})
-	d3, err := ComputeZoneMD(z3, ZONEMDSHA256)
+	d3, err := ComputeZoneMD(z3, ZONEMDSHA384)
 	if err != nil {
 		t.Fatalf("ComputeZoneMD z3: %v", err)
 	}

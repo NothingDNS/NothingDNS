@@ -87,7 +87,7 @@ func TestNewZoneManagerKVOnlyZoneRecomputesZONEMD(t *testing.T) {
 	}
 	// Prime ZONEMD the way Manager.Load does it after parsing a zone file:
 	// ComputeZoneMD writes it directly onto the in-memory zone object.
-	zonemd, err := zone.ComputeZoneMD(zSeed, zone.ZONEMDSHA256)
+	zonemd, err := zone.ComputeZoneMD(zSeed, zone.ZONEMDSHA384)
 	if err != nil {
 		t.Fatalf("ComputeZoneMD seed: %v", err)
 	}

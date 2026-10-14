@@ -242,7 +242,7 @@ func (m *Manager) Load(name, path string) error {
 
 	// Compute ZONEMD if enabled
 	if m.onemdEnabled {
-		zonemd, err := ComputeZoneMD(z, ZONEMDSHA256)
+		zonemd, err := ComputeZoneMD(z, ZONEMDSHA384)
 		if err != nil {
 			m.warnf("zone: failed to compute ZONEMD for %s: %v", z.Origin, err)
 		} else {

@@ -12,7 +12,7 @@ import (
 type RDataZONEMD struct {
 	Serial    uint32 // SOA serial associated with this digest
 	Scheme    uint8  // Digest scheme (1 = simple ZONEMD)
-	Algorithm uint8  // Hash algorithm (1 = SHA-256, 2 = SHA-384)
+	Algorithm uint8  // Hash algorithm (RFC 8976: 1 = SHA-384, 2 = SHA-512)
 	Digest    []byte // The digest value
 }
 

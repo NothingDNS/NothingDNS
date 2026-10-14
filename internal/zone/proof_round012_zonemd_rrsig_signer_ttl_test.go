@@ -16,7 +16,7 @@ package zone
 // for the RRSIG RR's TTL, and compares.
 
 import (
-	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/binary"
 	"sort"
 	"testing"
@@ -71,7 +71,7 @@ func digestOf(rrs [][]byte) []byte {
 	sorted := make([][]byte, len(rrs))
 	copy(sorted, rrs)
 	sort.Slice(sorted, func(i, j int) bool { return string(sorted[i]) < string(sorted[j]) })
-	h := sha256.New()
+	h := sha512.New384()
 	for _, rr := range sorted {
 		h.Write(rr)
 	}
@@ -112,7 +112,7 @@ func TestProofRound012ZoneMDRRSIGUsesSignerTTLInCanonicalForm(t *testing.T) {
 		TTL:   300,
 		RData: "192.0.2.1",
 	}}
-	gotControl, err := ComputeZoneMD(control, ZONEMDSHA256)
+	gotControl, err := ComputeZoneMD(control, ZONEMDSHA384)
 	if err != nil {
 		t.Fatalf("FAIL: harness setup: control ComputeZoneMD: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestProofRound012ZoneMDRRSIGUsesSignerTTLInCanonicalForm(t *testing.T) {
 	}
 
 	// SUBJECT: compute the production digest for the signed zone.
-	got, err := ComputeZoneMD(z, ZONEMDSHA256)
+	got, err := ComputeZoneMD(z, ZONEMDSHA384)
 	if err != nil {
 		t.Fatalf("FAIL: production ComputeZoneMD returned an error: %v", err)
 	}
