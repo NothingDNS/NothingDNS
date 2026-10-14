@@ -751,6 +751,11 @@ func (s *XoTServer) generateAXFRRecordsLocked(z *zone.Zone) ([]*protocol.Resourc
 	var records []*protocol.ResourceRecord
 	records = append(records, soaRR)
 	records = append(records, zoneRecords...)
+	// ZONEMD follows the zone data, before the closing SOA, exactly as the
+	// TCP AXFR does (RFC 8976 §3; F717).
+	if zonemdRR := zonemdRecordLocked(z, origin); zonemdRR != nil {
+		records = append(records, zonemdRR)
+	}
 	records = append(records, soaRR)
 
 	return records, nil

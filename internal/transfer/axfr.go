@@ -319,28 +319,38 @@ func (s *AXFRServer) generateAXFRRecordsLocked(z *zone.Zone) ([]*protocol.Resour
 	records = append(records, zoneRecords...)
 
 	// Add ZONEMD record if present (RFC 8976)
-	if z.ZONEMD != nil {
-		var zonemdSerial uint32
-		if z.SOA != nil {
-			zonemdSerial = z.SOA.Serial
-		}
-		// z.ZONEMD is computed at load; an UPDATE or API edit since then
-		// leaves it stale, so re-digest the snapshot being streamed (F713).
-		fresh, err := zone.ComputeZoneMD(z, zone.ZONEMDAlgorithm(z.ZONEMD.Algorithm))
-		var zonemdRR *protocol.ResourceRecord
-		if err == nil {
-			zonemdRR, err = s.createZONEMDRR(fresh, origin, zonemdSerial)
-		}
-		if err != nil {
-			util.Warnf("axfr: failed to create ZONEMD record: %v", err)
-		} else {
-			records = append(records, zonemdRR)
-		}
+	if zonemdRR := zonemdRecordLocked(z, origin); zonemdRR != nil {
+		records = append(records, zonemdRR)
 	}
 
 	records = append(records, soaRR)
 
 	return records, nil
+}
+
+// zonemdRecordLocked returns the ZONEMD record to stream with z, or nil when
+// the zone has none. z.ZONEMD is computed at load; an UPDATE or API edit since
+// then leaves it stale, so the digest is recomputed over the snapshot being
+// streamed (F713). Shared by AXFR and XoT (F717). Caller holds z's read lock.
+func zonemdRecordLocked(z *zone.Zone, origin *protocol.Name) *protocol.ResourceRecord {
+	if z.ZONEMD == nil {
+		return nil
+	}
+	var serial uint32
+	if z.SOA != nil {
+		serial = z.SOA.Serial
+	}
+	fresh, err := zone.ComputeZoneMD(z, zone.ZONEMDAlgorithm(z.ZONEMD.Algorithm))
+	if err != nil {
+		util.Warnf("axfr: failed to create ZONEMD record: %v", err)
+		return nil
+	}
+	rr, err := (*AXFRServer)(nil).createZONEMDRR(fresh, origin, serial)
+	if err != nil {
+		util.Warnf("axfr: failed to create ZONEMD record: %v", err)
+		return nil
+	}
+	return rr
 }
 
 // createSOARR creates a ResourceRecord from SOARecord
