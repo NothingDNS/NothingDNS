@@ -79,12 +79,14 @@ func (p *tcpConnPool) get() (*tcpConn, error) {
 		c := p.idle[len(p.idle)-1]
 		p.idle = p.idle[:len(p.idle)-1]
 
-		// Check if the idle connection is still valid
+		// Check if the idle connection is still valid. An idle connection that
+		// is expired or closed by the peer is discarded and the next
+		// one tried (or a fresh one dialed): failing to close it is no reason to
+		// fail the caller's query, which would also count a failure against a
+		// healthy upstream (F723). closeConnLocked releases the pool slot before
+		// it closes, so the close error is only informational here.
 		if tcpIdleTimeoutReachedAt(c.lastUsedAt, time.Now(), p.idleTimeout) {
-			if err := p.closeConnLocked(c); err != nil {
-				p.mu.Unlock()
-				return nil, err
-			}
+			_ = p.closeConnLocked(c)
 			continue
 		}
 
@@ -99,10 +101,7 @@ func (p *tcpConnPool) get() (*tcpConn, error) {
 		// one is a non-blocking peek, the Windows one a deadline-bounded
 		// read whose window is a serialized stall under this lock).
 		if !tcpConnReusable(c.conn) {
-			if err := p.closeConnLocked(c); err != nil {
-				p.mu.Unlock()
-				return nil, err
-			}
+			_ = p.closeConnLocked(c)
 			continue
 		}
 
