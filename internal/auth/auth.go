@@ -365,6 +365,20 @@ func (s *Store) GenerateToken(username string, expiry time.Duration) (*Token, er
 		return nil, fmt.Errorf("user not found")
 	}
 
+	// Drop tokens that have already expired. Nothing else removes one that is
+	// never presented again, so each login left an entry behind for the life
+	// of the process (F714). The session counter follows, as in RevokeToken.
+	now := time.Now()
+	for tok, t := range s.tokens {
+		if !tokenExpiredAt(t, now) {
+			continue
+		}
+		delete(s.tokens, tok)
+		if s.maxSessionsPerUser > 0 && s.activeSessions[t.Username] > 0 {
+			s.activeSessions[t.Username]--
+		}
+	}
+
 	// Enforce session limit: revoke oldest token if at capacity. When
 	// we evict, decrement the counter first — the unconditional
 	// increment below otherwise drives \`activeSessions[username]\`
@@ -403,7 +417,6 @@ func (s *Store) GenerateToken(username string, expiry time.Duration) (*Token, er
 	// Sign the token with HMAC-SHA256
 	signature := s.signToken(token)
 
-	now := time.Now()
 	t := &Token{
 		Token:      token,
 		Signature:  signature,
