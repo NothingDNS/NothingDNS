@@ -1044,12 +1044,21 @@ func applyAddToZone(z *zone.Zone, name string, op UpdateOperation) error {
 		return nil
 	}
 
-	// Duplicate suppression: identical RDATA updates the TTL only.
+	// All RRs of an RRset share one TTL (RFC 2181 §5.2): the added RR's TTL
+	// applies to the whole set, not just the new or matching member (F716).
+	dup := false
 	for i, r := range existing {
-		if r.Type == typeStr && sameRDataValue(op.Type, r.RData, op.RData) {
-			existing[i].TTL = op.TTL
-			return nil
+		if r.Type != typeStr {
+			continue
 		}
+		existing[i].TTL = op.TTL
+		if sameRDataValue(op.Type, r.RData, op.RData) {
+			dup = true
+		}
+	}
+	// Duplicate suppression: identical RDATA updates the TTL only.
+	if dup {
+		return nil
 	}
 
 	z.Records[name] = append(existing, zone.Record{
