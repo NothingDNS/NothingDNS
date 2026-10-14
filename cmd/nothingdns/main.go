@@ -968,6 +968,12 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 			return nil
 		})
 	reloadState.apiServer = apiServer // wire apiServer back into reload state
+	// Signers appear and disappear with runtime zones (F722); the API server
+	// reads its own reference to the map.
+	handler.zoneSignersMu.Lock()
+	handler.zoneSignersChanged = func(m map[string]*dnssec.Signer) { apiServer.WithZoneSigners(m) }
+	apiServer.WithZoneSigners(handler.zoneSigners)
+	handler.zoneSignersMu.Unlock()
 
 	// Initialize ODoH (RFC 9230) if enabled
 	if httpConfig.ODoHEnabled {

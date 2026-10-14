@@ -64,21 +64,24 @@ type integratedHandler struct {
 	validator       *dnssec.Validator
 	zoneSigners     map[string]*dnssec.Signer
 	zoneSignersMu   sync.RWMutex
-	nsec3Memo       nsec3HashMemo               // F488: NSEC3 owner hashes for online denial
-	denialChains    map[string]denialChainEntry // F706: per-zone denial chain snapshots
-	denialChainsMu  sync.Mutex
-	zoneTree        *zone.RadixTree // Radix tree for O(log n) zone matching
-	cluster         *cluster.Cluster
-	splitHorizon    *filter.SplitHorizon
-	viewZones       map[string]map[string]*zone.Zone // view name -> origin -> Zone
-	auditLogger     *audit.AuditLogger
-	tracer          *otel.Tracer
-	serverCtx       context.Context // Root context for all per-query work; cancelled on server shutdown
-	cancelServer    context.CancelFunc
-	idnaEnabled     bool // RFC 5891 IDNA validation enabled
-	mdnsResponder   *mdns.Responder
-	dsoManager      *dso.Manager
-	cookieJar       *dnscookie.CookieJar
+	// zoneSignersChanged publishes a replaced signer map to its other readers
+	// (the API server); the map is never mutated in place (F722).
+	zoneSignersChanged func(map[string]*dnssec.Signer)
+	nsec3Memo          nsec3HashMemo               // F488: NSEC3 owner hashes for online denial
+	denialChains       map[string]denialChainEntry // F706: per-zone denial chain snapshots
+	denialChainsMu     sync.Mutex
+	zoneTree           *zone.RadixTree // Radix tree for O(log n) zone matching
+	cluster            *cluster.Cluster
+	splitHorizon       *filter.SplitHorizon
+	viewZones          map[string]map[string]*zone.Zone // view name -> origin -> Zone
+	auditLogger        *audit.AuditLogger
+	tracer             *otel.Tracer
+	serverCtx          context.Context // Root context for all per-query work; cancelled on server shutdown
+	cancelServer       context.CancelFunc
+	idnaEnabled        bool // RFC 5891 IDNA validation enabled
+	mdnsResponder      *mdns.Responder
+	dsoManager         *dso.Manager
+	cookieJar          *dnscookie.CookieJar
 
 	// Component sub-structs (replaced atomically on hot-reload)
 	security SecurityComponents
@@ -1187,6 +1190,9 @@ func extractNSNames(resp *protocol.Message) []string {
 // RebuildZoneTree rebuilds the zone radix tree from all zone sources.
 // Call after adding or removing zones to maintain O(log n) zone lookup.
 func (h *integratedHandler) RebuildZoneTree() {
+	// Runs after the zone locks below are released (LIFO), like the NOTIFY
+	// observation: signer construction reads key files.
+	defer h.ensureZoneSigners()
 	// F547: after the rebuild (and after zonesMu is released — deferred
 	// calls run last-in first-out), let the NOTIFY sender see every
 	// transferable zone's serial. It only schedules async sends.
@@ -1258,6 +1264,73 @@ func (h *integratedHandler) RebuildZoneTree() {
 		h.kvPersistence,
 		h.zoneTree,
 	).withSlaveZones(h.transfer.SlaveManager)
+}
+
+// ensureZoneSigners keeps the signer set in step with the zone set when
+// dnssec.signing is enabled: a zone that appears after start (API, Raft, gossip,
+// a SIGHUP that adds a zone file) gets a signer built from the configured keys,
+// and the signer of a deleted zone is dropped. Without it such zones were
+// served unsigned until the next restart, which a validator behind a parent DS
+// treats as bogus (F722). The map is replaced, never mutated, so readers holding
+// it are undisturbed; a signer that cannot be built is logged and skipped.
+func (h *integratedHandler) ensureZoneSigners() {
+	cfg := h.config
+	if cfg == nil || h.zoneManager == nil || !cfg.DNSSEC.Enabled || !cfg.DNSSEC.Signing.Enabled {
+		return
+	}
+	zones := h.zoneManager.List()
+
+	h.zoneSignersMu.RLock()
+	current := h.zoneSigners
+	var missing []*zone.Zone
+	for origin, z := range zones {
+		if current[origin] == nil {
+			missing = append(missing, z)
+		}
+	}
+	stale := false
+	for origin := range current {
+		if _, ok := zones[origin]; !ok {
+			stale = true
+			break
+		}
+	}
+	h.zoneSignersMu.RUnlock()
+	if len(missing) == 0 && !stale {
+		return
+	}
+
+	built := make(map[string]*dnssec.Signer, len(missing))
+	for _, z := range missing {
+		signer, err := loadZoneSigner(z, cfg.DNSSEC.Signing)
+		if err != nil {
+			h.logger.Errorf("DNSSEC: zone %s is served unsigned, cannot build its signer: %v", z.Origin, err)
+			continue
+		}
+		if signer != nil {
+			built[z.Origin] = signer
+			h.logger.Infof("Zone signer loaded for %s (%d keys)", z.Origin, len(signer.GetKeys()))
+		}
+	}
+
+	h.zoneSignersMu.Lock()
+	next := make(map[string]*dnssec.Signer, len(h.zoneSigners)+len(built))
+	for origin, signer := range h.zoneSigners {
+		if _, ok := zones[origin]; ok {
+			next[origin] = signer
+		}
+	}
+	for origin, signer := range built {
+		if next[origin] == nil {
+			next[origin] = signer
+		}
+	}
+	h.zoneSigners = next
+	changed := h.zoneSignersChanged
+	h.zoneSignersMu.Unlock()
+	if changed != nil {
+		changed(next)
+	}
 }
 
 // ReloadViews reloads split-horizon view configuration and zone files.
