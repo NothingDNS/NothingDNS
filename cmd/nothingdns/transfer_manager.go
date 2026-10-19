@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -141,6 +142,10 @@ func NewTransferManager(cfg *config.Config, zones map[string]*zone.Zone, zonesMu
 	mgr.result.SlaveKeys = newManagedKeyStore()
 	mgr.result.SlaveKeys.sync(slaveKeysFromConfig(cfg.SlaveZones, logger))
 	mgr.result.SlaveManager = transfer.NewSlaveManager(mgr.result.SlaveKeys.store)
+	// Keep transferred zones on disk (next to the IXFR journals, in their own
+	// subdirectory so zone_dir scanning never sees them) so a restart while the
+	// master is unreachable still serves the zone until its EXPIRE (F725).
+	mgr.result.SlaveManager.SetPersistDir(filepath.Join(journalDataDir, "slave-zones"))
 	logger.Info("Slave manager initialized for automatic zone transfers")
 
 	// Configure slave zones from config if available

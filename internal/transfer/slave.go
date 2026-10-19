@@ -119,7 +119,11 @@ type SlaveZone struct {
 	timerGen  uint64
 	expireAt  time.Time
 	now       func() time.Time
-	mu        sync.RWMutex
+	// persisted/persistedSerial: the zone file written under persistDir holds
+	// persistedSerial (F725).
+	persisted       bool
+	persistedSerial uint32
+	mu              sync.RWMutex
 }
 
 // claimTransfer makes the caller the zone's single transfer owner. If a
@@ -209,6 +213,8 @@ type SlaveManager struct {
 	stopped   bool
 	now       func() time.Time
 	afterFunc func(d time.Duration, f func()) (stop func() bool)
+	// persistDir, when set, holds one zone file per slave zone (F725).
+	persistDir string
 }
 
 // NewSlaveManager creates a new slave zone manager.
@@ -267,6 +273,7 @@ func (sm *SlaveManager) AddSlaveZone(config SlaveZoneConfig) error {
 	}
 
 	slaveZone.now = sm.now
+	sm.loadPersistedZone(zoneName, slaveZone)
 	sm.slaveZones[zoneName] = slaveZone
 
 	// Create IXFR client for this zone
@@ -459,6 +466,9 @@ func (sm *SlaveManager) runZoneTransfer(zoneName string, slaveZone *SlaveZone) {
 		if errors.Is(err, errSlaveZoneRemoved) {
 			slaveZone.releaseTransfer()
 			return
+		}
+		if err == nil {
+			sm.persistSlaveZone(zoneName, slaveZone)
 		}
 		if !sm.completeTransfer(zoneName, slaveZone, err) {
 			return
