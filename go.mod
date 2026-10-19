@@ -2,6 +2,8 @@ module github.com/nothingdns/nothingdns
 
 go 1.26.9
 
+toolchain go1.27.2
+
 require (
 	github.com/quic-go/quic-go v0.60.0
 	go.opentelemetry.io/otel v1.45.0
