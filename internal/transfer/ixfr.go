@@ -676,6 +676,12 @@ type ixfrStreamTracker struct {
 	incremental  bool
 	inAdds       bool // incremental: currently in an additions section
 	done         bool
+	// upToDateCandidate records that the first record was an SOA not newer
+	// than the client serial: the one wire shape that may terminate with a
+	// clean end of stream after exactly one record (RFC 1995 §2/§4). Any
+	// later record cancels it (the receive loop finishes on done, or errors
+	// on a truncated stream per F199).
+	upToDateCandidate bool
 }
 
 // feed consumes one answer RR and reports whether it completed the transfer.
@@ -696,9 +702,15 @@ func (t *ixfrStreamTracker) feed(rr *protocol.ResourceRecord) error {
 		}
 		t.newSerial = soa.Serial
 		// RFC 1995 §2/§4: a server with nothing newer answers with its SOA
-		// alone.
+		// alone — a stream that ENDS after this record. It must not finish
+		// the transfer here: when the client's serial is AHEAD of the
+		// master's, the in-repo master answers with a full AXFR-style stream
+		// whose leading SOA is also not newer (round-011), and finishing at
+		// idx 0 discarded that whole zone. Termination for the single-SOA
+		// answer is the clean end of stream after exactly this one record,
+		// detected by the receive loop.
 		if !serialIsNewer(soa.Serial, t.clientSerial) {
-			t.done = true
+			t.upToDateCandidate = true
 		}
 	case idx == 1:
 		if soa == nil {
@@ -743,13 +755,28 @@ func (c *IXFRClient) receiveIXFRResponseForRequest(conn net.Conn, expectedTXID u
 
 	for {
 		if err := conn.SetReadDeadline(time.Now().Add(c.timeout)); err != nil {
+			// The single-SOA up-to-date answer terminates at the end of the
+			// stream, and a master that closes right after writing it can
+			// surface that close at either read site: net.Pipe fails the next
+			// SetReadDeadline itself ("closed pipe") instead of returning EOF
+			// from the following Read. One fully received up-to-date-candidate
+			// record is the complete answer.
+			if tracker.n == 1 && tracker.upToDateCandidate {
+				return records, nil
+			}
 			return nil, fmt.Errorf("setting read deadline: %w", err)
 		}
 
 		lengthBuf := make([]byte, 2)
 		if _, err := io.ReadFull(conn, lengthBuf); err != nil {
 			// F199: a stream that ends before its closing SOA is truncated,
-			// never a complete transfer.
+			// never a complete transfer — with one exception: the up-to-date
+			// answer (RFC 1995 §2) is a single SOA and the master closes the
+			// stream after writing it. A clean end of stream after exactly
+			// that record is the complete answer, not truncation.
+			if tracker.n == 1 && tracker.upToDateCandidate {
+				return records, nil
+			}
 			return nil, fmt.Errorf("reading message length: %w", err)
 		}
 
