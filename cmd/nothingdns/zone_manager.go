@@ -197,7 +197,13 @@ func synchronizeKVZones(mgr *ZoneManager, zoneManager *zone.Manager, kvPersisten
 				continue
 			}
 			mgr.result.Zones[z.Origin] = z
-			mgr.result.ZoneFiles[z.Origin] = ""
+			// NOT tracked in result.ZoneFiles: that map lists FILE-backed
+			// origins only (the tracking map run() aliases for reload pruning).
+			// A KV-restored origin recorded here was pruned by
+			// applyConfiguredZoneFiles on the first reload — the zone's KV
+			// entry is not a file, so no reload plan ever contained it — and
+			// synchronizeKVZones runs only at start, so the zone stayed gone
+			// from the running server until the next restart.
 			zoneManager.LoadZone(z, "")
 
 			logger.Infof("Loaded zone %s from persistent database with %d records", z.Origin, len(z.Records))
