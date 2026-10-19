@@ -139,8 +139,12 @@ func (l *Logger) WithField(key string, value interface{}) *Logger {
 	}
 }
 
-// WithFields returns a new Logger with the specified fields added.
+// WithFields returns a new Logger with the specified fields added. A nil
+// Logger stays nil so chained level methods keep discarding.
 func (l *Logger) WithFields(fields Fields) *Logger {
+	if l == nil {
+		return nil
+	}
 	newFields := make(Fields, len(l.fields)+len(fields))
 	for k, v := range l.fields {
 		newFields[k] = v
@@ -156,8 +160,15 @@ func (l *Logger) WithFields(fields Fields) *Logger {
 	}
 }
 
-// log is the internal logging method.
+// log is the internal logging method. A nil Logger discards: logging must
+// never take down request processing when a handler was wired without one
+// (the zero-value integratedHandler the transport coverage tests boot, and
+// any mis-wired build), so all level methods are nil-receiver safe through
+// this funnel.
 func (l *Logger) log(level LogLevel, msg string, fields ...Fields) {
+	if l == nil {
+		return
+	}
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
