@@ -106,7 +106,7 @@ SIGHUP (and `POST /api/v1/config/reload`) runs `reloadConfig` in `cmd/nothingdns
 - `internal/dnssec/` — Validation, signing, key rollover (RFC 7583), Ed25519/ECDSA/RSA
 - `internal/storage/` — KV store with WAL, ACID transactions, TLV serialization
 - `internal/zone/` — BIND-format zone file parser with `$GENERATE`, radix tree, WAL journal, ZONEMD
-- `internal/transfer/` — AXFR/IXFR zone transfers, NOTIFY, Dynamic DNS (RFC 2136), XoT (RFC 9103)
+- `internal/transfer/` — AXFR/IXFR zone transfers, NOTIFY, Dynamic DNS (RFC 2136), XoT (RFC 9103); transferred slave zones are kept in `<journal data dir>/slave-zones/*.zone` (the file mtime is the last refresh, so EXPIRE survives a restart; an expired file is not loaded)
 - `internal/dashboard/` — Embedded React 19 SPA served from `static/dist/`
 - `internal/dso/` — DNS Stateful Operations (RFC 8490): TCP/TLS keepalive sessions, max-payload negotiation, TLV stream parser. Body lives in `protocol.Message.RawBody` (opcode 6).
 - `internal/odoh/` — Oblivious DNS over HTTPS (RFC 9230) with RFC 9180 base-mode HPKE (DHKEM-X25519 / HKDF-SHA256 / AES-GCM), stdlib-only. HPKE math validated against RFC 9180 §A.1 vectors in `hpke_vectors_test.go`. Legacy non-RFC-9230 helpers in `odoh.go` are retained for test compatibility only — do not extend them; build on `hpke.go` / `rfc9230.go`.
