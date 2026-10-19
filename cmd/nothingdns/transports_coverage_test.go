@@ -7,12 +7,14 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"net"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -42,6 +44,35 @@ func ephemeralPort(t *testing.T) string {
 	addr := ln.Addr().String()
 	_ = ln.Close()
 	return addr
+}
+
+// startServersEADDRINUSERetry runs buildCfg() -> startServers, retrying up to
+// 3 times only when an address was stolen between the probe-bind/close of
+// ephemeralPort and startServers' real bind (close-then-rebind TOCTOU; the
+// 2026-10-19 full-suite run failed TestStartServers_UDPTLSDoQ exactly this
+// way). Each attempt gets fresh ports from buildCfg, and a partial-start set
+// is stopped before the next attempt so failed tries never leak listeners.
+// Any other error — and exhaustion — is fatal, matching unhardened behavior.
+func startServersEADDRINUSERetry(t *testing.T, buildCfg func() *config.Config, handler *integratedHandler, logger *util.Logger) *servers {
+	t.Helper()
+	const attempts = 3
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		srvs, err := startServers(buildCfg(), handler, nil, logger)
+		if err == nil {
+			return srvs
+		}
+		if srvs != nil {
+			srvs.stopAll(logger) // partial-start set: release before retrying
+		}
+		lastErr = err
+		if !errors.Is(err, syscall.EADDRINUSE) {
+			break
+		}
+		t.Logf("startServers hit a stolen ephemeral port (attempt %d/%d), retrying with fresh ports: %v", i+1, attempts, err)
+	}
+	t.Fatalf("startServers after %d attempt(s): %v", attempts, lastErr)
+	return nil
 }
 
 func generateSelfSignedCert(t *testing.T) (certPath, keyPath string) {
@@ -585,6 +616,40 @@ func ephemeralUDPAddr(t *testing.T) string {
 	return ephemeralPort(t)
 }
 
+// TestStartServersEADDRINUSERetryRecovers pins that hardening with a
+// deterministic theft: the first attempt binds a UDP port this test holds,
+// so startServers fails with the observed wrapped EADDRINUSE, the helper
+// stops the (empty) partial set and retries with fresh ports, and the boot
+// succeeds on attempt 2.
+func TestStartServersEADDRINUSERetryRecovers(t *testing.T) {
+	holder, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("holding UDP port: %v", err)
+	}
+	defer holder.Close()
+	held := holder.LocalAddr().String()
+
+	logger := newDiscardLogger()
+	handler := &integratedHandler{}
+	attempts := 0
+
+	srvs := startServersEADDRINUSERetry(t, func() *config.Config {
+		attempts++
+		if attempts == 1 {
+			return minimalConfig(held) // deterministic attempt-1 port theft
+		}
+		return minimalConfig(ephemeralPort(t))
+	}, handler, logger)
+	defer srvs.stopAll(logger)
+
+	if attempts < 2 {
+		t.Fatalf("helper succeeded without retrying (attempts=%d); want >=2 — first attempt must fail on the held port %s", attempts, held)
+	}
+	if srvs == nil || srvs.udp == nil {
+		t.Fatal("expected a running UDP server after the retry recovered")
+	}
+}
+
 // ============================================================================
 // startServers — drive the TLS / DoQ conditional branches inside
 // startServers with cfg.Server.{TLS,QUIC}.Enabled = true.
@@ -773,38 +838,33 @@ func TestStartServers_TCPError(t *testing.T) {
 // stopAll.
 func TestStartServers_UDPTLSDoQ(t *testing.T) {
 	cert, key := generateSelfSignedCert(t)
-	udpAddr := ephemeralPort(t)
-	tcpAddr := ephemeralPort(t)
-	tlsAddr := ephemeralPort(t)
-	doqAddr := ephemeralUDPAddr(t)
-
-	cfg := &config.Config{
-		Server: config.ServerConfig{
-			Port:    53,
-			UDPBind: []string{udpAddr},
-			TCPBind: []string{tcpAddr},
-			TLS: config.TLSConfig{
-				Enabled:  true,
-				Bind:     tlsAddr,
-				CertFile: cert,
-				KeyFile:  key,
-			},
-			QUIC: config.QUICConfig{
-				Enabled:  true,
-				Bind:     doqAddr,
-				CertFile: cert,
-				KeyFile:  key,
-			},
-		},
-	}
-
 	handler := &integratedHandler{}
 	logger := newDiscardLogger()
 
-	srvs, err := startServers(cfg, handler, nil, logger)
-	if err != nil {
-		t.Fatalf("startServers (UDP+TLS+DoQ): %v", err)
-	}
+	// Fresh ports per attempt: ephemeralPort's probe-bind/close can lose the
+	// port to another bind before startServers re-binds it (observed 2026-10-19
+	// as a 0.00s suite failure on "bind: address already in use").
+	srvs := startServersEADDRINUSERetry(t, func() *config.Config {
+		return &config.Config{
+			Server: config.ServerConfig{
+				Port:    53,
+				UDPBind: []string{ephemeralPort(t)},
+				TCPBind: []string{ephemeralPort(t)},
+				TLS: config.TLSConfig{
+					Enabled:  true,
+					Bind:     ephemeralPort(t),
+					CertFile: cert,
+					KeyFile:  key,
+				},
+				QUIC: config.QUICConfig{
+					Enabled:  true,
+					Bind:     ephemeralUDPAddr(t),
+					CertFile: cert,
+					KeyFile:  key,
+				},
+			},
+		}
+	}, handler, logger)
 	if srvs == nil || srvs.udp == nil || srvs.tcp == nil || srvs.tls == nil || srvs.doq == nil {
 		t.Fatal("expected non-nil UDP, TCP, TLS, and DoQ servers")
 	}
