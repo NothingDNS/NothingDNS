@@ -145,6 +145,20 @@ func (bl *Blocklist) Load() error {
 }
 
 func (bl *Blocklist) load() error {
+	// Download every URL source before taking the lock: a slow remote list
+	// must not stall IsBlocked, which every query takes bl.mu.RLock for.
+	bl.mu.RLock()
+	urls := append([]string(nil), bl.urls...)
+	bl.mu.RUnlock()
+	fetched := make(map[string]map[string]Entry, len(urls))
+	for _, url := range urls {
+		entries, err := bl.fetchURL(url)
+		if err != nil {
+			return fmt.Errorf("loading blocklist from %s: %w", url, err)
+		}
+		fetched[url] = entries
+	}
+
 	bl.mu.Lock()
 	defer bl.mu.Unlock()
 
@@ -176,6 +190,11 @@ func (bl *Blocklist) load() error {
 
 	// Load from URLs
 	for _, url := range bl.urls {
+		if entries, ok := fetched[url]; ok {
+			bl.installURL(url, entries)
+			continue
+		}
+		// Added since the snapshot above.
 		if err := bl.loadURL(url); err != nil {
 			bl.entries = prevEntries
 			bl.sourceEntries = prevSourceEntries
@@ -283,19 +302,40 @@ type urlInfo struct {
 	Host   string
 }
 
-// loadURL downloads and parses a blocklist from a URL.
+// loadURL downloads a blocklist and merges it in. The caller holds bl.mu; use
+// fetchURL first when the lock must not be held across the download.
 func (bl *Blocklist) loadURL(url string) error {
+	entries, err := bl.fetchURL(url)
+	if err != nil {
+		return err
+	}
+	bl.installURL(url, entries)
+	return nil
+}
+
+// installURL records a fetched source. The caller holds bl.mu.
+func (bl *Blocklist) installURL(url string, sourceEntries map[string]Entry) {
+	bl.sourceEntries[url] = sourceEntries
+	for domain, entry := range sourceEntries {
+		bl.entries[domain] = entry
+	}
+}
+
+// fetchURL downloads and parses a blocklist from a URL without touching the
+// blocklist's state, so it needs no lock: IsBlocked takes bl.mu on every query
+// and must not wait for a download.
+func (bl *Blocklist) fetchURL(url string) (map[string]Entry, error) {
 	if err := validateBlocklistURL(url); err != nil {
-		return fmt.Errorf("invalid blocklist URL: %w", err)
+		return nil, fmt.Errorf("invalid blocklist URL: %w", err)
 	}
 	resp, err := bl.httpClient.Get(url)
 	if err != nil {
-		return fmt.Errorf("fetching %s: %w", url, err)
+		return nil, fmt.Errorf("fetching %s: %w", url, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP %d for %s", resp.StatusCode, url)
+		return nil, fmt.Errorf("HTTP %d for %s", resp.StatusCode, url)
 	}
 
 	// SECURITY: Limit total response body size to prevent memory exhaustion.
@@ -328,7 +368,7 @@ func (bl *Blocklist) loadURL(url string) error {
 			if len(fields) == 1 && net.ParseIP(fields[0]) == nil {
 				entryCount++
 				if entryCount > maxEntries {
-					return fmt.Errorf("blocklist %s exceeds maximum entry count of %d", url, maxEntries)
+					return nil, fmt.Errorf("blocklist %s exceeds maximum entry count of %d", url, maxEntries)
 				}
 				domain := normalizeDomain(fields[0])
 				sourceEntries[domain] = Entry{Domain: domain, Comment: "url:" + url}
@@ -340,7 +380,7 @@ func (bl *Blocklist) loadURL(url string) error {
 		// fields[1] is the domain to block
 		entryCount++
 		if entryCount > maxEntries {
-			return fmt.Errorf("blocklist %s exceeds maximum entry count of %d", url, maxEntries)
+			return nil, fmt.Errorf("blocklist %s exceeds maximum entry count of %d", url, maxEntries)
 		}
 		domain := normalizeDomain(fields[1])
 
@@ -358,16 +398,11 @@ func (bl *Blocklist) loadURL(url string) error {
 
 	if err := scanner.Err(); err != nil {
 		if errors.Is(err, errBlocklistBodyTooLarge) {
-			return fmt.Errorf("blocklist %s exceeds maximum response body size of %d bytes", url, maxRemoteBlocklistBody)
+			return nil, fmt.Errorf("blocklist %s exceeds maximum response body size of %d bytes", url, maxRemoteBlocklistBody)
 		}
-		return err
+		return nil, err
 	}
-
-	bl.sourceEntries[url] = sourceEntries
-	for domain, entry := range sourceEntries {
-		bl.entries[domain] = entry
-	}
-	return nil
+	return sourceEntries, nil
 }
 
 // loadFile loads a single blocklist file.
@@ -554,20 +589,51 @@ func (bl *Blocklist) AddFile(path string) error {
 	bl.mu.Lock()
 	defer bl.mu.Unlock()
 
+	// A source that is already registered is refreshed in place, not
+	// registered twice: RemoveSource drops only one registration.
+	registered := containsString(bl.files, path)
+	prev := bl.sourceEntries[path]
+	if registered {
+		delete(bl.sourceEntries, path)
+	}
 	if err := bl.loadFile(path); err != nil {
+		if registered {
+			bl.sourceEntries[path] = prev
+		}
 		return err
+	}
+	if registered {
+		bl.rebuildEntriesLocked()
+		return nil
 	}
 	bl.files = append(bl.files, path)
 	return nil
 }
 
+func containsString(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
 // AddURL downloads and loads a blocklist from a URL.
 func (bl *Blocklist) AddURL(url string) error {
+	entries, err := bl.fetchURL(url)
+	if err != nil {
+		return err
+	}
+
 	bl.mu.Lock()
 	defer bl.mu.Unlock()
-
-	if err := bl.loadURL(url); err != nil {
-		return err
+	// An already registered URL is refreshed, not registered twice.
+	registered := containsString(bl.urls, url)
+	bl.installURL(url, entries)
+	if registered {
+		bl.rebuildEntriesLocked()
+		return nil
 	}
 	bl.urls = append(bl.urls, url)
 	return nil
@@ -601,14 +667,29 @@ func (bl *Blocklist) RemoveFile(path string) error {
 	delete(bl.sourceEntries, path)
 	delete(bl.disabledSources, path)
 
-	// Rebuild entries from remaining files
+	bl.rebuildEntriesLocked()
+	return nil
+}
+
+// rebuildEntriesLocked recomputes the merged entry set from the per-source
+// entries and the manually added domains, in the order load() merges them.
+// Re-reading sources instead would drop the entries of the sources not
+// re-read and, for URLs, refetch them over the network under bl.mu.
+func (bl *Blocklist) rebuildEntriesLocked() {
 	bl.entries = make(map[string]Entry)
-	for _, f := range bl.files {
-		if err := bl.loadFile(f); err != nil {
-			return err
+	for _, id := range bl.files {
+		for domain, entry := range bl.sourceEntries[id] {
+			bl.entries[domain] = entry
 		}
 	}
-	return nil
+	for _, id := range bl.urls {
+		for domain, entry := range bl.sourceEntries[id] {
+			bl.entries[domain] = entry
+		}
+	}
+	for domain, entry := range bl.manualEntries {
+		bl.entries[domain] = entry
+	}
 }
 
 // SetEnabled enables or disables the blocklist. Wait-free for readers.
@@ -705,13 +786,7 @@ func (bl *Blocklist) RemoveSource(id string) error {
 			bl.files = append(bl.files[:i], bl.files[i+1:]...)
 			delete(bl.sourceEntries, id)
 			delete(bl.disabledSources, id)
-			// Rebuild entries
-			bl.entries = make(map[string]Entry)
-			for _, f := range bl.files {
-				if err := bl.loadFile(f); err != nil {
-					return err
-				}
-			}
+			bl.rebuildEntriesLocked()
 			return nil
 		}
 	}
@@ -721,13 +796,7 @@ func (bl *Blocklist) RemoveSource(id string) error {
 			bl.urls = append(bl.urls[:i], bl.urls[i+1:]...)
 			delete(bl.sourceEntries, id)
 			delete(bl.disabledSources, id)
-			// Rebuild entries
-			bl.entries = make(map[string]Entry)
-			for _, u := range bl.urls {
-				if err := bl.loadURL(u); err != nil {
-					return err
-				}
-			}
+			bl.rebuildEntriesLocked()
 			return nil
 		}
 	}
