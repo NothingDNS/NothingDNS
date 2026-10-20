@@ -633,7 +633,8 @@ func (p *parser) handleInclude(args []string) error {
 
 	// If an origin override was specified, apply it for the included file
 	if len(args) >= 2 {
-		p.zone.Origin = strings.ToLower(canonicalize(args[1]))
+		// Like $ORIGIN, a relative name is relative to the current origin.
+		p.zone.Origin = strings.ToLower(makeAbsolute(args[1], p.zone.Origin))
 	}
 
 	f, err := os.Open(includeFile)
@@ -982,7 +983,9 @@ func (p *parser) parseRecordOwned(line string, ownerInherited bool) error {
 		// Line starts with owner name
 		record.Name = fields[fieldIdx]
 		fieldIdx++
-		p.lastOwner = record.Name
+		// Remember the owner as an absolute name: a later $ORIGIN or
+		// $INCLUDE origin must not re-resolve an inherited owner.
+		p.lastOwner = makeAbsolute(record.Name, p.zone.Origin)
 	} else {
 		// Continuation line - use last owner
 		record.Name = p.lastOwner
