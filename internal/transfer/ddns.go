@@ -421,7 +421,8 @@ func (h *DynamicDNSHandler) handleUpdate(req *protocol.Message, clientIP net.IP,
 // prerequisite RR of any class carries TTL 0, and an ANY or NONE prerequisite
 // carries no RDATA. An ANY or NONE update RR carries TTL 0, and an ANY one no
 // RDATA (a NONE update RR names the RR to delete, so it has RDATA). No update RR
-// is a transfer or mail meta-type (IXFR, AXFR, MAILB, MAILA).
+// is a transfer or mail meta-type (IXFR, AXFR, MAILB, MAILA), and TYPE ANY
+// appears only with class ANY (delete all RRsets at a name).
 func updateRRsWellFormed(prereqs, updates []*protocol.ResourceRecord) bool {
 	hasRData := func(rr *protocol.ResourceRecord) bool { return rr.Data != nil && rr.Data.Len() > 0 }
 	check := func(rr *protocol.ResourceRecord, prerequisite bool) bool {
@@ -435,6 +436,11 @@ func updateRRsWellFormed(prereqs, updates []*protocol.ResourceRecord) bool {
 			switch rr.Type {
 			case protocol.TypeIXFR, protocol.TypeAXFR, protocol.TypeMAILB, protocol.TypeMAILA:
 				return false
+			case protocol.TypeANY:
+				// Only "delete all RRsets at a name" (class ANY) uses TYPE ANY.
+				if rr.Class != protocol.ClassANY {
+					return false
+				}
 			}
 		}
 		switch rr.Class {
