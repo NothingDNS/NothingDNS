@@ -824,12 +824,28 @@ func (e *Engine) AddQNAMERule(pattern string, action PolicyAction, overrideData 
 	e.addRule(rule)
 }
 
-// RemoveQNAMERule removes a QNAME rule by pattern.
-func (e *Engine) RemoveQNAMERule(pattern string) {
+// RemoveQNAMERule removes a QNAME rule by pattern and reports whether one
+// existed.
+func (e *Engine) RemoveQNAMERule(pattern string) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	delete(e.qnameRules, normalizeQNAMEPattern(pattern))
+	key := normalizeQNAMEPattern(pattern)
+	_, existed := e.qnameRules[key]
+	delete(e.qnameRules, key)
+	return existed
+}
+
+// RemoveNSDNAMERule removes an NSDNAME rule by pattern and reports whether one
+// existed. ListQNAMERules lists NSDNAME rules too, so they must be removable.
+func (e *Engine) RemoveNSDNAMERule(pattern string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	key := normalizeQNAMEPattern(pattern)
+	_, existed := e.nsdnameRules[key]
+	delete(e.nsdnameRules, key)
+	return existed
 }
 
 // normalizeQNAMEPattern matches the key form QNAMEPolicy looks up: lowercase,

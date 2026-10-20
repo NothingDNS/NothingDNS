@@ -148,7 +148,22 @@ func (s *Server) handleRPZRules(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusBadRequest, "pattern query parameter required")
 			return
 		}
-		rpzEngine.RemoveQNAMERule(pattern)
+		// The list holds QNAME and NSDNAME rules; an optional trigger picks
+		// one when a pattern has both. Without it the QNAME rule goes first,
+		// and an NSDNAME rule is removed when no QNAME rule has the pattern.
+		switch trigger := strings.ToLower(r.URL.Query().Get("trigger")); trigger {
+		case "":
+			if !rpzEngine.RemoveQNAMERule(pattern) {
+				rpzEngine.RemoveNSDNAMERule(pattern)
+			}
+		case "qname":
+			rpzEngine.RemoveQNAMERule(pattern)
+		case "nsdname":
+			rpzEngine.RemoveNSDNAMERule(pattern)
+		default:
+			s.writeError(w, http.StatusBadRequest, "trigger must be QNAME or NSDNAME")
+			return
+		}
 		s.writeJSON(w, http.StatusOK, &MessageResponse{Message: "Rule removed"})
 	}
 }

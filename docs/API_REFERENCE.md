@@ -114,7 +114,7 @@ including `viewer`.
 | GET | `/api/v1/rpz` | operator | |
 | GET | `/api/v1/rpz/rules` | operator | |
 | POST | `/api/v1/rpz/rules` | admin | |
-| DELETE | `/api/v1/rpz/rules?pattern=` | admin | |
+| DELETE | `/api/v1/rpz/rules?pattern=[&trigger=]` | admin | |
 | POST | `/api/v1/rpz/toggle` | admin | |
 | GET | `/api/v1/dnssec/status` | operator | |
 | GET | `/api/v1/dnssec/keys` | admin | |
@@ -1205,8 +1205,9 @@ curl -s http://127.0.0.1:8080/api/v1/rpz -H "Authorization: Bearer $TOKEN"
 
 ### GET /api/v1/rpz/rules
 
-Role: operator. Lists QNAME-trigger rules only, at most 5000 (`truncated: true`
-when capped; `total` is the full count).
+Role: operator. Lists the QNAME and NSDNAME trigger rules (the `trigger` field
+tells them apart; client-IP, response-IP and NSIP rules are not listed), at most
+5000 (`truncated: true` when capped; `total` is the full count).
 
 ```json
 {
@@ -1255,7 +1256,10 @@ Response `201`:
 
 ### DELETE /api/v1/rpz/rules?pattern=
 
-Role: admin.
+Role: admin. Removes the rule listed for `pattern`. Without `trigger` the QNAME
+rule is removed, or the NSDNAME rule when no QNAME rule has that pattern. When a
+pattern has both, pass `trigger=QNAME` or `trigger=NSDNAME` (case-insensitive)
+to choose. Any other `trigger` value is `400`.
 
 ```bash
 curl -s -X DELETE "http://127.0.0.1:8080/api/v1/rpz/rules?pattern=ads.example.net" \
