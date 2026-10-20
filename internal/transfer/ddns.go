@@ -417,14 +417,25 @@ func (h *DynamicDNSHandler) handleUpdate(req *protocol.Message, clientIP net.IP,
 
 // updateRRsWellFormed checks the RR formats RFC 2136 §3.2.3 and §3.4.1.2 make
 // FORMERR. Every prerequisite and update RR is of the zone's class (IN) or ANY
-// or NONE (anything else would otherwise be stored as an IN record). An ANY or
-// NONE RR carries TTL 0; an ANY RR carries no RDATA, and neither does an ANY or
-// NONE prerequisite (a NONE update RR names the RR to delete, so it has RDATA).
+// or NONE (anything else would otherwise be stored as an IN record). A
+// prerequisite RR of any class carries TTL 0, and an ANY or NONE prerequisite
+// carries no RDATA. An ANY or NONE update RR carries TTL 0, and an ANY one no
+// RDATA (a NONE update RR names the RR to delete, so it has RDATA). No update RR
+// is a transfer or mail meta-type (IXFR, AXFR, MAILB, MAILA).
 func updateRRsWellFormed(prereqs, updates []*protocol.ResourceRecord) bool {
 	hasRData := func(rr *protocol.ResourceRecord) bool { return rr.Data != nil && rr.Data.Len() > 0 }
 	check := func(rr *protocol.ResourceRecord, prerequisite bool) bool {
 		if rr == nil || rr.Name == nil {
 			return false
+		}
+		if prerequisite && rr.TTL != 0 {
+			return false
+		}
+		if !prerequisite {
+			switch rr.Type {
+			case protocol.TypeIXFR, protocol.TypeAXFR, protocol.TypeMAILB, protocol.TypeMAILA:
+				return false
+			}
 		}
 		switch rr.Class {
 		case protocol.ClassIN:
