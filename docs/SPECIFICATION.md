@@ -898,81 +898,119 @@ newer snapshot.
 
 ### 11.1 REST API
 
-Base path: `/api/v1`
-Authentication: API key (Bearer token) or basic auth
+Base path: `/api/v1` (dashboard data under `/api/dashboard`)
+Authentication: `Authorization: Bearer <token>`: a session token from
+`POST /api/v1/auth/login`, or the shared `server.http.auth_token`. The session
+cookie is also accepted for `GET`, `HEAD` and `OPTIONS`. Roles are
+`viewer < operator < admin`.
+
+The authoritative route list, with roles, request and response bodies, is
+[API_REFERENCE.md](API_REFERENCE.md) §2 onward; the table below is a summary of
+the routes the server registers (`internal/api/server.go`). A path in `{}` is a
+URL segment; records and blocklist sources are addressed by the JSON body or
+query parameter shown, not by an id in the path. Paths starting with `/api/`,
+`/health`, `/livez`, `/readyz` and `/ws` are absolute; the others are relative to
+`/api/v1`.
 
 #### Endpoints
 
-**Zones**
+**Health and status**
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | /zones | List all zones |
-| POST | /zones | Create zone |
-| GET | /zones/{name} | Get zone details |
-| PUT | /zones/{name} | Update zone |
-| DELETE | /zones/{name} | Delete zone |
-| POST | /zones/{name}/import | Import BIND zone file |
-| GET | /zones/{name}/export | Export BIND zone file |
+| GET | /health, /livez | Liveness (public) |
+| GET | /readyz | Readiness: 503 when no upstream is healthy (public) |
+| GET | /api/v1/status | Server status |
+| GET | /api/v1/server/config | Server configuration summary |
 
-**Records**
+**Authentication**
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | /zones/{name}/records | List records |
-| POST | /zones/{name}/records | Add record |
-| PUT | /zones/{name}/records/{id} | Update record |
-| DELETE | /zones/{name}/records/{id} | Delete record |
+| POST | /api/v1/auth/login | Log in, returns a token |
+| POST | /api/v1/auth/bootstrap | First admin or password reset (localhost only) |
+| GET | /api/v1/auth/session | Restore the dashboard session from the cookie |
+| POST | /api/v1/auth/logout | Revoke the current token |
+| GET | /api/v1/auth/roles | List roles |
+| GET, POST, DELETE | /api/v1/auth/users | List, create, delete users (`DELETE /auth/users/{username}` also works) |
+
+**Zones and records**
+| Method | Path | Description |
+|--------|------|-------------|
+| GET, POST | /zones | List zones, create a zone |
+| GET, DELETE | /zones/{name} | Zone details, delete a zone |
+| POST | /zones/reload?zone= | Reload a zone from its file |
+| GET | /zones/transfers | Secondary-zone transfer state |
+| GET, POST, PUT, DELETE | /zones/{name}/records | List, add, update, delete records (JSON body names the record) |
+| GET | /zones/{name}/export | Export a BIND zone file |
+| POST | /zones/{name}/ptr-bulk | Bulk PTR (and A) creation from a CIDR |
+| GET | /zones/{name}/ptr6-lookup?ip= | IPv6 reverse lookup in an ip6.arpa zone |
 
 **Cluster**
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | /cluster/status | Cluster status |
 | GET | /cluster/nodes | List nodes |
-| POST | /cluster/nodes | Add node |
-| DELETE | /cluster/nodes/{id} | Remove node |
-| POST | /cluster/snapshot | Trigger snapshot |
+| POST | /cluster/join | Join a cluster |
+| DELETE | /cluster/leave | Leave the cluster |
 
-**Blocklist**
+**Blocklists**
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | /blocklist | List blocked domains |
-| POST | /blocklist | Add domain(s) |
-| DELETE | /blocklist/{domain} | Unblock domain |
-| POST | /blocklist/reload | Reload blocklists |
+| GET, POST | /blocklists | Statistics, add a file or URL source |
+| GET | /blocklists/sources | List sources |
+| POST | /blocklists/toggle | Enable or disable blocking |
+| POST | /blocklists/{source}/toggle | Enable or disable one source |
+| DELETE | /blocklists/{source} | Remove a source |
+
+**RPZ**
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | /rpz | RPZ statistics |
+| GET, POST, DELETE | /rpz/rules | List, add, delete rules (`DELETE ?pattern=[&trigger=]`) |
+| POST | /rpz/toggle | Enable or disable RPZ |
+
+**Access control, upstreams, GeoDNS**
+| Method | Path | Description |
+|--------|------|-------------|
+| GET, PUT | /acl | ACL rules |
+| GET, PUT | /acl/recursion | Recursion allow list |
+| GET, PUT | /upstreams | Upstream servers |
+| GET | /geoip/stats | GeoDNS statistics |
 
 **Cache**
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | /cache/stats | Cache statistics |
-| DELETE | /cache | Flush entire cache |
-| DELETE | /cache/{domain} | Flush domain from cache |
+| POST | /cache/flush | Flush the cache |
 
 **Config**
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | /config | Current config |
-| PATCH | /config | Update runtime config |
+| GET | /config | Current config (secrets redacted) |
+| POST | /config/reload | Reload the config file (same as SIGHUP) |
+| PUT | /config/{logging,rrl,cache,resolution,dns64,cookie} | Change a runtime tunable (persisted in `runtime_overrides.json`) |
 
 **DNSSEC**
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | /zones/{name}/dnssec | DNSSEC status |
-| POST | /zones/{name}/dnssec/sign | Sign zone |
-| POST | /zones/{name}/dnssec/rollover | Key rollover (not implemented, see §6.1.2) |
-| GET | /zones/{name}/dnssec/ds | Get DS records |
+| GET | /dnssec/status | Validation and signing status |
+| GET | /dnssec/keys | Signing keys (admin) |
 
-**Statistics**
+There is no zone-signing or key-rollover endpoint (see §6.1.2).
+
+**Statistics and query log**
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | /stats | Query statistics |
-| GET | /stats/top-queries | Top queried domains |
-| GET | /stats/top-blocked | Top blocked domains |
-| GET | /stats/top-clients | Top clients |
+| GET | /api/dashboard/stats, /api/dashboard/queries, /api/dashboard/zones | Dashboard data |
+| GET | /queries | Query log |
+| GET | /topdomains | Top queried domains |
+| GET | /metrics/history | Metrics history |
+| GET | /ws | WebSocket query stream |
 
-**Swagger**
+**OpenAPI**
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | /swagger | Swagger UI |
-| GET | /swagger/spec.json | OpenAPI 3.0 spec |
+| GET | /api/openapi.json | OpenAPI 3.0 spec |
+| GET | /api/docs | API explorer |
 
 ### 11.2 CLI Tool (dnsctl)
 
