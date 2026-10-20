@@ -602,6 +602,7 @@ func (m *Manager) AddRecord(zoneName string, record Record) error {
 			return fmt.Errorf("%w: %s %s %s", ErrRecordExists, record.Name, record.Type, record.RData)
 		}
 	}
+	setRRsetTTL(z.Records[record.Name], record.Type, record.TTL)
 	z.Records[record.Name] = append(z.Records[record.Name], record)
 	IncrementSerial(z)
 	z.Unlock()
@@ -619,6 +620,17 @@ func (m *Manager) AddRecord(zoneName string, record Record) error {
 
 	m.notifyMutation(zoneName, false)
 	return nil
+}
+
+// setRRsetTTL gives every record of rtype in records the same TTL: all RRs of
+// an RRset share one TTL (RFC 2181 §5.2), so a change to one member's TTL is a
+// change to the set's, as for a DDNS add (F716).
+func setRRsetTTL(records []Record, rtype string, ttl uint32) {
+	for i := range records {
+		if strings.EqualFold(records[i].Type, rtype) {
+			records[i].TTL = ttl
+		}
+	}
 }
 
 // DeleteRecord deletes records matching name+type from a zone.
@@ -833,7 +845,9 @@ func (m *Manager) UpdateRecord(zoneName string, name, rtype, oldData string, new
 
 	found := false
 	for i, r := range records {
-		if strings.ToUpper(r.Type) == rtype && (strings.EqualFold(r.RData, oldData) || RDataEqual(rtype, r.RData, oldData)) {
+		// RDataEqual, not a case-insensitive text match: TXT and other data are
+		// case-sensitive, so records differing only in case are different RRs.
+		if strings.ToUpper(r.Type) == rtype && RDataEqual(rtype, r.RData, oldData) {
 			records[i] = newRecord
 			found = true
 			break
@@ -843,6 +857,11 @@ func (m *Manager) UpdateRecord(zoneName string, name, rtype, oldData string, new
 	if !found {
 		z.Unlock()
 		return fmt.Errorf("record not found: %s %s %s", name, rtype, oldData)
+	}
+	// The updated TTL applies to the whole RRset (see setRRsetTTL), unless the
+	// record moved to another owner name.
+	if newRecord.Name == name {
+		setRRsetTTL(records, rtype, newRecord.TTL)
 	}
 
 	IncrementSerial(z)
