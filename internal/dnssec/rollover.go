@@ -357,7 +357,12 @@ func (rs *RolloverScheduler) generateRolloverZSK(now time.Time) {
 	// Schedule retirement of current active ZSKs
 	zsks := rs.signer.GetActiveZSKs()
 	for _, zsk := range zsks {
-		if zsk.KeyTag != key.KeyTag && zsk.Timing != nil && zsk.Timing.Retire.IsZero() {
+		// A key with no retirement scheduled retires when the replacement
+		// activates. One that retires sooner (the rollover starts on the first
+		// check inside the publish window) is held until then: retiring it
+		// first would leave no active ZSK in between.
+		if zsk.KeyTag != key.KeyTag && zsk.Timing != nil &&
+			(zsk.Timing.Retire.IsZero() || zsk.Timing.Retire.Before(activeTime)) {
 			updatedTiming := *zsk.Timing // copy
 			updatedTiming.Retire = activeTime
 			updatedTiming.Remove = activeTime.Add(rs.config.RetireSafety)
@@ -401,7 +406,12 @@ func (rs *RolloverScheduler) generateRolloverKSK(now time.Time) {
 	// Schedule retirement of current active KSKs
 	ksks := rs.signer.GetActiveKSKs()
 	for _, ksk := range ksks {
-		if ksk.KeyTag != key.KeyTag && ksk.Timing != nil && ksk.Timing.Retire.IsZero() {
+		// A key with no retirement scheduled retires when the replacement
+		// activates. One that retires sooner (the rollover starts on the first
+		// check inside the publish window) is held until then: retiring it
+		// first would leave no active KSK in between.
+		if ksk.KeyTag != key.KeyTag && ksk.Timing != nil &&
+			(ksk.Timing.Retire.IsZero() || ksk.Timing.Retire.Before(activeTime)) {
 			updatedTiming := *ksk.Timing // copy
 			updatedTiming.Retire = activeTime
 			updatedTiming.Remove = activeTime.Add(rs.config.RetireSafety)
