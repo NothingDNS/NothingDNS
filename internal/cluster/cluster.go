@@ -186,6 +186,11 @@ func New(config Config, logger *util.Logger, dnsCache *cache.Cache) (*Cluster, e
 
 	// Initialize based on consensus mode
 	if config.ConsensusMode == ConsensusRaft {
+		// Every replica applies the same log, so zone serials must not depend
+		// on the local clock (zone.Manager.SetDeterministicSerials).
+		if config.ZoneManager != nil {
+			config.ZoneManager.SetDeterministicSerials(true)
+		}
 		if err := c.initRaft(); err != nil {
 			return nil, fmt.Errorf("initializing Raft: %w", err)
 		}

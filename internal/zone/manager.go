@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
@@ -89,6 +90,13 @@ type Manager struct {
 	logger       Logger            // optional logger for errors
 	onemdEnabled bool              // enable ZONEMD computation (RFC 8976)
 
+	// deterministicSerials makes the manager's own mutations bump the SOA
+	// serial by plain RFC 1982 increment instead of the date-style
+	// IncrementSerial, which reads the local wall clock. A Raft cluster sets
+	// it: every replica applies the same log, so the serial must depend only
+	// on the zone and the log.
+	deterministicSerials atomic.Bool
+
 	// mutationHook, when set, is invoked after every successful zone
 	// mutation (CreateZone, AddRecord, DeleteRecord, UpdateRecord with
 	// deleted=false; DeleteZone with deleted=true). It centralizes
@@ -115,6 +123,23 @@ func NewManager() *Manager {
 		zones: make(map[string]*Zone),
 		files: make(map[string]string),
 	}
+}
+
+// SetDeterministicSerials selects how the manager bumps a zone's SOA serial on
+// AddRecord, UpdateRecord, DeleteRecord and DeleteRecordData: plain increment
+// when enabled (identical on every Raft replica), YYYYMMDDNN otherwise.
+func (m *Manager) SetDeterministicSerials(enabled bool) {
+	m.deterministicSerials.Store(enabled)
+}
+
+// bumpSerial advances z's SOA serial per SetDeterministicSerials. The caller
+// holds z.Lock().
+func (m *Manager) bumpSerial(z *Zone) {
+	if m.deterministicSerials.Load() {
+		incrementSerialPlain(z)
+		return
+	}
+	IncrementSerial(z)
 }
 
 // SetLogger sets the logger for the manager.
@@ -604,7 +629,7 @@ func (m *Manager) AddRecord(zoneName string, record Record) error {
 	}
 	setRRsetTTL(z.Records[record.Name], record.Type, record.TTL)
 	z.Records[record.Name] = append(z.Records[record.Name], record)
-	IncrementSerial(z)
+	m.bumpSerial(z)
 	z.Unlock()
 
 	if m.zoneDir != "" {
@@ -676,7 +701,7 @@ func (m *Manager) DeleteRecord(zoneName, name, rtype string) error {
 		z.Records[name] = filtered
 	}
 
-	IncrementSerial(z)
+	m.bumpSerial(z)
 	z.Unlock()
 
 	if m.zoneDir != "" {
@@ -747,7 +772,7 @@ func (m *Manager) DeleteRecordData(zoneName, name, rtype, rdata string) error {
 		z.Records[name] = filtered
 	}
 
-	IncrementSerial(z)
+	m.bumpSerial(z)
 	z.Unlock()
 
 	if m.zoneDir != "" {
@@ -864,7 +889,7 @@ func (m *Manager) UpdateRecord(zoneName string, name, rtype, oldData string, new
 		setRRsetTTL(records, rtype, newRecord.TTL)
 	}
 
-	IncrementSerial(z)
+	m.bumpSerial(z)
 	z.Unlock()
 
 	if m.zoneDir != "" {
@@ -985,8 +1010,21 @@ func IncrementSerial(z *Zone) {
 	} else {
 		z.SOA.Serial = SerialIncrement(z.SOA.Serial)
 	}
+	syncSOARecord(z)
+}
 
-	// Update the SOA record in the Records map too
+// incrementSerialPlain bumps the SOA serial by one (RFC 1982), with no
+// dependence on the clock.
+func incrementSerialPlain(z *Zone) {
+	if z.SOA == nil {
+		return
+	}
+	z.SOA.Serial = SerialIncrement(z.SOA.Serial)
+	syncSOARecord(z)
+}
+
+// syncSOARecord rewrites the SOA record in the Records map from z.SOA.
+func syncSOARecord(z *Zone) {
 	if records, ok := z.Records[z.Origin]; ok {
 		for i, r := range records {
 			if r.Type == "SOA" {

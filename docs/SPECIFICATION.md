@@ -880,6 +880,7 @@ newer snapshot.
 | Atomic zone batch (`create_zone` envelope, payload v1) | logs "create_zone … missing nameservers", applies nothing | upgrade all nodes before Raft-mode Dynamic DNS |
 | SOA-prerequisite guard (payload v2, `"zone": true`) | a v1-only node rejects it deterministically (nothing applied, warning logged) | upgrade all nodes before UPDATEs with SOA prerequisites |
 | Leader DNS address trailer on AppendEntries | old followers ignore it; an old leader sends none, so forwarding followers answer SERVFAIL | upgrade before enabling `forward_updates` |
+| Deterministic SOA serials for Raft-applied single-record changes (`add_record`, `update_record`, `del_record` bump the serial by plain RFC 1982 increment, not the date-style `YYYYMMDDNN`) | an older node bumps from its own clock, so its serial for the same log entries differs from upgraded nodes (same data, different serial) until the zone is next replaced by a snapshot | upgrade all nodes before relying on equal serials across replicas (for example as AXFR/IXFR sources behind a shared name); serials of Raft-mode zones are no longer date-shaped |
 | RFC 8945 TSIG chain on multi-message AXFR/IXFR | pre-fix servers sent an unbound chain that new clients reject (keyed AXFR between NothingDNS nodes never worked before the fix) | upgrade primaries and secondaries together for keyed transfers; single-message TSIG is unchanged; third-party interop of the multi-message chain is not yet proven |
 
 ---
