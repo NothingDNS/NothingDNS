@@ -25,6 +25,7 @@ func TestParseZoneRecords(t *testing.T) {
 		zoneData  string
 		origin    string
 		wantCount int
+		wantErr   bool     // the file is rejected, naming the offending line
 		wantTypes []uint16 // expected record types in order
 		wantNames []string // expected owner names in order
 	}{
@@ -79,7 +80,7 @@ www		300	IN	CNAME	example.com.
 			wantNames: []string{"example.com.", "example.com."},
 		},
 		{
-			name: "dollar directives are skipped",
+			name: "dollar directives are honoured",
 			zoneData: `$TTL 300
 $ORIGIN example.com.
 @	300	IN	A	192.0.2.1
@@ -115,40 +116,37 @@ ftp	300	IN	A	192.0.2.2
 			wantNames: []string{"www.example.com."},
 		},
 		{
-			name: "lines with fewer than 4 fields are skipped",
+			name: "lines the parser cannot read are an error, not skipped",
 			zoneData: `@	IN	A
 @	300	IN
 short
 `,
-			origin:    "example.com.",
-			wantCount: 0,
+			origin:  "example.com.",
+			wantErr: true,
 		},
 		{
-			name: "non-IN class records are skipped",
+			name: "non-IN class records are an error",
 			zoneData: `@	300	CH	A	192.0.2.1
 @	300	IN	A	192.0.2.2
 `,
-			origin:    "example.com.",
-			wantCount: 1,
-			wantNames: []string{"example.com."},
+			origin:  "example.com.",
+			wantErr: true,
 		},
 		{
-			name: "invalid TTL is skipped",
+			name: "invalid TTL is an error",
 			zoneData: `@	notanumber	IN	A	192.0.2.1
 @	300	IN	A	192.0.2.2
 `,
-			origin:    "example.com.",
-			wantCount: 1,
-			wantNames: []string{"example.com."},
+			origin:  "example.com.",
+			wantErr: true,
 		},
 		{
-			name: "unknown record type is skipped",
+			name: "unknown record type is an error",
 			zoneData: `@	300	IN	UNKNOWN	foo
 @	300	IN	A	192.0.2.1
 `,
-			origin:    "example.com.",
-			wantCount: 1,
-			wantTypes: []uint16{protocol.TypeA},
+			origin:  "example.com.",
+			wantErr: true,
 		},
 		{
 			name: "NS record with relative name",
@@ -195,6 +193,15 @@ short
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			records, err := parseZoneRecords(tt.zoneData, tt.origin)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("parseZoneRecords() = %d records and no error, want an error", len(records))
+				}
+				if !strings.Contains(err.Error(), "line ") {
+					t.Errorf("error does not name a line: %v", err)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("parseZoneRecords() error = %v", err)
 			}

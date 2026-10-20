@@ -1014,19 +1014,24 @@ There is no zone-signing or key-rollover endpoint (see §6.1.2).
 
 ### 11.2 CLI Tool (dnsctl)
 
+`dnsctl` talks to the REST API (§11.1). Global options go before the command:
+`-server URL` (default `http://localhost:8080`, or `NOTHINGDNS_SERVER`) and
+`-api-key KEY` (or `NOTHINGDNS_API_KEY`). `dnsctl help [command]` and
+`dnsctl version` are built in. The commands below are the ones in `cmd/dnsctl`.
+
 ```bash
 # Zone management
 dnsctl zone list
-dnsctl zone add example.com ns1.example.com.
+dnsctl zone add example.com [ns1.example.com.]   # nameserver defaults to ns1.<zone>.
 dnsctl zone remove example.com
 dnsctl zone reload example.com
 dnsctl zone export example.com > example.com.zone
 
-# Record management
+# Record management (ttl is optional: 300 on add, unchanged on update)
 dnsctl record list example.com
-dnsctl record add example.com www A 192.168.1.1 3600
-dnsctl record update example.com www A 192.168.1.1 192.168.1.2 3600
-dnsctl record remove example.com www A
+dnsctl record add example.com www A 192.168.1.1 [3600]
+dnsctl record update example.com www A 192.168.1.1 192.168.1.2 [3600]
+dnsctl record remove example.com www A           # removes the whole RRset
 
 # Cache
 dnsctl cache stats
@@ -1037,31 +1042,40 @@ dnsctl cache flush example.com
 dnsctl cluster status
 dnsctl cluster peers
 dnsctl cluster join 10.0.0.4:7946
-dnsctl cluster leave
+dnsctl cluster leave                              # removes the local node
 
 # Blocklist
 dnsctl blocklist status
 dnsctl blocklist sources
-dnsctl blocklist reload
+dnsctl blocklist reload                           # reloads the whole config, like `config reload`
 
 # DNSSEC
 dnsctl dnssec status
 dnsctl dnssec keys
 dnsctl dnssec generate-key --algorithm 13 --type KSK --zone example.com
 dnsctl dnssec ds-from-dnskey --zone example.com --keyfile Kexample.com.+013+12345.key
+dnsctl dnssec sign-zone --zone example.com --input example.com.zone   # offline signing of a zone file
+dnsctl dnssec verify-anchor <trust-anchor-file>
+dnsctl dnssec validate-zone --zone example.com.zone.signed [--ignore-time]
 
 # Diagnostics
-dnsctl dig example.com A                    # Built-in dig-like tool
-dnsctl dig @localhost example.com AAAA +dnssec
-dnsctl server health
+dnsctl dig example.com A                          # Built-in dig-like tool
+dnsctl dig @localhost example.com AAAA +dnssec    # also +cd
+
+# Server and config
 dnsctl server status
+dnsctl server health
+dnsctl server bootstrap --username admin          # first dashboard admin; run on the server host
 dnsctl config get
 dnsctl config reload
-
-# Server
-dnsctl server health
-dnsctl server status
 ```
+
+`dnsctl dnssec sign-zone` reads its input with the server's zone-file parser, so
+a standard BIND file (`$ORIGIN`, `$TTL`, `$INCLUDE`, `$GENERATE`, multi-line
+records, omitted TTL or class, inherited owners) is signed as the server would
+load it. A file with no `$ORIGIN` takes `--zone` as its origin. A line the parser
+cannot read, a class other than IN, or RDATA that does not parse is an error
+naming the line (`line N: ...`), and no output file is written.
 
 ### 11.3 Web Dashboard
 

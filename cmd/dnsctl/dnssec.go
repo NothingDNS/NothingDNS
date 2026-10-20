@@ -16,6 +16,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,6 +25,7 @@ import (
 	"github.com/nothingdns/nothingdns/internal/dnssec"
 	"github.com/nothingdns/nothingdns/internal/protocol"
 	"github.com/nothingdns/nothingdns/internal/util"
+	"github.com/nothingdns/nothingdns/internal/zone"
 )
 
 const (
@@ -426,91 +428,99 @@ func cmdDNSSECSignZone(args []string) error {
 	return nil
 }
 
-// parseZoneRecords parses a BIND-format zone file into resource records.
-//
-// KNOWN LIMITATION: this is a deliberately minimal line-by-line parser
-// for sign-zone / validate-zone. It ignores `$TTL`, `$ORIGIN`,
-// `$GENERATE`, and multi-line parens — every record must be on one
-// line with explicit `name TTL IN TYPE rdata` columns. For BIND zone
-// files that rely on those directives, pre-expand the file with
-// `named-checkzone -D <origin> <zonefile>` (or any other YAML/zone
-// expander) and feed the result here.
-//
-// The daemon's loader (internal/zone.ParseFile) supports the full
-// BIND grammar; switching this CLI to it would change the behavior
-// asserted by ~14 existing unit tests, so the migration is its own
-// task. Smoke-tested 2026-05-22: dnsctl dnssec sign-zone on a vanilla
-// `$ORIGIN example.com. / $TTL 3600 / @ IN SOA ...` zone file errors
-// with "no valid records found" because the `$` directives and the
-// explicit-TTL-less SOA fail this parser's `name TTL IN TYPE rdata`
-// format check.
+// parseZoneRecords reads a BIND-format zone file into resource records with
+// the server's own parser (zone.ParseFile), so $ORIGIN, $TTL, $INCLUDE,
+// $GENERATE, multi-line records, omitted TTL/class and inherited owners all
+// work as they do when the server loads the zone. A line the parser cannot
+// read is an error naming the line, never a silently shorter zone. origin is
+// the zone origin for files with no $ORIGIN of their own.
 func parseZoneRecords(data, origin string) ([]*protocol.ResourceRecord, error) {
+	// A file without $ORIGIN takes the zone name as its origin: put the
+	// directive on a line of its own in front (a file's own $ORIGIN wins), and
+	// report line numbers as the file has them.
+	shift := 0
+	if !hasOriginDirective(data) {
+		data = "$ORIGIN " + origin + "\n" + data
+		shift = 1
+	}
+	z, err := zone.ParseFile("zone file", strings.NewReader(data))
+	if err != nil {
+		return nil, shiftZoneErrorLine(err, shift)
+	}
+
+	// Hand the records over in file order (the parser keys them by owner, in
+	// map order): by source line, ties broken by owner name, so repeated runs
+	// sign the same input the same way.
+	names := make([]string, 0, len(z.Records))
+	for name := range z.Records {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var parsed []zone.Record
+	for _, name := range names {
+		parsed = append(parsed, z.Records[name]...)
+	}
+	sort.SliceStable(parsed, func(i, j int) bool { return parsed[i].Line < parsed[j].Line })
+
 	var records []*protocol.ResourceRecord
-	lines := strings.Split(data, "\n")
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, ";") || strings.HasPrefix(line, "$") {
-			continue
+	for _, rec := range parsed {
+		line := rec.Line - shift
+		if !strings.EqualFold(rec.Class, "IN") {
+			return nil, fmt.Errorf("line %d: %s %s: class %s is not supported (only IN)", line, rec.Name, rec.Type, rec.Class)
 		}
-
-		fields := strings.Fields(line)
-		if len(fields) < 4 {
-			continue
-		}
-
-		// Determine field positions: name ttl class type rdata
-		name := fields[0]
-		ttlStr := fields[1]
-		classStr := fields[2]
-		typeStr := strings.ToUpper(fields[3])
-		rdata := ""
-		if len(fields) > 4 {
-			rdata = strings.Join(fields[4:], " ")
-		}
-
-		ttl, err := strconv.ParseUint(ttlStr, 10, 32)
+		owner, err := protocol.ParseName(rec.Name)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("line %d: invalid owner name %q: %w", line, rec.Name, err)
 		}
-
-		if !strings.EqualFold(classStr, "IN") {
-			continue
+		rrtype := protocol.RecordTypeFromText(rec.Type)
+		if rrtype == 0 {
+			return nil, fmt.Errorf("line %d: unknown record type %q", line, rec.Type)
 		}
-
-		// Expand @ to origin
-		if name == "@" {
-			name = origin
-		} else if !strings.HasSuffix(name, ".") {
-			// Relative name: append origin
-			name = name + "." + origin
+		rdata := protocol.ParseRDataText(rec.Type, rec.RData)
+		if rdata == nil {
+			return nil, fmt.Errorf("line %d: invalid %s data %q", line, rec.Type, rec.RData)
 		}
-
-		owner, err := protocol.ParseName(name)
-		if err != nil {
-			continue
-		}
-
-		rrtype, ok := protocol.StringToType[typeStr]
-		if !ok || rrtype == 0 {
-			continue
-		}
-
-		rdataObj, err := parseRDataFromZone(rrtype, rdata)
-		if err != nil {
-			continue
-		}
-
 		records = append(records, &protocol.ResourceRecord{
 			Name:  owner,
 			Type:  rrtype,
 			Class: protocol.ClassIN,
-			TTL:   uint32(ttl),
-			Data:  rdataObj,
+			TTL:   rec.TTL,
+			Data:  rdata,
 		})
 	}
-
 	return records, nil
+}
+
+// hasOriginDirective reports whether the zone text sets its own $ORIGIN.
+func hasOriginDirective(data string) bool {
+	for _, line := range strings.Split(data, "\n") {
+		if f := strings.Fields(line); len(f) > 0 && strings.EqualFold(f[0], "$ORIGIN") {
+			return true
+		}
+	}
+	return false
+}
+
+// zoneErrorLine matches the "<file>:<line>: " prefix zone.ParseFile puts on
+// its errors.
+var zoneErrorLine = regexp.MustCompile(`^(zone file):(\d+):`)
+
+// shiftZoneErrorLine rewrites zone.ParseFile's "<file>:<line>:" error prefix to
+// "line N:", subtracting the line parseZoneRecords added in front of the file.
+func shiftZoneErrorLine(err error, shift int) error {
+	msg := err.Error()
+	m := zoneErrorLine.FindStringSubmatch(msg)
+	if m == nil {
+		return err
+	}
+	n, convErr := strconv.Atoi(m[2])
+	if convErr != nil {
+		return err
+	}
+	if n > shift {
+		n -= shift
+	}
+	return fmt.Errorf("line %d:%s", n, msg[len(m[0]):])
 }
 
 func cmdDNSSECVerifyAnchor(args []string) error {
