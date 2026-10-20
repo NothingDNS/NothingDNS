@@ -814,6 +814,13 @@ func (e *Engine) AddQNAMERule(pattern string, action PolicyAction, overrideData 
 		PolicyName:   "dynamic",
 		Priority:     0,
 	}
+	// addRule keeps the first rule on a priority tie, so a re-added pattern
+	// would be dropped while the API answers 201. Replace an existing rule
+	// unless it has a strictly better priority.
+	key := strings.ToLower(rule.Pattern)
+	if existing, ok := e.qnameRules[key]; ok && existing.Priority >= rule.Priority {
+		delete(e.qnameRules, key)
+	}
 	e.addRule(rule)
 }
 
