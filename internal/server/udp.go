@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
+	"github.com/nothingdns/nothingdns/internal/util"
 )
 
 // DefaultUDP sizes and limits.
@@ -334,8 +335,8 @@ func (s *UDPServer) reader(requestChan chan<- *udpRequest, readerWg *sync.WaitGr
 
 		atomic.AddUint64(&s.packetsReceived, 1)
 
-		// Check per-IP rate limit
-		if !s.rateLimiter.Load().Allow(addr.IP.String()) {
+		// Check per-source rate limit (IPv6 clients count per /64, F709)
+		if !s.rateLimiter.Load().Allow(util.IPLimitKey(addr.IP)) {
 			s.bufferPool.Put(bufPtr)
 			continue
 		}
