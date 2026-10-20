@@ -47,8 +47,9 @@ func ParseRDataText(rtype, rdata string) RData {
 	}
 	switch strings.ToUpper(rtype) {
 	case "A":
+		// Dotted quad only: net.ParseIP also takes the IPv4-mapped IPv6 form.
 		ip := net.ParseIP(rdata)
-		if ip != nil {
+		if ip != nil && !strings.Contains(rdata, ":") {
 			ipv4 := ip.To4()
 			if ipv4 == nil {
 				return nil
@@ -60,8 +61,10 @@ func ParseRDataText(rtype, rdata string) RData {
 			return rd
 		}
 	case "AAAA":
+		// IPv6 text only: net.ParseIP also takes a dotted quad, which would
+		// be served as ::ffff:a.b.c.d.
 		ip := net.ParseIP(rdata)
-		if ip != nil {
+		if ip != nil && strings.Contains(rdata, ":") {
 			var addr [16]byte
 			copy(addr[:], ip.To16())
 			rd := rdataAAAAPool.Get().(*RDataAAAA)
@@ -776,7 +779,7 @@ func parseHIPRData(rdata string) RData {
 // parseIPSECKEYRData parses IPSECKEY RData: `precedence gateway-type algorithm gateway public-key`.
 func parseIPSECKEYRData(rdata string) RData {
 	fields := strings.Fields(rdata)
-	if len(fields) < 5 {
+	if len(fields) < 4 {
 		return nil
 	}
 	precedence, ok := parseUintField(fields[0], 8)
@@ -791,8 +794,14 @@ func parseIPSECKEYRData(rdata string) RData {
 	if !ok {
 		return nil
 	}
-	publicKey, ok := decodeBase64RData(strings.Join(fields[4:], ""))
-	if !ok {
+	// RFC 4025 §2.4: algorithm 0 means no public key is present, so the key
+	// text is absent too (what String() prints for such a record).
+	var publicKey []byte
+	if len(fields) == 4 {
+		if algorithm != 0 {
+			return nil
+		}
+	} else if publicKey, ok = decodeBase64RData(strings.Join(fields[4:], "")); !ok {
 		return nil
 	}
 
