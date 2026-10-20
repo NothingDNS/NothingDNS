@@ -411,20 +411,34 @@ type Target struct {
 
 // selectTarget selects a target based on the load balancing strategy.
 func (lb *LoadBalancer) selectTarget() (*Target, error) {
+	return lb.selectTargetExcluding("")
+}
+
+// selectTargetExcluding selects a target whose address differs from exclude
+// (when non-empty). Failover uses it: a target that just failed stays "healthy"
+// until its third consecutive failure, so a plain re-selection can pick it
+// again and leave a working server unused.
+func (lb *LoadBalancer) selectTargetExcluding(exclude string) (*Target, error) {
 	lb.mu.RLock()
 	defer lb.mu.RUnlock()
 
 	// Check if we have anycast groups
 	if len(lb.anycastGroups) > 0 {
-		return lb.selectAnycastTarget()
+		return lb.selectAnycastTargetExcluding(exclude)
 	}
 
 	// Fall back to standalone servers
-	return lb.selectStandaloneTarget()
+	return lb.selectStandaloneTargetExcluding(exclude)
 }
 
 // selectAnycastTarget selects a target from anycast groups.
 func (lb *LoadBalancer) selectAnycastTarget() (*Target, error) {
+	return lb.selectAnycastTargetExcluding("")
+}
+
+// selectAnycastTargetExcluding is selectAnycastTarget skipping the backend at
+// address exclude (when non-empty).
+func (lb *LoadBalancer) selectAnycastTargetExcluding(exclude string) (*Target, error) {
 	// Get a list of any healthy anycast group
 	var selectedGroup *AnycastGroup
 
@@ -448,7 +462,7 @@ func (lb *LoadBalancer) selectAnycastTarget() (*Target, error) {
 	}
 
 	// Select backend from the group
-	backend := selectedGroup.SelectBackend(lb.topology.Region, lb.topology.Zone)
+	backend := selectedGroup.selectBackendExcluding(lb.topology.Region, lb.topology.Zone, exclude)
 	if backend == nil {
 		return nil, fmt.Errorf("no healthy backends in anycast group %s", selectedGroup.AnycastIP)
 	}
@@ -466,19 +480,41 @@ func (lb *LoadBalancer) selectAnycastTarget() (*Target, error) {
 
 // selectStandaloneTarget selects a target from standalone servers.
 func (lb *LoadBalancer) selectStandaloneTarget() (*Target, error) {
+	return lb.selectStandaloneTargetExcluding("")
+}
+
+// selectStandaloneTargetExcluding is selectStandaloneTarget skipping the
+// server at address exclude (when non-empty).
+func (lb *LoadBalancer) selectStandaloneTargetExcluding(exclude string) (*Target, error) {
 	if len(lb.servers) == 0 {
 		return nil, fmt.Errorf("no upstream servers available")
+	}
+
+	// The selectors read only lb.servers, so a view over the remaining
+	// servers applies the strategy without the excluded one.
+	view := lb
+	if exclude != "" {
+		remaining := make([]*Server, 0, len(lb.servers))
+		for _, s := range lb.servers {
+			if s != nil && s.Address != exclude {
+				remaining = append(remaining, s)
+			}
+		}
+		if len(remaining) == 0 {
+			return nil, fmt.Errorf("no upstream servers available besides %s", exclude)
+		}
+		view = &LoadBalancer{servers: remaining}
 	}
 
 	var selected *Server
 
 	switch lb.strategy {
 	case RoundRobin:
-		selected = lb.selectRoundRobin()
+		selected = view.selectRoundRobin()
 	case Fastest:
-		selected = lb.selectFastest()
+		selected = view.selectFastest()
 	default:
-		selected = lb.selectRandom()
+		selected = view.selectRandom()
 	}
 
 	if selected == nil {
@@ -653,7 +689,7 @@ func (lb *LoadBalancer) queryWithFailover(target *Target, msg *protocol.Message)
 	atomic.AddUint64(&lb.failoverCount, 1)
 
 	// Select a different target
-	failoverTarget, selectErr := lb.selectTarget()
+	failoverTarget, selectErr := lb.selectTargetExcluding(target.Address)
 	if selectErr != nil || failoverTarget.Address == target.Address {
 		return nil, fmt.Errorf("query failed and no failover available: %w", err)
 	}

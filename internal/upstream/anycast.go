@@ -210,6 +210,12 @@ func (g *AnycastGroup) GetActiveBackend() *AnycastBackend {
 
 // SelectBackend selects a backend based on health, region, and weight.
 func (g *AnycastGroup) SelectBackend(preferredRegion, preferredZone string) *AnycastBackend {
+	return g.selectBackendExcluding(preferredRegion, preferredZone, "")
+}
+
+// selectBackendExcluding is SelectBackend skipping the backend whose address
+// is exclude (when non-empty).
+func (g *AnycastGroup) selectBackendExcluding(preferredRegion, preferredZone, exclude string) *AnycastBackend {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
@@ -220,7 +226,7 @@ func (g *AnycastGroup) SelectBackend(preferredRegion, preferredZone string) *Any
 	// First, try to find a healthy backend in the preferred region and zone
 	if preferredRegion != "" {
 		for _, b := range g.Backends {
-			if b == nil {
+			if b == nil || (exclude != "" && b.Address() == exclude) {
 				continue
 			}
 			if b.IsHealthy() && b.Region == preferredRegion {
@@ -240,7 +246,16 @@ func (g *AnycastGroup) SelectBackend(preferredRegion, preferredZone string) *Any
 
 	// Get all healthy backends
 	var healthy []*AnycastBackend
-	for _, b := range g.Backends {
+	candidates := g.Backends
+	if exclude != "" {
+		candidates = make([]*AnycastBackend, 0, len(g.Backends))
+		for _, b := range g.Backends {
+			if b != nil && b.Address() != exclude {
+				candidates = append(candidates, b)
+			}
+		}
+	}
+	for _, b := range candidates {
 		if b != nil && b.IsHealthy() {
 			healthy = append(healthy, b)
 		}
@@ -248,7 +263,7 @@ func (g *AnycastGroup) SelectBackend(preferredRegion, preferredZone string) *Any
 
 	if len(healthy) == 0 {
 		// Fallback to first backend even if unhealthy
-		return firstBackend(g.Backends)
+		return firstBackend(candidates)
 	}
 
 	// Weighted selection from healthy backends
