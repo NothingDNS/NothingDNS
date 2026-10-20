@@ -330,6 +330,17 @@ func (h *DynamicDNSHandler) handleUpdate(req *protocol.Message, clientIP net.IP,
 		return h.createUpdateResponse(req, protocol.RcodeRefused), key, nil
 	}
 
+	// RFC 2136 §3.2.3 / §3.4.1.2: a prerequisite or update RR must be of the
+	// zone's class (IN) or ANY/NONE; anything else makes the message FORMERR.
+	// Otherwise a CH or HS RR below would be stored as an IN record.
+	for _, section := range [][]*protocol.ResourceRecord{req.Answers, req.Authorities} {
+		for _, rr := range section {
+			if rr == nil || rr.Name == nil || (rr.Class != protocol.ClassIN && rr.Class != protocol.ClassANY && rr.Class != protocol.ClassNONE) {
+				return h.createUpdateResponse(req, protocol.RcodeFormatError), key, nil
+			}
+		}
+	}
+
 	// Parse the wire RRs into typed update + prerequisite structs.
 	// Prerequisite *checking* happens later, inside ApplyUpdate, under
 	// z.Lock() — see M-6. The earlier unlocked check at this site
@@ -1106,13 +1117,12 @@ func zoneTypeExists(z *zone.Zone, name string, rrType uint16) bool {
 	return false
 }
 
-// updateRDataEqual keeps TXT payloads case-sensitive; DNS owner names and
-// domain-name RDATA retain their existing case-insensitive matching.
+// updateRDataEqual compares stored and requested RDATA with the zone package's
+// canonical comparison: domain names match case-insensitively, while TXT, SPF,
+// CAA, URI and the other character-string payloads stay case-sensitive.
 func updateRDataEqual(rrType uint16, stored, requested string) bool {
-	if rrType == protocol.TypeTXT {
-		return stored == requested
-	}
-	return strings.EqualFold(stored, requested) || sameRDataValue(rrType, stored, requested)
+	return zone.RDataEqual(protocol.TypeString(rrType), stored, requested) ||
+		sameRDataValue(rrType, stored, requested)
 }
 
 // sameRDataValue reports whether two RDATA texts parse to the same value.
