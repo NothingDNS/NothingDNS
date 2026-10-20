@@ -912,7 +912,7 @@ func TestHandleUpdate_PrerequisiteFailure(t *testing.T) {
 		},
 		// Prerequisite: YXDOMAIN for a name that does NOT exist
 		Answers: []*protocol.ResourceRecord{
-			{Name: prereqName, Type: protocol.TypeANY, Class: protocol.ClassANY, TTL: 0, Data: &protocol.RDataA{}},
+			{Name: prereqName, Type: protocol.TypeANY, Class: protocol.ClassANY, TTL: 0, Data: &protocol.RDataRaw{TypeVal: protocol.TypeANY}}, // RDLENGTH 0 (RFC 2136 §3.2.3)
 		},
 	}
 

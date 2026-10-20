@@ -330,15 +330,8 @@ func (h *DynamicDNSHandler) handleUpdate(req *protocol.Message, clientIP net.IP,
 		return h.createUpdateResponse(req, protocol.RcodeRefused), key, nil
 	}
 
-	// RFC 2136 §3.2.3 / §3.4.1.2: a prerequisite or update RR must be of the
-	// zone's class (IN) or ANY/NONE; anything else makes the message FORMERR.
-	// Otherwise a CH or HS RR below would be stored as an IN record.
-	for _, section := range [][]*protocol.ResourceRecord{req.Answers, req.Authorities} {
-		for _, rr := range section {
-			if rr == nil || rr.Name == nil || (rr.Class != protocol.ClassIN && rr.Class != protocol.ClassANY && rr.Class != protocol.ClassNONE) {
-				return h.createUpdateResponse(req, protocol.RcodeFormatError), key, nil
-			}
-		}
+	if !updateRRsWellFormed(req.Answers, req.Authorities) {
+		return h.createUpdateResponse(req, protocol.RcodeFormatError), key, nil
 	}
 
 	// Parse the wire RRs into typed update + prerequisite structs.
@@ -420,6 +413,40 @@ func (h *DynamicDNSHandler) handleUpdate(req *protocol.Message, clientIP net.IP,
 
 	// Return success response
 	return h.createUpdateResponse(req, protocol.RcodeSuccess), key, nil
+}
+
+// updateRRsWellFormed checks the RR formats RFC 2136 §3.2.3 and §3.4.1.2 make
+// FORMERR. Every prerequisite and update RR is of the zone's class (IN) or ANY
+// or NONE (anything else would otherwise be stored as an IN record). An ANY or
+// NONE RR carries TTL 0; an ANY RR carries no RDATA, and neither does an ANY or
+// NONE prerequisite (a NONE update RR names the RR to delete, so it has RDATA).
+func updateRRsWellFormed(prereqs, updates []*protocol.ResourceRecord) bool {
+	hasRData := func(rr *protocol.ResourceRecord) bool { return rr.Data != nil && rr.Data.Len() > 0 }
+	check := func(rr *protocol.ResourceRecord, prerequisite bool) bool {
+		if rr == nil || rr.Name == nil {
+			return false
+		}
+		switch rr.Class {
+		case protocol.ClassIN:
+			return true
+		case protocol.ClassANY:
+			return rr.TTL == 0 && !hasRData(rr)
+		case protocol.ClassNONE:
+			return rr.TTL == 0 && !(prerequisite && hasRData(rr))
+		}
+		return false
+	}
+	for _, rr := range prereqs {
+		if !check(rr, true) {
+			return false
+		}
+	}
+	for _, rr := range updates {
+		if !check(rr, false) {
+			return false
+		}
+	}
+	return true
 }
 
 // updateErrorRcode maps an apply/commit error to the UPDATE RCODE.

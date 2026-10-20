@@ -1264,7 +1264,7 @@ func TestHandleUpdate_DeleteNameAuthority(t *testing.T) {
 			// Delete name operation (ClassANY + TypeANY)
 			{Name: mustParseName2("test.example.com."), Type: protocol.TypeANY,
 				Class: protocol.ClassANY, TTL: 0,
-				Data: &protocol.RDataA{Address: [4]byte{0, 0, 0, 0}},
+				Data: &protocol.RDataRaw{TypeVal: protocol.TypeANY}, // RDLENGTH 0, as RFC 2136 §2.5.3 requires
 			},
 		},
 	}
