@@ -145,7 +145,7 @@ Upstream DNS sunucu havuzu (recursive değilken kullanılır).
 
 | Alan | Tip | Varsayılan | Hot-reload | Açıklama |
 |---|---|---|---|---|
-| `servers` | []string | `[8.8.8.8:53, 8.8.4.4:53]` | evet (API ile ekleme/çıkarma da canlıdır ve `runtime_overrides.json`'a yazılır) | Upstream listesi (port dahil) |
+| `servers` | []string | `[8.8.8.8:53, 8.8.4.4:53]` | evet (API ile ekleme/çıkarma da canlıdır ve `runtime_overrides.json`'a yazılır) | Upstream listesi (port dahil). `anycast_groups` ile birlikte tanımlıysa anycast backend'ler önce denenir; hiçbir anycast backend sağlıklı değilse (veya denenen backend başarısız olursa) bu sunucular yedek olarak kullanılır |
 | `strategy` | string | `random` | evet | `random`, `round_robin`, `fastest` |
 | `health_check` | duration | `30s` | evet | Sağlık kontrolü periyodu |
 | `failover_timeout` | duration | `5s` | evet (yalnızca `anycast_groups` ile kullanılır) | Failover'a kadar bekleme |

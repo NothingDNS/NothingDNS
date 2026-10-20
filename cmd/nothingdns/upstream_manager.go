@@ -72,7 +72,7 @@ func NewUpstreamManager(cfg *config.Config, logger *util.Logger) (*UpstreamManag
 		logger.Infof("Load balancer initialized with %d anycast groups (%d total backends)",
 			len(lbConfig.AnycastGroups), totalBackends)
 		if len(cfg.Upstream.Servers) > 0 {
-			logger.Infof("Load balancer also has %d standalone servers", len(cfg.Upstream.Servers))
+			logger.Infof("Load balancer also has %d standalone servers (used when no anycast backend is healthy)", len(cfg.Upstream.Servers))
 		}
 	} else {
 		// Use standard upstream client

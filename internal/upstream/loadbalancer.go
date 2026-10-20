@@ -424,7 +424,20 @@ func (lb *LoadBalancer) selectTargetExcluding(exclude string) (*Target, error) {
 
 	// Check if we have anycast groups
 	if len(lb.anycastGroups) > 0 {
-		return lb.selectAnycastTargetExcluding(exclude)
+		target, err := lb.selectAnycastTargetExcluding(exclude)
+		if err == nil && target.Backend != nil && target.Backend.IsHealthy() {
+			return target, nil
+		}
+		// No healthy anycast backend (or none besides the one that just
+		// failed): the standalone servers configured next to the groups are
+		// the fallback, ahead of an unhealthy anycast backend.
+		if len(lb.servers) > 0 {
+			if standalone, serr := lb.selectStandaloneTargetExcluding(exclude); serr == nil &&
+				(err != nil || standalone.Server.IsHealthy()) {
+				return standalone, nil
+			}
+		}
+		return target, err
 	}
 
 	// Fall back to standalone servers
