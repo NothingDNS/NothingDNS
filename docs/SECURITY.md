@@ -44,7 +44,7 @@ NothingDNS has **minimal external dependencies** — only two non-standard-libra
 All cryptographic operations use Go's standard library `crypto/*` packages. No third-party crypto libraries are used.
 
 ### DNSSEC
-- Signing uses RSA/SHA-256/SHA-512 with key rollover support
+- Signing uses RSA/SHA-256/SHA-512; keys are static and replaced by hand (automatic key rollover is not implemented, see SPECIFICATION.md §6.1.2)
 - Validation follows RFC 4035 with chain-of-trust from trust anchors
 - NSEC3 opt-out support for large delegations
 

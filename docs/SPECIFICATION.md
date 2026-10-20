@@ -492,10 +492,19 @@ upstream:
 
 #### 6.1.2 Key Management
 - KSK (Key Signing Key) and ZSK (Zone Signing Key) separation
-- Automatic key rollover (prepublish method)
+- Automatic key rollover (prepublish method): **not implemented in the server.**
+  The server signs with the keys listed in `dnssec.signing.keys` and never
+  replaces them; rolling a key is a manual change of that list and a restart
+  (zone signers are built at start, §12.4), with the parent DS updated by hand.
+  `internal/dnssec/rollover.go` holds an RFC 7583 scheduler with tests, but
+  nothing starts it, and it could not be started safely yet: key state and
+  timing are not persisted (a restart would return Published and Retired keys
+  as Active), and the signer has no path that publishes the new DNSKEY or
+  hands the parent a DS. Persisting that state comes first.
 - Key generation: RSA-2048/4096, ECDSA P-256/P-384, Ed25519
 - DS record generation for parent zone
-- Key storage: file-based (PEM) or embedded KV store
+- Key storage: private key files named in `dnssec.signing.keys`. The embedded
+  KV `KeyStore` in `internal/dnssec` is not wired into the server.
 
 #### 6.1.3 Algorithms Supported
 | Algorithm | Code | Status |
@@ -948,7 +957,7 @@ Authentication: API key (Bearer token) or basic auth
 |--------|------|-------------|
 | GET | /zones/{name}/dnssec | DNSSEC status |
 | POST | /zones/{name}/dnssec/sign | Sign zone |
-| POST | /zones/{name}/dnssec/rollover | Key rollover |
+| POST | /zones/{name}/dnssec/rollover | Key rollover (not implemented, see §6.1.2) |
 | GET | /zones/{name}/dnssec/ds | Get DS records |
 
 **Statistics**
