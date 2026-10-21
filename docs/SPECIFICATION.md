@@ -12,7 +12,7 @@ NothingDNS is a modern, production-grade DNS server that combines authoritative 
 
 ### 1.2 Philosophy
 - **Minimal Dependencies** — Core DNS logic is hand-rolled; external Go deps are limited to necessary transport/platform support.
-- **Single Binary** — One binary to rule them all: DNS server, CLI tool, web dashboard.
+- **Single Server Binary** — `nothingdns` is the DNS server, REST API and embedded web dashboard in one static binary; `dnsctl` is the separate CLI.
 - **BIND Compatible** — Import existing BIND zone files seamlessly. Familiar zone file syntax.
 - **Cloud-Native** — Single binary runs everywhere: bare metal, Docker, Kubernetes, edge.
 - **Cluster-First** — Raft consensus for zone replication, leader election, and failover.
@@ -23,7 +23,7 @@ NothingDNS is a modern, production-grade DNS server that combines authoritative 
 - **Binary:** `nothingdns` (server) + `dnsctl` (CLI management tool)
 - **Default Ports:** 53 (UDP/TCP), 853 (DoT/DoQ when enabled), 8080 (API/Dashboard/DoH when configured), 9153 (Metrics), 7946 (cluster gossip/Raft RPC)
 - **License:** MIT
-- **Language:** Go 1.26.6+
+- **Language:** Go (`go.mod`: go 1.26.9, built with toolchain 1.27.2)
 - **Repository:** github.com/nothingdns/nothingdns
 
 ---
@@ -37,7 +37,7 @@ NothingDNS is a modern, production-grade DNS server that combines authoritative 
 │                          NothingDNS                                  │
 │                                                                      │
 │  ┌──────────────────── Protocol Layer ────────────────────────┐     │
-│  │  UDP/TCP :53  │  DoT :853  │  DoH :443  │  DoQ :853/UDP   │     │
+│  │  UDP/TCP :53  │  DoT :853  │  DoH (API port) │ DoQ :853/UDP│     │
 │  └──────────────────────────┬─────────────────────────────────┘     │
 │                              │                                       │
 │  ┌──────────────────── Query Pipeline ────────────────────────┐     │
@@ -73,151 +73,60 @@ NothingDNS is a modern, production-grade DNS server that combines authoritative 
 
 ### 2.2 Module Structure
 
-> **Note:** The tree below is aspirational and reflects the planned module
-> layout. The actual source tree is flat in `internal/` — see `tree -d` or
-> the project README for the current layout. Key differences: there is no
-> `internal/api/rest/` or `internal/api/grpc/` (API lives flat in
-> `internal/api/`; there is no gRPC at all — nodes talk Raft RPC, see §10.3), no `internal/dynamic/` (DDNS is in `internal/transfer/`),
-> and the `internal/util/` used here does not correspond to a single
-> `internal/util/` package.
+The source tree is flat under `internal/`; there is no `internal/api/rest/` or
+`internal/api/grpc/`, no `internal/auth/` authoritative engine, no
+`internal/dynamic/`, and no gRPC anywhere (nodes talk Raft RPC and gossip, see
+§10.3). Dynamic DNS lives in `internal/transfer/`, the authoritative engine in
+`cmd/nothingdns` on top of `internal/zone/`. This is the layout in the tree:
 
 ```
 nothingdns/
 ├── cmd/
-│   ├── nothingdns/          # Main server binary
-│   │   └── main.go
-│   └── dnsctl/              # CLI management tool
-│       └── main.go
-├── internal/
-│   ├── protocol/            # DNS wire protocol (RFC 1035)
-│   │   ├── message.go       # DNS message struct & marshal/unmarshal
-│   │   ├── header.go        # DNS header (12-byte fixed)
-│   │   ├── question.go      # Question section
-│   │   ├── record.go        # Resource record base
-│   │   ├── types.go         # A, AAAA, CNAME, MX, NS, TXT, SOA, SRV, CAA, PTR, NAPTR, SSHFP
-│   │   ├── edns.go          # EDNS(0) OPT record, Client Subnet
-│   │   ├── labels.go        # DNS label compression/decompression
-│   │   └── wire.go          # Binary serialization helpers
-│   ├── server/              # Protocol listeners
-│   │   ├── udp.go           # UDP listener (:53)
-│   │   ├── tcp.go           # TCP listener (:53)
-│   │   ├── dot.go           # DNS over TLS (:853)
-│   │   ├── doh.go           # DNS over HTTPS (:443)
-│   │   ├── doq.go           # DNS over QUIC (:853/UDP)
-│   │   └── handler.go       # Common query handler interface
-│   ├── auth/                # Authoritative engine
-│   │   ├── engine.go        # Authoritative query resolution
-│   │   ├── zone.go          # Zone data structure
-│   │   ├── zonefile.go      # BIND zone file parser
-│   │   ├── zonestore.go     # In-memory zone store
-│   │   ├── wildcard.go      # Wildcard matching (*.example.com)
-│   │   ├── delegation.go    # NS delegation handling
-│   │   └── notify.go        # NOTIFY (RFC 1996)
-│   ├── resolver/            # Recursive resolver
-│   │   ├── engine.go        # Recursive resolution engine
-│   │   ├── iterator.go      # Iterative resolution from root hints
-│   │   ├── forwarder.go     # Upstream forwarder mode
-│   │   ├── cache.go         # Response cache (TTL-aware)
-│   │   ├── negative.go      # Negative caching (NXDOMAIN, NODATA)
-│   │   ├── prefetch.go      # TTL-based prefetching
-│   │   ├── hints.go         # Root hints (embedded)
-│   │   └── qname.go         # QNAME minimization (RFC 7816)
-│   ├── dnssec/              # DNSSEC implementation
-│   │   ├── signer.go        # Zone signing (RRSIG generation)
-│   │   ├── validator.go     # Response validation (chain of trust)
-│   │   ├── keys.go          # DNSKEY/DS/RRSIG/NSEC/NSEC3 records
-│   │   ├── keystore.go      # Key management & rotation
-│   │   └── algorithms.go    # RSA, ECDSA (P-256, P-384), Ed25519
-│   ├── transfer/            # Zone transfer
-│   │   ├── axfr.go          # Full zone transfer (AXFR)
-│   │   ├── ixfr.go          # Incremental zone transfer (IXFR)
-│   │   └── tsig.go          # TSIG authentication (RFC 2845)
-│   ├── dynamic/             # Dynamic DNS
-│   │   ├── update.go        # DNS UPDATE (RFC 2136)
-│   │   ├── prereq.go        # Update prerequisites
-│   │   └── journal.go       # Update journal for IXFR
-│   ├── filter/              # Query filtering & manipulation
-│   │   ├── blocklist.go     # Domain blocklist (ad-blocking)
-│   │   ├── allowlist.go     # Domain allowlist
-│   │   ├── acl.go           # IP-based access control lists
-│   │   ├── ratelimit.go     # Response Rate Limiting (RRL)
-│   │   ├── geodns.go        # GeoIP-based response routing
-│   │   ├── geoip.go         # Embedded GeoIP database (MaxMind GeoLite2 binary format)
-│   │   └── splithorizon.go  # Split-horizon / view-based DNS
-│   ├── cluster/             # Raft-based clustering
-│   │   ├── raft.go          # Raft consensus implementation
-│   │   ├── log.go           # Raft log (append-only)
-│   │   ├── snapshot.go      # State snapshots
-│   │   ├── transport.go     # Raft RPC transport (TCP)
-│   │   ├── fsm.go           # Finite state machine (zone store mutations)
-│   │   ├── peer.go          # Peer discovery & management
-│   │   └── health.go        # Cluster health checks
-│   ├── storage/             # Persistent storage
-│   │   ├── wal.go           # Write-ahead log
-│   │   ├── boltlike.go      # Embedded B+tree key-value store
-│   │   └── serializer.go    # Binary serialization for storage
-│   ├── config/              # Configuration
-│   │   ├── config.go        # YAML config parser (hand-written)
-│   │   ├── defaults.go      # Default configuration values
-│   │   ├── validate.go      # Config validation
-│   │   └── reload.go        # Hot-reload (SIGHUP)
-│   ├── api/                 # Management APIs
-│   │   ├── rest/            # REST API
-│   │   │   ├── router.go    # HTTP router (hand-written)
-│   │   │   ├── middleware.go # Auth, CORS, logging middleware
-│   │   │   ├── zones.go     # Zone CRUD endpoints
-│   │   │   ├── records.go   # Record CRUD endpoints
-│   │   │   ├── cluster.go   # Cluster status/management endpoints
-│   │   │   ├── config.go    # Runtime config endpoints
-│   │   │   ├── stats.go     # Statistics endpoints
-│   │   │   ├── blocklist.go # Blocklist management endpoints
-│   │   │   └── swagger.go   # Embedded Swagger UI & spec
-│   │   ├── grpc/            # gRPC inter-node communication
-│   │   │   ├── server.go    # gRPC server (hand-written protobuf encoding)
-│   │   │   ├── client.go    # gRPC client
-│   │   │   ├── proto.go     # Protocol buffer wire format (manual)
-│   │   │   └── services.go  # Zone sync, health, forwarding services
-│   ├── dashboard/           # Embedded web dashboard
-│   │   ├── server.go        # Static file server
-│   │   ├── embed.go         # go:embed for static assets
-│   │   ├── websocket.go     # Real-time updates via WebSocket
-│   │   └── static/          # Pre-built frontend assets
-│   │       ├── index.html
-│   │       ├── app.js       # Vanilla JS dashboard (no framework)
-│   │       └── style.css
-│   ├── metrics/             # Observability
-│   │   ├── prometheus.go    # Prometheus-compatible /metrics endpoint
-│   │   ├── collector.go     # Metrics collection (queries/sec, latency, cache hit ratio)
-│   │   └── health.go        # Health check endpoint
-│   ├── quic/                # QUIC protocol (for DoQ)
-│   │   ├── listener.go      # QUIC listener
-│   │   ├── connection.go    # QUIC connection handling
-│   │   ├── stream.go        # QUIC stream management
-│   │   ├── crypto.go        # TLS 1.3 handshake for QUIC
-│   │   ├── packet.go        # QUIC packet format
-│   │   └── congestion.go    # Congestion control (New Reno)
-│   └── util/                # Shared utilities
-│       ├── logger.go        # Structured logger (JSON + text)
-│       ├── pool.go          # Byte buffer pool (sync.Pool)
-│       ├── ip.go            # IP address utilities
-│       ├── domain.go        # Domain name validation & normalization
-│       └── signal.go        # Graceful shutdown signal handling
-├── configs/
-│   └── nothingdns.yaml      # Example configuration file
-├── zones/
-│   └── example.com.zone     # Example BIND zone file
-├── blocklists/
-│   └── default.txt          # Default ad/tracker blocklist
-├── go.mod                   # Minimal external dependencies (quic-go, golang.org/x/...)
-├── go.sum                   # Module checksums (populated)
-├── Makefile
-├── Dockerfile
-├── README.md
-├── docs/
-│   ├── SPECIFICATION.md      # This file
-│   └── IMPLEMENTATION.md     # Implementation guide
-└── README.md
+│   ├── nothingdns/      # Server: main.go wiring, request pipeline (pipeline*.go),
+│   │                    #   authoritative.go, handler.go, managers (cache_manager,
+│   │                    #   upstream_manager, zone_manager, security_manager,
+│   │                    #   dnssec_manager, cluster_manager, transfer_manager), reload.go
+│   └── dnsctl/          # CLI management tool (§11.2)
+├── internal/            # one package per concern, listed below
+├── web/                 # React dashboard sources, built into internal/dashboard/static/dist
+├── config.example.yaml  # Example configuration
+├── deploy/, docs/, scripts/
+└── Dockerfile, go.mod, go.sum
 ```
+
+| Package | Role |
+|---|---|
+| `protocol` | DNS wire protocol: message, header, question, records, EDNS0/OPT, label compression, RDATA types and their text form |
+| `server` | UDP, TCP and DoT listeners, certificate reloading, the handler interface |
+| `quic` | DNS over QUIC (DoQ) on `quic-go` |
+| `doh` | DNS over HTTPS (wire and JSON) and DNS over WebSocket handlers |
+| `odoh` | Oblivious DoH (RFC 9230) with RFC 9180 HPKE |
+| `dso` | DNS Stateful Operations (RFC 8490) |
+| `dnscookie` | DNS Cookies (RFC 7873) |
+| `zone` | Zone-file parser, zone manager, radix tree, WAL journal, KV persistence, ZONEMD, zone writer |
+| `resolver` | Iterative resolver: root hints, QNAME minimisation, 0x20, CNAME/DNAME chasing |
+| `upstream` | Forwarding client, load balancer, anycast groups, health checks, TCP connection pool |
+| `cache` | Response cache (LRU, TTL, negative, stale) and aggressive NSEC caching |
+| `dnssec` | Validator, signer, trust anchors, key store and rollover scheduler (the last two are not wired into the server, §6.1.2) |
+| `transfer` | AXFR/IXFR, NOTIFY, TSIG, Dynamic DNS (RFC 2136), XoT, secondary-zone management |
+| `filter` | ACL, recursion policy, rate limiter, RRL, split-horizon views |
+| `blocklist` | Domain blocklists (hosts and domain-per-line files, URLs) |
+| `rpz` | Response Policy Zones |
+| `geodns` | GeoIP (MMDB) based answers |
+| `dns64` | DNS64 synthesis (RFC 6147) |
+| `idna` | IDNA / Punycode validation (RFC 5891 to 5893) |
+| `cluster` | Gossip membership, Raft consensus (`cluster/raft`), zone batches |
+| `storage` | Embedded key-value store and write-ahead log |
+| `config` | Hand-written YAML parser, config structs, validation, runtime overrides |
+| `api` | REST API server, OpenAPI document, dashboard stats |
+| `auth` | Users, roles and session tokens for the API |
+| `audit` | Structured query and operation audit log |
+| `dashboard`, `websocket` | Embedded SPA and the live query WebSocket |
+| `metrics`, `otel` | Prometheus exporter; OpenTelemetry tracing facade |
+| `memory` | Memory monitor and cache eviction under pressure |
+| `mdns` | mDNS / DNS-SD responder |
+| `util` | Logger, buffer pools, IP helpers, shared small utilities |
+| `catalog`, `load`, `e2e` | Catalog zones (RFC 9432) and a load-test tool, neither used by the server; end-to-end tests |
 
 ---
 
@@ -280,15 +189,21 @@ type Header struct {
 | CAA    | 257  | Certificate authority auth   | RFC 8659 |
 | TSIG   | 250  | Transaction signature        | RFC 2845 |
 
+The table lists the common types. The server also handles AFSDB, APL, CDS,
+CDNSKEY, CERT, DHCID, DNAME, HINFO, HIP, HTTPS, IPSECKEY, KEY, KX, LOC,
+OPENPGPKEY, RP, SIG, SPF, SVCB, TA, URI and ZONEMD, and any other type in the
+RFC 3597 generic form (`TYPE<n>`, `\# <length> <hex>`).
+
 #### 3.1.4 Label Compression
 DNS label compression (RFC 1035 §4.1.4) using pointer offsets (0xC0 prefix). Both compression and decompression must be implemented for wire format efficiency.
 
 #### 3.1.5 EDNS(0) Support (RFC 6891)
 - Extended RCODE & flags
 - UDP payload size advertisement (up to 4096 bytes)
-- EDNS Client Subnet option (RFC 7871)
+- EDNS Client Subnet option (RFC 7871): parsed into the client info only, never
+  acted on (§9.4)
 - DNSSEC OK (DO) bit
-- Padding option (RFC 7830) for DoT/DoH privacy
+- Padding option (RFC 7830) on DoH responses; DoT does not pad
 
 ### 3.2 Transport Protocols
 
@@ -303,43 +218,34 @@ DNS label compression (RFC 1035 §4.1.4) using pointer offsets (0xC0 prefix). Bo
 - Port 53 (default)
 - 2-byte length prefix before DNS message
 - Connection reuse (pipelining) support
-- Idle timeout: 30 seconds (configurable)
+- Read and write timeout: 30 seconds each (fixed)
 - Implementation: `net.Listen("tcp", ":53")`
 
 #### 3.2.3 DNS over TLS — DoT (RFC 7858)
 - Port 853 (default)
-- TLS 1.2+ (prefer TLS 1.3)
+- TLS 1.3 only (the listener sets it as the minimum)
 - Same wire format as TCP (2-byte length prefix)
-- Certificate management via Let's Encrypt or custom certs
+- Certificate and key files (`server.tls`), re-read on SIGHUP; there is no built-in ACME/Let's Encrypt client
 - ALPN: not required for DoT
 - Implementation: `tls.Listen("tcp", ":853", tlsConfig)`
 
 #### 3.2.4 DNS over HTTPS — DoH (RFC 8484)
-- Port 443 (default)
-- HTTP/2 required (HTTP/1.1 fallback)
+- Served on the API HTTP listener (`server.http.bind`, default `:8080`) when
+  `server.http.doh_enabled` is set; with TLS on that listener it speaks HTTP/2
+  or HTTP/1.1 like any `net/http` server
 - Content-Type: `application/dns-message` (wire format)
 - Also support: `application/dns-json` (JSON API like Google/Cloudflare)
 - Methods: GET (base64url query param) and POST (binary body)
 - Path: `/dns-query` (configurable)
-- Implementation: `net/http` with `crypto/tls` (TLS 1.3)
+- Implementation: `net/http`
 
 #### 3.2.5 DNS over QUIC — DoQ (RFC 9250)
 - Port 853/UDP (default)
-- QUIC transport (hand-written QUIC implementation using `net.UDPConn`)
-- TLS 1.3 integrated (QUIC requires it)
+- QUIC transport by `github.com/quic-go/quic-go` (the one transport dependency,
+  see the dependency policy); TLS 1.3 is part of QUIC
 - One DNS message per QUIC stream
-- 0-RTT support for repeat clients
 - ALPN: `doq`
-- Connection migration support
-- **QUIC Implementation Scope** (minimal, DNS-focused):
-  - Initial/Handshake/1-RTT packet types
-  - TLS 1.3 handshake integration via `crypto/tls`
-  - Stream multiplexing (unidirectional for DoQ)
-  - Connection ID management
-  - Loss detection & New Reno congestion control
-  - 0-RTT early data
-  - Connection migration (server-side)
-  - QUIC transport parameters negotiation
+- Per-address connection limits count an IPv6 client by its /64
 
 ---
 
@@ -351,7 +257,7 @@ DNS label compression (RFC 1035 §4.1.4) using pointer offsets (0xC0 prefix). Bo
 - In-memory radix tree (trie) indexed by domain name labels (reversed)
 - Thread-safe via `sync.RWMutex` per zone
 - Supports multiple zones with overlapping namespaces
-- DNSSEC-signed zone variants stored alongside unsigned
+- DNSSEC signing is done online when a zone is answered (§6.1); the store holds the unsigned zone data
 
 #### 4.1.2 BIND Zone File Parser
 Full RFC 1035 §5 zone file format support:
@@ -364,7 +270,7 @@ Full RFC 1035 §5 zone file format support:
 - Parenthesized multi-line records
 - Semicolon comments
 - All record types listed in §3.1.3
-- Class: IN (default), CH (Chaosnet for version.bind)
+- Class IN. There is no CHAOS responder (`version.bind` and the like are not answered)
 
 #### 4.1.3 Zone Loading
 ```yaml
@@ -415,9 +321,10 @@ slave_zones:
 
 #### 5.1.2 Forwarder Mode
 - Forward to upstream DNS servers (Cloudflare, Google, custom)
-- Support for forwarding over UDP/TCP/DoT/DoH
-- Upstream health checking with failover
-- Per-zone forwarding rules
+- Forwarding over UDP, retried over TCP when a response is truncated (no DoT or DoH upstreams)
+- Upstream health checking with failover; strategies `random` (default), `round_robin`, `fastest`
+- Optional anycast groups (`upstream.anycast_groups`); standalone servers listed beside them are the fallback when no anycast backend is healthy
+- One upstream set for all names: there are no per-zone forwarding rules
 
 ```yaml
 resolution:
@@ -442,34 +349,33 @@ upstream:
 
 #### 5.2.1 Response Cache
 - LRU eviction with TTL expiration
-- Maximum cache size (configurable, default 100,000 entries)
-- Cache key: (QNAME, QTYPE, QCLASS, DO-bit)
+- Maximum cache size (`cache.size`, default 10,000 entries)
+- Cache key: (QNAME lower-cased, QTYPE, DO-bit); the class is always IN
 - Honors TTL from responses
-- Minimum TTL override (default: 30s)
-- Maximum TTL cap (default: 86400s / 24h)
+- Minimum TTL override (`cache.min_ttl`, default 5s)
+- Maximum TTL cap (`cache.max_ttl`, default 86400s / 24h)
 - Serve-stale (RFC 8767) — serve expired entries while refreshing
 
 #### 5.2.2 Negative Cache (RFC 2308)
 - Cache NXDOMAIN responses
 - Cache NODATA (empty answer) responses
-- Negative TTL from SOA MINIMUM field
-- Maximum negative TTL cap (default: 3600s)
+- Negative TTL from the SOA (RFC 2308), capped by `cache.negative_ttl` (default 60s)
 
 #### 5.2.3 Prefetching
-- Prefetch entries when TTL drops below 10% of original
-- Background goroutine for prefetch queries
-- Configurable prefetch percentage threshold
+- Settings: `cache.prefetch` (off by default) and `cache.prefetch_threshold`
+  (seconds before expiry, default 60). The cache has the hook that fires a
+  refresh when an entry crosses the threshold, but the committed server never
+  installs the refresh callback, so these settings currently have no effect.
 
 ### 5.3 Security
 
 #### 5.3.1 Resolver Hardening
-- Source port randomization
-- Transaction ID randomization (crypto/rand)
-- 0x20 encoding (random case in QNAME for forgery resistance)
+- Source port randomization (a fresh UDP socket per query)
+- Transaction ID randomization
+- 0x20 encoding (random case in QNAME, `resolution.use_0x20`, off by default)
 - Bailiwick checking (ignore out-of-zone glue)
-- Maximum referral depth: 20
-- Query timeout: 5 seconds (per upstream)
-- Total resolution timeout: 30 seconds
+- Maximum delegation depth: `resolution.max_depth` (default 10)
+- Query timeout: `resolution.timeout` (default 5 seconds per query)
 
 ---
 
@@ -685,16 +591,27 @@ the data:
 ### 9.1 Blocklist / Allowlist (Ad-Blocking)
 
 #### 9.1.1 Blocklist
-- Domain blocklist format (hosts file format + domain-only format)
-- Support for popular blocklist sources (AdGuard, Steven Black, Pi-hole compatible)
-- Local blocklist file(s)
-- Response for blocked domains: NXDOMAIN, 0.0.0.0, or custom IP
-- Regex pattern matching (optional, hand-written regex engine)
-- Wildcard blocking (block *.ads.example.com)
+- Sources: local files and HTTPS URLs, in hosts-file format (`0.0.0.0 ads.example.com`)
+  or one domain per line; `#` comments
+- URL sources must be `https://` with an IP-literal host that is not private,
+  loopback or link-local (redirects are checked the same way); response bodies
+  and entry counts are capped
+- A listed name blocks itself and its subdomains
+- A blocked query is answered NXDOMAIN with the Extended DNS Error "Filtered";
+  there are no other block responses (no `0.0.0.0` or custom-IP answers, no regex
+  or wildcard syntax; subdomain matching covers the wildcard case)
+- Managed at runtime through the API and dashboard: add or remove file and URL
+  sources, enable or disable one source, switch blocking on or off, reload
 
-#### 9.1.2 Allowlist
-- Override blocklist for specific domains
-- Per-client/group allowlists
+#### 9.1.2 Allowlist and overrides
+There is no allowlist. A per-name exception or a custom answer is an RPZ rule
+(§9.1.3): `PASSTHRU` lets a name through, and `A`/`AAAA`/`CNAME` actions
+rewrite it.
+
+#### 9.1.3 Response Policy Zones
+RPZ files (`rpz.files`) carry QNAME, client-IP, response-IP, NSDNAME and NSIP
+triggers with NXDOMAIN, NODATA, CNAME, address override, DROP, PASSTHRU and
+TCP-only actions; rules can also be added and removed through the API.
 
 ```yaml
 blocklist:
@@ -711,12 +628,14 @@ blocklist:
 - Support for MaxMind GeoLite2 binary format (.mmdb)
 - Embedded GeoIP reader (parse MMDB format natively in Go)
 - Country, continent, and ASN-level resolution
-- Configurable database path + auto-reload on update
+- Configurable database path; the database is re-read when the configuration is
+  reloaded (SIGHUP), not on file change
 
 #### 9.2.2 Geo-Based Responses
-- Per-record geo routing rules
-- Fallback chain: city → country → continent → default
-- EDNS Client Subnet awareness (use client's real IP, not resolver IP)
+- Per-domain, per-type geo routing rules
+- Fallback chain: ASN → country → continent → default (there is no city level)
+- The decision uses the address the query arrived from; EDNS Client Subnet is
+  not consulted (§9.4)
 
 ```yaml
 geodns:
@@ -754,18 +673,18 @@ views:
 ```
 
 ### 9.4 EDNS Client Subnet (RFC 7871)
-- Parse ECS option from incoming queries
-- Forward ECS to upstream resolvers
-- Use ECS for GeoDNS decisions
-- Configurable ECS scope (prefix length limits)
-- Privacy mode: strip ECS before forwarding
+Not implemented. The OPT option is parsed into the client information and
+nothing reads it: it is not used for GeoDNS or cache keys, not forwarded to
+upstreams, not echoed in responses, and there is no ECS configuration. Doing it
+properly needs a trust policy, a scope-aware cache key and the RFC 7871 §7.2.1
+response echo, so a partial "use ECS for Geo" would itself be non-conformant.
 
 ### 9.5 Response Rate Limiting — RRL (RFC Draft)
-- Per-source-IP rate limiting
-- Per-response-type limits (NXDOMAIN, referral, nodata, answer)
-- Slip rate: probabilistic truncation instead of drop
-- Token bucket algorithm
-- Configurable window size and rates
+- Per-client limiting (an IPv4 address, or an IPv6 /64)
+- Buckets per client, query type and response code
+- Token bucket algorithm; a client that exceeds it is suppressed for a window
+  and answered REFUSED. There is no slip (probabilistic truncation) setting.
+- Settings: `rrl.rate`, `rrl.burst`, `rrl.max_buckets`
 
 ```yaml
 rrl:
@@ -1286,35 +1205,31 @@ A CA removed from `xot.ca_file` is refused on session resumption too
 ## 13. Storage & Persistence
 
 ### 13.1 Write-Ahead Log (WAL)
-- Append-only binary log for crash recovery
-- All zone mutations logged before applying
-- Configurable sync mode: `fsync` every write vs. periodic
-- WAL compaction with snapshot
+- `internal/storage` has an append-only WAL: CRC32-checked entries in
+  `wal-*.log` segments (up to 64 MiB each), synced every 100 ms
+- Zones also keep their own journal for incremental transfers (§8.2)
 
 ### 13.2 Embedded Key-Value Store
-- B+tree based (hand-written, inspired by BoltDB)
-- Used for: zone data persistence, DNSSEC keys, cluster state, configuration
-- ACID transactions
-- Copy-on-write for concurrent reads
-- Single-file database
+- A bucketed key-value store held in memory and saved to a single file,
+  `<storage.data_dir>/data.db`, in a TLV format protected by an HMAC (an
+  AES-256-GCM variant is used when an encryption key is set); it is not a B+tree
+- Transactions (`Begin`/`Update`/`View`) with one writer and concurrent readers
+- Used for: zones created through the API (`KVPersistence`) and their records
+- DNSSEC keys are not stored in it: the server signs with the private key files
+  named in `dnssec.signing.keys` (§6.1.2)
 
 ### 13.3 Data Directory Layout
+What the server writes under `storage.data_dir` and the other configured
+directories:
 ```
-/var/lib/nothingdns/
-├── data.db              # Embedded KV store
-├── wal/                 # Write-ahead log
-│   ├── 000001.wal
-│   └── 000002.wal
-├── raft/                # Raft state
-│   ├── log/
-│   ├── snapshots/
-│   └── stable.db
-├── keys/                # DNSSEC keys
-│   └── example.com/
-│       ├── Kexample.com.+013+12345.key
-│       └── Kexample.com.+013+12345.private
-└── journal/             # Dynamic DNS journals
-    └── example.com.jnl
+<storage.data_dir>/
+├── data.db              # key-value store (API-created zones)
+├── users.json           # dashboard users (server.http.users_file)
+├── access_policy.json   # ACL and recursion allow list edited through the API
+└── runtime_overrides.json  # settings changed through PUT /api/v1/config/*
+<zone_dir>/*.zone        # zone files written for zones created through the API
+<transfer.journal_dir>/  # IXFR journals; slave-zones/*.zone holds secondary zones
+<cluster.data_dir>/      # Raft log, hard state and snapshots (Raft mode)
 ```
 
 ---
@@ -1355,19 +1270,21 @@ A CA removed from `xot.ca_file` is refused on session resumption too
 - XoT: TLS 1.3 only, mTLS or network allow list required
 - ODoH: ACL and recursion policy apply to the HTTP peer of the target (the
   oblivious proxy), not to the end client
-- API authentication (bearer token / basic auth); users defined in the config
-  file cannot be deleted or changed through the API (409)
-- TLS 1.3 for DoT/DoH/DoQ
+- API authentication (bearer token; session or shared token, §11.1); users
+  defined in the config file cannot be deleted or changed through the API (409)
+- TLS: DoT, DoQ and XoT require TLS 1.3; DoH and the API share one HTTP
+  listener that uses Go's default minimum (TLS 1.2)
 - DNSSEC validation for resolver mode
 
 ### 15.2 Operational Security
-- Drop privileges after binding to port 53 (run as non-root)
-- Chroot support
-- Minimal file system access
+- Run as a non-root user and give the binary the capability to bind port 53
+  (the systemd unit and the container image do this); the server does not drop
+  privileges after binding and has no chroot support
 - No shell execution
-- Sandboxed zone file parser
-- Config file permission checks
-- Secrets via environment variables
+- Zone `$INCLUDE` files must live next to the including file (no absolute paths,
+  `..` or symlinks)
+- Placeholder secrets are rejected by config validation
+- Secrets can come from environment variables (`${VAR}` in the config)
 
 ---
 
