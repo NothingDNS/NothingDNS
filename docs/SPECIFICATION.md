@@ -1112,12 +1112,11 @@ resolution:
 
 cache:
   enabled: true
-  size: 100000
-  min_ttl: 30
+  size: 100000                     # default 10000
+  min_ttl: 30                      # default 5 (seconds)
   max_ttl: 86400
-  negative_ttl: 3600
+  negative_ttl: 300                # default 60 (cap, seconds)
   serve_stale: true
-  prefetch: true
 
 zones:
   - /etc/nothingdns/zones/example.com.zone
@@ -1307,99 +1306,111 @@ directories:
 ## 16. Deployment
 
 ### 16.1 Single Binary
+Release binaries for linux, darwin and windows (amd64 and arm64) come from
+`scripts/build-release.sh` (§17), named `nothingdns-<os>-<arch>` and
+`dnsctl-<os>-<arch>` with a `SHA256SUMS` file:
 ```bash
-# Download and run
-curl -fsSL https://github.com/nothingdns/nothingdns/releases/latest/download/nothingdns-linux-amd64 -o nothingdns
-chmod +x nothingdns
-./nothingdns --config /etc/nothingdns/nothingdns.yaml
+curl -fsSLO https://github.com/nothingdns/nothingdns/releases/latest/download/nothingdns-linux-amd64
+curl -fsSLO https://github.com/nothingdns/nothingdns/releases/latest/download/SHA256SUMS
+sha256sum --ignore-missing -c SHA256SUMS
+chmod +x nothingdns-linux-amd64
+./nothingdns-linux-amd64 -config /etc/nothingdns/nothingdns.yaml
 ```
+Check a file first with `nothingdns -config <file> -validate-config`.
 
 ### 16.2 Docker
-```dockerfile
-FROM scratch
-COPY nothingdns /nothingdns
-EXPOSE 53/udp 53/tcp 853 443 8080 9153
-ENTRYPOINT ["/nothingdns"]
-```
+The `Dockerfile` is multi-stage: `golang:1.27.2-alpine` builds `nothingdns` and
+`dnsctl` statically (`CGO_ENABLED=0`, `-trimpath`), and the final image is
+`FROM scratch` with both binaries in `/usr/local/bin`, the CA bundle, a default
+config at `/etc/nothingdns/nothingdns.yaml` (`deploy/docker/nothingdns.yaml`) and
+a writable `/data` volume. It runs as UID 1000. Published ports: `53/udp`,
+`53/tcp`, `853`, `8853` (XoT), `443`, `8080` (REST API, dashboard) and `9153`
+(metrics, off in the default config).
 
 ```bash
 docker run -d --name nothingdns \
-  -p 53:53/udp -p 53:53/tcp \
-  -p 853:853 -p 443:443 \
-  -p 8080:8080 -p 9153:9153 \
-  -v ./config:/etc/nothingdns \
-  ghcr.io/ecostack/nothingdns:latest
+  -p 53:53/udp -p 53:53/tcp -p 8080:8080 \
+  -v nothingdns-data:/data \
+  ghcr.io/nothingdns/nothingdns:latest
+# your own config: -v ./nothingdns.yaml:/etc/nothingdns/nothingdns.yaml:ro
 ```
 
-### 16.3 Docker Compose (3-Node Cluster)
-```yaml
-version: '3.8'
-services:
-  dns1:
-    image: ghcr.io/ecostack/nothingdns:latest
-    environment:
-      NOTHINGDNS_CLUSTER_ENABLED: "true"
-      NOTHINGDNS_CLUSTER_NODE_ID: "node-1"
-      NOTHINGDNS_CLUSTER_BIND: "0.0.0.0:4222"
-      NOTHINGDNS_CLUSTER_PEERS: "node-2=dns2:4222,node-3=dns3:4222"
-    ports:
-      - "53:53/udp"
-      - "53:53/tcp"
-      - "8080:8080"
-    networks:
-      - dnsnet
+The image has no shell or `wget`; its health check is `dnsctl server health`.
+`docker-compose.yml` is the single-node setup for development and testing.
 
-  dns2:
-    image: ghcr.io/ecostack/nothingdns:latest
-    environment:
-      NOTHINGDNS_CLUSTER_ENABLED: "true"
-      NOTHINGDNS_CLUSTER_NODE_ID: "node-2"
-      NOTHINGDNS_CLUSTER_BIND: "0.0.0.0:4222"
-      NOTHINGDNS_CLUSTER_PEERS: "node-1=dns1:4222,node-3=dns3:4222"
-    networks:
-      - dnsnet
-
-  dns3:
-    image: ghcr.io/ecostack/nothingdns:latest
-    environment:
-      NOTHINGDNS_CLUSTER_ENABLED: "true"
-      NOTHINGDNS_CLUSTER_NODE_ID: "node-3"
-      NOTHINGDNS_CLUSTER_BIND: "0.0.0.0:4222"
-      NOTHINGDNS_CLUSTER_PEERS: "node-1=dns1:4222,node-2=dns2:4222"
-    networks:
-      - dnsnet
-
-networks:
-  dnsnet:
-```
+### 16.3 Multi-node
+For a Raft cluster, give each node a `cluster:` section as in §10.2 (the same
+`peers` list on every node, a distinct `node_id` and a shared
+`encryption_key`) and its own data directory. `deploy/config-node{1,2,3}.yaml`
+are example node configs. Production multi-node deployments use the Helm chart
+in `deploy/helm/nothingdns` or the manifests in `deploy/k8s`. Cluster settings
+are not read from environment variables (§12.3); put them in the config file.
 
 ### 16.4 Systemd Service
+`deploy/nothingdns.service`:
 ```ini
 [Unit]
 Description=NothingDNS Server
-After=network.target
+Documentation=https://github.com/nothingdns/nothingdns
+After=network.target network-online.target
+Wants=network-online.target
 
 [Service]
-Type=notify
-ExecStart=/usr/local/bin/nothingdns -config /etc/nothingdns/nothingdns.yaml
-ExecReload=/bin/kill -HUP $MAINPID
-Restart=always
-RestartSec=5
+Type=simple
+# Dedicated system account created by install.sh / setup.sh:
+#   useradd --system --no-create-home --shell /usr/sbin/nologin nothingdns
 User=nothingdns
 Group=nothingdns
-AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+# Main executable
+ExecStart=/usr/local/bin/nothingdns -config /etc/nothingdns/nothingdns.yaml
+
+# Reload configuration on SIGHUP
+ExecReload=/bin/kill -HUP $MAINPID
+
+# Restart policy
+Restart=on-failure
+RestartSec=5
+
+# Resource limits
+LimitNOFILE=65535
+LimitNPROC=512
+
+# Security - bind to privileged ports
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_RAW
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_RAW
+
+# Security hardening
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/nothingdns /var/log/nothingdns
-# Pin stdout/stderr to a file under /var/log/nothingdns so the
-# /etc/logrotate.d/nothingdns rule (which globs /var/log/nothingdns/*.log)
+ProtectKernelTunables=true
+ProtectControlGroups=true
+PrivateTmp=true
+PrivateDevices=true
+
+# Allow write access to data (including Raft under cluster/), logs, and
+# zone files the API edits ("-" ignores the path if it does not exist).
+ReadWritePaths=/var/lib/nothingdns /var/log/nothingdns -/etc/nothingdns/zones
+
+# Pin stdout/stderr to a file under /var/log/nothingdns so the logrotate
+# rule written by install.sh/setup.sh (which globs /var/log/nothingdns/*.log)
 # actually catches the running app's log stream, not just the query log.
-# `append:` (systemd >= 246) preserves the file across restarts and matches
-# the audit logger's O_APPEND open mode.
+# `append:` (systemd >= 246) preserves the existing file across restarts and
+# matches the O_APPEND open mode used by the audit logger.
 StandardOutput=append:/var/log/nothingdns/server.log
 StandardError=append:/var/log/nothingdns/server.log
 SyslogIdentifier=nothingdns
+
+# Environment
+Environment=NOTHINGDNS_CONFIG=/etc/nothingdns/nothingdns.yaml
+
+# Working directory
+WorkingDirectory=/var/lib/nothingdns
+
+# Timeout settings
+TimeoutStartSec=30
+TimeoutStopSec=30
 
 [Install]
 WantedBy=multi-user.target
@@ -1409,31 +1420,26 @@ WantedBy=multi-user.target
 
 ## 17. Build & Cross-Compilation
 
-```makefile
-VERSION := $(shell git describe --tags --always)
-LDFLAGS := -s -w -X main.Version=$(VERSION)
+Go 1.26.9 or later (`go.mod`; CI and the image use toolchain 1.27.2) and no C
+toolchain: every build is `CGO_ENABLED=0`.
 
-build:
-	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o bin/nothingdns ./cmd/nothingdns
-	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o bin/dnsctl ./cmd/dnsctl
-
-release:
-	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o dist/nothingdns-linux-amd64 ./cmd/nothingdns
-	GOOS=linux GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o dist/nothingdns-linux-arm64 ./cmd/nothingdns
-	GOOS=darwin GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o dist/nothingdns-darwin-amd64 ./cmd/nothingdns
-	GOOS=darwin GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o dist/nothingdns-darwin-arm64 ./cmd/nothingdns
-	GOOS=windows GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o dist/nothingdns-windows-amd64.exe ./cmd/nothingdns
-	GOOS=freebsd GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o dist/nothingdns-freebsd-amd64 ./cmd/nothingdns
-
-docker:
-	docker build -t ghcr.io/ecostack/nothingdns:$(VERSION) .
-
-test:
-	go test -race -cover ./...
-
-bench:
-	go test -bench=. -benchmem ./...
+```bash
+make build            # nothingdns and dnsctl, with -trimpath -ldflags "-s -w"
+make build-web        # the React dashboard (web/, needs npm)
+make build-release    # scripts/build-release.sh: cross-platform binaries + SHA256SUMS in dist/
+make build-docker     # docker build -t nothingdns:latest .
+make test             # go test ./... -count=1 -short
+make test-race        # the same with the race detector
+make ci               # fmt-check, vet, staticcheck, test, build
 ```
+
+`scripts/build-release.sh` builds linux, darwin and windows for amd64 and arm64
+(override with `TARGETS="linux/amd64 ..."`). It bakes the version into the
+binaries with
+`-X github.com/nothingdns/nothingdns/internal/util.Version=<version>`, taking it
+from the exact git tag, else the `VERSION` file. The Dockerfile does the same
+with its `VERSION` build argument. The static-analysis checks that must pass
+before a merge are listed in `AGENTS.md`.
 
 ---
 
@@ -1442,22 +1448,27 @@ bench:
 | Feature | NothingDNS | BIND 9 | CoreDNS | PowerDNS | Unbound |
 |---------|-----------|--------|---------|----------|---------|
 | Language | Go | C | Go | C++ | C |
-| Dependencies | Minimal (2 direct) | Many | Many (plugins) | Many | Several |
+| Dependencies | Minimal (6 direct modules: quic-go, OpenTelemetry, x/sys) | Many | Many (plugins) | Many | Several |
 | Single Binary | ✅ | ❌ | ✅ | ❌ | ❌ |
 | Authoritative | ✅ | ✅ | ✅ (plugin) | ✅ | ❌ |
 | Recursive | ✅ | ✅ | ✅ (plugin) | ✅ (recursor) | ✅ |
 | DoT | ✅ | ✅ | ✅ | ❌ | ✅ |
-| DoH | ✅ | ❌ | ✅ | ❌ | ✅ |
+| DoH | ✅ | ✅ (9.18+) | ✅ | ❌ | ✅ |
 | DoQ | ✅ | ❌ | ❌ | ❌ | ❌ |
 | DNSSEC Sign | ✅ | ✅ | ❌ | ✅ | ❌ |
 | DNSSEC Validate | ✅ | ✅ | ✅ | ❌ | ✅ |
-| Clustering | ✅ (Raft) | ❌ | ❌ | ❌ | ❌ |
+| Clustering | ✅ (Raft, static membership) | ❌ | ❌ | ❌ | ❌ |
 | GeoDNS | ✅ | ❌ | ✅ | ✅ | ❌ |
 | Split-Horizon | ✅ | ✅ (views) | ❌ | ❌ | ❌ |
 | Ad-Blocking | ✅ | ❌ | ✅ (plugin) | ❌ | ❌ |
 | Web Dashboard | ✅ | ❌ | ❌ | ✅ | ❌ |
 | REST API | ✅ | ❌ | ❌ | ✅ | ❌ |
 | BIND Zone Import | ✅ | Native | ❌ | ❌ | ❌ |
+
+The NothingDNS column was checked against the code (see §6 to §11 for what each
+✅ covers and what it does not: no ECS, no automatic key rollover, no
+allowlist). The other columns are general knowledge of those products and were
+not re-checked; verify them before relying on the comparison.
 
 ---
 
