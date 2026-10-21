@@ -426,13 +426,14 @@ Implementation: All using Go's `crypto/rsa`, `crypto/ecdsa`, `crypto/ed25519` �
 ### 6.2 Validation (Recursive)
 
 - Full chain of trust validation from root trust anchors
-- Trust anchor management (RFC 5011 — automated updates)
-- Embedded root trust anchors (IANA root KSK)
+- Trust anchors: the built-in IANA root KSKs (KSK-2024 and KSK-2017) plus an
+  optional file (`dnssec.trust_anchor`, RFC 7958 XML). There is no RFC 5011
+  automated update: a root key roll needs a new release or a new anchor file.
 - DNSSEC-aware cache (separate DNSSEC and non-DNSSEC entries)
 - AD (Authentic Data) bit setting in responses
 - CD (Checking Disabled) bit honoring
 - Bogus response handling (SERVFAIL with extended error)
-- Negative trust anchor support (RFC 7646)
+- No negative trust anchors (RFC 7646)
 
 #### 6.2.1 Validation work limits (fixed by design)
 
@@ -563,6 +564,11 @@ the data:
 - Prerequisites: RRset exists, RRset does not exist, name exists, name does not exist
 - Update section: Add RRset, Delete RRset, Delete name
 - Atomic updates per zone
+- Malformed messages are FORMERR (RFC 2136 §3.2.3, §3.4.1.2): a prerequisite or
+  update RR whose class is not IN, ANY or NONE; an ANY or NONE RR with a
+  non-zero TTL; an ANY RR, or any ANY/NONE prerequisite, with RDATA; a
+  prerequisite with a non-zero TTL; an update RR of type IXFR, AXFR, MAILB or
+  MAILA, or of type ANY unless its class is ANY
 - SOA serial auto-increment on successful update
 - TSIG authentication always required: unsigned UPDATE → REFUSED; the key must
   list the zone in `transfer.tsig_keys[].allow_update` (else REFUSED); unknown
@@ -579,10 +585,12 @@ the data:
   client's (§10.3)
 
 ### 8.2 Journal
-- Append-only journal of all dynamic updates
-- Used for IXFR generation
-- Periodic journal compaction (merge with zone file)
-- Journal replay on startup
+- Journal of the changes made by dynamic updates and other zone edits
+- Used for IXFR generation; a request the journal cannot cover is answered with
+  a full (AXFR-style) transfer
+- Kept to the most recent entries per zone (default 100); older ones are
+  trimmed, not merged into the zone file
+- Reloaded on startup
 
 ---
 
@@ -679,7 +687,7 @@ upstreams, not echoed in responses, and there is no ECS configuration. Doing it
 properly needs a trust policy, a scope-aware cache key and the RFC 7871 §7.2.1
 response echo, so a partial "use ECS for Geo" would itself be non-conformant.
 
-### 9.5 Response Rate Limiting — RRL (RFC Draft)
+### 9.5 Response Rate Limiting — RRL (BIND-style, no RFC)
 - Per-client limiting (an IPv4 address, or an IPv6 /64)
 - Buckets per client, query type and response code
 - Token bucket algorithm; a client that exceeds it is suppressed for a window
@@ -703,7 +711,10 @@ rrl:
 - **Leader Election** — randomized election timeout, RequestVote RPC
 - **Log Replication** — AppendEntries RPC, log matching property
 - **Safety** — election restriction (up-to-date log), commit rules
-- **Membership Changes** — joint consensus for cluster resizing
+- **Membership** — static: the peer list is `cluster.peers`, and changing it
+  means editing the config and doing a rolling restart. The joint-consensus
+  code exists but is not safe to run, so runtime add/remove fails closed
+  (`dnsctl cluster join` answers an error in Raft mode).
 - **Log Compaction** — periodic snapshots + truncation
 - **Transport** — custom binary RPC over TCP on `cluster.bind_addr:gossip_port`
   (see §10.3)
@@ -722,6 +733,11 @@ The Raft FSM applies zone commands to every replica's zone store:
   command carries RDATA)
 - Atomic zone batch — one entry applied all-or-nothing with one SOA serial
   bump and an optional precondition fingerprint (used by Dynamic DNS, §8.1)
+
+In Raft mode the SOA serial is bumped the same way on every replica: a single
+record command adds one (RFC 1982), and a batch takes the date prefix the
+proposer wrote into the entry, so replicas that apply the same log hold the same
+serial. Standalone and SWIM servers use the date-style `YYYYMMDDNN` serial.
 
 Blocklists, ACLs and configuration are not replicated through Raft; each
 node reads its own config file and data directory.
@@ -1447,45 +1463,57 @@ bench:
 
 ## 19. RFC Compliance
 
+What the code implements. Where an RFC is only partly covered, the line says so.
+
 ### Core
-- RFC 1034 — Domain Names: Concepts and Facilities
-- RFC 1035 — Domain Names: Implementation and Specification
+- RFC 1034, RFC 1035 — Domain Names
 - RFC 2181 — Clarifications to the DNS Specification
+- RFC 3597 — Handling of unknown RR types (`TYPE<n>`, `\# <len> <hex>`)
+- RFC 4343 — Case insensitivity of names
 - RFC 6895 — DNS IANA Considerations
+- RFC 5891, RFC 5892, RFC 5893 — IDNA (A-label validation, derived properties, Bidi)
 
 ### Transport
 - RFC 7766 — DNS Transport over TCP
 - RFC 7858 — DNS over TLS (DoT)
-- RFC 8484 — DNS over HTTPS (DoH)
-- RFC 9250 — DNS over QUIC (DoQ)
+- RFC 8484 — DNS over HTTPS (DoH); DNS over WebSocket on the same listener
+- RFC 9250 — DNS over QUIC (DoQ), through `quic-go`
+- RFC 9103 — Zone transfer over TLS (XoT)
+- RFC 9230 — Oblivious DoH, with RFC 9180 HPKE
+- RFC 8490 — DNS Stateful Operations
 
 ### EDNS
 - RFC 6891 — EDNS(0)
-- RFC 7871 — EDNS Client Subnet
-- RFC 7830 — EDNS Padding
+- RFC 7830 — EDNS Padding (DoH responses)
+- RFC 7873 — DNS Cookies
+- RFC 8914 — Extended DNS Errors
+- RFC 7871 — EDNS Client Subnet: the option is parsed only; not implemented (§9.4)
 
 ### DNSSEC
-- RFC 4033 — DNSSEC Introduction and Requirements
-- RFC 4034 — Resource Records for DNSSEC
-- RFC 4035 — Protocol Modifications for DNSSEC
-- RFC 5155 — NSEC3
-- RFC 5011 — Trust Anchor Update
-- RFC 6698 — DANE/TLSA
+- RFC 4033, RFC 4034, RFC 4035 — DNSSEC (validation and online/offline signing)
+- RFC 5155 — NSEC3; RFC 9276 — NSEC3 parameter guidance (iterations capped at 150)
+- RFC 8198 — Aggressive use of NSEC
+- RFC 8976 — ZONEMD
+- RFC 6698 — TLSA record type (stored and served; DANE validation is not performed)
+- RFC 5011 — Trust Anchor Update: not implemented (§6.2)
+- RFC 7583 — Key rollover timing: a scheduler exists but is not wired in (§6.1.2)
 
 ### Zone Transfer & Dynamic DNS
 - RFC 1995 — Incremental Zone Transfer (IXFR)
 - RFC 1996 — NOTIFY
 - RFC 2136 — Dynamic DNS UPDATE
-- RFC 2845 — TSIG
+- RFC 8945 — TSIG (this supersedes RFC 2845)
 - RFC 5936 — AXFR
 
-### Security & Performance
+### Resolution, policy and performance
 - RFC 2308 — Negative Caching
 - RFC 4592 — Wildcard Processing
 - RFC 6672 — DNAME
 - RFC 7816 — QNAME Minimization
 - RFC 8767 — Serve-Stale
-- RFC 8914 — Extended DNS Errors
+- RFC 6147 — DNS64
+- Response rate limiting follows the BIND-style RRL design (not an RFC; §9.5)
+- RFC 6762, RFC 6763 — mDNS and DNS-SD responder
 
 ---
 
