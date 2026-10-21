@@ -145,7 +145,7 @@ func (p *Pipeline) ServeDNS(h *integratedHandler, w server.ResponseWriter, r *pr
 		if h.metrics != nil && q.qtypeStr != "" {
 			h.metrics.RecordQueryLatency(q.qtypeStr, latency)
 		}
-		if h.auditLogger != nil && q.qtypeStr != "" {
+		if h.auditLogger.Enabled() && q.qtypeStr != "" {
 			clientIP := "-"
 			if ci := q.currentWriter.ClientInfo(); ci != nil && ci.IP() != nil {
 				clientIP = ci.IP().String()

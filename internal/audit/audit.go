@@ -270,6 +270,13 @@ func (a *AuditLogger) LogQuery(entry QueryAuditEntry) {
 	a.writeLine(formatQueryAuditLine(entry))
 }
 
+// Enabled reports whether LogQuery would write anything. Callers on the query
+// path use it to skip building the entry (client IP and rcode strings). A nil
+// logger is disabled.
+func (a *AuditLogger) Enabled() bool {
+	return a != nil && a.enabled.Load()
+}
+
 // LogAXFR writes an AXFR audit entry.
 func (a *AuditLogger) LogAXFR(entry AXFRAuditEntry) {
 	if !a.enabled.Load() {

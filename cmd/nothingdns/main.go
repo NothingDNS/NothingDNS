@@ -902,9 +902,13 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 	dashboardServer.SetAuthToken(resolveDashboardBearer(cfg.Server.HTTP))
 	dashboardServer.SetAuthTokenRole(cfg.Server.HTTP.AuthTokenRole)
 	dashboardServer.SetZoneManager(zoneManagerInstance)
-	// Feed per-query events into the dashboard (Query Log page + live stream).
-	handler.dashboardServer = dashboardServer
 	httpConfig := effectiveHTTPConfig(cfg)
+	// Feed per-query events into the dashboard (Query Log page + live stream).
+	// With the HTTP server disabled nothing can read them (server.http.* is
+	// restart-only), so skip building them for every query.
+	if httpConfig.Enabled {
+		handler.dashboardServer = dashboardServer
+	}
 	var apiServer *api.Server
 	apiServer = api.NewServer(httpConfig, zoneManagerInstance, dnsCache, func() error {
 		logger.Info("Reloading configuration via API...")

@@ -40,6 +40,11 @@ type headerPolicyResponseWriter struct {
 	// refuses by design.
 	recursionAvailable bool
 
+	// summarize makes Write build the compact answer summary the dashboard
+	// Query Log shows. Off when no dashboard is attached, so the per-response
+	// RDATA formatting is skipped.
+	summarize bool
+
 	// recursionDenied is set when this client may not use recursion
 	// (allow_recursion). Its responses must not advertise RA either.
 	recursionDenied bool
@@ -162,7 +167,9 @@ func (hw *headerPolicyResponseWriter) Write(msg *protocol.Message) (int, error) 
 		}
 		hw.normalizeOPT(msg)
 		hw.rcode, hw.wrote = msg.Header.Flags.RCODE, true
-		hw.answers = summarizeAnswers(msg)
+		if hw.summarize {
+			hw.answers = summarizeAnswers(msg)
+		}
 	}
 	return hw.inner.Write(msg)
 }
@@ -228,6 +235,7 @@ func newHeaderPolicyWriter(h *integratedHandler, w server.ResponseWriter, req *p
 		inner:              w,
 		opcode:             protocol.OpcodeQuery,
 		recursionAvailable: recursionAvailable(h),
+		summarize:          h != nil && h.dashboardServer != nil,
 	}
 	if req != nil {
 		hw.opcode = req.Header.Flags.Opcode
