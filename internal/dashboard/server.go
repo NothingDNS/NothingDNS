@@ -725,11 +725,23 @@ func (s *Server) RemoveClient(client *Client) {
 	delete(s.clients, client)
 }
 
+// marshalBroadcast serialises a live-query message; a variable so tests can
+// count how often the broadcast loop pays for it.
+var marshalBroadcast = json.Marshal
+
 // broadcastLoop broadcasts events to all connected clients
 func (s *Server) broadcastLoop() {
 	defer s.wg.Done()
 	for event := range s.broadcastChan {
-		data, err := json.Marshal(&BroadcastMessage{
+		// Nobody is watching: skip the marshalling. Every DNS query reaches
+		// this loop, so serialising it for no recipient is pure hot-path cost.
+		s.mu.RLock()
+		watching := len(s.clients) > 0
+		s.mu.RUnlock()
+		if !watching {
+			continue
+		}
+		data, err := marshalBroadcast(&BroadcastMessage{
 			Type:  "query",
 			Event: event,
 		})
@@ -743,7 +755,7 @@ func (s *Server) broadcastLoop() {
 			payload := data
 			if client.redactIPs {
 				if redacted == nil {
-					redacted, err = json.Marshal(&BroadcastMessage{
+					redacted, err = marshalBroadcast(&BroadcastMessage{
 						Type:  "query",
 						Event: RedactQueryEvents([]*QueryEvent{event})[0],
 					})
