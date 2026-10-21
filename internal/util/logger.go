@@ -279,6 +279,19 @@ func isLogControl(r rune) bool {
 	return (r < 0x20 && r != '\t') || r == 0x7f || (r >= 0x80 && r <= 0x9f) || r == 0x2028 || r == 0x2029
 }
 
+// enabled reports whether a message at level would be written. The formatted
+// log methods check it before fmt.Sprintf so a suppressed message (the
+// per-query Debugf calls at level=info/error) costs no formatting or
+// allocation. A nil Logger is never enabled.
+func (l *Logger) enabled(level LogLevel) bool {
+	if l == nil {
+		return false
+	}
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return level >= l.level
+}
+
 // Debug logs a debug message.
 func (l *Logger) Debug(msg string) {
 	l.log(DEBUG, msg)
@@ -286,6 +299,9 @@ func (l *Logger) Debug(msg string) {
 
 // Debugf logs a formatted debug message.
 func (l *Logger) Debugf(format string, args ...interface{}) {
+	if !l.enabled(DEBUG) {
+		return
+	}
 	l.log(DEBUG, fmt.Sprintf(format, args...))
 }
 
@@ -296,6 +312,9 @@ func (l *Logger) Info(msg string) {
 
 // Infof logs a formatted info message.
 func (l *Logger) Infof(format string, args ...interface{}) {
+	if !l.enabled(INFO) {
+		return
+	}
 	l.log(INFO, fmt.Sprintf(format, args...))
 }
 
@@ -306,6 +325,9 @@ func (l *Logger) Warn(msg string) {
 
 // Warnf logs a formatted warning message.
 func (l *Logger) Warnf(format string, args ...interface{}) {
+	if !l.enabled(WARN) {
+		return
+	}
 	l.log(WARN, fmt.Sprintf(format, args...))
 }
 
@@ -316,6 +338,9 @@ func (l *Logger) Error(msg string) {
 
 // Errorf logs a formatted error message.
 func (l *Logger) Errorf(format string, args ...interface{}) {
+	if !l.enabled(ERROR) {
+		return
+	}
 	l.log(ERROR, fmt.Sprintf(format, args...))
 }
 
