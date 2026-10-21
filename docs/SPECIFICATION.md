@@ -1261,7 +1261,7 @@ monitoring threshold, lower than the goals here.
 | Metric | Target | Status |
 |--------|--------|--------|
 | Queries/sec (UDP, cached) | >500,000 | Not measured end to end. The cache lookup alone costs about 150 ns (single thread) and 96 ns (parallel), `go test ./internal/cache -bench Get` |
-| Queries/sec (UDP, authoritative) | >200,000 | **Not met**, and not testable on one host. With the local flood (`go test -tags perf -run TestLocalUDPFlood ./internal/load/`, per-IP UDP cap disabled via `server.udp_rate_per_ip: 0`) the default single UDP socket gives about 89,000 to 92,000; `server.udp_listeners: 4` gives about 131,000 to 138,000, and 8 adds nothing. The load generator shares the 12 cores: a trivial one-thread Go UDP echo server (no DNS) reached only about 170,000 with the same client. With the default cap of 100 per client IP, one source gets about 100 |
+| Queries/sec (UDP, authoritative) | >200,000 | **Not met**, and not testable on one host. With the local flood (`go test -tags perf -run TestLocalUDPFlood ./internal/load/`, per-IP UDP cap disabled via `server.udp_rate_per_ip: 0`) a single UDP socket (`server.udp_listeners: 1`) gives about 89,000 to 92,000; `server.udp_listeners: 4` (the auto default on Linux with 4+ CPUs) gives about 131,000 to 138,000, and 8 adds nothing. The load generator shares the 12 cores: a trivial one-thread Go UDP echo server (no DNS) reached only about 170,000 with the same client. With the default cap of 100 per client IP, one source gets about 100 |
 | Queries/sec (DoH) | >100,000 | Not measured |
 | Average latency (cached) | <1ms | Not measured |
 | Average latency (authoritative) | <5ms | Not measured |
@@ -1279,9 +1279,10 @@ monitoring threshold, lower than the goals here.
 - UDP: one socket per bind address (created with `SO_REUSEPORT` where the
   platform has it), a reader goroutine and a worker pool of `NumCPU × 4` per
   socket; no `recvmmsg` batching
-- Raising `server.udp_listeners` (extra `SO_REUSEPORT` sockets per address,
-  default 1) is the measured way to scale UDP reads on a multi-core Linux host:
-  about +50% in the local flood at 4 listeners, nothing further beyond that.
+- `server.udp_listeners` (extra `SO_REUSEPORT` sockets per address) scales UDP
+  reads on a multi-core Linux host: about +50% in the local flood at 4
+  listeners, nothing further beyond that. Unset (0) means auto: 4 on Linux with
+  at least 4 CPUs, otherwise 1; `1` forces a single socket.
   A CPU profile of the single-listener case (taken before the dashboard JSON fix, which was about 7% of it) showed the server about 15%
   idle-scheduling and 27% in `sendmsg`/`recvmsg` syscalls, using about 2.9 of 12
   cores; the DNS logic is not the bottleneck

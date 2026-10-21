@@ -34,7 +34,7 @@ Measured on a 12-core Linux machine with the generator on the same host
 
 | Server setting | QPS |
 |----------------|-----|
-| default (one UDP socket) | 89,000 to 92,000 |
+| `server.udp_listeners: 1` (one UDP socket) | 89,000 to 92,000 |
 | `server.udp_listeners: 4` | 131,000 to 138,000 |
 | `server.udp_listeners: 8` | 129,000 to 134,000 |
 | trivial Go UDP echo server (no DNS), same client | about 170,000 |
@@ -45,7 +45,7 @@ same machine gave 78,000 (one socket) and 121,000 to 123,000 (4 listeners).
 Absolute numbers shift a few percent from day to day, so compare builds only in
 back-to-back runs.
 
-Use more than one listener on multi-core Linux hosts. The echo row is the
+`server.udp_listeners` defaults to auto (4 sockets on Linux with at least 4 CPUs, otherwise 1); set it to 1 to force a single socket. The per-client cap `udp_rate_per_ip` is kept per socket. The echo row is the
 ceiling of this test setup, because the client and the kernel loopback share the
 same cores; to measure beyond it, run the generator on a separate host.
 

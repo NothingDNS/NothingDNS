@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"runtime"
 	"sync"
 	"time"
 
@@ -38,6 +39,26 @@ type servers struct {
 	doqCerts *server.CertReloader
 }
 
+// autoUDPListeners is the socket count chosen when server.udp_listeners is
+// unset (0) on a multi-core Linux host. Measured: 4 sockets lift local
+// authoritative UDP throughput about 50% over one; more add nothing
+// (docs/PERFORMANCE.md).
+const autoUDPListeners = 4
+
+// effectiveUDPListeners resolves server.udp_listeners. An explicit value is
+// used as-is (1 forces a single socket). 0 means auto: autoUDPListeners on
+// Linux with at least 4 CPUs, where the kernel balances SO_REUSEPORT sockets,
+// and a single socket elsewhere.
+func effectiveUDPListeners(configured int, goos string, cpus int) int {
+	if configured > 0 {
+		return configured
+	}
+	if goos == "linux" && cpus >= autoUDPListeners {
+		return autoUDPListeners
+	}
+	return 1
+}
+
 // startServers creates and starts the UDP, TCP, TLS (DoT), DoQ, and XoT
 // transport servers based on the config. Returns the created servers or
 // the partially-started set on error (so callers can shut them down).
@@ -49,10 +70,7 @@ func startServers(cfg *config.Config, handler *integratedHandler, transferMgr *T
 
 	// UDP. udp_listeners>1 opens extra SO_REUSEPORT sockets on the same
 	// address so reads are not stuck on one core (Linux balances them).
-	udpListeners := cfg.Server.UDPListeners
-	if udpListeners < 1 {
-		udpListeners = 1
-	}
+	udpListeners := effectiveUDPListeners(cfg.Server.UDPListeners, runtime.GOOS, runtime.NumCPU())
 	firstUDP := true
 	for _, addr := range udpAddrs {
 		for n := 0; n < udpListeners; n++ {

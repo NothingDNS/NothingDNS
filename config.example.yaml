@@ -20,8 +20,10 @@ server:
   # (lock-free). Omitted means the built-in default of 100, which silently
   # drops the rest. Use rrl: for DNS response rate limiting.
   udp_rate_per_ip: 0
-  # Extra SO_REUSEPORT sockets per address (Linux scales reads). Default 1.
-  # udp_listeners: 1
+  # SO_REUSEPORT sockets per address. 0 (default) = auto: 4 on Linux hosts with
+  # at least 4 CPUs, otherwise 1; set 1 to force a single socket. The per-client
+  # cap above is kept per socket.
+  # udp_listeners: 0
 
   # HTTP API server (for REST API, DoH, Dashboard)
   http:

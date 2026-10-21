@@ -95,6 +95,7 @@ DNS dinleyicileri ve yönetim arayüzleri.
 | `bind` | `[]string` | `["0.0.0.0", "::"]` | hayır | Dinleme adresleri (IPv4 + IPv6) |
 | `port` | int | `53` | hayır | UDP/TCP DNS portu |
 | `udp_workers` | int | `0` (auto: NumCPU\*4) | hayır | UDP worker sayısı |
+| `udp_listeners` | int | `0` (auto) | hayır | Adres başına `SO_REUSEPORT` UDP soket sayısı. `0` = otomatik: en az 4 CPU'lu Linux'ta 4, aksi halde 1; `1` tek soketi zorlar. İstemci başına sınır (`udp_rate_per_ip`) soket başınadır |
 | `tcp_workers` | int | `0` (auto: NumCPU\*2) | hayır | TCP worker sayısı |
 | `tls.enabled` | bool | `false` | hayır (DoT dinleyicisi yalnızca başlangıçta açılır/kapatılır) | DoT (DNS over TLS) etkinleştir |
 | `tls.cert_file` | string | — | içerik evet (SIGHUP / `POST /api/v1/config/reload` dosyayı yeniden okur; SNI'lı ve SNI'sız yeni el sıkışmalar yeni sertifikayı alır, açık bağlantılar eskisini korur; yüklenemezse eski sertifika kalır ve hata loglanır); yol değişikliği yeniden başlatma gerektirir | TLS sertifika yolu (`quic.*`/`xot.*` boşsa DoQ ve XoT de bunu kullanır) |

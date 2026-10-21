@@ -949,6 +949,7 @@ func TestStartServersListensOnEveryBindAddress(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Server.Port = port
 	cfg.Server.Bind = []string{"127.0.0.1", "::1"}
+	cfg.Server.UDPListeners = 1 // one socket per address; 0 would mean auto (several on Linux)
 	handler := &integratedHandler{}
 	logger := newDiscardLogger()
 

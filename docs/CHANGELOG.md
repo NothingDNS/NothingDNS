@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **UDP listeners default to auto**: `server.udp_listeners` unset (or 0) now
+  opens 4 `SO_REUSEPORT` sockets per UDP address on Linux hosts with at least 4
+  CPUs (1 elsewhere); `udp_listeners: 1` keeps a single socket. About +50% local
+  authoritative UDP throughput (docs/PERFORMANCE.md). The per-client cap
+  `udp_rate_per_ip` is kept per socket, so with the default cap a client using
+  many source ports can reach up to N times it.
+
 ## [1.2.19] — 2026-10-10
 
 ### Added

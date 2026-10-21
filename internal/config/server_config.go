@@ -44,8 +44,10 @@ type ServerConfig struct {
 	UDPRatePerIPSet bool `yaml:"-"`
 
 	// UDPListeners is how many SO_REUSEPORT sockets to open per UDP address.
-	// 0 or 1 is a single socket. Higher values spread reads across cores on
-	// Linux; other kernels may not balance, so the default stays 1.
+	// 0 (default) is auto: 4 sockets on Linux hosts with at least 4 CPUs,
+	// otherwise 1 (other kernels may not balance SO_REUSEPORT sockets).
+	// 1 forces a single socket; higher values spread reads across cores.
+	// The per-client cap (udp_rate_per_ip) is kept per socket.
 	UDPListeners int `yaml:"udp_listeners"`
 
 	// PID file path (optional, for daemon mode)
