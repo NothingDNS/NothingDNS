@@ -380,80 +380,126 @@ dnsctl dig example.com AXFR +tcp
 ## dnssec — DNSSEC Operations
 
 ```bash
-dnsctl dnssec [subcommand]
+dnsctl dnssec <subcommand> [options]
 ```
+
+`status` and `keys` ask the server over the API. The other subcommands work on
+local files and need no server. Options are Go-style flags: `--zone example.com`
+and `--zone=example.com` are both accepted.
 
 ### dnssec status
 
-Show DNSSEC status.
+Show the server's DNSSEC validation and signing status.
 
 ```bash
 dnsctl dnssec status
 ```
 
+### dnssec keys
+
+List the signing keys of each signed zone (zone, key tag, algorithm, KSK/ZSK).
+Requires the admin role.
+
+```bash
+dnsctl dnssec keys
+```
+
 ### dnssec generate-key
 
-Generate DNSSEC key pair.
+Generate a key pair and write the key files.
 
 ```bash
-dnsctl dnssec generate-key --zone=<zone> [--algorithm=<algo>] [--bits=<size>] [--ksk|--zsk]
+dnsctl dnssec generate-key --zone <zone> [--algorithm <n>] [--type KSK|ZSK] [--keysize <bits>] [--output <dir>]
 ```
 
-**Algorithms**: `rsasha256` (default), `rsasha512`, `ecdsap256sha256`, `ecdsap384sha384`, `ed25519`
+| Option | Default | Meaning |
+|---|---|---|
+| `--zone` | (required) | Zone name |
+| `--algorithm` | `13` | DNSSEC algorithm number: `8` RSASHA256, `10` RSASHA512, `13` ECDSAP256SHA256, `14` ECDSAP384SHA384, `15` ED25519 |
+| `--type` | `ZSK` | `KSK` or `ZSK` |
+| `--keysize` | `0` (RSA: 2048) | Key size in bits, RSA only |
+| `--output` | `.` | Directory for the key files |
 
-**Examples**:
-```bash
-# Generate KSK
-dnsctl dnssec generate-key --zone=example.com --ksk --algorithm=ecdsap256sha256
-
-# Generate ZSK
-dnsctl dnssec generate-key --zone=example.com --zsk --bits=1024
-```
-
-### dnssec sign-zone
-
-Sign a zone.
+It writes `K<zone>.+<algorithm>+<tag>.key` and `.private`, and prints the key
+tag and, for a KSK, its DS record.
 
 ```bash
-dnsctl dnssec sign-zone --zone=<zone> [--active-keys]
-```
-
-```bash
-dnsctl dnssec sign-zone --zone=example.com
+dnsctl dnssec generate-key --zone example.com --type KSK --algorithm 13
+dnsctl dnssec generate-key --zone example.com --type ZSK --algorithm 8 --keysize 2048
 ```
 
 ### dnssec ds-from-dnskey
 
-Get DS record from DNSKEY.
+Print the DS record for a public key file.
 
 ```bash
-dnsctl dnssec ds-from-dnskey --zone=<zone> [--digest=<algorithm>]
+dnsctl dnssec ds-from-dnskey --zone <zone> --keyfile <file.key> [--digest <n>]
 ```
 
-**Algorithms**: `sha256` (default), `sha384`
+`--digest` is a digest type number: `2` SHA-256 (default), `1` SHA-1, `4` SHA-384.
 
 ```bash
-dnsctl dnssec ds-from-dnskey --zone=example.com
-dnsctl dnssec ds-from-dnskey --zone=example.com --digest=sha384
+dnsctl dnssec ds-from-dnskey --zone example.com --keyfile Kexample.com.+013+12345.key
+dnsctl dnssec ds-from-dnskey --zone example.com --keyfile Kexample.com.+013+12345.key --digest 4
 ```
 
-### dnssec verify
+### dnssec sign-zone
 
-Verify DNSSEC signatures.
+Sign a zone file offline and write the signed zone. This does not touch the
+running server.
 
 ```bash
-dnsctl dnssec verify --zone=<zone>
+dnsctl dnssec sign-zone --zone <zone> --input <zonefile> [--output <file>] [--keydir <dir>]
+                        [--algorithm <n>] [--keysize <bits>] [--nsec3 [--iterations <n>] [--salt <hex>]]
+                        [--validity <duration>]
 ```
 
-### dnssec key
+| Option | Default | Meaning |
+|---|---|---|
+| `--zone` | (required) | Zone name |
+| `--input` | (required) | Zone file to sign |
+| `--output` | `<input>.signed` | Signed zone file to write |
+| `--keydir` | `.` | Directory searched for the zone's `K<zone>.+…` key files |
+| `--algorithm` | `13` | Algorithm for keys generated when `--keydir` has none (3 to 16) |
+| `--keysize` | `0` | RSA key size in bits; required for RSA algorithms |
+| `--nsec3` | off | Use NSEC3 instead of NSEC |
+| `--iterations` | `0` | NSEC3 iterations, 0 to 65535 (RFC 9276 recommends 0; the server rejects more than 150 in its own config) |
+| `--salt` | none | NSEC3 salt, hex |
+| `--validity` | `720h` | Signature validity, a Go duration |
 
-Manage DNSSEC keys.
+The input is read with the server's zone-file parser, so a standard BIND file
+works (`$ORIGIN`, `$TTL`, `$INCLUDE`, `$GENERATE`, multi-line records, omitted
+TTL and class). A file with no `$ORIGIN` takes `--zone` as its origin. A line that
+cannot be read, a class other than IN, or RDATA that does not parse stops the
+run with `line N: ...` and no output is written.
+
+The keys found in `--keydir` are used. When there are none, a KSK and a ZSK are
+generated for this run only: they are not saved, so generate and keep the keys
+first (`generate-key`) if the zone will be re-signed or a DS published.
 
 ```bash
-dnsctl dnssec key list --zone=<zone>
-dnsctl dnssec key activate --zone=<zone> --key-id=<id>
-dnsctl dnssec key deactivate --zone=<zone> --key-id=<id>
-dnsctl dnssec key remove --zone=<zone> --key-id=<id>
+dnsctl dnssec sign-zone --zone example.com --input example.com.zone
+dnsctl dnssec sign-zone --zone example.com --input example.com.zone --keydir ./keys \
+    --nsec3 --iterations 1 --salt abcdef --validity 336h
+```
+
+### dnssec validate-zone
+
+Check the RRSIGs of a signed zone file against its DNSKEYs and report how many
+are valid, invalid and expired.
+
+```bash
+dnsctl dnssec validate-zone --zone <signed-zone-file> [--ignore-time]
+```
+
+`--ignore-time` skips the inception and expiration check (for testing).
+
+### dnssec verify-anchor
+
+Check a trust anchor file and list the anchors it holds per zone.
+
+```bash
+dnsctl dnssec verify-anchor <trust-anchor-file>
 ```
 
 ---
