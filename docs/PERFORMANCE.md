@@ -22,6 +22,27 @@ the latency rows are not enforced by anything in the server.
 
 ## 1. Baseline Benchmarking
 
+### Local UDP flood and its ceiling
+
+`go test -tags perf -run TestLocalUDPFlood ./internal/load/` floods
+`127.0.0.1:15353` (override with `PERF_ADDR`, `PERF_WORKERS`) and prints the
+success QPS. Run the server with `server.udp_rate_per_ip: 0`, otherwise the
+default 100 queries/second per client IP caps a single source.
+
+Measured on a 12-core Linux machine with the generator on the same host
+(authoritative A query, one local zone):
+
+| Server setting | QPS |
+|----------------|-----|
+| default (one UDP socket) | 65,000 to 77,000 |
+| `server.udp_listeners: 4` | 106,000 to 114,000 |
+| `server.udp_listeners: 8` or `12` | 113,000 to 116,000 |
+| trivial Go UDP echo server (no DNS), same client | about 176,000 |
+
+Use more than one listener on multi-core Linux hosts. The echo row is the
+ceiling of this test setup, because the client and the kernel loopback share the
+same cores; to measure beyond it, run the generator on a separate host.
+
 ### Quick Benchmark
 
 ```bash
