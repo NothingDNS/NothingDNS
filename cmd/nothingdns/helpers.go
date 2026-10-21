@@ -81,7 +81,10 @@ func isSubdomain(child, parent string) bool {
 	if child == parent {
 		return true
 	}
-	return strings.HasSuffix(child, "."+parent)
+	// strings.HasSuffix(child, "."+parent) without building the concatenation:
+	// this runs once per zone per query on the hot path.
+	cut := len(child) - len(parent)
+	return cut >= 1 && child[cut-1] == '.' && child[cut:] == parent
 }
 
 // canonicalize ensures a domain name ends with a dot and is lowercase.

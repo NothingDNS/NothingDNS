@@ -347,6 +347,19 @@ func (m *Manager) List() map[string]*Zone {
 	return result
 }
 
+// Range calls fn for every loaded zone under the manager's read lock, without
+// copying the zone map (List copies it on every call). fn must be quick and
+// must not call back into the Manager; returning false stops the iteration.
+func (m *Manager) Range(fn func(name string, z *Zone) bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for name, z := range m.zones {
+		if !fn(name, z) {
+			return
+		}
+	}
+}
+
 // ListShared returns the internal zones map for read-only access.
 // Caller must NOT modify the returned map.
 // This enables single-source-of-truth zone access without map copying.

@@ -4,7 +4,7 @@
 package main
 
 import (
-	"sort"
+	"slices"
 	"sync"
 
 	"github.com/nothingdns/nothingdns/internal/transfer"
@@ -80,19 +80,37 @@ func (m *MultiZoneProvider) withSlaveZones(sm *transfer.SlaveManager) *MultiZone
 	return m
 }
 
+// rangeMatches collects the zones from rng whose origin contains qname,
+// without the per-query copy of the zone map that List makes.
+func rangeMatches(qname string, rng func(func(string, *zone.Zone) bool)) []ZoneMatch {
+	var matches []ZoneMatch
+	rng(func(name string, z *zone.Zone) bool {
+		if isSubdomain(qname, name) {
+			matches = append(matches, ZoneMatch{name, z})
+		}
+		return true
+	})
+	return matches
+}
+
 // FindZones queries all providers and merges results.
 func (m *MultiZoneProvider) FindZones(qname string) []ZoneMatch {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	seen := make(map[string]struct{})
 	var matches []ZoneMatch
-
 	for _, p := range m.providers {
 		for _, match := range p.FindZones(qname) {
-			if _, exists := seen[match.Origin]; !exists {
+			// A query matches few zones, so a linear scan beats a map.
+			dup := false
+			for i := range matches {
+				if matches[i].Origin == match.Origin {
+					dup = true
+					break
+				}
+			}
+			if !dup {
 				matches = append(matches, match)
-				seen[match.Origin] = struct{}{}
 			}
 		}
 	}
@@ -159,13 +177,7 @@ type managerZoneProvider struct {
 }
 
 func (p *managerZoneProvider) FindZones(qname string) []ZoneMatch {
-	var matches []ZoneMatch
-	for name, z := range p.manager.List() {
-		if isSubdomain(qname, name) {
-			matches = append(matches, ZoneMatch{name, z})
-		}
-	}
-	return matches
+	return rangeMatches(qname, p.manager.Range)
 }
 
 func (p *managerZoneProvider) ListZones() map[string]*zone.Zone {
@@ -182,13 +194,7 @@ type kvZoneProvider struct {
 }
 
 func (p *kvZoneProvider) FindZones(qname string) []ZoneMatch {
-	var matches []ZoneMatch
-	for name, z := range p.kv.Manager().List() {
-		if isSubdomain(qname, name) {
-			matches = append(matches, ZoneMatch{name, z})
-		}
-	}
-	return matches
+	return rangeMatches(qname, p.kv.Manager().Range)
 }
 
 func (p *kvZoneProvider) ListZones() map[string]*zone.Zone {
@@ -295,7 +301,7 @@ func (h *integratedHandler) localZonesLocked() map[string]*zone.Zone {
 
 // sortZonesByLength sorts zones by origin length descending (most specific first).
 func sortZonesByLength(zones []ZoneMatch) {
-	sort.Slice(zones, func(i, j int) bool {
-		return len(zones[i].Origin) > len(zones[j].Origin)
+	slices.SortStableFunc(zones, func(a, b ZoneMatch) int {
+		return len(b.Origin) - len(a.Origin)
 	})
 }
