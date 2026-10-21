@@ -13,7 +13,10 @@ dnsctl [global-flags] <command> [command-flags] [arguments]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-server` | `http://localhost:8080` | NothingDNS API server URL |
-| `-api-key` | (empty) | API key for authentication |
+| `-api-key` | (empty) | API key for authentication (the bearer token: `server.http.auth_token` or a session token) |
+
+Global flags go before the command. `NOTHINGDNS_SERVER` and `NOTHINGDNS_API_KEY`
+set their defaults; `dnsctl -version` is the same as `dnsctl version`.
 
 ### Examples
 
@@ -46,8 +49,10 @@ dnsctl zone list
 
 **Output**:
 ```
-example.com.          3600    45 records   signed
-internal.example.com. 1800    120 records  unsigned
+ZONE                                     RECORDS
+---------------------------------------- ----------
+example.com.                             4
+test.org.                                2
 ```
 
 ### zone add
@@ -57,6 +62,10 @@ Add a new zone.
 ```bash
 dnsctl zone add <zone-name> [nameserver]
 ```
+
+The nameserver defaults to `ns1.<zone>.`. The zone gets an SOA with admin
+mailbox `admin.<zone>.`, TTL 3600 and the usual timers, and one NS record. It is
+written to `zone_dir` when one is configured.
 
 **Examples**:
 ```bash
@@ -78,11 +87,15 @@ dnsctl zone remove example.com
 
 ### zone reload
 
-Reload one zone from disk.
+Reload one zone from its file.
 
 ```bash
 dnsctl zone reload <zone-name>
 ```
+
+Use the absolute name, with the trailing dot (`example.com.`): the server looks
+the name up as given, so `dnsctl zone reload example.com` answers
+`zone example.com not found`. (`zone add`, `remove` and `export` accept either form.)
 
 ### zone export
 
@@ -114,6 +127,10 @@ Add a DNS record.
 dnsctl record add <zone> <name> <type> <value> [ttl]
 ```
 
+`<value>` is one argument, so quote RDATA that has spaces. The TTL is a
+positional number (default 300), not a flag. `<name>` is relative to the zone,
+or `@` for the apex.
+
 **Examples**:
 ```bash
 dnsctl record add example.com www A 192.168.1.100 3600
@@ -124,7 +141,7 @@ dnsctl record add example.com mail TXT "v=spf1 mx ~all"
 
 ### record remove
 
-Remove a DNS record.
+Remove a record set: every record of that type at the name.
 
 ```bash
 dnsctl record remove <zone> <name> <type>
@@ -143,6 +160,9 @@ Update a DNS record.
 dnsctl record update <zone> <name> <type> <old-data> <new-data> [ttl]
 ```
 
+Replaces the record whose data is `<old-data>`. Without `[ttl]` the record keeps
+its current TTL.
+
 ### record list
 
 List records in a zone.
@@ -153,6 +173,15 @@ dnsctl record list <zone>
 
 ```bash
 dnsctl record list example.com
+```
+
+**Output**:
+```
+NAME                                     TYPE     TTL      DATA
+---------------------------------------- -------- -------- --------------------
+www.example.com.                         A        300      192.0.2.10
+example.com.                             SOA      300      ns1.example.com. hostmaster.example.com. 1 3600 900 604800 300
+example.com.                             NS       300      ns1.example.com.
 ```
 
 ---
@@ -173,23 +202,25 @@ dnsctl cache stats
 
 **Output**:
 ```
-Cache Statistics
------------------
-Hits:         15,234
-Misses:       1,234
-Size:         5,432 / 10,000
-Hit Ratio:    92.5%
-Evictions:    12
-Stale Hits:   45
+Cache Statistics:
+  Size:      0
+  Capacity:  10000
+  Hits:      0
+  Misses:    0
+  Hit Ratio: 0.00%
 ```
 
 ### cache flush
 
-Flush (clear) the cache.
+Flush (clear) the cache. Requires the admin role.
 
 ```bash
-dnsctl cache flush
+dnsctl cache flush [name]
 ```
+
+`flush <name>` sends the name to the server, but the server does not read it:
+`POST /api/v1/cache/flush` always clears the whole cache. Per-name flushing is
+not implemented, so `dnsctl cache flush www.example.com` empties everything.
 
 ---
 
@@ -207,17 +238,9 @@ Show cluster status.
 dnsctl cluster status
 ```
 
-**Output**:
-```
-Cluster Status
---------------
-Enabled:      Yes
-Mode:         SWIM
-Node ID:      node-1
-Nodes:        3
-Leader:       node-1
-Cache Sync:   Enabled
-```
+Prints the `GET /api/v1/cluster/status` response as an indented tree (cluster
+health, gossip and Raft counters, query metrics); the fields depend on the
+consensus mode. Without clustering it shows `healthy: false` and zero counters.
 
 ### cluster peers
 
@@ -229,23 +252,28 @@ dnsctl cluster peers
 
 **Output**:
 ```
-NODE     ADDR              STATE    REGION    QUERIES/S  CACHE-HIT  LATENCY
-node-1   172.28.0.10:7946  Alive    us-east   1,000      95%        2ms
-node-2   172.28.0.11:7946  Alive    us-west   950        94%        3ms
-node-3   172.28.0.12:7946  Alive    eu-west   980        93%        4ms
+ID                                   ADDRESS              PORT   STATE      REGION
+------------------------------------ -------------------- ------ ---------- ----------
+node-1                               172.28.0.10          7946   alive      us-east
 ```
+
+With clustering disabled it prints `No cluster nodes found (clustering may be disabled)`.
 
 ### cluster join
 
-Join a cluster (from seed node).
+Join a cluster through a seed node.
 
 ```bash
-dnsctl cluster join <seed-node-addr>
+dnsctl cluster join <address>[:port]
 ```
+
+Admin role. With clustering disabled the server answers `503 Cluster not available`.
 
 ### cluster leave
 
-Leave the cluster gracefully.
+Remove the node the API is talking to from the cluster. It takes no node
+argument and cannot evict another node. Admin role; `503 Cluster not available`
+when clustering is disabled.
 
 ```bash
 dnsctl cluster leave
@@ -261,15 +289,25 @@ dnsctl blocklist [subcommand]
 
 ### blocklist status
 
-Show blocklist status.
+Show blocklist statistics.
 
 ```bash
 dnsctl blocklist status
 ```
 
+**Output**:
+```
+Blocklist Status:
+  Enabled:    false
+  Total Rules: 0
+  Files:      0
+  URLs:       0
+```
+
 ### blocklist sources
 
-List configured blocklist sources.
+List configured blocklist sources (file and URL), or print
+`No sources information available` when there are none.
 
 ```bash
 dnsctl blocklist sources
@@ -277,7 +315,9 @@ dnsctl blocklist sources
 
 ### blocklist reload
 
-Reload all blocklists.
+Reload the server configuration, which reloads the blocklists with everything
+else. It calls `POST /api/v1/config/reload`, exactly like `dnsctl config reload`,
+and prints `Configuration reloaded`; there is no blocklist-only reload.
 
 ```bash
 dnsctl blocklist reload
@@ -293,16 +333,25 @@ dnsctl config [subcommand]
 
 ### config get
 
-Get current configuration.
+Print the running configuration (secrets are redacted by the server), or one
+value by its dotted key.
 
 ```bash
 dnsctl config get
 dnsctl config get server.http.bind
 ```
 
+**Output** of the second command:
+```
+server.http.bind: 127.0.0.1:18080
+```
+
+An unknown key is `no such config key: <key>`.
+
 ### config reload
 
-Reload configuration from file.
+Reload the configuration file, the same as sending SIGHUP. Admin role. Prints
+`Configuration reloaded`.
 
 ```bash
 dnsctl config reload
@@ -515,15 +564,15 @@ dnsctl server status
 **Output**:
 ```
 Server Status:
-  Status:    ok
-  Version:   1.2.17
-  Timestamp: 2026-07-06T12:00:00Z
+  Status:    running
+  Version:   1.2.19
+  Timestamp: 2026-10-21T00:11:16Z
   Cache:
-    Size:     123
+    Size:     0
     Capacity: 10000
-    Hits:     456
-    Misses:   78
-    Hit Ratio: 85.37%
+    Hits:     0
+    Misses:   0
+    Hit Ratio: 0.00%
   Cluster:
     Enabled: false
 ```
@@ -534,6 +583,11 @@ Check server health.
 
 ```bash
 dnsctl server health
+```
+
+**Output**:
+```
+Server healthy: {"status":"healthy","timestamp":"2026-10-21T00:11:16Z"}
 ```
 
 ### server bootstrap
@@ -584,7 +638,7 @@ dnsctl version
 
 **Output**:
 ```
-dnsctl version 1.2.17
+dnsctl version 1.2.19
 ```
 
 `dnsctl -version` prints the same version line.
@@ -618,18 +672,6 @@ dnsctl help <command>
 
 ---
 
-## Configuration File
-
-`dnsctl` can read defaults from `~/.config/dnsctl/config.yaml`:
-
-```yaml
-server: http://localhost:8080
-api_key: your-api-key
-timeout: 30s
-```
-
----
-
 ## Examples
 
 ### Common Workflows
@@ -642,7 +684,7 @@ dnsctl server health
 dnsctl zone list
 
 # Add a new record
-dnsctl record add example.com api A 192.168.1.50 --ttl=3600
+dnsctl record add example.com api A 192.168.1.50 3600
 
 # Check cache performance
 dnsctl cache stats
@@ -657,7 +699,7 @@ dnsctl cache flush
 dnsctl zone reload example.com
 
 # Verify DNSSEC is working
-dnsctl dig +dnssec +ad example.com DNSKEY
+dnsctl dig example.com DNSKEY +dnssec
 ```
 
 ### Scripting Examples
@@ -670,7 +712,7 @@ watch -n1 'dnsctl cache stats'
 dnsctl record list example.com
 
 # Backup all zones
-for zone in $(dnsctl zone list | awk '{print $1}'); do
+for zone in $(dnsctl zone list | awk 'NR>2 {print $1}'); do
   dnsctl zone export "$zone" > "${zone}.zone.bak"
 done
 
