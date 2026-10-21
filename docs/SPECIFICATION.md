@@ -1093,23 +1093,50 @@ Embedded React 19 dashboard built from `web/src/` and served from `internal/dash
 
 ### 11.4 Prometheus Metrics
 
-Endpoint: `/metrics` (port 9153, Prometheus exposition format)
+Endpoint: `metrics.path` (default `/metrics`) on `metrics.bind` (default
+`:9153`), Prometheus text exposition format (`text/plain; version=0.0.4`). It
+is off unless `metrics.enabled` is true. The same listener serves `/health`
+(`{"status":"healthy","uptime":"…"}`).
 
-Key metrics:
-- `nothingdns_queries_total{type, protocol, view}` — counter
-- `nothingdns_responses_total{rcode}` — counter (NOERROR, NXDOMAIN, SERVFAIL, etc.)
-- `nothingdns_query_duration_seconds{protocol}` — histogram
-- `nothingdns_cache_size` — gauge
-- `nothingdns_cache_hits_total` — counter
-- `nothingdns_cache_misses_total` — counter
-- `nothingdns_blocked_queries_total` — counter
-- `nothingdns_zone_count` — gauge
-- `nothingdns_zone_records_total{zone}` — gauge
-- `nothingdns_cluster_is_leader` — gauge (0 or 1)
-- `nothingdns_cluster_peers` — gauge
-- `nothingdns_cluster_raft_term` — gauge
-- `nothingdns_upstream_latency_seconds{upstream}` — histogram
-- `nothingdns_dnssec_validations_total{result}` — counter (secure, insecure, bogus)
+The endpoint fails closed: with `metrics.auth_token` set, scrapers send
+`Authorization: Bearer <token>` and any bind address is allowed; without a token
+it may bind only to loopback, and the server refuses to start (and
+`-validate-config` reports an error) on any other address. Bind and token
+changes need a restart (§12.4).
+
+The metrics below are all that the exporter writes (`internal/metrics`). Counters
+reset when the process restarts.
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `nothingdns_server_uptime_seconds` | gauge | | Seconds since start |
+| `nothingdns_queries_total` | counter | `type` | Queries received, by query type. A type the server does not know is labelled `OTHER`, which bounds cardinality. |
+| `nothingdns_responses_total` | counter | `rcode` | Responses sent, by numeric RCODE (`0` NOERROR, `2` SERVFAIL, `3` NXDOMAIN, …) |
+| `nothingdns_cache_hits_total` | counter | | Cache hits |
+| `nothingdns_cache_misses_total` | counter | | Cache misses |
+| `nothingdns_blocklist_blocks_total` | counter | | Queries refused by the blocklist or an RPZ rule |
+| `nothingdns_rate_limited_total` | counter | | Queries dropped by rate limiting |
+| `nothingdns_upstream_queries_total` | counter | `server` | Queries sent to each upstream (no sample until one is sent) |
+| `nothingdns_query_duration_seconds` | histogram | `type` | Query processing time, buckets 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0 s and `+Inf`, plus `_sum` and `_count` |
+| `nothingdns_cluster_nodes_total` | gauge | | Known cluster nodes (a gauge, despite the `_total` name) |
+| `nothingdns_cluster_nodes_alive` | gauge | | Nodes currently alive |
+| `nothingdns_cluster_healthy` | gauge | | `1` when the cluster is healthy, else `0` |
+| `nothingdns_cluster_gossip_messages_sent_total` | counter | | Gossip messages sent |
+| `nothingdns_cluster_gossip_messages_received_total` | counter | | Gossip messages received |
+| `nothingdns_udp_packets_received_total` | counter | | UDP datagrams received |
+| `nothingdns_udp_packets_sent_total` | counter | | UDP datagrams sent |
+| `nothingdns_udp_errors_total` | counter | | UDP errors |
+| `nothingdns_tcp_connections_accepted_total` | counter | | TCP connections accepted |
+| `nothingdns_tcp_connections_closed_total` | counter | | TCP connections closed |
+| `nothingdns_tcp_messages_received_total` | counter | | TCP messages received |
+| `nothingdns_tcp_errors_total` | counter | | TCP errors |
+
+The cluster metrics are present, at zero, when clustering is off. The transport
+counters are copied from the UDP and TCP servers periodically. The exporter has
+no per-protocol or per-view labels and does not export cache size, zone,
+Raft, per-upstream latency or DNSSEC validation metrics; those are visible
+through the REST API (`/api/v1/cache/stats`, `/api/v1/zones`,
+`/api/v1/cluster/status`, `/api/v1/dnssec/status`) and the dashboard.
 
 ---
 
