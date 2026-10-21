@@ -6,6 +6,11 @@ This guide covers performance tuning, benchmarking, and optimization strategies 
 
 ## Performance Targets
 
+These are operational monitoring thresholds, not the design goals in
+[SPECIFICATION.md §14](SPECIFICATION.md) (which sets higher QPS goals and records
+which have been measured). The `QPS` row is a per-node figure to alert on, and
+the latency rows are not enforced by anything in the server.
+
 | Metric | Target | Critical Threshold |
 |--------|--------|-------------------|
 | QPS | 50,000+ | < 10,000 |
@@ -44,7 +49,7 @@ echo "mail.example.com MX" >> queries.txt
 queryperf -d queries.txt -s 127.0.0.1 -q 100 -T 10
 ```
 
-### Load Testing withveget
+### Load Testing
 
 ```bash
 # Using Go's built-in test as load generator
@@ -53,13 +58,14 @@ go test ./internal/e2e/... -bench=. -benchtime=10s -count=3
 
 ## 2. Profiling
 
+The server does **not** register `/debug/pprof/*` (or import `net/http/pprof`),
+so there is no endpoint to `curl` for profiles. Profile benchmarks and the load
+harness with `go test`, or add a pprof listener in a local build.
+
 ### CPU Profiling
 
 ```bash
-# Enable CPU profiling on running server
-curl http://localhost:8080/debug/pprof/profile?seconds=30 > cpu.prof
-
-# Or run benchmark with profiling
+# Profile a benchmark
 go test -cpuprofile=cpu.out -count=3 ./internal/...
 
 # Analyze with pprof
@@ -69,10 +75,7 @@ go tool pprof -http=:8081 cpu.prof
 ### Memory Profiling
 
 ```bash
-# Enable memory profiling
-curl http://localhost:8080/debug/pprof/heap > memory.prof
-
-# Or run benchmark
+# Profile a benchmark
 go test -memprofile=mem.out -count=3 ./internal/cache/...
 
 # Analyze
@@ -83,7 +86,7 @@ go tool pprof -http=:8081 mem.out
 
 ```bash
 # Profile goroutine blocking
-curl http://localhost:8080/debug/pprof/block > block.prof
+go test -blockprofile=block.prof ./internal/cache/...
 
 # Analyze
 go tool pprof -http=:8081 block.prof
@@ -93,7 +96,7 @@ go tool pprof -http=:8081 block.prof
 
 ```bash
 # Profile lock contention
-curl http://localhost:8080/debug/pprof/mutex > mutex.prof
+go test -mutexprofile=mutex.prof ./internal/cache/...
 
 # Analyze
 go tool pprof -http=:8081 mutex.prof
@@ -102,8 +105,8 @@ go tool pprof -http=:8081 mutex.prof
 ### Trace Profiling
 
 ```bash
-# Collect 30-second execution trace
-curl http://localhost:8080/debug/pprof/trace?seconds=30 > trace.prof
+# Collect an execution trace of a benchmark
+go test -trace=trace.prof ./internal/cache/...
 
 # Analyze
 go tool trace trace.prof
@@ -526,6 +529,11 @@ For global deployment:
 ## 13. Benchmarks
 
 ### Baseline Numbers (Single Node)
+
+> These figures are illustrative and were not produced by a reproducible harness
+> in this repository. The measured results (about 65,000 to 73,000 authoritative
+> UDP QPS on a 12-core dev machine) are in [SPECIFICATION.md §14](SPECIFICATION.md).
+> The DNSSEC and cluster tables below are likewise unverified estimates.
 
 On `Intel i9-12900K, 32GB RAM, NVMe SSD`:
 
