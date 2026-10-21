@@ -316,7 +316,7 @@ A small `dig`-style query tool: one question, sent over UDP, printed in dig's
 section layout. It is not a full `dig`; the options it supports are listed below.
 
 ```bash
-dnsctl dig [@server] <name> [<type>] [+dnssec]
+dnsctl dig [@server] <name> [<type>] [IN] [+dnssec] [+cd]
 ```
 
 The arguments may come in any order: `@server`, the name, the type, and the
@@ -328,7 +328,8 @@ The arguments may come in any order: `@server`, the name, the type, and the
 | `<name>` | Name to look up; a trailing dot is optional. Required. |
 | `<type>` | Record type mnemonic (`A`, `AAAA`, `MX`, `TXT`, `SOA`, `NS`, `DNSKEY`, …). Default `A`. An unknown mnemonic is an error. |
 | `+dnssec` | Set the DO bit in an EDNS0 OPT record (4096-byte payload), so the answer carries DNSSEC records. |
-| `+cd` | Accepted and ignored. |
+| `+cd` | Set the CD (checking disabled) bit in the query. |
+| `IN` | The query class; accepted (before or after the type) and ignored, because queries are always class IN. |
 
 ```bash
 dnsctl dig example.com A
@@ -349,20 +350,22 @@ dnsctl dig @127.0.0.1:5354 example.com SOA
   and additional sections, `SERVER` and `WHEN`. The `Query time` line is a fixed
   `~0ms` placeholder, not a measurement.
 
-### Not supported
+### Rejected, not ignored
 
-- Any other `+option` is ignored without an error: `+short`, `+tcp`, `+trace`,
-  `+multiline`, `+time=N`, `+ad` and the rest have no effect (a `+tcp AXFR` is
-  still a single UDP query).
-- A query class argument (`IN`, `CH`) is read as the record type and fails with
-  `unsupported query type`. Queries are always class IN.
-- An argument starting with `-` is rejected with a hint about the positional
-  syntax, so reverse lookups with `-x` do not work; query the `in-addr.arpa` /
-  `ip6.arpa` name with type `PTR` instead.
-- No delegation tracing, zone transfers, or output formatting options.
+dnsctl dig stops with an error, and sends no query, for anything it does not do:
+
+- Any `+option` other than `+dnssec` and `+cd` (`+short`, `+tcp`, `+trace`,
+  `+multiline`, `+time=N`, `+ad`, …): `unsupported option +short (dnsctl dig
+  supports +dnssec and +cd)`.
+- A class other than IN (`CH`, `HS`): `query class CH is not supported (only IN)`.
+- Any argument starting with `-` (`-x`, `-p`, `--server`, …).
+- A third positional argument (`unexpected argument …`). `ANY` after the name is
+  the record type, not a class.
+
+There is no delegation tracing, zone transfer or output formatting. For a
+reverse lookup, query the `in-addr.arpa` / `ip6.arpa` name with type `PTR`:
 
 ```bash
-# Reverse lookup of 192.0.2.10
 dnsctl dig @127.0.0.1 10.2.0.192.in-addr.arpa PTR
 ```
 

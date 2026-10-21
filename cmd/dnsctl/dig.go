@@ -73,6 +73,17 @@ func digQueryTCP(addr string, query []byte) (*protocol.Message, error) {
 // never be queried without spelling out an explicit port. A bare IPv6
 // literal must also be bracketed before a port can be appended, because
 // "2001:db8::1" + ":53" is still unparseable.
+// isDigClass reports whether arg is a DNS class mnemonic rather than a record
+// type. ANY and NONE are left alone: ANY is also the type that asks for every
+// record.
+func isDigClass(arg string) bool {
+	switch strings.ToUpper(arg) {
+	case "IN", "CH", "HS":
+		return true
+	}
+	return false
+}
+
 func digServerAddr(server string) string {
 	if _, _, err := net.SplitHostPort(server); err == nil {
 		return server // already host:port
@@ -88,11 +99,15 @@ func digServerAddr(server string) string {
 }
 
 func cmdDig(args []string) error {
-	// Parse dig-style arguments: [@server] <name> [<type>] [+dnssec]
+	// Parse dig-style arguments: [@server] <name> [<type>] [IN] [+dnssec] [+cd].
+	// Anything this tool does not do is an error: silently dropping +short,
+	// +tcp or a class gave the user an answer to a different question.
 	var server string
 	var qname string
 	var qtypeStr string
+	var qclassSeen bool
 	var wantDNSSEC bool
+	var checkingDisabled bool
 
 	for _, arg := range args {
 		switch {
@@ -103,18 +118,29 @@ func cmdDig(args []string) error {
 			case "+dnssec":
 				wantDNSSEC = true
 			case "+cd":
-				// checking disabled - ignored for now
+				checkingDisabled = true
+			default:
+				return fmt.Errorf("unsupported option %s (dnsctl dig supports +dnssec and +cd)", arg)
 			}
 		case strings.HasPrefix(arg, "-"):
-			// dig uses positional @server / +flag syntax — not GNU long
-			// flags. Catching this here avoids a confusing
-			// "unsupported query type: --server" later on when a user
-			// reaches for the flag form by reflex.
-			return fmt.Errorf("dig uses positional syntax — try @%s instead of %s", strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-")+"=value", arg)
+			// dig's own flags (-x, -p, -t, ...) and GNU long flags are not
+			// supported; the server is "@server", not "--server".
+			return fmt.Errorf("unsupported option %s (dnsctl dig takes @server, a name, a type, +dnssec and +cd)", arg)
 		case qname == "":
 			qname = arg
+		case isDigClass(arg):
+			// Queries are always class IN: accept IN, refuse the others.
+			if !strings.EqualFold(arg, "IN") {
+				return fmt.Errorf("query class %s is not supported (only IN)", strings.ToUpper(arg))
+			}
+			if qclassSeen {
+				return fmt.Errorf("unexpected argument %q: the query class was already given", arg)
+			}
+			qclassSeen = true
 		case qtypeStr == "":
 			qtypeStr = strings.ToUpper(arg)
+		default:
+			return fmt.Errorf("unexpected argument %q (dnsctl dig takes one name and one type)", arg)
 		}
 	}
 
@@ -172,6 +198,7 @@ func cmdDig(args []string) error {
 	if wantDNSSEC {
 		msg.SetEDNS0(4096, true)
 	}
+	msg.Header.Flags.CD = checkingDisabled
 
 	// Pack message
 	buf := make([]byte, 65535)

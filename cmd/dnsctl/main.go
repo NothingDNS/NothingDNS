@@ -211,10 +211,16 @@ Subcommands:
   get               Get current configuration
   reload            Reload configuration`,
 
-		"dig": `Usage: dnsctl dig [@server] <name> [<type>]
+		"dig": `Usage: dnsctl dig [@server] <name> [<type>] [IN] [+dnssec] [+cd]
+
+One query over UDP (retried over TCP if truncated). Other dig options are
+rejected, not ignored.
 
 Options:
-  Similar to standard dig command
+  @server   Resolver to query (default 127.0.0.1, port 53)
+  +dnssec   Set the DO bit (DNSSEC records in the answer)
+  +cd       Set the CD bit (checking disabled)
+  IN        The class; accepted, queries are always class IN
 
 Examples:
   dnsctl dig example.com
