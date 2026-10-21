@@ -80,17 +80,22 @@ func (m *MultiZoneProvider) withSlaveZones(sm *transfer.SlaveManager) *MultiZone
 	return m
 }
 
-// rangeMatches collects the zones from rng whose origin contains qname,
-// without the per-query copy of the zone map that List makes.
-func rangeMatches(qname string, rng func(func(string, *zone.Zone) bool)) []ZoneMatch {
-	var matches []ZoneMatch
-	rng(func(name string, z *zone.Zone) bool {
-		if isSubdomain(qname, name) {
-			matches = append(matches, ZoneMatch{name, z})
-		}
-		return true
-	})
-	return matches
+// zoneAppender is implemented by the built-in providers so MultiZoneProvider
+// can collect matches into one slice: FindZones on the hot path then allocates
+// that slice only, instead of a slice, a closure and a captured variable per
+// provider.
+type zoneAppender interface {
+	appendZones(dst []ZoneMatch, qname string) []ZoneMatch
+}
+
+// appendMatch appends m, giving a nil dst room for a few matches at once (a
+// query matches at most a handful of zones) while leaving it nil, with no
+// allocation, when nothing matches.
+func appendMatch(dst []ZoneMatch, m ZoneMatch) []ZoneMatch {
+	if dst == nil {
+		dst = make([]ZoneMatch, 0, 4)
+	}
+	return append(dst, m)
 }
 
 // FindZones queries all providers and merges results.
@@ -100,24 +105,37 @@ func (m *MultiZoneProvider) FindZones(qname string) []ZoneMatch {
 
 	var matches []ZoneMatch
 	for _, p := range m.providers {
-		for _, match := range p.FindZones(qname) {
-			// A query matches few zones, so a linear scan beats a map.
-			dup := false
-			for i := range matches {
-				if matches[i].Origin == match.Origin {
-					dup = true
-					break
-				}
-			}
-			if !dup {
-				matches = append(matches, match)
-			}
+		if a, ok := p.(zoneAppender); ok {
+			matches = a.appendZones(matches, qname)
+		} else {
+			matches = append(matches, p.FindZones(qname)...)
 		}
 	}
+	matches = dedupeZoneMatches(matches)
 
 	// Sort by origin length descending (most specific first)
 	sortZonesByLength(matches)
 	return matches
+}
+
+// dedupeZoneMatches drops later matches for an origin already present (the
+// earlier provider wins). A query matches few zones, so the quadratic scan
+// beats a map.
+func dedupeZoneMatches(matches []ZoneMatch) []ZoneMatch {
+	out := matches[:0]
+	for _, m := range matches {
+		dup := false
+		for i := range out {
+			if out[i].Origin == m.Origin {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // ListZones returns all zones from all providers.
@@ -153,13 +171,16 @@ type staticZoneProvider struct {
 }
 
 func (p *staticZoneProvider) FindZones(qname string) []ZoneMatch {
-	var matches []ZoneMatch
+	return p.appendZones(nil, qname)
+}
+
+func (p *staticZoneProvider) appendZones(dst []ZoneMatch, qname string) []ZoneMatch {
 	for origin, z := range p.zones {
 		if isSubdomain(qname, origin) {
-			matches = append(matches, ZoneMatch{origin, z})
+			dst = appendMatch(dst, ZoneMatch{origin, z})
 		}
 	}
-	return matches
+	return dst
 }
 
 func (p *staticZoneProvider) ListZones() map[string]*zone.Zone {
@@ -177,7 +198,17 @@ type managerZoneProvider struct {
 }
 
 func (p *managerZoneProvider) FindZones(qname string) []ZoneMatch {
-	return rangeMatches(qname, p.manager.Range)
+	return p.appendZones(nil, qname)
+}
+
+func (p *managerZoneProvider) appendZones(dst []ZoneMatch, qname string) []ZoneMatch {
+	p.manager.Range(func(name string, z *zone.Zone) bool {
+		if isSubdomain(qname, name) {
+			dst = appendMatch(dst, ZoneMatch{name, z})
+		}
+		return true
+	})
+	return dst
 }
 
 func (p *managerZoneProvider) ListZones() map[string]*zone.Zone {
@@ -194,7 +225,17 @@ type kvZoneProvider struct {
 }
 
 func (p *kvZoneProvider) FindZones(qname string) []ZoneMatch {
-	return rangeMatches(qname, p.kv.Manager().Range)
+	return p.appendZones(nil, qname)
+}
+
+func (p *kvZoneProvider) appendZones(dst []ZoneMatch, qname string) []ZoneMatch {
+	p.kv.Manager().Range(func(name string, z *zone.Zone) bool {
+		if isSubdomain(qname, name) {
+			dst = appendMatch(dst, ZoneMatch{name, z})
+		}
+		return true
+	})
+	return dst
 }
 
 func (p *kvZoneProvider) ListZones() map[string]*zone.Zone {
@@ -211,14 +252,17 @@ type radixZoneProvider struct {
 }
 
 func (p *radixZoneProvider) FindZones(qname string) []ZoneMatch {
+	return p.appendZones(nil, qname)
+}
+
+func (p *radixZoneProvider) appendZones(dst []ZoneMatch, qname string) []ZoneMatch {
 	if p.tree == nil {
-		return nil
+		return dst
 	}
-	best := p.tree.Find(qname)
-	if best == nil {
-		return nil
+	if best := p.tree.Find(qname); best != nil {
+		dst = appendMatch(dst, ZoneMatch{best.Origin, best})
 	}
-	return []ZoneMatch{{best.Origin, best}}
+	return dst
 }
 
 func (p *radixZoneProvider) ListZones() map[string]*zone.Zone {
@@ -260,13 +304,16 @@ func (p *slaveZoneProvider) ListZones() map[string]*zone.Zone {
 }
 
 func (p *slaveZoneProvider) FindZones(qname string) []ZoneMatch {
-	var matches []ZoneMatch
+	return p.appendZones(nil, qname)
+}
+
+func (p *slaveZoneProvider) appendZones(dst []ZoneMatch, qname string) []ZoneMatch {
 	for name, z := range p.ListZones() {
 		if isSubdomain(qname, name) {
-			matches = append(matches, ZoneMatch{name, z})
+			dst = appendMatch(dst, ZoneMatch{name, z})
 		}
 	}
-	return matches
+	return dst
 }
 
 func (p *slaveZoneProvider) GetZone(origin string) (*zone.Zone, bool) {

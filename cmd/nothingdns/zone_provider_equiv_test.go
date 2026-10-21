@@ -124,3 +124,30 @@ func BenchmarkMultiZoneProviderFindZones(b *testing.B) {
 		}
 	}
 }
+
+// FindZones runs for every query: it may allocate the result slice and
+// nothing else (no per-provider slice, closure or captured variable).
+func TestFindZonesAllocations(t *testing.T) {
+	mgr := zone.NewManager()
+	for i := 0; i < 10; i++ {
+		mustCreate(t, mgr, fmt.Sprintf("z%d.zt.org.", i))
+	}
+	mp := NewMultiZoneProvider(nil, mgr, nil, nil)
+
+	hit := testing.AllocsPerRun(200, func() {
+		if len(mp.FindZones("www.z3.zt.org.")) != 1 {
+			t.Fatal("expected one match")
+		}
+	})
+	if hit > 1 {
+		t.Errorf("matching query allocates %v times, want <= 1", hit)
+	}
+	miss := testing.AllocsPerRun(200, func() {
+		if mp.FindZones("www.other.example.") != nil {
+			t.Fatal("expected no match")
+		}
+	})
+	if miss != 0 {
+		t.Errorf("non-matching query allocates %v times, want 0", miss)
+	}
+}
