@@ -15,6 +15,11 @@ type MetricsConfig struct {
 
 	// Bearer token required to scrape metrics and metrics health.
 	AuthToken string `yaml:"auth_token"`
+
+	// PprofBind, when set, starts a Go pprof (/debug/pprof/*) HTTP listener on
+	// this loopback host:port. Empty (the default) disables it. Independent of
+	// Enabled; a non-loopback address is a validation error.
+	PprofBind string `yaml:"pprof_bind"`
 }
 
 func unmarshalMetrics(node *Node, cfg *MetricsConfig) error {
@@ -32,6 +37,7 @@ func unmarshalMetrics(node *Node, cfg *MetricsConfig) error {
 		cfg.Path = "/metrics"
 	}
 	cfg.AuthToken = node.GetString("auth_token")
+	cfg.PprofBind = node.GetString("pprof_bind")
 
 	return nil
 }

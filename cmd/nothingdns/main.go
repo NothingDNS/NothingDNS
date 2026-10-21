@@ -555,6 +555,15 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 	serverCtx, cancelServer := context.WithCancel(context.Background())
 	defer cancelServer() // Safe: deferred before any early return
 
+	// metrics.pprof_bind: opt-in loopback-only pprof listener.
+	if cfg.Metrics.PprofBind != "" {
+		pprofAddr, err := startPprof(serverCtx, cfg.Metrics.PprofBind, logger)
+		if err != nil {
+			return fmt.Errorf("starting pprof listener: %w", err)
+		}
+		logger.Infof("pprof listening on http://%s/debug/pprof/", pprofAddr)
+	}
+
 	// Initialize cluster manager
 	clusterManager, err := NewClusterManager(cfg, logger, dnsCache, metricsCollector, zoneManagerInstance)
 	if err != nil {

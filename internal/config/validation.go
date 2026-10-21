@@ -643,6 +643,16 @@ func (c *Config) validateLogging() []string {
 func (c *Config) validateMetrics() []string {
 	var errors []string
 
+	if b := strings.TrimSpace(c.Metrics.PprofBind); b != "" {
+		host, port, err := net.SplitHostPort(b)
+		switch {
+		case err != nil || port == "":
+			errors = append(errors, fmt.Sprintf("metrics: pprof_bind %q must be host:port (e.g. 127.0.0.1:6060)", b))
+		case host == "" || isPublicListenAddress(b):
+			errors = append(errors, fmt.Sprintf("metrics: pprof_bind %q must be a loopback address (pprof is unauthenticated)", b))
+		}
+	}
+
 	if !c.Metrics.Enabled {
 		return errors
 	}

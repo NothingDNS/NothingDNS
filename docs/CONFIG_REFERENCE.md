@@ -190,6 +190,7 @@ LRU cache ayarları.
 | `bind` | string | `:9153` | hayır | Metrik dinleme adresi. `auth_token` yoksa yalnızca loopback (`127.0.0.1:9153`) kabul edilir; aksi halde sunucu başlamaz ve `-validate-config` hata verir |
 | `path` | string | `/metrics` | hayır | Metrik HTTP yolu |
 | `auth_token` | string | "" | hayır | `Authorization: Bearer` token'ı. Loopback dışı bir `bind` için zorunlu |
+| `pprof_bind` | string | "" | hayır | Doluysa Go pprof (`/debug/pprof/*`) dinleyicisini bu `host:port` üzerinde başlatır; `enabled`'dan bağımsızdır. Yalnızca loopback kabul edilir (`127.0.0.1:6060`); kimlik doğrulaması yoktur, bu yüzden loopback dışı adres `-validate-config` hatasıdır. Boş = kapalı |
 
 ## `tracing`
 

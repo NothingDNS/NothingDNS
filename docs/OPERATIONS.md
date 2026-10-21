@@ -800,9 +800,9 @@ dnsctl server health
 # Check what's causing
 top -p $(pgrep nothingdns)
 
-# Profile CPU (the server has no /debug/pprof endpoint; profile a benchmark
-# with go test -cpuprofile, see docs/PERFORMANCE.md)
-go test -cpuprofile=cpu.prof ./internal/... && go tool pprof -http=:8081 cpu.prof
+# Profile CPU (needs metrics.pprof_bind: "127.0.0.1:6060", see docs/PERFORMANCE.md)
+curl -o cpu.prof "http://127.0.0.1:6060/debug/pprof/profile?seconds=30"
+go tool pprof -http=:8081 cpu.prof
 
 # Common causes:
 # 1. DNSSEC signing on high QPS
@@ -821,8 +821,9 @@ go test -cpuprofile=cpu.prof ./internal/... && go tool pprof -http=:8081 cpu.pro
 # Check dashboard/server metrics
 curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/dashboard/stats | jq
 
-# Profile memory (no /debug/pprof endpoint; use go test -memprofile)
-go test -memprofile=mem.prof ./internal/cache/... && go tool pprof -http=:8081 mem.prof
+# Profile memory (needs metrics.pprof_bind)
+curl -o mem.prof http://127.0.0.1:6060/debug/pprof/heap
+go tool pprof -http=:8081 mem.prof
 
 # Quick fixes:
 # - Reduce cache size

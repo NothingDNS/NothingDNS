@@ -58,14 +58,26 @@ go test ./internal/e2e/... -bench=. -benchtime=10s -count=3
 
 ## 2. Profiling
 
-The server does **not** register `/debug/pprof/*` (or import `net/http/pprof`),
-so there is no endpoint to `curl` for profiles. Profile benchmarks and the load
-harness with `go test`, or add a pprof listener in a local build.
+The server can expose Go's pprof handlers, off by default. Set
+`metrics.pprof_bind` to a loopback address and restart (it is not hot-reloaded):
+
+```yaml
+metrics:
+  pprof_bind: "127.0.0.1:6060"   # unauthenticated; non-loopback is rejected
+```
+
+It is separate from the metrics port, works with `metrics.enabled: false`, and
+serves `/debug/pprof/` (index, `profile`, `heap`, `goroutine`, `allocs`,
+`trace`, ...). `block` and `mutex` profiles are empty because the server does not
+set a sampling rate. Benchmarks can also be profiled with `go test` as below.
 
 ### CPU Profiling
 
 ```bash
-# Profile a benchmark
+# Running server (needs metrics.pprof_bind)
+curl -o cpu.prof "http://127.0.0.1:6060/debug/pprof/profile?seconds=30"
+
+# Or profile a benchmark
 go test -cpuprofile=cpu.out -count=3 ./internal/...
 
 # Analyze with pprof
@@ -75,7 +87,10 @@ go tool pprof -http=:8081 cpu.prof
 ### Memory Profiling
 
 ```bash
-# Profile a benchmark
+# Running server
+curl -o memory.prof http://127.0.0.1:6060/debug/pprof/heap
+
+# Or profile a benchmark
 go test -memprofile=mem.out -count=3 ./internal/cache/...
 
 # Analyze
