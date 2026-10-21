@@ -55,11 +55,12 @@ Any other sub-path under `/zones/{zone}/` returns `404 {"error":"Not found"}`.
 **Zone names in paths.** Zones are stored lowercase with a trailing dot
 (`example.com.`). Use that exact form in paths.
 
-- `GET /zones/{zone}`, `POST /zones/{zone}/ptr-bulk`,
-  `GET /zones/{zone}/ptr6-lookup` and `POST /zones/reload?zone=` look the
-  name up **exactly**: `example.com` (no dot) or `Example.com.` returns 404.
-- `DELETE /zones/{zone}`, the `/records` endpoints and `/export` normalise the
-  name (lowercase, trailing dot added), so `example.com` also works there.
+- `GET /zones/{zone}`, `POST /zones/{zone}/ptr-bulk` and
+  `GET /zones/{zone}/ptr6-lookup` look the name up **exactly**: `example.com`
+  (no dot) or `Example.com.` returns 404.
+- `DELETE /zones/{zone}`, `POST /zones/reload?zone=`, the `/records` endpoints
+  and `/export` normalise the name (lowercase, trailing dot added), so
+  `example.com` also works there.
 - A zone name that is itself `reload` or `transfers` cannot be addressed with
   `GET /zones/{zone}` because those paths are separate routes.
 
@@ -725,7 +726,7 @@ curl -s -X POST "http://127.0.0.1:8080/api/v1/zones/reload?zone=example.com." \
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `zone` | string | **Yes** | Exact zone name (lowercase, trailing dot) |
+| `zone` | string | **Yes** | Zone name; case and the trailing dot do not matter |
 
 ### Response
 
@@ -742,7 +743,7 @@ curl -s -X POST "http://127.0.0.1:8080/api/v1/zones/reload?zone=example.com." \
 |--------|-------|-------|
 | `400` | `Missing zone parameter` | No `zone` |
 | `403` | `Admin role required` | Caller is not an admin |
-| `500` | `zone example.com. not found` | Unknown zone, name not in exact form, or zone without a file |
+| `500` | `zone example.com. not found` | Unknown zone, or a zone without a file |
 | `500` | parse/validation error, or `Failed to reload zone` | Zone file invalid or unreadable |
 | `503` | `Zone manager not available` | Subsystem unavailable |
 

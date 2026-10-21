@@ -93,9 +93,7 @@ Reload one zone from its file.
 dnsctl zone reload <zone-name>
 ```
 
-Use the absolute name, with the trailing dot (`example.com.`): the server looks
-the name up as given, so `dnsctl zone reload example.com` answers
-`zone example.com not found`. (`zone add`, `remove` and `export` accept either form.)
+The name may be given with or without the trailing dot, in any case.
 
 ### zone export
 
@@ -218,9 +216,11 @@ Flush (clear) the cache. Requires the admin role.
 dnsctl cache flush [name]
 ```
 
-`flush <name>` sends the name to the server, but the server does not read it:
-`POST /api/v1/cache/flush` always clears the whole cache. Per-name flushing is
-not implemented, so `dnsctl cache flush www.example.com` empties everything.
+With a name, only the entries of exactly that name are removed (every record
+type, with and without the DO bit; case and a trailing dot do not matter); its
+subdomains stay cached. It prints the count, for example
+`Flushed 3 cache entries for www.example.com`. Without a name the whole cache
+is cleared and it prints `Cache flushed`.
 
 ---
 

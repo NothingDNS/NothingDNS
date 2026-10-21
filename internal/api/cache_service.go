@@ -41,6 +41,15 @@ func (s *CacheService) Flush() error {
 	return nil
 }
 
+// FlushName purges the entries of one name (every type) and returns how many
+// were removed.
+func (s *CacheService) FlushName(name string) int {
+	if s == nil || s.cache == nil {
+		return 0
+	}
+	return len(s.cache.InvalidateName(name))
+}
+
 // Available reports whether the underlying cache is present.
 func (s *CacheService) Available() bool {
 	return s != nil && s.cache != nil

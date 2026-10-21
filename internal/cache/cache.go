@@ -1045,14 +1045,35 @@ func (c *Cache) InvalidatePattern(pattern string) []string {
 	if pattern == "" {
 		return nil
 	}
+	return c.invalidateMatching(func(domain string) bool {
+		return invalidationPatternMatches(domain, pattern)
+	})
+}
 
+// InvalidateName removes the entries of exactly one name (every record type,
+// with and without the DO bit) and broadcasts the invalidations. Unlike
+// InvalidatePattern it leaves the name's subdomains alone. Case and a trailing
+// dot are ignored. It returns the removed keys.
+func (c *Cache) InvalidateName(name string) []string {
+	name = normalizeInvalidatePattern(name)
+	if name == "" {
+		return nil
+	}
+	return c.invalidateMatching(func(domain string) bool {
+		return normalizeInvalidatePattern(domain) == name
+	})
+}
+
+// invalidateMatching removes every entry whose query name satisfies match and
+// notifies the invalidation callback of each removed key.
+func (c *Cache) invalidateMatching(match func(domain string) bool) []string {
 	var invalidated []string
 
 	for i := range c.shards {
 		s := &c.shards[i]
 		s.mu.Lock()
 		for key, entry := range s.entries {
-			if invalidationPatternMatches(entryDomain(key, entry), pattern) {
+			if match(entryDomain(key, entry)) {
 				s.removeEntry(entry)
 				invalidated = append(invalidated, key)
 			}

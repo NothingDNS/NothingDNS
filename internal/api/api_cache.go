@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 )
 
@@ -32,6 +33,16 @@ func (s *Server) handleCacheFlush(w http.ResponseWriter, r *http.Request) {
 
 	if !s.cacheService.Available() {
 		s.writeError(w, http.StatusServiceUnavailable, "Cache not available")
+		return
+	}
+
+	// ?name= flushes the entries of that one name; without it the whole cache
+	// is cleared.
+	if name := r.URL.Query().Get("name"); name != "" {
+		n := s.cacheService.FlushName(name)
+		s.writeJSON(w, http.StatusOK, &MessageResponse{
+			Message: fmt.Sprintf("Flushed %d cache entries for %s", n, name),
+		})
 		return
 	}
 

@@ -627,14 +627,24 @@ cache is disabled.
 
 ### POST /api/v1/cache/flush
 
-Role: admin. Removes every cached entry. No request body.
+Role: admin. Removes every cached entry, or only the entries of one name when
+`?name=` is given. No request body.
 
 ```bash
 curl -s -X POST http://127.0.0.1:8080/api/v1/cache/flush -H "Authorization: Bearer $TOKEN"
+curl -s -X POST "http://127.0.0.1:8080/api/v1/cache/flush?name=www.example.com" -H "Authorization: Bearer $TOKEN"
 ```
 
 ```json
 {"message":"Cache flushed"}
+```
+
+With `name` the entries of exactly that name are removed (every record type,
+with and without the DO bit; case and a trailing dot do not matter). Its
+subdomains are kept. The response reports the count:
+
+```json
+{"message":"Flushed 3 cache entries for www.example.com"}
 ```
 
 `503` when the cache is disabled. To change cache sizing and TTLs, see

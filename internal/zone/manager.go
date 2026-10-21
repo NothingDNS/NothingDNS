@@ -356,8 +356,10 @@ func (m *Manager) ListShared() map[string]*Zone {
 	return m.zones
 }
 
-// Reload reloads a zone from its file.
+// Reload reloads a zone from its file. The name may be given in any spelling
+// the manager's other methods accept (case, with or without the trailing dot).
 func (m *Manager) Reload(name string) error {
+	name = normalizeZoneName(name)
 	m.mu.RLock()
 	path, ok := m.files[name]
 	m.mu.RUnlock()
