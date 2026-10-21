@@ -1361,7 +1361,9 @@ func loadZoneSigner(z *zone.Zone, signingCfg config.SigningConfig) (*dnssec.Sign
 		if err != nil {
 			return nil, fmt.Errorf("loading private key %q: %w", keyConfig.PrivateKey, err)
 		}
-		signer.AddKey(key)
+		if err := signer.AddKey(key); err != nil {
+			return nil, fmt.Errorf("adding signing key %q: %w", keyConfig.PrivateKey, err)
+		}
 	}
 
 	return signer, nil

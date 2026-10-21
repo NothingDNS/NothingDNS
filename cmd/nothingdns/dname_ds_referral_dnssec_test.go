@@ -15,7 +15,7 @@ func dnssecRegSigner(t *testing.T, origin string) *dnssec.Signer {
 		if err != nil {
 			t.Fatal(err)
 		}
-		s.AddKey(k)
+		// GenerateKeyPair already added k, retrying on a key tag collision.
 		s.SetKeyState(k.KeyTag, dnssec.KeyStateActive)
 	}
 	return s

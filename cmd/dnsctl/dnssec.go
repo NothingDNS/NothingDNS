@@ -356,7 +356,10 @@ func cmdDNSSECSignZone(args []string) error {
 			fmt.Fprintf(os.Stderr, "Warning: failed to load key %s: %v\n", kf, err)
 			continue
 		}
-		signer.AddKey(key)
+		if err := signer.AddKey(key); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: skipping key %s: %v\n", kf, err)
+			continue
+		}
 		fmt.Printf("  Loaded key: %s (tag=%d, %s)\n", filepath.Base(kf), key.KeyTag, keyType(key))
 	}
 

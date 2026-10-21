@@ -1,6 +1,7 @@
 package dnssec
 
 import (
+	"bytes"
 	"fmt"
 	"sort"
 	"strings"
@@ -16,6 +17,10 @@ type Signer struct {
 	keys   map[uint16]*SigningKey // keytag -> key
 	mu     sync.RWMutex
 	config SignerConfig
+
+	// keyGen replaces generateKeyPairOnce in tests that need to force key tag
+	// collisions; nil in production.
+	keyGen func(algorithm uint8, isKSK bool) (*SigningKey, error)
 }
 
 // SigningKey holds a key pair for signing.
@@ -84,11 +89,36 @@ func NewSigner(zone string, config SignerConfig) *Signer {
 	}
 }
 
-// AddKey adds a signing key (KSK or ZSK).
-func (s *Signer) AddKey(key *SigningKey) {
+// AddKey adds a signing key (KSK or ZSK). The signer indexes keys by key tag,
+// so adding a different key whose tag is already in use is refused rather than
+// silently replacing (and losing) the existing key; re-adding the same key is
+// allowed.
+func (s *Signer) AddKey(key *SigningKey) error {
+	if key == nil {
+		return fmt.Errorf("nil signing key")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if existing, ok := s.keys[key.KeyTag]; ok && !sameKeyMaterial(existing, key) {
+		return fmt.Errorf("key tag %d is already used by a different key in zone %s", key.KeyTag, s.zone)
+	}
 	s.keys[key.KeyTag] = key
+	return nil
+}
+
+// sameKeyMaterial reports whether a and b are the same key (same DNSKEY
+// flags, algorithm and public key), as opposed to two keys that merely share
+// a tag.
+func sameKeyMaterial(a, b *SigningKey) bool {
+	if a == b {
+		return true
+	}
+	if a.DNSKEY == nil || b.DNSKEY == nil {
+		return false
+	}
+	return a.DNSKEY.Flags == b.DNSKEY.Flags &&
+		a.DNSKEY.Algorithm == b.DNSKEY.Algorithm &&
+		bytes.Equal(a.DNSKEY.PublicKey, b.DNSKEY.PublicKey)
 }
 
 // RemoveKey removes a signing key.
@@ -201,20 +231,29 @@ func (s *Signer) GenerateKeyPair(algorithm uint8, isKSK bool) (*SigningKey, erro
 func (s *Signer) generateKeyPairWithState(algorithm uint8, isKSK bool, state KeyState, timing *KeyTiming) (*SigningKey, error) {
 	const maxKeyTagAttempts = 16
 
+	gen := s.generateKeyPairOnce
+	if s.keyGen != nil {
+		gen = s.keyGen
+	}
 	for attempt := 0; attempt < maxKeyTagAttempts; attempt++ {
-		key, err := s.generateKeyPairOnce(algorithm, isKSK)
+		key, err := gen(algorithm, isKSK)
 		if err != nil {
 			return nil, err
 		}
-		if key.KeyTag != 0 {
-			key.State = state
-			key.Timing = timing
-			s.AddKey(key)
-			return key, nil
+		if key.KeyTag == 0 {
+			continue
 		}
+		key.State = state
+		key.Timing = timing
+		// A tag already in use by another key (a ~1/65,000 chance against
+		// each existing key) would replace it: draw a new key instead.
+		if err := s.AddKey(key); err != nil {
+			continue
+		}
+		return key, nil
 	}
 
-	return nil, fmt.Errorf("generated DNSSEC key tag was zero after %d attempts", maxKeyTagAttempts)
+	return nil, fmt.Errorf("no usable DNSSEC key tag (zero or already in use) after %d attempts", maxKeyTagAttempts)
 }
 
 func (s *Signer) generateKeyPairOnce(algorithm uint8, isKSK bool) (*SigningKey, error) {
