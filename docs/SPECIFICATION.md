@@ -1261,7 +1261,7 @@ monitoring threshold, lower than the goals here.
 | Metric | Target | Status |
 |--------|--------|--------|
 | Queries/sec (UDP, cached) | >500,000 | Not measured end to end. The cache lookup alone costs about 150 ns (single thread) and 96 ns (parallel), `go test ./internal/cache -bench Get` |
-| Queries/sec (UDP, authoritative) | >200,000 | **Not met**, and not testable on one host. With the local flood (`go test -tags perf -run TestLocalUDPFlood ./internal/load/`, per-IP UDP cap disabled via `server.udp_rate_per_ip: 0`) the default single UDP socket gives about 65,000 to 77,000; `server.udp_listeners: 4` gives about 106,000 to 114,000, and 8 or 12 add nothing (about 113,000 to 116,000). The load generator shares the 12 cores: a trivial one-thread Go UDP echo server (no DNS) reached only about 176,000 with the same client. With the default cap of 100 per client IP, one source gets about 100 |
+| Queries/sec (UDP, authoritative) | >200,000 | **Not met**, and not testable on one host. With the local flood (`go test -tags perf -run TestLocalUDPFlood ./internal/load/`, per-IP UDP cap disabled via `server.udp_rate_per_ip: 0`) the default single UDP socket gives about 89,000 to 92,000; `server.udp_listeners: 4` gives about 131,000 to 138,000, and 8 adds nothing. The load generator shares the 12 cores: a trivial one-thread Go UDP echo server (no DNS) reached only about 170,000 with the same client. With the default cap of 100 per client IP, one source gets about 100 |
 | Queries/sec (DoH) | >100,000 | Not measured |
 | Average latency (cached) | <1ms | Not measured |
 | Average latency (authoritative) | <5ms | Not measured |
@@ -1281,8 +1281,8 @@ monitoring threshold, lower than the goals here.
   socket; no `recvmmsg` batching
 - Raising `server.udp_listeners` (extra `SO_REUSEPORT` sockets per address,
   default 1) is the measured way to scale UDP reads on a multi-core Linux host:
-  about +45% in the local flood at 4 listeners, nothing further beyond that.
-  A CPU profile of the single-listener case showed the server about 15%
+  about +50% in the local flood at 4 listeners, nothing further beyond that.
+  A CPU profile of the single-listener case (taken before the dashboard JSON fix, which was about 7% of it) showed the server about 15%
   idle-scheduling and 27% in `sendmsg`/`recvmsg` syscalls, using about 2.9 of 12
   cores; the DNS logic is not the bottleneck
 - TCP and DoT: a goroutine per connection, with per-IP connection caps
