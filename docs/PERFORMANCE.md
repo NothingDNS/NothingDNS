@@ -68,12 +68,33 @@ Percentages are of all samples.
 maps and building a suffix string per zone. Commit `a8696db` iterates in place
 (`zone.Manager.Range`) and compares suffixes without allocating: the 50-zone
 micro-benchmark (`go test ./cmd/nothingdns -run xxx -bench FindZones`) went from
-about 4,500 ns and 7 allocations to about 2,100 ns and 4 allocations per call.
+about 4,500 ns and 7 allocations to about 2,100 ns and 4 allocations per call
+(1 allocation after the cleanup below).
 In the flood with one zone that is only about +4% (143,000 to 148,000 against
 137,000 to 143,000, three alternating runs, one of the pairs equal), because the
 lookup is still linear in the number of zones and this test has one. The rest of
 the profile is the kernel send and receive path; going further would need batched
 I/O (`recvmmsg`) or more cores.
+
+### Per-query waste removed after the profile
+
+An allocation profile of the same flood (`/debug/pprof/allocs`, about 68
+allocations per query) pointed at work done for every query that nothing used.
+Each fix was measured against the commit before it with the same flood (4
+listeners, 48 workers, alternating runs of the two builds on one machine):
+
+| Change | Commit | Flood QPS (before, after) |
+|--------|--------|---------------------------|
+| `Logger.Debugf`/`Infof`/`Warnf`/`Errorf` called `fmt.Sprintf` before checking the log level, so the per-query debug line formatted and allocated even at `level: error`; the level is now checked first | `89f9eb5` | about 148,000, 156,000 (+6%) |
+| Audit entries (client IP and rcode strings) were built with `logging.query_log` off, and dashboard query events (clone, IP string, RDATA summary) with `server.http` disabled; both are now skipped when nothing can read them | `012ea27` | about 155,000, 165,000 (+6.5%) |
+| `FindZones` allocated a slice and a closure per provider per query; it now allocates one slice on a match and none on a miss (4 to 1 and 2 to 0 allocations; `TestFindZonesAllocations`) | `691eb18` | about 164,000, 170,000 (+3%, one of four pairs equal) |
+
+The query-event skip does not apply when the HTTP server is enabled: the
+dashboard's stats and top domains are served over REST whether or not a
+WebSocket viewer is connected, so those events are still built (only the audit
+skip applies). Each row was measured on top of the ones above it, and the
+absolute QPS drifts a few percent from run to run, so only the back-to-back
+before/after pairs mean anything.
 
 ### Quick Benchmark
 
