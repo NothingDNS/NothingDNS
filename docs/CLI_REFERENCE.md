@@ -312,67 +312,58 @@ dnsctl config reload
 
 ## dig — DNS Query Tool
 
-A `dig`-compatible DNS query tool.
+A small `dig`-style query tool: one question, sent over UDP, printed in dig's
+section layout. It is not a full `dig`; the options it supports are listed below.
 
 ```bash
-dnsctl dig [@server] [name] [type] [class] [options]
+dnsctl dig [@server] <name> [<type>] [+dnssec]
 ```
 
-### Basic Queries
+The arguments may come in any order: `@server`, the name, the type, and the
+`+` option. It does not read the global `-server` option and does not use the API.
+
+| Argument | Meaning |
+|---|---|
+| `@server` | Resolver to query: an IPv4 or IPv6 address or a host name, with an optional port (`@1.1.1.1`, `@[2001:db8::1]:5353`, `@2001:db8::1`). Default `127.0.0.1`, port 53. |
+| `<name>` | Name to look up; a trailing dot is optional. Required. |
+| `<type>` | Record type mnemonic (`A`, `AAAA`, `MX`, `TXT`, `SOA`, `NS`, `DNSKEY`, …). Default `A`. An unknown mnemonic is an error. |
+| `+dnssec` | Set the DO bit in an EDNS0 OPT record (4096-byte payload), so the answer carries DNSSEC records. |
+| `+cd` | Accepted and ignored. |
 
 ```bash
-# A record
 dnsctl dig example.com A
-
-# AAAA record
-dnsctl dig example.com AAAA
-
-# MX record
 dnsctl dig example.com MX
-
-# TXT record
-dnsctl dig example.com TXT
-
-# SOA record
-dnsctl dig example.com SOA
+dnsctl dig @1.1.1.1 example.com AAAA
+dnsctl dig @localhost example.com DNSKEY +dnssec
+dnsctl dig @127.0.0.1:5354 example.com SOA
 ```
 
-### Query Options
+### Behavior
+
+- One query goes out over UDP with a 5-second deadline. A response with the TC
+  bit set is retried once over TCP; if that fails, a warning is printed and the
+  truncated answer is shown.
+- Only a datagram that answers this query (same ID, QR set) is accepted; others
+  are skipped until the deadline.
+- The output shows the header and flags, then the question, answer, authority
+  and additional sections, `SERVER` and `WHEN`. The `Query time` line is a fixed
+  `~0ms` placeholder, not a measurement.
+
+### Not supported
+
+- Any other `+option` is ignored without an error: `+short`, `+tcp`, `+trace`,
+  `+multiline`, `+time=N`, `+ad` and the rest have no effect (a `+tcp AXFR` is
+  still a single UDP query).
+- A query class argument (`IN`, `CH`) is read as the record type and fails with
+  `unsupported query type`. Queries are always class IN.
+- An argument starting with `-` is rejected with a hint about the positional
+  syntax, so reverse lookups with `-x` do not work; query the `in-addr.arpa` /
+  `ip6.arpa` name with type `PTR` instead.
+- No delegation tracing, zone transfers, or output formatting options.
 
 ```bash
-# Specific DNS server
-dnsctl dig @1.1.1.1 example.com A
-
-# DNSSEC validation
-dnsctl dig +dnssec example.com A
-
-# Check AD (Authentic Data) bit
-dnsctl dig +ad example.com DNSKEY
-
-# Short output
-dnsctl dig +short example.com A
-
-# TCP instead of UDP
-dnsctl dig +tcp example.com A
-
-# Trace delegation
-dnsctl dig +trace example.com NS
-
-# Reverse lookup
-dnsctl dig -x 1.2.3.4
-```
-
-### Examples
-
-```bash
-# Full dig-compatible output
-dnsctl dig example.com MX +multiline
-
-# Time out after 5 seconds
-dnsctl dig example.com A +time=5
-
-# Use TCP
-dnsctl dig example.com AXFR +tcp
+# Reverse lookup of 192.0.2.10
+dnsctl dig @127.0.0.1 10.2.0.192.in-addr.arpa PTR
 ```
 
 ---

@@ -1060,7 +1060,7 @@ dnsctl dnssec validate-zone --zone example.com.zone.signed [--ignore-time]
 
 # Diagnostics
 dnsctl dig example.com A                          # Built-in dig-like tool
-dnsctl dig @localhost example.com AAAA +dnssec    # also +cd
+dnsctl dig @localhost example.com AAAA +dnssec    # UDP only; +dnssec is the one supported option
 
 # Server and config
 dnsctl server status
