@@ -1251,27 +1251,37 @@ directories:
 
 ## 14. Performance Targets
 
-| Metric | Target |
-|--------|--------|
-| Queries/sec (UDP, cached) | >500,000 |
-| Queries/sec (UDP, authoritative) | >200,000 |
-| Queries/sec (DoH) | >100,000 |
-| Average latency (cached) | <1ms |
-| Average latency (authoritative) | <5ms |
-| Memory usage (100K cache + 10 zones) | <256MB |
-| Binary size | <30MB |
-| Startup time (cold) | <2 seconds |
-| Zone load (1M records) | <5 seconds |
-| Cluster failover time | <3 seconds |
+These are design goals, not guarantees. The Status column records what has
+been measured on the development machine (12-core Linux, loopback, load
+generator on the same host, release flags `-trimpath -ldflags "-s -w"`). Where
+nothing was measured the table says so. [PERFORMANCE.md](PERFORMANCE.md) holds
+the operational thresholds and tuning notes; its QPS figure (50,000+) is a
+monitoring threshold, lower than the goals here.
+
+| Metric | Target | Status |
+|--------|--------|--------|
+| Queries/sec (UDP, cached) | >500,000 | Not measured end to end. The cache lookup alone costs about 150 ns (single thread) and 96 ns (parallel), `go test ./internal/cache -bench Get` |
+| Queries/sec (UDP, authoritative) | >200,000 | **Not met** by the local flood (`go test -tags perf -run TestLocalUDPFlood ./internal/load/`): about 65,000 to 73,000 with the per-IP UDP cap disabled (`server.udp_rate_per_ip: 0`); with the default cap of 100 per client IP, one source gets about 100 |
+| Queries/sec (DoH) | >100,000 | Not measured |
+| Average latency (cached) | <1ms | Not measured |
+| Average latency (authoritative) | <5ms | Not measured |
+| Memory usage (100K cache + 10 zones) | <256MB | Not measured; idle with one small zone: about 20 MB RSS. A 1M-record zone takes about 240 MB of heap once parsed |
+| Binary size | <30MB | Met: `nothingdns` 21.6 MB, `dnsctl` 7.8 MB (29.4 MB together) |
+| Startup time (cold) | <2 seconds | Met: about 0.15 s to a healthy `/health` with a small config |
+| Zone load (1M records) | <5 seconds | Met for parsing: 1.7 s for 1,000,000 A records (`zone.ParseFile`); validation and indexing were not timed |
+| Cluster failover time | <3 seconds | Not measured |
 
 ### 14.1 Performance Design Decisions
-- Zero allocation on hot path (sync.Pool for byte buffers)
-- Pre-allocated response buffers
-- Lock-free cache reads where possible (sync.Map for hot entries)
-- Goroutine-per-query model (Go scheduler handles multiplexing)
-- UDP batch reading (recvmmsg equivalent via multiple goroutines)
-- Connection pooling for upstream resolvers
-- EDNS buffer size negotiation to minimize TCP fallback
+- Pooled buffers on the hot path: `sync.Pool` for UDP request and response
+  buffers and for DNS messages
+- A sharded response cache: each shard has its own `RWMutex`, reads take the read
+  lock, and LRU promotion is probabilistic so most hits never take the write lock
+- UDP: one socket per bind address (created with `SO_REUSEPORT` where the
+  platform has it), a reader goroutine and a worker pool of `NumCPU × 4` per
+  socket; no `recvmmsg` batching
+- TCP and DoT: a goroutine per connection, with per-IP connection caps
+- Connection pooling for upstream TCP
+- EDNS buffer size negotiation to minimise TCP fallback
 
 ---
 
@@ -1534,20 +1544,38 @@ What the code implements. Where an RFC is only partly covered, the line says so.
 - Windows service manager (use NSSM externally)
 - LDAP/Active Directory integration
 - HTTP-based zone API that replaces zone files entirely (API and zone files coexist)
-- Full QUIC implementation beyond DNS-focused subset (mDNS is implemented — see `internal/mdns/`)
+- A QUIC stack of its own: DoQ uses `quic-go` (§3.2.5)
 - Commercial GeoIP database bundling (user provides their own)
+
+### 20.1 Described earlier, not implemented
+Features this document once presented as part of the design that the code does
+not have; treat them as not implemented:
+
+- Automatic DNSSEC key rollover and the embedded key store (§6.1.2)
+- RFC 5011 trust anchor updates and negative trust anchors (§6.2)
+- EDNS Client Subnet handling (§9.4)
+- A blocklist allowlist, regex or custom-IP block responses (§9.1)
+- A GeoDNS city level and automatic database reload on file change (§9.2)
+- DoT or DoH upstreams and per-zone forwarding (§5.1.2)
+- RRL slip (§9.5)
+- Raft membership changes at runtime (§10.1.1)
+- A CHAOS (`version.bind`) responder (§4.1.2)
+- Prometheus metrics for cache size, zones, Raft, per-upstream latency and
+  DNSSEC validation (§11.4)
 
 ---
 
 ## 21. Success Criteria
 
-1. **Functional:** Pass all RFC compliance tests for authoritative + recursive modes
-2. **Performance:** Exceed 500K QPS on cached UDP queries (single node)
-3. **Reliability:** Zero downtime during leader failover in 3-node cluster (<3s)
-4. **Compatibility:** Successfully import and serve 100% of valid BIND zone files
-5. **Security:** Pass DNSSEC validation test suites (DNSViz, Verisign Labs)
-6. **Usability:** Fresh install to serving first zone in <5 minutes
-7. **Size:** Single binary under 30MB, Docker image under 35MB (FROM scratch)
+| # | Criterion | Status |
+|---|---|---|
+| 1 | **Functional:** pass RFC compliance tests for authoritative and recursive modes | Not demonstrated: the repository has unit and end-to-end tests but runs no external conformance suite (CI workflows run only on demand or on a release tag) |
+| 2 | **Performance:** exceed 500K QPS on cached UDP queries (single node) | Not measured (§14) |
+| 3 | **Reliability:** zero downtime during leader failover in a 3-node cluster (<3 s) | Not measured; cluster tests exist, none times a failover |
+| 4 | **Compatibility:** import and serve 100% of valid BIND zone files | Not demonstrated: the parser covers `$ORIGIN`, `$TTL`, `$INCLUDE`, `$GENERATE`, multi-line records and inherited owners, with many unit tests, but it has not been run against a BIND test corpus |
+| 5 | **Security:** pass DNSSEC validation test suites (DNSViz, Verisign Labs) | Not demonstrated: no such suite is run in the repository |
+| 6 | **Usability:** fresh install to serving the first zone in under 5 minutes | Not measured |
+| 7 | **Size:** single binary under 30 MB, Docker image under 35 MB (`FROM scratch`) | Binary met (21.6 MB). The image holds both binaries (29.4 MB), the CA bundle and small config files, so it should be near 30 MB; it was not built here |
 
 ---
 
