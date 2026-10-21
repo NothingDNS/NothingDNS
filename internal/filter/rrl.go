@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// RRLConfig configures DNS Response Rate Limiting (RFC 8231).
+// RRLConfig configures DNS Response Rate Limiting (BIND-style RRL; there is no RFC).
 type RRLConfig struct {
 	Enabled       bool `yaml:"enabled"`
 	Rate          int  `yaml:"rate"`           // responses per second per bucket
@@ -27,7 +27,7 @@ type rrlBucket struct {
 	suppressed time.Time // when suppression window started; zero = not suppressed
 }
 
-// RRL implements DNS Response Rate Limiting per RFC 8231.
+// RRL implements BIND-style DNS Response Rate Limiting (there is no RFC for it).
 // Unlike the token-bucket client limiter (which tracks queries), RRL tracks
 // responses to detect when a client is receiving disproportionate answers
 // relative to the configured rate. This catches reflected amplification floods

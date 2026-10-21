@@ -385,7 +385,7 @@ func (h *integratedHandler) checkRPZResponseIPWithError(w server.ResponseWriter,
 }
 
 // sendRefused returns a REFUSED response without forwarding to upstream.
-// Used by RRL suppression (RFC 8231 §4) and for policy-denied responses.
+// Used by RRL suppression and for policy-denied responses.
 func (h *integratedHandler) sendRefused(w server.ResponseWriter, r *protocol.Message) {
 	if h.metrics != nil {
 		h.metrics.RecordResponse(protocol.RcodeRefused)

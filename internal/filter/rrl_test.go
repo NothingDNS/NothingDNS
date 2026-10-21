@@ -1,6 +1,6 @@
 package filter
 
-// RRL (RFC 8231 Response Rate Limiting) tests.
+// RRL (BIND-style Response Rate Limiting) tests.
 //
 // Covers all the public surface: NewRRL defaults, Allow under burst,
 // rate limit + suppression window, LogSuperlative amplification

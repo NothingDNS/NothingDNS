@@ -693,7 +693,7 @@ func (s *Server) WithRateLimiter(rl *filter.RateLimiter) *Server {
 	return s
 }
 
-// WithRRL sets the response-side rate limiter (RFC 8231) that PUT
+// WithRRL sets the response-side rate limiter (BIND-style RRL) that PUT
 // /api/v1/config/rrl enables and disables together with the rate limiter.
 func (s *Server) WithRRL(rrl *filter.RRL) *Server {
 	s.runtimeMu.Lock()

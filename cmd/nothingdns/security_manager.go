@@ -134,7 +134,7 @@ func NewSecurityManager(cfg *config.Config, logger *util.Logger) (*SecurityManag
 		logger.Infof("RRL enabled: %d qps/client, burst %d", cfg.RRL.Rate, cfg.RRL.Burst)
 	}
 
-	// Initialize RRL (response-side rate limiting per RFC 8231).
+	// Initialize RRL (response-side rate limiting, BIND-style RRL; not an RFC).
 	mgr.result.RRL = filter.NewRRL(filter.RRLConfig{
 		Enabled:       cfg.RRL.Enabled,
 		Rate:          cfg.RRL.Rate,
