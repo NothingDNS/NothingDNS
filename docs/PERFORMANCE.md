@@ -49,6 +49,32 @@ back-to-back runs.
 ceiling of this test setup, because the client and the kernel loopback share the
 same cores; to measure beyond it, run the generator on a separate host.
 
+### Where the time goes at 4 listeners
+
+A CPU profile taken from the running server (`metrics.pprof_bind`, see §2) during
+the flood above, 4 listeners, after the dashboard fix: about 6 of 12 cores busy.
+Percentages are of all samples.
+
+| Share | What |
+|-------|------|
+| about 27% | `sendmsg` / `recvmsg` syscalls (`udpResponseWriter.Write` about 29% cumulative, the reader about 13%) |
+| about 38% | `serveAuthoritativeFromCache` (the send above plus building the response) |
+| about 8% | `MultiZoneProvider.FindZones` (before the change below) |
+| about 6% each | `Message.Copy` of the cached answer, `Message.Pack` (mostly `PackName`) |
+| about 4% | `UnpackMessage` |
+| about 8% | `sync.Pool.Get` |
+
+`FindZones` queried every zone source per query, copying the manager and KV zone
+maps and building a suffix string per zone. Commit `a8696db` iterates in place
+(`zone.Manager.Range`) and compares suffixes without allocating: the 50-zone
+micro-benchmark (`go test ./cmd/nothingdns -run xxx -bench FindZones`) went from
+about 4,500 ns and 7 allocations to about 2,100 ns and 4 allocations per call.
+In the flood with one zone that is only about +4% (143,000 to 148,000 against
+137,000 to 143,000, three alternating runs, one of the pairs equal), because the
+lookup is still linear in the number of zones and this test has one. The rest of
+the profile is the kernel send and receive path; going further would need batched
+I/O (`recvmmsg`) or more cores.
+
 ### Quick Benchmark
 
 ```bash
