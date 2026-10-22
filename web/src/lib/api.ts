@@ -50,6 +50,13 @@ export async function downloadAuthenticated(
 	const token = getToken();
 	if (token) headers.Authorization = `Bearer ${token}`;
 	const resp = await fetch(`${API_BASE}${path}`, { headers });
+	// Global 401 handling, same contract as api()/fetchApi(): an expired token
+	// bounces the user to login instead of surfacing a raw HTTP 401 on the
+	// export buttons.
+	if (resp.status === 401) {
+		useAuthStore.getState().clearAuth();
+		throw new Error("Session expired. Please sign in again.");
+	}
 	if (!resp.ok) {
 		throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
 	}

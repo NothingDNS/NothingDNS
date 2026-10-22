@@ -1,1 +1,0 @@
-import{n as e,y as t}from"./dist-DQUDUDU6.js";var n=t();function r({className:t,...r}){return(0,n.jsx)(`div`,{className:e(`animate-pulse rounded-md bg-muted`,t),...r})}export{r as t};

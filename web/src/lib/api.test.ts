@@ -282,6 +282,15 @@ describe('downloadAuthenticated', () => {
     ).rejects.toThrow('HTTP 404');
   });
 
+  it('clears the session on 401 like api() does (C2)', async () => {
+    useAuthStore.getState().setAuth('tok_dl', 'u', 'admin');
+    mockFetch.mockResolvedValue(new Response(null, { status: 401 }));
+    await expect(
+      downloadAuthenticated('/api/v1/zones/example.com/export', 'example.com.zone'),
+    ).rejects.toThrow('Session expired');
+    expect(useAuthStore.getState().isAuthenticated).toBe(false);
+  });
+
   it('omits Bearer when not authenticated', async () => {
     mockFetch.mockResolvedValue(
       Promise.resolve(
