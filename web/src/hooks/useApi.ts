@@ -1,6 +1,12 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { z, type ZodType } from "zod";
 
+import { parseWithSchema } from "@/lib/api";
 import { useAuthStore } from "@/stores/authStore";
+
+const MessageResponseSchema = z.object({
+	message: z.string().optional(),
+});
 
 // Helper to get auth token from the in-memory Zustand store only (LOW-005).
 // Never read from document.cookie — the backend cookie is HttpOnly.
@@ -25,7 +31,11 @@ function _errorMessageFromPayload(payload: unknown, fallback: string): string {
 	return typeof message === "string" && message.trim() ? message : fallback;
 }
 
-async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
+async function fetchApi<T>(
+	path: string,
+	options?: RequestInit,
+	schema?: ZodType<T>,
+): Promise<T> {
 	const headers: Record<string, string> = {
 		"Content-Type": "application/json",
 	};
@@ -72,8 +82,11 @@ async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
 
 	const contentType = resp.headers.get("content-type");
 	if (contentType?.includes("application/json")) {
-		return resp.json() as Promise<T>;
+		const data: unknown = await resp.json();
+		if (schema) return parseWithSchema(schema, data);
+		return data as T;
 	}
+	if (schema) return parseWithSchema(schema, {});
 	return {} as T;
 }
 
@@ -92,10 +105,10 @@ export function useUpdateLoggingConfig() {
 
 	return useMutation({
 		mutationFn: (data: LoggingConfigRequest) =>
-			fetchApi<{ message: string }>("/api/v1/config/logging", {
+			fetchApi("/api/v1/config/logging", {
 				method: "PUT",
 				body: JSON.stringify(data),
-			}),
+			}, MessageResponseSchema),
 		onSuccess: () => {
 			queryClient.invalidateQueries({ queryKey: ["server-config"] });
 		},
@@ -115,10 +128,10 @@ export function useUpdateRRLConfig() {
 
 	return useMutation({
 		mutationFn: (data: RRLConfigRequest) =>
-			fetchApi<{ message: string }>("/api/v1/config/rrl", {
+			fetchApi("/api/v1/config/rrl", {
 				method: "PUT",
 				body: JSON.stringify(data),
-			}),
+			}, MessageResponseSchema),
 		onSuccess: () => {
 			queryClient.invalidateQueries({ queryKey: ["server-config"] });
 		},
@@ -144,10 +157,10 @@ export function useUpdateCacheConfig() {
 
 	return useMutation({
 		mutationFn: (data: CacheConfigRequest) =>
-			fetchApi<{ message: string }>("/api/v1/config/cache", {
+			fetchApi("/api/v1/config/cache", {
 				method: "PUT",
 				body: JSON.stringify(data),
-			}),
+			}, MessageResponseSchema),
 		onSuccess: () => {
 			queryClient.invalidateQueries({ queryKey: ["server-config"] });
 		},
@@ -169,10 +182,10 @@ export function useUpdateResolutionConfig() {
 
 	return useMutation({
 		mutationFn: (data: ResolutionConfigRequest) =>
-			fetchApi<{ message: string }>("/api/v1/config/resolution", {
+			fetchApi("/api/v1/config/resolution", {
 				method: "PUT",
 				body: JSON.stringify(data),
-			}),
+			}, MessageResponseSchema),
 		onSuccess: () => {
 			queryClient.invalidateQueries({ queryKey: ["server-config"] });
 		},
@@ -184,10 +197,10 @@ export function useUpdateDNS64Config() {
 
 	return useMutation({
 		mutationFn: (data: { enabled: boolean }) =>
-			fetchApi<{ message: string }>("/api/v1/config/dns64", {
+			fetchApi("/api/v1/config/dns64", {
 				method: "PUT",
 				body: JSON.stringify(data),
-			}),
+			}, MessageResponseSchema),
 		onSuccess: () => {
 			queryClient.invalidateQueries({ queryKey: ["server-config"] });
 		},
@@ -199,10 +212,10 @@ export function useUpdateCookieConfig() {
 
 	return useMutation({
 		mutationFn: (data: { enabled: boolean }) =>
-			fetchApi<{ message: string }>("/api/v1/config/cookie", {
+			fetchApi("/api/v1/config/cookie", {
 				method: "PUT",
 				body: JSON.stringify(data),
-			}),
+			}, MessageResponseSchema),
 		onSuccess: () => {
 			queryClient.invalidateQueries({ queryKey: ["server-config"] });
 		},
@@ -214,10 +227,10 @@ export function useUpdateUpstreamServer() {
 
 	return useMutation({
 		mutationFn: (data: { action: "add" | "remove"; server: string }) =>
-			fetchApi<{ message: string }>("/api/v1/upstreams", {
+			fetchApi("/api/v1/upstreams", {
 				method: "PUT",
 				body: JSON.stringify(data),
-			}),
+			}, MessageResponseSchema),
 		onSuccess: () => {
 			queryClient.invalidateQueries({ queryKey: ["server-config"] });
 		},

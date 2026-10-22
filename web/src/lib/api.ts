@@ -1,6 +1,19 @@
+import { z, type ZodType } from "zod";
+
 import { useAuthStore } from "@/stores/authStore";
 
 const API_BASE = "";
+
+export function parseWithSchema<T>(schema: ZodType<T>, data: unknown): T {
+	const parsed = schema.safeParse(data);
+	if (!parsed.success) {
+		const issues = parsed.error.issues
+			.map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
+			.join("; ");
+		throw new Error(`API response failed schema validation: ${issues}`);
+	}
+	return parsed.data;
+}
 
 function _errorMessageFromPayload(payload: unknown, fallback: string): string {
 	if (!payload || typeof payload !== "object") return fallback;
@@ -58,6 +71,7 @@ export async function api<T = unknown>(
 	method: string,
 	path: string,
 	body?: unknown,
+	schema?: ZodType<T>,
 ): Promise<T> {
 	const headers: Record<string, string> = {
 		"Content-Type": "application/json",
@@ -118,22 +132,29 @@ export async function api<T = unknown>(
 
 	// Only parse JSON on success
 	if (contentType?.includes("application/json")) {
-		return (await resp.json()) as T;
+		const data: unknown = await resp.json();
+		if (schema) return parseWithSchema(schema, data);
+		return data as T;
 	}
-	// Return empty object for non-JSON success responses
+	// Non-JSON success: with a schema, run the empty payload through the same
+	// contract — required fields fail loudly instead of fabricating a typed
+	// value; without a schema, keep the legacy cast.
+	if (schema) return parseWithSchema(schema, {});
 	return {} as T;
 }
 
-export interface DashboardStats {
-	uptime: number;
-	queriesTotal: number;
-	queriesPerSec: number;
-	cacheHitRate: number;
-	blockedQueries: number;
-	activeClients: number;
-	zoneCount: number;
-	upstreamLatency: number;
-}
+export const DashboardStatsSchema = z.object({
+	uptime: z.number(),
+	queriesTotal: z.number(),
+	queriesPerSec: z.number(),
+	cacheHitRate: z.number(),
+	blockedQueries: z.number(),
+	activeClients: z.number(),
+	zoneCount: z.number(),
+	upstreamLatency: z.number(),
+});
+
+export type DashboardStats = z.infer<typeof DashboardStatsSchema>;
 
 export interface QueryEvent {
 	timestamp: string;
@@ -148,27 +169,33 @@ export interface QueryEvent {
 	protocol: string;
 }
 
-export interface Zone {
-	name: string;
-	serial: number;
-	records: number;
-}
+export const ZoneSchema = z.object({
+	name: z.string(),
+	serial: z.number(),
+	records: z.number(),
+});
 
-export interface ZoneDetail {
-	name: string;
-	records: number;
-	serial?: number;
-	soa?: {
-		mname: string;
-		rname: string;
-		serial: number;
-		refresh: number;
-		retry: number;
-		expire: number;
-		minimum: number;
-	};
-	nameservers?: string[];
-}
+export type Zone = z.infer<typeof ZoneSchema>;
+
+export const ZoneDetailSchema = z.object({
+	name: z.string(),
+	records: z.number(),
+	serial: z.number().optional(),
+	soa: z
+		.object({
+			mname: z.string(),
+			rname: z.string(),
+			serial: z.number(),
+			refresh: z.number(),
+			retry: z.number(),
+			expire: z.number(),
+			minimum: z.number(),
+		})
+		.optional(),
+	nameservers: z.array(z.string()).optional(),
+});
+
+export type ZoneDetail = z.infer<typeof ZoneDetailSchema>;
 
 export interface DnsRecord {
 	name: string;
@@ -198,25 +225,29 @@ export interface ServerStatus {
 	};
 }
 
-export interface QueryLogEntry {
-	timestamp: string;
-	client_ip: string;
-	domain: string;
-	query_type: string;
-	response_code: string;
-	answers?: string[];
-	duration_ms: number;
-	cached: boolean;
-	blocked: boolean;
-	protocol: string;
-}
+export const QueryLogEntrySchema = z.object({
+	timestamp: z.string(),
+	client_ip: z.string(),
+	domain: z.string(),
+	query_type: z.string(),
+	response_code: z.string(),
+	answers: z.array(z.string()).optional(),
+	duration_ms: z.number(),
+	cached: z.boolean(),
+	blocked: z.boolean(),
+	protocol: z.string(),
+});
 
-export interface QueryLogResponse {
-	queries: QueryLogEntry[];
-	total: number;
-	offset: number;
-	limit: number;
-}
+export type QueryLogEntry = z.infer<typeof QueryLogEntrySchema>;
+
+export const QueryLogResponseSchema = z.object({
+	queries: z.array(QueryLogEntrySchema),
+	total: z.number(),
+	offset: z.number(),
+	limit: z.number(),
+});
+
+export type QueryLogResponse = z.infer<typeof QueryLogResponseSchema>;
 
 export interface TopDomainsEntry {
 	domain: string;

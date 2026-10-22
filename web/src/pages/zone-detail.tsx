@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { api, downloadAuthenticated, type ZoneDetail, type DnsRecord } from '@/lib/api';
+import { api, downloadAuthenticated, ZoneDetailSchema, type ZoneDetail, type DnsRecord } from '@/lib/api';
 import { ZoneEditor } from '@/components/zone-editor';
 import { ChevronRight, Download, Shield, Zap, Database, Clock, Globe } from 'lucide-react';
 
@@ -21,7 +21,7 @@ export function ZoneDetailPage() {
     setError(null);
     try {
       const [zd, rd] = await Promise.all([
-        api<ZoneDetail>('GET', `/api/v1/zones/${encodeURIComponent(zn)}`),
+        api('GET', `/api/v1/zones/${encodeURIComponent(zn)}`, undefined, ZoneDetailSchema),
         api<{ records: DnsRecord[] }>('GET', `/api/v1/zones/${encodeURIComponent(zn)}/records`),
       ]);
       setZone(zd);

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { z } from 'zod';
 import { api, downloadAuthenticated } from './api';
 import { useAuthStore } from '@/stores/authStore';
 
@@ -35,6 +36,37 @@ function mockNonJsonResponse(status = 200) {
     }),
   );
 }
+
+describe('api() schema validation (C1: server JSON must be narrowed, not cast)', () => {
+	// Local minimal schema: proves the mechanism without coupling the test to
+	// the exported schemas (which the fix introduces alongside this test).
+	const statsSchema = z.object({
+		uptime: z.number(),
+		queriesPerSec: z.number(),
+	});
+
+	it('rejects a {} JSON payload for a stats-shaped call instead of returning undefined fields', async () => {
+		mockFetch.mockResolvedValue(mockJsonResponse({}));
+		await expect(
+			api('GET', '/api/dashboard/stats', undefined, statsSchema),
+		).rejects.toThrow(/failed schema validation/);
+	});
+
+	it('passes a valid payload through the schema with parsed values', async () => {
+		mockFetch.mockResolvedValue(
+			mockJsonResponse({ uptime: 60, queriesPerSec: 12.5 }),
+		);
+		const stats = await api('GET', '/api/dashboard/stats', undefined, statsSchema);
+		expect(stats).toEqual({ uptime: 60, queriesPerSec: 12.5 });
+	});
+
+	it('rejects a non-JSON 2xx response when a schema is provided (no silent {} as T)', async () => {
+		mockFetch.mockResolvedValue(mockNonJsonResponse());
+		await expect(
+			api('GET', '/api/dashboard/stats', undefined, statsSchema),
+		).rejects.toThrow(/failed schema validation/);
+	});
+});
 
 describe('api()', () => {
   it('sends GET request with correct headers', async () => {

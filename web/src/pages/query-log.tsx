@@ -3,7 +3,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Input } from '@/components/ui/input';
-import { api, type QueryLogResponse } from '@/lib/api';
+import { api, QueryLogResponseSchema, type QueryLogResponse } from '@/lib/api';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 const PAGE_SIZE = 50;
@@ -39,7 +39,7 @@ export function QueryLogPage() {
       setError(null);
       try {
         const q = debouncedFilter ? `&q=${encodeURIComponent(debouncedFilter)}` : '';
-        const result = await api<QueryLogResponse>('GET', `/api/v1/queries?offset=${offset}&limit=${PAGE_SIZE}${q}`);
+        const result = await api('GET', `/api/v1/queries?offset=${offset}&limit=${PAGE_SIZE}${q}`, undefined, QueryLogResponseSchema);
         // Ignore stale responses
         if (cancelled) return;
         if (currentOffsetRef.current !== offset) return;

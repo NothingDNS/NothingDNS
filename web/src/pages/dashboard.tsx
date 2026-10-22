@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
-import { api, type DashboardStats } from '@/lib/api';
+import { api, DashboardStatsSchema, type DashboardStats } from '@/lib/api';
 import { useQueryStream } from '@/stores/queryStream';
 import { useAuthStore } from '@/stores/authStore';
 import { hasMinRole } from '@/lib/roles';
@@ -33,7 +33,7 @@ export function DashboardPage() {
   const loadStats = async () => {
     const gen = ++loadStatsGeneration.current;
     try {
-      const data = await api<DashboardStats>('GET', '/api/dashboard/stats');
+      const data = await api('GET', '/api/dashboard/stats', undefined, DashboardStatsSchema);
       if (gen !== loadStatsGeneration.current) return; // superseded by a newer load
       setStats(data);
       setLastUpdate(new Date());

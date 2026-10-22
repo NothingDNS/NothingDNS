@@ -6,7 +6,8 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { Skeleton } from '@/components/ui/skeleton';
-import { api, type Zone } from '@/lib/api';
+import { api, ZoneSchema, type Zone } from '@/lib/api';
+import { z } from 'zod';
 import { ErrorState, EmptyState } from '@/components/states';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { toast } from 'sonner';
@@ -36,7 +37,7 @@ export function ZonesPage() {
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const navigate = useNavigate();
-  const load = () => { setLoading(true); api<{ zones: Zone[] }>('GET', '/api/v1/zones').then((d) => { setZones(d.zones || []); setError(null); }).catch((e) => setError(e instanceof Error ? e.message : 'Failed to load zones')).finally(() => setLoading(false)); };
+  const load = () => { setLoading(true); api('GET', '/api/v1/zones', undefined, z.object({ zones: z.array(ZoneSchema) })).then((d) => { setZones(d.zones || []); setError(null); }).catch((e) => setError(e instanceof Error ? e.message : 'Failed to load zones')).finally(() => setLoading(false)); };
   useEffect(() => { load(); }, []);
   const filtered = zones.filter((z) => z.name.toLowerCase().includes(search.toLowerCase()));
 
