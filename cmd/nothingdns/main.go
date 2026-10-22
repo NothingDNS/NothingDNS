@@ -829,6 +829,10 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 	}
 	handlerLogger = logger
 
+	// cache.prefetch: the cache decides when an entry is due, the handler
+	// re-resolves it (prefetch.go). A no-op while cache.prefetch is off.
+	handler.wirePrefetch()
+
 	// Wire zone mutations to query routing: after every zone mutation
 	// (REST API, Raft apply, gossip), rebuild the radix tree and zone
 	// provider so created/deleted zones are visible to DNS queries.

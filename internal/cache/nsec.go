@@ -187,6 +187,18 @@ func (nc *NSECCache) lookupAt(qname string, qtype uint16, now time.Time) *protoc
 			continue
 		}
 
+		// An NSEC owned by a zone cut or by a DNAME owner says nothing about
+		// the names beneath it (RFC 6840 §4.1). An "ancestor delegation" NSEC
+		// (NS set, SOA clear) is the PARENT's record of the cut: the child
+		// zone's names and its apex data are not in it. An NSEC with the DNAME
+		// bit set sits on a name whose subtree is synthesized, not stored.
+		// Skip such an entry for any name it cannot speak for; it still serves
+		// as the proof for names outside the subtree and, for a delegation,
+		// for the DS type at the cut itself.
+		if nsecEntryCannotSpeakFor(entry, qnameParsed, qtype) {
+			continue
+		}
+
 		// Check if qname falls in the range (owner, nextDomain) in canonical order.
 		// NSEC proves: no names exist between owner and nextDomain.
 		if nameInNSECRange(qnameParsed, entry.Owner, entry.NextDomain) {
@@ -206,8 +218,14 @@ func (nc *NSECCache) lookupAt(qname string, qtype uint16, now time.Time) *protoc
 
 		// Also check: if qname matches the NSEC owner but the type is not
 		// in the type bitmap, this proves NODATA (name exists, type doesn't).
+		//
+		// The CNAME bit counts too (RFC 6840 §4.3): a name that owns a CNAME
+		// has data for every type — the alias — so a bitmap with CNAME set
+		// cannot prove NODATA for any other type. Treating it as NODATA would
+		// hide the alias and hand out an AD=1 "no data" for a name that
+		// resolves. Leave it to normal resolution.
 		if protocol.CompareNames(qnameParsed, entry.Owner) == 0 {
-			if !typeInBitmap(qtype, entry.TypeBitMap) {
+			if !typeInBitmap(qtype, entry.TypeBitMap) && !typeInBitmap(protocol.TypeCNAME, entry.TypeBitMap) {
 				return nc.synthesizeNODATA(qname, qtype, entry)
 			}
 		}
@@ -282,11 +300,60 @@ func (nc *NSECCache) wildcardDeniedFor(qname, zone *protocol.Name, covering *nse
 			if zoneOfEntry == nil || protocol.CompareNames(zoneOfEntry, zone) != 0 {
 				continue
 			}
+			// The same RFC 6840 §4.1 rule as in lookupAt: the wildcard name is
+			// below its encloser, so an NSEC owned by a zone cut or a DNAME
+			// at or above it cannot be the proof that no wildcard exists.
+			if nsecEntryCannotSpeakFor(e, wildcard, protocol.TypeANY) {
+				continue
+			}
 			if nameInNSECRange(wildcard, e.Owner, e.NextDomain) {
 				return true
 			}
 		}
 		return false
+	}
+	return false
+}
+
+// nsecEntryCannotSpeakFor reports whether entry must not be used to deny qname
+// (type qtype) because of what its own type bitmap says about its owner
+// (RFC 6840 §4.1):
+//
+//   - an ancestor delegation NSEC — NS bit set, SOA bit clear — proves nothing
+//     about RRs below the cut, "which include all RRs at that owner name other
+//     than DS RRs, and all RRs below that owner name regardless of type";
+//   - an NSEC with the DNAME bit set proves nothing about any subdomain of its
+//     owner.
+//
+// Names outside the owner's subtree are unaffected, and so is DS at a
+// delegation owner: the parent's NSEC is exactly where its absence is proven.
+func nsecEntryCannotSpeakFor(entry *nsecEntry, qname *protocol.Name, qtype uint16) bool {
+	if entry == nil || entry.Owner == nil || qname == nil {
+		return false
+	}
+	atOwner := protocol.CompareNames(qname, entry.Owner) == 0
+	belowOwner := !atOwner && protocol.IsSubdomain(qname, entry.Owner)
+
+	if typeInBitmap(protocol.TypeDNAME, entry.TypeBitMap) && belowOwner {
+		return true
+	}
+	// RFC 6840 §4.1 defines an ancestor delegation by three conditions: NS set,
+	// SOA clear, AND a signer shorter than the owner (the record is signed by
+	// the parent zone, not by the zone it sits at). The signer is not kept, but
+	// the SOA that came with the response names the zone the proof is for:
+	// an NSEC owned by that very name is the zone's own apex record, signed by
+	// the zone itself, and is never an ancestor delegation however its bitmap
+	// looks. Only an owner strictly below the zone is a cut.
+	if zone := nsecEntryZone(entry); zone != nil && protocol.CompareNames(entry.Owner, zone) == 0 {
+		return false
+	}
+	if typeInBitmap(protocol.TypeNS, entry.TypeBitMap) && !typeInBitmap(protocol.TypeSOA, entry.TypeBitMap) {
+		if belowOwner {
+			return true
+		}
+		if atOwner && qtype != protocol.TypeDS {
+			return true
+		}
 	}
 	return false
 }

@@ -569,6 +569,12 @@ func resolverStage(h *integratedHandler) Stage {
 		defer resp.Release()
 		sanitizePipelineResponse(resp)
 
+		// The iterative resolver reports an unreachable or lame authority
+		// as a SERVFAIL response, not as an error (RFC 8767 §4).
+		if failedRefresh(resp) && h.serveStaleOnFailedRefresh(q, "resolver returned "+rcodeToString(resp.Header.Flags.RCODE)) {
+			return true, nil
+		}
+
 		resp.Header.ID = q.msg.Header.ID
 		// The resolver returns the authoritative server's header: AA is not
 		// this server's claim on a recursive answer, and AD may only come
@@ -609,6 +615,42 @@ func resolverStage(h *integratedHandler) Stage {
 	}
 }
 
+// failedRefresh reports whether resp is an error answer that does not refresh
+// cached data. RFC 8767 §4: only NOERROR and NXDOMAIN are answers; any other
+// RCODE (SERVFAIL, REFUSED, ...) "SHOULD be considered a failure to refresh the
+// data and therefore leave any previous state intact". A recursive upstream
+// that cannot reach the authority reports the outage exactly this way — as a
+// SERVFAIL response, not as a transport error.
+func failedRefresh(resp *protocol.Message) bool {
+	if resp == nil {
+		return false
+	}
+	switch resp.Header.Flags.RCODE {
+	case protocol.RcodeSuccess, protocol.RcodeNameError:
+		return false
+	default:
+		return true
+	}
+}
+
+// serveStaleOnFailedRefresh answers q from the stale cache (RFC 8767) after a
+// failed refresh and reports whether it did. GetStale returns a private copy
+// with TTLs clamped to 30s, safe for reply to mutate; it is nil when serve-stale
+// is off or nothing usable is cached, in which case the caller's error answer
+// goes out unchanged.
+func (h *integratedHandler) serveStaleOnFailedRefresh(q *query, why string) bool {
+	stale := h.cache.GetStale(q.cacheKey)
+	if stale == nil || stale.Message == nil {
+		return false
+	}
+	h.logger.Debugf("Serving stale cache entry for %s (%s)", q.qname, why)
+	if h.metrics != nil {
+		h.metrics.RecordResponse(protocol.RcodeSuccess)
+	}
+	reply(q.currentWriter, q.msg, stale.Message)
+	return true
+}
+
 // cachePipelineResponse caches a validated, policy-checked answer under the
 // query's pipeline key (Set deep-copies internally). Bogus data served to a
 // CD=1 client is never cached (F662).
@@ -617,7 +659,7 @@ func (h *integratedHandler) cachePipelineResponse(q *query, resp *protocol.Messa
 		return
 	}
 	if resp.Header.Flags.RCODE == protocol.RcodeSuccess && len(resp.Answers) > 0 {
-		ttl := extractTTL(resp)
+		ttl := answerCacheTTL(resp)
 		// Bound resp's own TTLs by the cache policy BEFORE Set copies it,
 		// so the client and the cached entry agree on how long this answer
 		// is good for. Skipping this left the miss response — the one that
@@ -628,8 +670,15 @@ func (h *integratedHandler) cachePipelineResponse(q *query, resp *protocol.Messa
 		(resp.Header.Flags.RCODE == protocol.RcodeSuccess && len(resp.Answers) == 0) {
 		// Store the full message so negative cache hits can serve the
 		// SOA (RFC 2308) and any NSEC/NSEC3 proofs back to the client.
-		// negTTL==0 falls back to the cache's configured negative TTL.
-		negTTL, _ := negativeCacheTTL(resp)
+		// negTTL==0 with no SOA falls back to the cache's configured negative
+		// TTL. A SOA that says 0 is different: the negative TTL is
+		// min(SOA TTL, SOA MINIMUM) (RFC 2308 §5), and zero means the answer
+		// can only be used for the transaction in progress (RFC 1035 §3.2.1),
+		// so it is not cached — passing the 0 on would be read as "unknown".
+		negTTL, hasSOA := negativeCacheTTL(resp)
+		if hasSOA && negTTL == 0 {
+			return
+		}
 		h.cache.SetNegativeMessage(q.cacheKey, resp.Header.Flags.RCODE, resp, negTTL)
 		h.logger.Debugf("Cached negative response for %s (rcode=%d, negTTL=%d)", q.qname, resp.Header.Flags.RCODE, negTTL)
 
@@ -729,6 +778,13 @@ func upstreamStage(h *integratedHandler) Stage {
 			return true, nil
 		}
 		q.msg.Header.ID = origID
+
+		// An upstream that is up but cannot resolve answers SERVFAIL (or
+		// REFUSED): a failed refresh, so stale data is served just as when
+		// the upstream does not answer at all (RFC 8767 §4).
+		if failedRefresh(resp) && h.serveStaleOnFailedRefresh(q, "upstream returned "+rcodeToString(resp.Header.Flags.RCODE)) {
+			return true, nil
+		}
 
 		// AD is this server's own claim (RFC 4035 §3.2.3): with a validator
 		// configured, only its Secure verdict may set it. The upstream's AD

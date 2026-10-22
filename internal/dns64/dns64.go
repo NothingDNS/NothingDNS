@@ -5,6 +5,7 @@ package dns64
 import (
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
@@ -399,6 +400,100 @@ func (s *Synthesizer) IsExcluded(ip net.IP) bool {
 		}
 	}
 	return false
+}
+
+// IsExcludedAAAA reports whether the IPv6 address of a AAAA record falls in a
+// configured exclusion range, comparing in IPv6 space. IsExcluded cannot be
+// used for this: it skips IPv6-form ranges for any address with a 4-byte form,
+// and an IPv4-mapped AAAA such as ::ffff:192.0.2.9 is exactly that, so the
+// ::ffff:0:0/96 range RFC 6147 §5.1.4 names would never match it. IPv4-form
+// ranges describe A records and do not apply to AAAA data.
+func (s *Synthesizer) IsExcludedAAAA(addr [16]byte) bool {
+	if s == nil {
+		return false
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, ipnet := range s.excludeNets {
+		if len(ipnet.Mask) != net.IPv6len {
+			continue
+		}
+		base := ipnet.IP.To16()
+		if base == nil {
+			continue
+		}
+		match := true
+		for i := 0; i < net.IPv6len; i++ {
+			if addr[i]&ipnet.Mask[i] != base[i]&ipnet.Mask[i] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
+
+// FilterExcludedAAAA applies RFC 6147 §5.1.4 to the answer of a AAAA query: AAAA
+// records whose address is in the exclusion set are removed, so an answer left
+// without any AAAA is an empty answer and synthesis proceeds, and the offending
+// records are never returned to the client ("It MUST NOT return the offending
+// AAAA records as part of a response"). RRSIGs covering the AAAA RRset of an
+// owner that lost a record are dropped with it — the signature no longer
+// matches the shrunken RRset. It returns true when anything was removed.
+func (s *Synthesizer) FilterExcludedAAAA(question *protocol.Question, response *protocol.Message) bool {
+	if s == nil || question == nil || response == nil || question.QType != protocol.TypeAAAA {
+		return false
+	}
+	if !s.IsEnabled() || response.Header.Flags.RCODE != protocol.RcodeSuccess {
+		return false
+	}
+
+	// First pass: find the owners that lose an address.
+	var affected map[string]bool
+	for _, rr := range response.Answers {
+		if rr == nil || rr.Type != protocol.TypeAAAA || rr.Name == nil {
+			continue
+		}
+		data, ok := rr.Data.(*protocol.RDataAAAA)
+		if !ok || data == nil || !s.IsExcludedAAAA(data.Address) {
+			continue
+		}
+		if affected == nil {
+			affected = make(map[string]bool)
+		}
+		affected[strings.ToLower(rr.Name.String())] = true
+	}
+	if affected == nil {
+		return false
+	}
+
+	kept := response.Answers[:0]
+	for _, rr := range response.Answers {
+		if rr != nil && rr.Name != nil {
+			owner := strings.ToLower(rr.Name.String())
+			if rr.Type == protocol.TypeAAAA {
+				if data, ok := rr.Data.(*protocol.RDataAAAA); ok && data != nil && s.IsExcludedAAAA(data.Address) {
+					continue
+				}
+			} else if rr.Type == protocol.TypeRRSIG && affected[owner] {
+				if sig, ok := rr.Data.(*protocol.RDataRRSIG); ok && sig != nil && sig.TypeCovered == protocol.TypeAAAA {
+					continue
+				}
+			}
+		}
+		kept = append(kept, rr)
+	}
+	for i := len(kept); i < len(response.Answers); i++ {
+		response.Answers[i] = nil
+	}
+	response.Answers = kept
+	response.Header.ANCount = uint16(len(kept))
+	return true
 }
 
 // SetEnabled enables or disables DNS64 synthesis.

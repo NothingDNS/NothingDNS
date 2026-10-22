@@ -1154,17 +1154,22 @@ func (r *Resolver) cacheResponse(name string, qtype uint16, msg *protocol.Messag
 		return
 	}
 
-	// Use minimum TTL from answer section
+	// Use minimum TTL from answer section. A record with TTL 0 may only be
+	// used for the transaction in progress (RFC 1035 §3.2.1), so it makes the
+	// whole answer uncacheable: the minimum is then 0, not "unset". The 300s
+	// default applies only when the answer section holds no records at all.
 	ttl := uint32(0)
+	seen := false
 	for _, rr := range msg.Answers {
 		if rr == nil {
 			continue
 		}
-		if ttl == 0 || rr.TTL < ttl {
+		if !seen || rr.TTL < ttl {
 			ttl = rr.TTL
 		}
+		seen = true
 	}
-	if ttl == 0 {
+	if !seen {
 		ttl = 300 // Default 5 minutes
 	}
 
@@ -1311,6 +1316,13 @@ func (r *Resolver) cacheNegative(name string, qtype uint16, rcode uint8, msgs ..
 		msg = msgs[0]
 	}
 	ttl, hasTTL := negativeTTLFromAuthority(msg)
+	// A SOA that makes the negative TTL 0 (RFC 2308 §5: min(SOA TTL, SOA
+	// MINIMUM)) forbids caching it (RFC 1035 §3.2.1). The cache reads a 0 TTL
+	// as "no SOA, use negative_ttl", so storing it would cache the answer for
+	// the very lifetime the authority ruled out.
+	if hasTTL && ttl == 0 {
+		return
+	}
 	// Prefer storing the whole message: the Authority section carries the
 	// SOA and NSEC/NSEC3+RRSIG denial proofs a validator needs when this
 	// negative is served back (chain building fetches DS through this

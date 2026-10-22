@@ -146,6 +146,11 @@ func (h *integratedHandler) tryDNS64Synthesis(ctx context.Context, w server.Resp
 	if h.security.DNS64Synth == nil {
 		return false
 	}
+	// RFC 6147 §5.1.4: AAAA records in the exclusion set are unusable for an
+	// IPv6-only client. Drop them before anything else looks at the answer, so
+	// an answer holding only such records counts as empty (synthesis follows)
+	// and the offending records are never returned.
+	h.security.DNS64Synth.FilterExcludedAAAA(q, resp)
 	// RFC 6147 §5.5: when the client sets CD=1 it is performing its own DNSSEC
 	// validation and would be misled by a synthesised AAAA that we cannot
 	// authenticate. Skip synthesis in that case.

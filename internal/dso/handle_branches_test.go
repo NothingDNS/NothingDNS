@@ -22,7 +22,10 @@ func packTLV(typ uint16, value []byte) []byte {
 }
 
 // dsoMessage wraps a TLV stream in the OPCODE-DSO header form
-// HandleDSORequest expects.
+// HandleDSORequest expects. It builds a DSO REQUEST: RFC 8490 §5.4.1 requires
+// a request to carry a unique nonzero MESSAGE ID (zero marks a unidirectional
+// message, which a Keepalive or an unrecognized primary TLV must never be), so
+// the ID is nonzero. Tests of the zero-ID rules set Header.ID = 0 explicitly.
 func dsoMessage(tlvs ...[]byte) *protocol.Message {
 	var body []byte
 	for _, t := range tlvs {
@@ -30,7 +33,7 @@ func dsoMessage(tlvs ...[]byte) *protocol.Message {
 	}
 	return &protocol.Message{
 		Header: protocol.Header{
-			ID:    0,
+			ID:    0x4242,
 			Flags: protocol.Flags{Opcode: protocol.OpcodeDSO},
 		},
 		RawBody: body,

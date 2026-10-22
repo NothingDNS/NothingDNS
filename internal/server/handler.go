@@ -131,9 +131,11 @@ type DSOConnHandler interface {
 	HandleDSO(conn net.Conn, msg *protocol.Message) (*protocol.Message, error)
 	ConnClosed(conn net.Conn)
 	// Touch resets the DSO inactivity timer for conn. The transport calls
-	// it on every message (DSO or regular DNS) so that traffic on a
-	// connection that also hosts a DSO session keeps that session alive
-	// (RFC 8490 §7.1.1). A no-op if conn has no session.
+	// it for every REGULAR DNS message so that traffic on a connection that
+	// also hosts a DSO session keeps that session alive (RFC 8490 §6.3). It is
+	// not called for DSO messages: HandleDSO accounts for those itself, since a
+	// DSO Keepalive resets only the keepalive timer, never the inactivity
+	// timer. A no-op if conn has no session.
 	Touch(conn net.Conn)
 }
 

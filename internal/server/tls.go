@@ -482,18 +482,20 @@ func (s *TLSServer) processMessage(conn *tls.Conn, data []byte) {
 	}
 	defer msg.Release()
 
-	// Any message on this connection resets a co-hosted DSO session's
-	// inactivity timer (RFC 8490 §7.1.1).
-	if s.dsoHandler != nil {
-		s.dsoHandler.Touch(conn)
-	}
-
 	// DSO (RFC 8490, opcode 6) is per-connection stateful and never enters
 	// the regular query pipeline. DoT is the RFC 8490 §5.1 recommended
 	// transport for DSO.
 	if msg.Header.Flags.Opcode == protocol.OpcodeDSO {
 		s.handleDSO(conn, msg)
 		return
+	}
+
+	// A regular DNS message on a connection that also hosts a DSO session
+	// resets that session's inactivity timer (RFC 8490 §6.3). DSO messages are
+	// not touched here: HandleDSORequest decides for itself, because a DSO
+	// Keepalive must NOT reset the inactivity timer.
+	if s.dsoHandler != nil {
+		s.dsoHandler.Touch(conn)
 	}
 
 	// Build client info

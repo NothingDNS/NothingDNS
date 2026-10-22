@@ -934,7 +934,7 @@ func (h *integratedHandler) resolveExternalCNAMETarget(w server.ResponseWriter, 
 		// client — this ensures downstream DNS caches receive the configured max_ttl
 		// cap, not the upstream's raw TTL (e.g. CDN 999999s).
 		if resp.Header.Flags.RCODE == protocol.RcodeSuccess && len(resp.Answers) > 0 {
-			ttl := extractTTL(resp)
+			ttl := answerCacheTTL(resp)
 			clampedTTL := h.cache.ApplyTTLPolicy(resp, ttl)
 			h.cache.Set(cacheKey, resp, clampedTTL)
 		}

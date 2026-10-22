@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -86,10 +87,32 @@ func NewEngine(cfg Config) *Engine {
 	}
 	if cfg.GeoRules != nil {
 		for k, v := range cfg.GeoRules {
-			e.rules[k] = v
+			e.rules[canonicalRuleKey(k)] = v
 		}
 	}
 	return e
+}
+
+// canonicalRuleKey lower-cases the domain part of a "domain:type" rule key.
+// DNS names compare case-insensitively (RFC 1035 §2.3.3, RFC 4343), and a
+// resolver using 0x20 encoding randomizes the case of every query name, so the
+// spelling of the name must never decide whether a rule applies.
+func canonicalRuleKey(key string) string {
+	i := strings.LastIndexByte(key, ':')
+	if i < 0 {
+		return strings.ToLower(key)
+	}
+	return ruleKey(key[:i], key[i+1:])
+}
+
+// ruleKey builds the map key for a domain and record type. The root dot is
+// optional in presentation form, so "cdn.example.com" and "cdn.example.com."
+// are the same name; the query name always carries it, so a configured rule
+// written without it would otherwise load and be counted but never match. The
+// record-type mnemonic is case-insensitive too (RFC 1035 §5.1), while the
+// resolver path always supplies it upper-case, so "a" and "A" are one rule.
+func ruleKey(domain, rtype string) string {
+	return strings.TrimSuffix(strings.ToLower(domain), ".") + ":" + strings.ToUpper(rtype)
 }
 
 // LoadMMDB loads a MaxMind DB file using the real binary-format parser in
@@ -322,7 +345,7 @@ func (e *Engine) Resolve(domain, rtype string, clientIP net.IP) string {
 
 	atomic.AddUint64(&e.lookups, 1)
 
-	key := domain + ":" + rtype
+	key := ruleKey(domain, rtype)
 
 	e.mu.RLock()
 	geoRec, ok := e.rules[key]
@@ -380,16 +403,14 @@ func (e *Engine) Resolve(domain, rtype string, clientIP net.IP) string {
 func (e *Engine) SetRule(domain, rtype string, rec *GeoRecord) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	key := domain + ":" + rtype
-	e.rules[key] = rec
+	e.rules[ruleKey(domain, rtype)] = rec
 }
 
 // RemoveRule removes a geo rule.
 func (e *Engine) RemoveRule(domain, rtype string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	key := domain + ":" + rtype
-	delete(e.rules, key)
+	delete(e.rules, ruleKey(domain, rtype))
 }
 
 // Stats returns GeoDNS engine statistics.
@@ -511,6 +532,21 @@ func countryToContinent(country string) string {
 		"AE": "AS", "GB": "EU", "US": "NA", "UY": "SA", "UZ": "AS",
 		"VU": "OC", "VE": "SA", "VN": "AS", "YE": "AS", "ZM": "AF",
 		"ZW": "AF",
+		// Territories and newer states. GeoLite2/GeoIP2 databases return
+		// these ISO codes (HK, PR, PS, ...); without an entry the client
+		// skipped its continent-level record and got the rule default.
+		"AI": "NA", "AQ": "AN", "AS": "OC", "AW": "NA", "AX": "EU",
+		"BL": "NA", "BM": "NA", "BQ": "NA", "BV": "AN", "CC": "AS",
+		"CK": "OC", "CV": "AF", "CW": "NA", "CX": "AS", "EH": "AF",
+		"FK": "SA", "FO": "EU", "GF": "SA", "GG": "EU", "GI": "EU",
+		"GL": "NA", "GP": "NA", "GS": "AN", "GU": "OC", "HK": "AS",
+		"HM": "AN", "IM": "EU", "IO": "AS", "JE": "EU", "KM": "AF",
+		"KY": "NA", "MF": "NA", "MO": "AS", "MP": "OC", "MQ": "NA",
+		"MS": "NA", "NC": "OC", "NF": "OC", "NU": "OC", "PF": "OC",
+		"PM": "NA", "PN": "OC", "PR": "NA", "PS": "AS", "RE": "AF",
+		"SH": "AF", "SJ": "EU", "SS": "AF", "SX": "NA", "TC": "NA",
+		"TF": "AN", "TK": "OC", "UM": "OC", "VA": "EU", "VG": "NA",
+		"VI": "NA", "WF": "OC", "XK": "EU", "YT": "AF",
 	}
 	if c, ok := continentMap[country]; ok {
 		return c

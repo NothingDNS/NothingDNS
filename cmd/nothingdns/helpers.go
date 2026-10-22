@@ -156,17 +156,45 @@ func rdataPacks(rd protocol.RData) bool {
 	return protocol.RDataPacksText(rd)
 }
 
-// extractTTL extracts a reasonable TTL from a response.
+// extractTTL returns the lifetime a response may be cached for: the smallest
+// positive TTL among its answer records, or 300 when there is none. A cached
+// answer must not outlive any record it holds (RFC 1035 §3.2.1, RFC 2181 §8),
+// and an answer routinely mixes RRsets with different TTLs — a long-lived
+// CNAME in front of a short-lived CDN address is the everyday case — so taking
+// the first record's TTL kept a 30-second address for an hour. The resolver's
+// own cacheResponse already uses the minimum.
 func extractTTL(resp *protocol.Message) uint32 {
 	if resp == nil {
 		return 300
 	}
+	var ttl uint32
 	for _, answer := range resp.Answers {
-		if answer != nil && answer.TTL > 0 {
-			return answer.TTL
+		if answer != nil && answer.TTL > 0 && (ttl == 0 || answer.TTL < ttl) {
+			ttl = answer.TTL
 		}
 	}
-	return 300
+	if ttl == 0 {
+		return 300
+	}
+	return ttl
+}
+
+// answerCacheTTL is the lifetime a positive answer may be cached for. A record
+// published with TTL 0 "can only be used for the transaction in progress, and
+// should not be cached" (RFC 1035 §3.2.1, RFC 8767 §4), so an answer holding
+// one has no cache lifetime at all: 0, which the cache stores as already
+// expired (stale-servable only, subject to the operator's min_ttl floor).
+// extractTTL cannot express that — it treats a zero as "no TTL given" and
+// substitutes the 300s default, caching a dynamic record for five minutes.
+func answerCacheTTL(resp *protocol.Message) uint32 {
+	if resp != nil {
+		for _, answer := range resp.Answers {
+			if answer != nil && answer.TTL == 0 {
+				return 0
+			}
+		}
+	}
+	return extractTTL(resp)
 }
 
 // hasDOBit checks if the client wants DNSSEC (DO bit in OPT record).

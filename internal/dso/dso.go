@@ -583,14 +583,23 @@ func (m *Manager) HandleDSORequest(session *Session, msg *protocol.Message) (*pr
 		return nil, fmt.Errorf("%w: unsolicited DSO response (QR=1)", ErrDSOFatal)
 	}
 
-	// Update activity
-	session.UpdateActivity()
-
 	// Parse TLVs from additional section
 	tlvBuf, err := m.extractTLVs(msg)
 	if err != nil {
 		// Malformed framing / nonzero section counts are fatal per §5.2.
 		return nil, fmt.Errorf("%w: extracting TLVs: %w", ErrDSOFatal, err)
+	}
+
+	// Update activity. RFC 8490 §6.3: any complete message resets the
+	// session's timers "with the one exception being that a DSO Keepalive
+	// message resets only the keepalive timer, not the inactivity timeout
+	// timer" — keepalive traffic exists only to keep a session that has real
+	// work alive, so counting it as activity would let a client that does
+	// nothing but ping hold a session slot open indefinitely (§6.3 calls this
+	// the "circular livelock"). This type tracks only the inactivity timer, so
+	// a Keepalive leaves it alone.
+	if !primaryTLVIsKeepalive(tlvBuf) {
+		session.UpdateActivity()
 	}
 
 	// Process TLVs
@@ -604,6 +613,16 @@ func (m *Manager) HandleDSORequest(session *Session, msg *protocol.Message) (*pr
 
 		switch tlv.Type {
 		case DSOTLVKeepalive:
+			// RFC 8490 §7.1: a client's Keepalive MUST be a DSO request with
+			// a nonzero MESSAGE ID, and "if a server receives a DSO Keepalive
+			// message with a zero MESSAGE ID, then this is a fatal error and
+			// the server MUST forcibly abort the connection immediately"
+			// (§5.4.1: a request cannot be made unidirectional by sending ID 0).
+			// The transport answers only nonzero IDs, so accepting it here
+			// would apply the timeouts and then never acknowledge them.
+			if isPrimary && msg.Header.ID == 0 {
+				return nil, fmt.Errorf("%w: Keepalive TLV with zero MESSAGE ID", ErrDSOFatal)
+			}
 			// Process keepalive request and respond
 			_, keepaliveInterval, err := ParseKeepaliveTLV(tlv)
 			if err != nil {
@@ -653,10 +672,17 @@ func (m *Manager) HandleDSORequest(session *Session, msg *protocol.Message) (*pr
 
 		default:
 			if isPrimary {
-				// RFC 8490 §5.1.1: an unrecognized PRIMARY TLV is answered
-				// with DSOTYPENI and the session STAYS OPEN — it is not a
-				// fatal error. (Aborting the connection here would tear
-				// down any pipelined regular DNS queries riding on it.)
+				// RFC 8490 §5.4.5: with a nonzero MESSAGE ID the request is
+				// answered with DSOTYPENI and the session STAYS OPEN — it is
+				// not a fatal error. (Aborting the connection here would tear
+				// down any pipelined regular DNS queries riding on it.) But a
+				// message with BOTH an unrecognized Primary TLV and a zero
+				// MESSAGE ID is a unidirectional message nobody may answer:
+				// that "is a fatal error and the recipient MUST forcibly
+				// abort the connection immediately".
+				if msg.Header.ID == 0 {
+					return nil, fmt.Errorf("%w: unrecognized primary TLV %#04x in a message with zero MESSAGE ID", ErrDSOFatal, tlv.Type)
+				}
 				return m.buildDSOErrorResponse(msg, protocol.RcodeDSOTypeNI)
 			}
 			// Unknown additional TLVs are ignored per RFC 8490 TLV handling.
@@ -672,6 +698,14 @@ func (m *Manager) HandleDSORequest(session *Session, msg *protocol.Message) (*pr
 		return nil, err
 	}
 	return response, nil
+}
+
+// primaryTLVIsKeepalive reports whether the TLV stream begins with a Keepalive
+// TLV, i.e. whether the message is a DSO Keepalive message (RFC 8490 §6.3: "a
+// DSO Keepalive message (i.e., messages where the Keepalive TLV is the first
+// TLV)").
+func primaryTLVIsKeepalive(tlvStream []byte) bool {
+	return len(tlvStream) >= 2 && binary.BigEndian.Uint16(tlvStream[0:2]) == DSOTLVKeepalive
 }
 
 // buildDSOErrorResponse builds a DSO response (opcode 6, zero section
