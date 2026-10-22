@@ -196,6 +196,15 @@ func synchronizeKVZones(mgr *ZoneManager, zoneManager *zone.Manager, kvPersisten
 			if !found || z == nil {
 				continue
 			}
+			// Round 026: a KV entry without a parseable SOA (legacy data, an
+			// interrupted old writer) restores as a zone with no SOA — no
+			// negative-answer SOA, no DDNS serial checks, no AXFR source.
+			// Skip it with a warning, like the slave loader refuses an
+			// origin mismatch; the KV entry stays untouched (repairable).
+			if z.SOA == nil {
+				logger.Warnf("zone: KV-restored zone %s has no SOA record; skipping (repair or remove the entry in the persistent database)", z.Origin)
+				continue
+			}
 			mgr.result.Zones[z.Origin] = z
 			// NOT tracked in result.ZoneFiles: that map lists FILE-backed
 			// origins only (the tracking map run() aliases for reload pruning).

@@ -1231,6 +1231,15 @@ func (c *Cluster) restoreZones(data []byte) error {
 		if err != nil {
 			return fmt.Errorf("parse zone %s: %w", name, err)
 		}
+		// Round 026: a snapshot payload must meet the same bar as a zone
+		// file at load. An originless payload parses with Origin "." and
+		// would install as the root zone — this node would then answer
+		// authoritatively for every name. Aborting here, like a parse
+		// error, keeps the parse-before-mutate contract: the existing
+		// state stays untouched.
+		if err := z.Validate(); err != nil {
+			return fmt.Errorf("parse zone %s: %w", name, err)
+		}
 		parsed[normalizeClusterZoneName(name)] = z
 	}
 
@@ -1358,6 +1367,13 @@ func (c *Cluster) handleZoneUpdate(payload ZoneUpdatePayload) {
 			z, err := zone.ParseFile(payload.ZoneName, bytes.NewReader(payload.RawZone))
 			if err != nil {
 				c.logger.Warnf("Failed to parse zone %s from gossip: %v", payload.ZoneName, err)
+				return
+			}
+			// Round 026: same integrity bar as the snapshot install — an
+			// originless gossip payload would install as the root zone and
+			// claim every name. Drop the payload like a parse failure.
+			if err := z.Validate(); err != nil {
+				c.logger.Warnf("Ignoring invalid zone %s from gossip: %v", payload.ZoneName, err)
 				return
 			}
 			// LoadZone does not fire the mutation hook; notify so query
