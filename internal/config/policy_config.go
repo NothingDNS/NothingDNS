@@ -117,7 +117,7 @@ func unmarshalGeoDNS(node *Node, cfg *GeoDNSConfig) error {
 	if err != nil {
 		return fmt.Errorf("geodns: %w", err)
 	}
-	for _, ruleNode := range ruleItems {
+	for i, ruleNode := range ruleItems {
 		var rule GeoDNSRule
 		rule.Domain = ruleNode.GetString("domain")
 		rule.Type = ruleNode.GetString("type")
@@ -134,16 +134,28 @@ func unmarshalGeoDNS(node *Node, cfg *GeoDNSConfig) error {
 				}
 			}
 		}
-		for _, key := range []string{"US", "CA", "DE", "FR", "GB", "JP", "CN", "AU",
-			"BR", "IN", "RU", "KR", "MX", "IT", "ES", "NL", "SE", "PL", "NO",
-			"NA", "EU", "AS", "SA", "OC", "AF"} {
+		// Flat region keys beside `default:` (the form config.example.yaml
+		// documents). Every key shaped like a region code is a record — not a
+		// fixed shortlist, which silently dropped HK, TR, AS13335, ... — while
+		// anything else (a typo such as `defualt:`) stays out of the records.
+		for _, key := range ruleNode.Keys() {
+			if !isGeoRegionKey(key) {
+				continue
+			}
 			if v := ruleNode.GetString(key); v != "" {
 				rule.Records[key] = v
 			}
 		}
-		if len(rule.Records) > 0 || rule.Default != "" {
-			cfg.Rules = append(cfg.Rules, rule)
+		// A rule that parsed to no records and no default can never answer:
+		// dropping it silently turned key/value typos (a lowercase region
+		// key, an empty record value) into "the domain is not geo-steered",
+		// with no config error (AGENTS.md: strict loading, never silent
+		// defaults — same class as rpz.zones, upstream.anycast_groups and
+		// cluster.peers).
+		if len(rule.Records) == 0 && rule.Default == "" {
+			return fmt.Errorf("geodns: rules[%d]: rule for %q has no records and no default", i, rule.Domain)
 		}
+		cfg.Rules = append(cfg.Rules, rule)
 	}
 
 	return nil
@@ -171,4 +183,23 @@ func unmarshalDNS64(node *Node, cfg *DNS64Config) error {
 	cfg.ExcludeNets = getStringSlice(node, "exclude_nets", nil)
 
 	return nil
+}
+
+// isGeoRegionKey reports whether key has the shape of a GeoDNS region code:
+// an upper-case two-letter ISO 3166-1 country or continent code ("US", "EU"),
+// or an autonomous system ("AS13335"). These are the only keys the engine's
+// country -> continent -> default lookup can ever match.
+func isGeoRegionKey(key string) bool {
+	if len(key) == 2 {
+		return key[0] >= 'A' && key[0] <= 'Z' && key[1] >= 'A' && key[1] <= 'Z'
+	}
+	if len(key) > 2 && key[0] == 'A' && key[1] == 'S' {
+		for i := 2; i < len(key); i++ {
+			if key[i] < '0' || key[i] > '9' {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }

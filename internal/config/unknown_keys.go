@@ -73,6 +73,11 @@ func walkUnknownKeys(node *Node, path string, t reflect.Type) {
 	for _, key := range node.Keys() {
 		ft, ok := fields[key]
 		if !ok {
+			// geodns.rules takes region codes as flat keys beside `default:`;
+			// they are read, so they are not typos.
+			if path == "geodns.rules" && isGeoRegionKey(key) {
+				continue
+			}
 			util.Warnf("config: unknown key %q in section %q — ignored (typo?)", key, path)
 			continue
 		}

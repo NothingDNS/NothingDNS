@@ -1904,7 +1904,29 @@ func (z *Zone) Validate() error {
 		return fmt.Errorf("zone %q: missing SOA record", z.Origin)
 	}
 
-	if len(z.NS) == 0 {
+	// The apex must carry the zone's NS set (RFC 1034). Records is the source
+	// of truth (the same principle the writer and the zone API follow, F715):
+	// z.NS also lists delegation NS, so counting it let a file with no apex NS
+	// but any delegation NS pass this check — and WriteZone's apex fallback
+	// then persisted the delegation's nameserver as an apex NS on the next
+	// mutation. Programmatically built zones whose apex NS live only in z.NS
+	// stay valid: their entries carry the apex as Name.
+	hasApexNS := false
+	for _, rec := range z.Records[z.Origin] {
+		if strings.EqualFold(rec.Type, "NS") {
+			hasApexNS = true
+			break
+		}
+	}
+	if !hasApexNS {
+		for _, ns := range z.NS {
+			if ns.Name != "" && strings.EqualFold(canonicalize(ns.Name), canonicalize(z.Origin)) {
+				hasApexNS = true
+				break
+			}
+		}
+	}
+	if !hasApexNS {
 		return fmt.Errorf("zone %q: missing NS records", z.Origin)
 	}
 

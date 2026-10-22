@@ -169,6 +169,11 @@ func TestHandleConfigGet_RedactsAllSecrets(t *testing.T) {
 			Metrics: config.MetricsConfig{
 				AuthToken: "prom-bearer-token",
 			},
+			Transfer: config.TransferConfig{
+				TSIGKeys: []config.TransferTSIGKeyConfig{
+					{Name: "xfr-key.example.", Secret: "transfer-tsig-key-abcdefghijklmnop"},
+				},
+			},
 		}
 	}
 
@@ -188,6 +193,7 @@ func TestHandleConfigGet_RedactsAllSecrets(t *testing.T) {
 		"super-secret", "jwt-secret", "alice-plaintext",
 		"gossip-key-abcdefghijklmnop", "snap-key-abcdefghijklmnop",
 		"storage-key-abcdefghijklmnop", "prom-bearer-token",
+		"transfer-tsig-key-abcdefghijklmnop",
 	} {
 		if bytes.Contains([]byte(body), []byte(secret)) {
 			t.Errorf("secret %q leaked in config response", secret)

@@ -41,6 +41,9 @@ func TestConfigGet_RedactsSecrets(t *testing.T) {
 	cfg.SlaveZones = []config.SlaveZoneConfig{{
 		TSIGSecret: sentinel("slave-tsig-secret"),
 	}}
+	cfg.Transfer.TSIGKeys = []config.TransferTSIGKeyConfig{{
+		Secret: sentinel("transfer-tsig-secret"),
+	}}
 
 	s.WithConfigGetter(func() *config.Config { return cfg })
 
@@ -71,6 +74,7 @@ func TestConfigGet_RedactsSecrets(t *testing.T) {
 		"Metrics.AuthToken":                sentinel("metrics-auth-token"),
 		"DNSSEC.Signing.Keys[].PrivateKey": sentinel("dnssec-private-key"),
 		"SlaveZones[].TSIGSecret":          sentinel("slave-tsig-secret"),
+		"Transfer.TSIGKeys[].Secret":       sentinel("transfer-tsig-secret"),
 	}
 	for field, sentinelValue := range leaks {
 		if strings.Contains(body, sentinelValue) {

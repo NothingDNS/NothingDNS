@@ -126,6 +126,20 @@ func (s *Server) handleConfigGet(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// transfer.tsig_keys[].secret: the RFC 8945 shared secrets secondaries
+	// use to sign AXFR/IXFR — and, for keys with allow_update, to authorize
+	// RFC 2136 UPDATE against named zones. Same class of secret as
+	// SlaveZones[].TSIGSecret above; serving the config must not hand out
+	// transfer/update authentication.
+	if transfer, ok := publicCfg["Transfer"].(map[string]any); ok {
+		if keys, ok := transfer["TSIGKeys"].([]any); ok {
+			for _, k := range keys {
+				if key, ok := k.(map[string]any); ok {
+					key["Secret"] = ""
+				}
+			}
+		}
+	}
 
 	s.writeJSON(w, http.StatusOK, publicCfg)
 }
