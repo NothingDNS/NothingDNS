@@ -33,9 +33,9 @@ When a new deliberate-ignore is genuinely safe and broadly applicable, add its
 signature here rather than scattering `_ =` — otherwise annotate the call site
 with `_ =` / `_, _ =`.
 
-**Go version**: 1.27.2+ (root `go.mod` toolchain). `CGO_ENABLED=0` for static builds.
+**Go version**: 1.27.3+ (root `go.mod` toolchain). `CGO_ENABLED=0` for static builds.
 
-**Docker**: Multi-stage `Dockerfile` builds both binaries from scratch — `golang:1.27.2-alpine` compiles with `CGO_ENABLED=0`, `-trimpath`, and stripped/static link flags, then copies to `FROM scratch`.
+**Docker**: Multi-stage `Dockerfile` builds both binaries from scratch — `golang:1.27.3-alpine` compiles with `CGO_ENABLED=0`, `-trimpath`, and stripped/static link flags, then copies to `FROM scratch`.
 
 ## Architecture Overview
 

@@ -23,7 +23,7 @@ NothingDNS is a modern, production-grade DNS server that combines authoritative 
 - **Binary:** `nothingdns` (server) + `dnsctl` (CLI management tool)
 - **Default Ports:** 53 (UDP/TCP), 853 (DoT/DoQ when enabled), 8080 (API/Dashboard/DoH when configured), 9153 (Metrics), 7946 (cluster gossip/Raft RPC)
 - **License:** MIT
-- **Language:** Go (`go.mod`: go 1.26.9, built with toolchain 1.27.2)
+- **Language:** Go (`go.mod`: go 1.26.9, built with toolchain 1.27.3)
 - **Repository:** github.com/nothingdns/nothingdns
 
 ---
@@ -1336,7 +1336,7 @@ chmod +x nothingdns-linux-amd64
 Check a file first with `nothingdns -config <file> -validate-config`.
 
 ### 16.2 Docker
-The `Dockerfile` is multi-stage: `golang:1.27.2-alpine` builds `nothingdns` and
+The `Dockerfile` is multi-stage: `golang:1.27.3-alpine` builds `nothingdns` and
 `dnsctl` statically (`CGO_ENABLED=0`, `-trimpath`), and the final image is
 `FROM scratch` with both binaries in `/usr/local/bin`, the CA bundle, a default
 config at `/etc/nothingdns/nothingdns.yaml` (`deploy/docker/nothingdns.yaml`) and
@@ -1437,7 +1437,7 @@ WantedBy=multi-user.target
 
 ## 17. Build & Cross-Compilation
 
-Go 1.26.9 or later (`go.mod`; CI and the image use toolchain 1.27.2) and no C
+Go 1.26.9 or later (`go.mod`; CI and the image use toolchain 1.27.3) and no C
 toolchain: every build is `CGO_ENABLED=0`.
 
 ```bash
