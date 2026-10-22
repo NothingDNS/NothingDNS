@@ -56,7 +56,7 @@ export function AdvancedSettings({ config }: { config: ServerConfig }) {
           <KVRow label="Bind" value={config.ODoH?.Bind || '-'} mono />
           <KVRow label="Target URL" value={config.ODoH?.TargetURL || '-'} mono />
           <KVRow label="Proxy URL" value={config.ODoH?.ProxyURL || '-'} mono />
-          <KVRow label="KEM" value={config.ODoH?.KEM || 4} />
+          <KVRow label="KEM" value={config.ODoH?.KEM || 32} />
           <KVRow label="KDF" value={config.ODoH?.KDF || 1} />
           <KVRow label="AEAD" value={config.ODoH?.AEAD || 1} />
         </CardContent>
