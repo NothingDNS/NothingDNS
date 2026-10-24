@@ -39,20 +39,26 @@
 go mod init github.com/nothingdns/nothingdns
 ```
 
-The root module currently targets Go 1.26.6 and keeps the runtime dependency set intentionally small.
+The root module requires Go 1.26.9, is built with toolchain 1.27.3, and keeps the runtime dependency set intentionally small.
 
 ```go
 module github.com/nothingdns/nothingdns
 
-go 1.26.6
+go 1.26.9
+
+toolchain go1.27.3
 
 require (
     github.com/quic-go/quic-go v0.60.0
-    golang.org/x/sys v0.46.0
+    go.opentelemetry.io/otel v1.45.0
+    go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.45.0
+    go.opentelemetry.io/otel/sdk v1.45.0
+    go.opentelemetry.io/otel/trace v1.45.0
+    golang.org/x/sys v0.48.0
 )
 ```
 
-`web/go.mod` is a separate tiny module that also declares `go 1.26.6`.
+`web/go.mod` is a separate tiny module with no Go code that declares `go 1.26.6`.
 
 ### 1.2 Binary Entry Points
 

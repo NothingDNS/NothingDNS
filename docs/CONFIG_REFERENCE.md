@@ -407,6 +407,14 @@ sunulmaz** (sorgular yerel zone gibi yanıtlanmaz) ve sonraki başarılı
 yenilemede yeniden sunulur. Henüz hiç transfer edilmemiş (SOA'sız) bir slave
 zone da sunulmaz.
 
+**Diskte saklama:** Her başarılı transferden sonra zone
+`<dizin>/slave-zones/<zone>.zone` dosyasına yazılır. `<dizin>` sırasıyla
+`transfer.journal_dir`, `storage.data_dir`, `zone_dir`, hiçbiri yoksa çalışma
+dizinidir. Açılışta bu dosyalar yüklenir; master'a ulaşılamasa da zone sunulmaya
+devam eder ve ilk transfer IXFR ile artımlı yapılır. Dosyanın değişiklik zamanı
+son yenileme sayılır, yani EXPIRE yeniden başlatmadan sonra da işler: süresi
+dolmuş bir dosya yüklenmez.
+
 **Gelen NOTIFY:** Bir slave zone için NOTIFY yalnızca o zone'un `masters`
 listesindeki bir adresten (host adları çözülerek) kabul edilir ve hemen bir
 yenileme tetikler; diğer kaynaklar `REFUSED` alır. `transfer.allow_list` slave

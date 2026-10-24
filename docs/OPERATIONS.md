@@ -367,6 +367,12 @@ curl -H "Authorization: Bearer $TOKEN" \
   http://localhost:8080/api/v1/zones/transfers | jq
 
 # Slave zones fetch on startup/retry and when a valid NOTIFY arrives.
+# Each transferred zone is also kept in <dir>/slave-zones/<zone>.zone, where
+# <dir> is transfer.journal_dir, else storage.data_dir, else zone_dir. On start
+# these files are served until the master answers; the file mtime is the last
+# refresh, so an expired zone is not loaded. Include the directory in backups.
+ls -l /var/lib/nothingdns/slave-zones/
+
 # Verify that the master serves AXFR:
 dig @master-server example.com AXFR +tcp
 ```
