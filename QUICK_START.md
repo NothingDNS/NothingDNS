@@ -37,7 +37,9 @@ curl -fsSL https://raw.githubusercontent.com/NothingDNS/NothingDNS/main/install.
 The script verifies the release checksums, creates a `nothingdns` system
 user, writes `/etc/nothingdns/nothingdns.yaml`, installs and starts a systemd
 service, and creates the dashboard admin. The generated password is stored in
-the root-only file `/etc/nothingdns/credentials`. If port 53 is taken by
+the root-only file `/etc/nothingdns/credentials`; it is the initial password
+only. Change it after the first login with **Change password** in the
+dashboard sidebar (the credentials file is not updated). If port 53 is taken by
 another resolver it falls back to port 5353 (set `NOTHINGDNS_STOP_HOST_DNS=1`
 to take over port 53 instead).
 

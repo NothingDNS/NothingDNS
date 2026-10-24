@@ -12,7 +12,7 @@ const OpenAPISpec = `{
   "info": {
     "title": "NothingDNS API",
     "description": "REST API for NothingDNS server management. See docs/API_REFERENCE.md for the full guide. Every operation carries x-required-role (viewer < operator < admin). DNS transports (DoH, DoWS, ODoH) and the /ws dashboard stream are described in the guide.",
-    "version": "1.2.17",
+    "version": "1.3.0",
     "contact": {
       "name": "ECOSTACK TECHNOLOGY OÜ"
     },
@@ -1204,6 +1204,43 @@ const OpenAPISpec = `{
           "password"
         ]
       },
+      "UpdateUserRequest": {
+        "type": "object",
+        "properties": {
+          "password": {
+            "type": "string",
+            "format": "password",
+            "description": "8 to 128 bytes; omit to keep the current password"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "admin",
+              "operator",
+              "viewer"
+            ],
+            "description": "Omit to keep the current role"
+          }
+        }
+      },
+      "ChangePasswordRequest": {
+        "type": "object",
+        "properties": {
+          "old_password": {
+            "type": "string",
+            "format": "password"
+          },
+          "new_password": {
+            "type": "string",
+            "format": "password",
+            "description": "8 to 128 bytes, different from old_password"
+          }
+        },
+        "required": [
+          "old_password",
+          "new_password"
+        ]
+      },
       "Roles": {
         "type": "object",
         "properties": {
@@ -2029,6 +2066,98 @@ const OpenAPISpec = `{
         }
       }
     },
+    "/api/v1/auth/password": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Change your own password",
+        "x-required-role": "any",
+        "description": "Requires a user login; the shared server.http.auth_token has no password to change (403). old_password is checked with the /auth/login throttle, so a failed check counts toward the IP and IP+username lockout. On success every token of the user is revoked and a new token is returned with a new ndns_token cookie: the calling session continues and every other session ends. A wrong current password is 400, not 401. Users defined in the config file cannot change their password here (409).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Password changed; new session token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body, missing field, new password not 8 to 128 bytes or equal to the current one, or wrong current password",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Shared API token: no user to change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "User is defined in the config file; change it there",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Throttled: current-password failure delay or lockout, another check from the same IP in flight, or the API rate limit; see Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Failed to save users file; change not applied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/auth/roles": {
       "get": {
         "tags": [
@@ -2334,7 +2463,7 @@ const OpenAPISpec = `{
         ],
         "summary": "Delete a user",
         "x-required-role": "admin",
-        "description": "Requires the admin role. Other methods on this path return 405. Users defined in the config file cannot be deleted (409).",
+        "description": "Requires the admin role. Methods other than DELETE and PUT on this path return 405. Users defined in the config file cannot be deleted (409).",
         "parameters": [
           {
             "name": "username",
@@ -2399,6 +2528,117 @@ const OpenAPISpec = `{
           },
           "409": {
             "description": "User is defined in the config file; change it there",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "API rate limit exceeded (per client IP; see server.http.api_rate_limit)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Failed to save users file; change not applied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Update a user's password or role",
+        "x-required-role": "admin",
+        "description": "Requires the admin role. Sets a new password, a new role, or both; an omitted field is unchanged. Every token of the user is revoked when the password or role changes. Your own account is refused (400); change your own password with POST /api/v1/auth/password. Users defined in the config file cannot be changed (409), and demoting the last admin is refused (409).",
+        "parameters": [
+          {
+            "name": "username",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "User to update"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateUserRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body or role, nothing to change, password not 8 to 128 bytes, or your own account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "User is defined in the config file, or the change would demote the last admin",
             "content": {
               "application/json": {
                 "schema": {

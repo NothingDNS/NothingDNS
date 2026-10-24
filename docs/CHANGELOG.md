@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Password changes from the dashboard** ([#18](https://github.com/NothingDNS/NothingDNS/issues/18)): before, a password could only be changed through the localhost-only bootstrap endpoint, which needed SSH access to the server.
+  - Every user can change their own password with **Change password** in the sidebar (`POST /api/v1/auth/password`, current password required). Their other sessions are signed out and the current one continues with a new token.
+  - Admins can reset another user's password and change their role from the Users page (`PUT /api/v1/auth/users/{username}`). That user's sessions are revoked.
+  - Users defined in the config file stay read-only (409).
+  - `install.sh` now says that the password in `/etc/nothingdns/credentials` is only the initial one.
 - **Slave zones survive a restart**: each transferred zone is kept in `<journal data dir>/slave-zones/*.zone` and loaded on start, so a slave restarted while its master is unreachable keeps serving the zone, and its first transfer is incremental. EXPIRE counts from the file's last refresh, so an expired zone is not loaded.
 - **Opt-in pprof listener** (`metrics.pprof_bind`): serves `/debug/pprof/*` on a private mux at a loopback `host:port`. It is off by default and independent of `metrics.enabled`. A non-loopback or malformed address fails `-validate-config`.
 - **Per-name cache flush**: `POST /api/v1/cache/flush?name=` (and `dnsctl cache flush <name>`) now removes only that name's entries (all types, with and without DO) and reports the count. Before, the parameter was ignored and the whole cache was emptied.

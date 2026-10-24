@@ -335,6 +335,19 @@ type CreateUserRequest struct {
 	Role     string `json:"role"`
 }
 
+// UpdateUserRequest is the request body for PUT /api/v1/auth/users/{username}.
+// An empty field is left unchanged; at least one must be set.
+type UpdateUserRequest struct {
+	Password string `json:"password,omitempty"`
+	Role     string `json:"role,omitempty"`
+}
+
+// ChangePasswordRequest is the request body for POST /api/v1/auth/password.
+type ChangePasswordRequest struct {
+	OldPassword string `json:"old_password"`
+	NewPassword string `json:"new_password"`
+}
+
 // RoleResponse represents a role in the roles endpoint.
 type RoleResponse struct {
 	Name        string `json:"name"`

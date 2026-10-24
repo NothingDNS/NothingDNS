@@ -819,6 +819,7 @@ func (s *Server) Start() error {
 		mux.HandleFunc("/api/v1/auth/users/", s.handleUsers)
 		mux.HandleFunc("/api/v1/auth/roles", s.handleRoles)
 		mux.HandleFunc("/api/v1/auth/logout", s.handleLogout)
+		mux.HandleFunc("/api/v1/auth/password", s.handleChangePassword)
 	}
 
 	// Config management

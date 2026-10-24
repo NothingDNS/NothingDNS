@@ -1082,6 +1082,8 @@ print_login_summary() {
         echo "  Username: ${BOOTSTRAP_USER}"
         echo "  Password: ${BOOTSTRAP_PASS}"
         echo "  Saved in: ${CONFIG_DIR}/credentials  (sudo cat ${CONFIG_DIR}/credentials)"
+        echo "  This is the initial password. Change it with \"Change password\" in the"
+        echo "  dashboard sidebar; ${CONFIG_DIR}/credentials is not updated when you do."
     else
         echo "Dashboard: http://<this-host>:8080"
         echo "Admin login was not written. Check ${CONFIG_DIR}/credentials or bootstrap manually."

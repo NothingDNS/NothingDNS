@@ -74,26 +74,31 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Set cookie
-	// SECURITY (LOW-018): Secure flag is set for direct TLS or when a trusted
-	// proxy forwarded X-Forwarded-Proto: https (see isRequestSecure).
-	// Plaintext deployments transmit cookies unencrypted. Deploy behind TLS
-	// or a TLS-terminating reverse proxy for production.
-	http.SetCookie(w, &http.Cookie{
-		Name:     "ndns_token",
-		Value:    token.Token,
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   s.isRequestSecure(r),
-		SameSite: http.SameSiteStrictMode,
-		MaxAge:   cookieMaxAgeSeconds(tokenExpiry),
-	})
+	s.setSessionCookie(w, r, token.Token, tokenExpiry)
 
 	s.writeJSON(w, http.StatusOK, &LoginResponse{
 		Token:    token.Token,
 		Username: user.Username,
 		Role:     string(user.Role),
 		Expires:  token.ExpiresAt.Format(time.RFC3339),
+	})
+}
+
+// setSessionCookie sets the HttpOnly ndns_token cookie the dashboard uses to
+// restore its in-memory bearer after a reload (GET /api/v1/auth/session).
+// SECURITY (LOW-018): Secure flag is set for direct TLS or when a trusted
+// proxy forwarded X-Forwarded-Proto: https (see isRequestSecure).
+// Plaintext deployments transmit cookies unencrypted. Deploy behind TLS
+// or a TLS-terminating reverse proxy for production.
+func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, token string, expiry time.Duration) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "ndns_token",
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   s.isRequestSecure(r),
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   cookieMaxAgeSeconds(expiry),
 	})
 }
 
@@ -276,20 +281,7 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Set cookie
-	// SECURITY (LOW-018): Secure flag is set for direct TLS or when a trusted
-	// proxy forwarded X-Forwarded-Proto: https (see isRequestSecure).
-	// Plaintext deployments transmit cookies unencrypted. Deploy behind TLS
-	// or a TLS-terminating reverse proxy for production.
-	http.SetCookie(w, &http.Cookie{
-		Name:     "ndns_token",
-		Value:    token.Token,
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   s.isRequestSecure(r),
-		SameSite: http.SameSiteStrictMode,
-		MaxAge:   cookieMaxAgeSeconds(tokenExpiry),
-	})
+	s.setSessionCookie(w, r, token.Token, tokenExpiry)
 
 	s.writeJSON(w, http.StatusOK, &BootstrapResponse{
 		Token:    token.Token,
@@ -378,6 +370,87 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, &MessageResponse{Message: "Logged out"})
 }
 
+// handleChangePassword lets the logged-in user change their own password.
+// Every session of the user is revoked (UpdateUser) and the caller gets a new
+// token and cookie in a login response, so this session continues while any
+// other one — possibly an attacker's — ends. A wrong current password is a
+// 400, not a 401: the request itself is authenticated, and the dashboard
+// treats every 401 as an expired session.
+func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
+	if s.requireMethod(w, r, http.MethodPost) {
+		return
+	}
+	authStore := s.currentAuthStore()
+	if authStore == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Auth not configured")
+		return
+	}
+	caller := GetUser(r.Context())
+	if caller == nil || caller.Username == "" || caller.Username == legacyTokenUsername {
+		s.writeError(w, http.StatusForbidden, "Password change requires a user login")
+		return
+	}
+
+	var req ChangePasswordRequest
+	if !s.decode(w, r, &req) {
+		return
+	}
+	if req.OldPassword == "" || req.NewPassword == "" {
+		s.writeError(w, http.StatusBadRequest, "Current and new password required")
+		return
+	}
+	if req.NewPassword == req.OldPassword {
+		s.writeError(w, http.StatusBadRequest, "New password must differ from the current password")
+		return
+	}
+	if err := auth.ValidatePassword(req.NewPassword); err != nil {
+		s.writeUserStoreError(w, err)
+		return
+	}
+
+	// The current-password check is a credential oracle for whoever holds
+	// the session: throttle it with the /auth/login limiter, as bootstrap
+	// does (F273).
+	limitKey := limiterIPKey(s.clientIP(r))
+	rejected, delay, done := s.loginLimiter.beginAttempt(limitKey)
+	if !rejected {
+		defer done()
+		rejected, delay = s.loginLimiter.checkUserRateLimit(limitKey, caller.Username)
+	}
+	if rejected {
+		w.Header().Set("Retry-After", retryAfterSeconds(delay))
+		s.writeError(w, http.StatusTooManyRequests, "Too many requests, try again later")
+		return
+	}
+	if !authStore.VerifyUserPassword(caller.Username, req.OldPassword) {
+		s.loginLimiter.recordFailedAttempt(limitKey, caller.Username)
+		s.writeError(w, http.StatusBadRequest, "Current password is incorrect")
+		return
+	}
+	s.loginLimiter.recordSuccess(limitKey, caller.Username)
+
+	user, err := authStore.UpdateUser(caller.Username, req.NewPassword, "")
+	if err != nil {
+		s.writeUserStoreError(w, err)
+		return
+	}
+
+	tokenExpiry := authStore.TokenExpiry()
+	token, err := authStore.GenerateToken(user.Username, tokenExpiry)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "Password changed; sign in again")
+		return
+	}
+	s.setSessionCookie(w, r, token.Token, tokenExpiry)
+
+	s.writeJSON(w, http.StatusOK, &LoginResponse{
+		Token:    token.Token,
+		Username: user.Username,
+		Role:     string(user.Role),
+		Expires:  token.ExpiresAt.Format(time.RFC3339),
+	})
+}
+
 // handleUsers manages users.
 func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 	authStore := s.currentAuthStore()
@@ -385,7 +458,7 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusServiceUnavailable, "Auth not configured")
 		return
 	}
-	if userPathParameter(r) && r.Method != http.MethodDelete {
+	if userPathParameter(r) && r.Method != http.MethodDelete && r.Method != http.MethodPut {
 		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
@@ -489,6 +562,68 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 
 		s.writeJSON(w, http.StatusOK, &MessageResponse{Message: "User deleted"})
 
+	case http.MethodPut:
+		// PUT is only defined on the item path; the collection keeps its 405.
+		if !userPathParameter(r) {
+			s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+			return
+		}
+		if !hasRole(r.Context(), authStore, auth.RoleAdmin) {
+			s.writeError(w, http.StatusForbidden, "Admin role required")
+			return
+		}
+		username := userPathName(r)
+		if username == "" {
+			s.writeError(w, http.StatusBadRequest, "username required")
+			return
+		}
+		// An admin's own password goes through POST /auth/password, which
+		// asks for the current one, so a hijacked session cannot lock the
+		// owner out; an own role change is refused like an own delete.
+		caller := GetUser(r.Context())
+		if caller != nil && username == caller.Username {
+			s.writeError(w, http.StatusBadRequest, "Cannot change the current user here; use POST /api/v1/auth/password for your own password")
+			return
+		}
+
+		var req UpdateUserRequest
+		if !s.decode(w, r, &req) {
+			return
+		}
+		if req.Password == "" && req.Role == "" {
+			s.writeError(w, http.StatusBadRequest, "password or role required")
+			return
+		}
+		if req.Role != "" {
+			role := auth.Role(req.Role)
+			if auth.ValidateRole(role) != nil {
+				s.writeError(w, http.StatusBadRequest, "Invalid role")
+				return
+			}
+			if caller != nil && roleOrder[role] > roleOrder[caller.Role] {
+				s.writeError(w, http.StatusForbidden, "Cannot assign a role higher than your own")
+				return
+			}
+		}
+
+		// UpdateUser revokes every token of the user when the password or
+		// role changes.
+		user, err := authStore.UpdateUser(username, req.Password, auth.Role(req.Role))
+		if errors.Is(err, auth.ErrLastAdmin) {
+			// ErrLastAdmin's text speaks of deleting; here it is a demotion.
+			s.writeError(w, http.StatusConflict, "Cannot demote the last admin user")
+			return
+		} else if err != nil {
+			s.writeUserStoreError(w, err)
+			return
+		}
+		s.writeJSON(w, http.StatusOK, &UserResponse{
+			Username: user.Username,
+			Role:     string(user.Role),
+			Created:  user.CreatedAt,
+			Updated:  user.UpdatedAt,
+		})
+
 	default:
 		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 	}
@@ -498,6 +633,12 @@ func userDeleteName(r *http.Request) string {
 	if username := r.URL.Query().Get("username"); username != "" {
 		return username
 	}
+	return userPathName(r)
+}
+
+// userPathName returns the unescaped {username} of /api/v1/auth/users/{username},
+// or "" when the path has none or it spans more than one segment.
+func userPathName(r *http.Request) string {
 	path, ok := userPathParameterValue(r)
 	if !ok || strings.Contains(path, "/") {
 		return ""

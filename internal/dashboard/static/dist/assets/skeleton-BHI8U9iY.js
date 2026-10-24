@@ -1,0 +1,1 @@
+import{_ as e,x as t}from"./api-D8w-GwWp.js";var n=t();function r({className:t,...r}){return(0,n.jsx)(`div`,{className:e(`animate-pulse rounded-md bg-muted`,t),...r})}export{r as t};

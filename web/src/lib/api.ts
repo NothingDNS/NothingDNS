@@ -332,6 +332,38 @@ export interface CreateUserRequest {
 	role: string;
 }
 
+/** PUT /api/v1/auth/users/{username}: an omitted field is left unchanged. */
+export interface UpdateUserRequest {
+	password?: string;
+	role?: string;
+}
+
+/** POST /api/v1/auth/password answers like a login: the new session token. */
+export const LoginResponseSchema = z.object({
+	token: z.string().min(1),
+	username: z.string().min(1),
+	role: z.string().min(1),
+	expires: z.string().optional(),
+});
+export type LoginResponse = z.infer<typeof LoginResponseSchema>;
+
+// Mirrors auth.ValidatePassword, which counts UTF-8 bytes: 8 minimum, 128
+// maximum.
+export const PASSWORD_MIN_LENGTH = 8;
+export const PASSWORD_MAX_BYTES = 128;
+
+/** passwordProblem returns why the server would refuse a new password, or null. */
+export function passwordProblem(password: string): string | null {
+	const bytes = new TextEncoder().encode(password).length;
+	if (bytes < PASSWORD_MIN_LENGTH) {
+		return `Password must be at least ${PASSWORD_MIN_LENGTH} characters`;
+	}
+	if (bytes > PASSWORD_MAX_BYTES) {
+		return `Password must be at most ${PASSWORD_MAX_BYTES} bytes`;
+	}
+	return null;
+}
+
 export interface MetricsHistory {
 	timestamps: number[];
 	queries: number[];

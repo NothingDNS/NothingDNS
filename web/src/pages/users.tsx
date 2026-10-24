@@ -1,20 +1,112 @@
-import { useEffect, useState } from 'react';
+import { type FormEvent, useEffect, useId, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Input } from '@/components/ui/input';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ErrorState } from '@/components/states';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { toast } from 'sonner';
-import { api, type UserInfo } from '@/lib/api';
-import { UserPlus, Trash2, Shield, Clock, User, FileLock } from 'lucide-react';
+import { api, passwordProblem, type UpdateUserRequest, type UserInfo } from '@/lib/api';
+import { hasMinRole } from '@/lib/roles';
+import { useAuthStore } from '@/stores/authStore';
+import { UserPlus, Trash2, Shield, Clock, User, FileLock, Pencil, Loader2 } from 'lucide-react';
 
 // Config-file users are read-only through the API (409 on delete, password
 // reset or role change); they are changed in the config file and reloaded.
 const CONFIG_USER_HINT = 'Defined in the config file; it cannot be deleted or changed here. Edit the config file and reload instead.';
+// The API refuses PUT on the caller's own account: their own password goes
+// through POST /api/v1/auth/password, which asks for the current one.
+const SELF_EDIT_HINT = 'Use "Change password" in the sidebar for your own account.';
+
+const selectClass = 'flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+
+// EditUserDialog sets another user's role and/or password
+// (PUT /api/v1/auth/users/{username}); the server signs that user out
+// everywhere when either changes.
+function EditUserDialog({ user, onClose, onSaved }: { user: UserInfo; onClose: () => void; onSaved: () => void }) {
+  const [role, setRole] = useState(user.role);
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const roleId = useId();
+  const passwordId = useId();
+  const confirmId = useId();
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    const body: UpdateUserRequest = {};
+    if (role !== user.role) body.role = role;
+    if (password || confirm) {
+      const problem = passwordProblem(password) ?? (password !== confirm ? 'The passwords do not match' : null);
+      if (problem) {
+        setError(problem);
+        return;
+      }
+      body.password = password;
+    }
+    if (!body.role && !body.password) {
+      setError('Change the role or enter a new password');
+      return;
+    }
+    setSaving(true);
+    setError('');
+    try {
+      await api('PUT', `/api/v1/auth/users/${encodeURIComponent(user.username)}`, body);
+      toast.success(`User "${user.username}" updated; their sessions were signed out`);
+      onSaved();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to update user');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const labelClass = 'text-sm font-medium mb-1.5 block';
+  return (
+    <Dialog open onOpenChange={(v) => { if (!v && !saving) onClose(); }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Edit user "{user.username}"</DialogTitle>
+          <DialogDescription>Leave the password empty to keep it. Saving signs the user out of every session.</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={submit} className="space-y-4">
+          <div>
+            <label htmlFor={roleId} className={labelClass}>Role</label>
+            <select id={roleId} value={role} onChange={e => setRole(e.target.value)} className={selectClass}>
+              <option value="viewer">Viewer</option>
+              <option value="operator">Operator</option>
+              <option value="admin">Admin</option>
+            </select>
+          </div>
+          <div>
+            <label htmlFor={passwordId} className={labelClass}>New password</label>
+            <Input id={passwordId} type="password" autoComplete="new-password" value={password} onChange={e => setPassword(e.target.value)} />
+          </div>
+          <div>
+            <label htmlFor={confirmId} className={labelClass}>Confirm new password</label>
+            <Input id={confirmId} type="password" autoComplete="new-password" value={confirm} onChange={e => setConfirm(e.target.value)} />
+          </div>
+          {error && <p role="alert" className="text-destructive text-sm">{error}</p>}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
+            <Button type="submit" disabled={saving}>
+              {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+              Save
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 export function UsersPage() {
+  const currentUser = useAuthStore((s) => s.username);
+  const isAdmin = hasMinRole(useAuthStore((s) => s.role), 'admin');
+  const [editTarget, setEditTarget] = useState<UserInfo | null>(null);
   const [users, setUsers] = useState<UserInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
@@ -183,7 +275,24 @@ export function UsersPage() {
                     </td>
                     <td className="p-3">
                       {/* Disabled buttons swallow hover events in some browsers, so the
-                          wrapper carries the tooltip too. */}
+                          wrappers carry the tooltips too. */}
+                      {isAdmin && (() => {
+                        const hint = u.config_defined ? CONFIG_USER_HINT : u.username === currentUser ? SELF_EDIT_HINT : undefined;
+                        return (
+                          <span title={hint} className="inline-block">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              aria-label={`Edit user ${u.username}`}
+                              title={hint}
+                              disabled={hint !== undefined}
+                              onClick={() => setEditTarget(u)}
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                          </span>
+                        );
+                      })()}
                       <span title={u.config_defined ? CONFIG_USER_HINT : undefined} className="inline-block">
                         <Button
                           variant="ghost"
@@ -217,6 +326,15 @@ export function UsersPage() {
         onConfirm={handleDelete}
         onCancel={() => setDeleteTarget(null)}
       />
+
+      {editTarget && (
+        <EditUserDialog
+          key={editTarget.username}
+          user={editTarget}
+          onClose={() => setEditTarget(null)}
+          onSaved={() => { setEditTarget(null); fetchUsers(); }}
+        />
+      )}
     </div>
   );
 }

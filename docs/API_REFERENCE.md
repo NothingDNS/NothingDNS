@@ -76,9 +76,11 @@ including `viewer`.
 | GET | `/api/v1/auth/session` | any | Restore SPA bearer from cookie after reload |
 | POST | `/api/v1/auth/bootstrap` | public, localhost only | First admin / password reset |
 | POST | `/api/v1/auth/logout` | any | Revokes current token |
+| POST | `/api/v1/auth/password` | any | Change your own password; returns a new token |
 | GET | `/api/v1/auth/roles` | operator | |
 | GET | `/api/v1/auth/users` | operator | |
 | POST | `/api/v1/auth/users` | admin | Persisted to users file |
+| PUT | `/api/v1/auth/users/{username}` | admin | Reset another user's password and/or role |
 | DELETE | `/api/v1/auth/users/{username}` | admin | Also `DELETE /api/v1/auth/users?username=` |
 | GET | `/api/v1/status` | any | Extra detail for operator+ |
 | GET | `/api/v1/server/config` | operator | |
@@ -203,7 +205,7 @@ and static dashboard assets.
 
 | Role | Access |
 |---|---|
-| `viewer` | `GET /api/v1/status` (basic fields only), `POST /api/v1/auth/logout`, `/api/openapi.json`, `/api/docs`, and the `/ws` live query stream (client IPs masked). Every other management endpoint returns 403. In the dashboard a viewer sees only the Dashboard live stream and About. |
+| `viewer` | `GET /api/v1/status` (basic fields only), `POST /api/v1/auth/logout`, `POST /api/v1/auth/password`, `/api/openapi.json`, `/api/docs`, and the `/ws` live query stream (client IPs masked). Every other management endpoint returns 403. In the dashboard a viewer sees only the Dashboard live stream and About. |
 | `operator` | All read endpoints; zone and record changes (create, edit, delete, bulk PTR). |
 | `admin` | Everything, including users, ACL/recursion, cache flush and cache/RRL/logging settings, config reload, zone reload, blocklist and RPZ changes, upstream changes, DNSSEC keys, cluster join/leave. Only admins see unmasked client IPs in `/api/v1/queries`. |
 
@@ -361,6 +363,44 @@ curl -s -X POST http://127.0.0.1:8080/api/v1/auth/logout -H "Authorization: Bear
 A request without a valid token gets `401` (the route is not public). Logging
 out with the legacy `auth_token` returns 200 but does not disable that token.
 
+### POST /api/v1/auth/password
+
+Role: any logged-in user. Changes the caller's own password. In the dashboard
+this is **Change password** at the bottom of the sidebar.
+
+| Field | Type | Required | Constraints |
+|---|---|---|---|
+| `old_password` | string | yes | the caller's current password |
+| `new_password` | string | yes | 8-128 bytes, different from `old_password` |
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/api/v1/auth/password \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"old_password":"S3cure-Passw0rd","new_password":"N3w-Passw0rd-2"}'
+```
+
+On success every token of the user is revoked, including the one used for
+this request, and the response is a new login: response `200` with the same
+body as [login](#post-apiv1authlogin), plus `Set-Cookie: ndns_token=...`.
+The calling session continues with the new token; every other session of the
+user ends.
+
+`old_password` is checked with the login throttle: a wrong one counts toward
+the IP and IP+username lockout described under login.
+
+| Status | Body | When |
+|---|---|---|
+| 400 | `Current and new password required`, `New password must differ from the current password`, `password must be at least 8 characters` (or the 128-byte limit) | Validation |
+| 400 | `Current password is incorrect` | Wrong `old_password` (400, not 401: the request itself is authenticated) |
+| 401 | `Unauthorized` | Missing or invalid token |
+| 403 | `Password change requires a user login` | The legacy shared `auth_token` |
+| 409 | `user is defined in the config file; change it there` | `config_defined` user |
+| 429 | `Too many requests, try again later` | `old_password` checks throttled like login, or the API rate limit. `Retry-After` is set. |
+| 500 | `Failed to save users file; change not applied` | The users file could not be written; the password did not change |
+
+The password set by `install.sh` (in `/etc/nothingdns/credentials`) is only the
+initial one: that file is not updated when the password is changed here.
+
 ### GET /api/v1/auth/users
 
 Role: operator. Returns a JSON **array** (not an object).
@@ -378,7 +418,7 @@ curl -s http://127.0.0.1:8080/api/v1/auth/users -H "Authorization: Bearer $TOKEN
 
 Order is not stable. `config_defined` is `true` for users defined under
 `server.http.users` in the config file: they cannot be deleted or have their
-password reset through the API (`409`), because the config would restore them
+password or role changed through the API (`409`), because the config would restore them
 at the next start; change them in the config file instead.
 
 ### POST /api/v1/auth/users
@@ -410,8 +450,46 @@ Response `201`:
 | 400 | `password must be at least 8 characters` (or the 128-byte limit) | Weak or oversized password |
 | 500 | `Failed to save users file; change not applied` | The users file could not be written; the user was not created |
 
-There is no endpoint to change a user's role or password other than the
-localhost bootstrap reset. `PUT /api/v1/auth/users` returns 405.
+To change an existing user, use `PUT /api/v1/auth/users/{username}` (admin)
+or, for your own password, `POST /api/v1/auth/password`. `PUT` on the
+collection path `/api/v1/auth/users` returns 405.
+
+### PUT /api/v1/auth/users/{username}
+
+Role: admin. Sets another user's password, role, or both; an omitted field is
+left unchanged. When either changes, every token of that user is revoked. In
+the dashboard this is the pencil button on the Users page.
+
+| Field | Type | Required | Constraints |
+|---|---|---|---|
+| `password` | string | no | 8-128 bytes |
+| `role` | string | no | `admin`, `operator` or `viewer` |
+
+At least one field must be set. The current password is not asked for: this is
+an admin reset. Your own account is refused (`400`); change your own password
+with `POST /api/v1/auth/password`, which asks for the current one.
+
+```bash
+curl -s -X PUT http://127.0.0.1:8080/api/v1/auth/users/ops \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"password":"Reset-Pass-123","role":"viewer"}'
+```
+
+Response `200`:
+
+```json
+{"username":"ops","role":"viewer","created_at":"2026-09-16T17:07:00Z","updated_at":"2026-10-24T11:02:41Z"}
+```
+
+| Status | Body | When |
+|---|---|---|
+| 400 | `password or role required`, `Invalid role`, `password must be at least 8 characters` (or the 128-byte limit) | Validation |
+| 400 | `Cannot change the current user here; use POST /api/v1/auth/password for your own password` | Your own account |
+| 403 | `Admin role required` | Caller is not an admin |
+| 404 | `user not found` | Unknown user |
+| 409 | `user is defined in the config file; change it there` | `config_defined` user |
+| 409 | `Cannot demote the last admin user` | The role change would leave no admin |
+| 500 | `Failed to save users file; change not applied` | The users file could not be written; nothing changed |
 
 ### DELETE /api/v1/auth/users/{username}
 
@@ -435,7 +513,7 @@ curl -s -X DELETE http://127.0.0.1:8080/api/v1/auth/users/ops -H "Authorization:
 | 409 | `user is defined in the config file; change it there` | `config_defined` user |
 | 500 | `Failed to save users file; change not applied` | The users file could not be written; the user still exists |
 
-Any method other than `DELETE` on `/api/v1/auth/users/{username}` returns 405.
+Methods other than `DELETE` and `PUT` on `/api/v1/auth/users/{username}` return 405.
 
 ### GET /api/v1/auth/roles
 

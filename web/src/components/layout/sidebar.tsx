@@ -9,6 +9,7 @@ import {
 	Globe2,
 	Info,
 	Key,
+	KeyRound,
 	LayoutDashboard,
 	LogOut,
 	Menu,
@@ -29,6 +30,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router";
+import { ChangePasswordDialog } from "@/components/change-password-dialog";
 import { useTheme } from "@/hooks/useThemeHook";
 import { api } from "@/lib/api";
 import { hasMinRole, type Role } from "@/lib/roles";
@@ -67,6 +69,7 @@ export function Sidebar({
 }) {
 	const [collapsed, setCollapsed] = useState(false);
 	const [mobileOpen, setMobileOpen] = useState(false);
+	const [passwordOpen, setPasswordOpen] = useState(false);
 	const { theme, setTheme } = useTheme();
 	const username = useAuthStore((s) => s.username);
 	const role = useAuthStore((s) => s.role);
@@ -267,6 +270,23 @@ export function Sidebar({
 							</>
 						)}
 					</button>
+					{username && (
+						<button
+							type="button"
+							onClick={() => {
+								setPasswordOpen(true);
+								setMobileOpen(false);
+							}}
+							title="Change password"
+							className={cn(
+								"flex items-center gap-2 rounded-lg px-3 py-2 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors w-full cursor-pointer",
+								collapsed && "justify-center px-2",
+							)}
+						>
+							<KeyRound className="h-3.5 w-3.5 shrink-0" />
+							{!collapsed && <span>Change password</span>}
+						</button>
+					)}
 					<button
 						type="button"
 						onClick={handleLogout}
@@ -280,6 +300,10 @@ export function Sidebar({
 					</button>
 				</div>
 			</aside>
+			<ChangePasswordDialog
+				open={passwordOpen}
+				onClose={() => setPasswordOpen(false)}
+			/>
 		</>
 	);
 }
