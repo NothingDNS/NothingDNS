@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-10-24
+
 ### Added
 
 - **Slave zones survive a restart**: each transferred zone is kept in `<journal data dir>/slave-zones/*.zone` and loaded on start, so a slave restarted while its master is unreachable keeps serving the zone, and its first transfer is incremental. EXPIRE counts from the file's last refresh, so an expired zone is not loaded.
