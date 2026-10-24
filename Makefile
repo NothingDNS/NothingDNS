@@ -262,7 +262,7 @@ benchmark:
 ## Run security checks (govulncheck, staticcheck)
 security-check:
 	@echo "Running security checks..."
-	@go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+	@go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
 	@govulncheck ./...
 	@go install honnef.co/go/tools/cmd/staticcheck@2026.2.1
 	@staticcheck ./...
