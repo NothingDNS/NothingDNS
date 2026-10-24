@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Slave zones survive a restart**: each transferred zone is kept in `<journal data dir>/slave-zones/*.zone` and loaded on start, so a slave restarted while its master is unreachable keeps serving the zone, and its first transfer is incremental. EXPIRE counts from the file's last refresh, so an expired zone is not loaded.
+- **Opt-in pprof listener** (`metrics.pprof_bind`): serves `/debug/pprof/*` on a private mux at a loopback `host:port`. It is off by default and independent of `metrics.enabled`. A non-loopback or malformed address fails `-validate-config`.
+- **Per-name cache flush**: `POST /api/v1/cache/flush?name=` (and `dnsctl cache flush <name>`) now removes only that name's entries (all types, with and without DO) and reports the count. Before, the parameter was ignored and the whole cache was emptied.
+- **`dnsctl dig +cd`** is implemented; unsupported options are rejected instead of ignored.
+
 ### Changed
 
 - **UDP listeners default to auto**: `server.udp_listeners` unset (or 0) now
@@ -15,6 +22,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   authoritative UDP throughput (docs/PERFORMANCE.md). The per-client cap
   `udp_rate_per_ip` is kept per socket, so with the default cap a client using
   many source ports can reach up to N times it.
+- **IPv6 clients are limited per /64**: the query rate limiter, the UDP transport rate limit, per-client TCP/DoT/DoQ connection caps, and API login/request throttling group IPv6 clients by /64 instead of by single address.
+- **Raft clusters bump SOA serials deterministically**: zone changes applied through Raft use a plain RFC 1982 increment, so every replica ends with the same serial for the same data. Standalone and SWIM servers keep the `YYYYMMDDNN` form. Mixed-version note in `docs/SPECIFICATION.md` §10.4.
+- **Stricter loading**: zone files reject an unknown token before the record type, an unterminated quoted string, a non-apex SOA, and a zone whose only NS records belong to a delegation. Mis-shaped `rpz.zones`, `geodns.rules`, `upstream.anycast_groups` and `cluster.peers` lists, GeoDNS rules that produce no records, and a `cluster.rpc` TLS block without `tls_ca_cert_file` are config load errors. Each of these used to load with data or a feature silently dropped. Run `-validate-config` before upgrading.
+- **Performance**: faster `FindZones` (one allocation, none on a miss), a cached online-denial chain with binary-searched neighbours, log formatting skipped below the active level, and audit and dashboard query events only built when someone reads them.
+- **Documentation** now matches the code: the spec, the CLI, API and metrics references, and the performance figures. Automatic DNSSEC key rollover is documented as not implemented; the server signs with the keys in `dnssec.signing.keys`.
+
+### Fixed
+
+Results of further audit rounds, including:
+
+- **Zone files**: BIND unit TTLs (`1h30m`) and SOA timers written with units, RFC 3597 generic RDATA and `TYPE<n>` records, default TTLs without `$TTL`, inherited owners and `$INCLUDE` origins per RFC 1035 §5.1, `$ORIGIN` sections, upper-case `$GENERATE` X radix, exact quoted RDATA, and lower-cased origins. `AddRecord` rejects duplicates atomically and RRset TTLs stay uniform.
+- **Protocol**: TXT, HINFO, URI, CAA and NAPTR round-trip through their RFC 1035 text form (string boundaries kept, control octets escaped), CAA tags are validated, A/AAAA text must match its address family, keyless IPSECKEY parses, and empty labels are rejected.
+- **ZONEMD**: hash algorithms are numbered per RFC 8976, the record is attached on every load path and re-digested when streaming AXFR and XoT.
+- **DNSSEC**: zones restored from the database or added after start are signed. A retiring key is held until its replacement is active. A key tag collision is an error instead of silently replacing a key.
+- **Zone transfer and DDNS**: UPDATE validation (FORMERR for malformed ANY/NONE RRs, prerequisite TTLs, meta types and foreign classes), RDATA matched by value with case-sensitive character strings, a TTL applied to the whole RRset, the journal records what an UPDATE changed, out-of-zone records are dropped from slave transfers, IXFR handles a client that is ahead, and TSIG requires CLASS ANY and TTL 0.
+- **Cache**: TTL handling per RFC 2308 §5 and RFC 8767 §4, stale answers on upstream SERVFAIL, prefetch wired end to end, and authoritative cache hits logged as cached.
+- **Upstream and resolver**: failover picks a different target, standalone servers back up anycast groups, a stale idle TCP connection never fails a query, and iterative responses must have QR=1.
+- **Cluster**: zone installs from peers are validated (a payload without `$ORIGIN` could install as the root zone), and KV entries without a parseable SOA are skipped. Zone persistence is ordered against deletes, and KV-restored and `zone_dir` zones survive a reload.
+- **Other subsystems**: DSO keepalive and inactivity timers (RFC 8490), DNS64 exclusion and RRSIG handling (RFC 6147), NSEC ancestor-delegation and DNAME rules (RFC 6840), case-insensitive GeoDNS rule keys, RPZ rule replacement and NSDNAME deletion, blocklist inline comments and source removal, IDNA length limit and U+0130 mapping, and control characters neutralised in text logs.
+- **API, CLI and dashboard**: record data the authoritative path would not serve is rejected, the zone detail lists apex NS from the records, `dnsctl zone reload` accepts any name spelling, `dnsctl dig` checks response IDs, `dnsctl sign-zone` uses the server's zone parser, and the dashboard validates server JSON with Zod and clears the session on a download 401.
+
+### Security
+
+- **Go 1.27.3** (root `go.mod` toolchain, Docker builder): fixes GO-2026-6809 in `crypto/x509`, which was reachable from every TLS surface (DoT, DoH, HTTPS API, XoT). `govulncheck ./...` reports no reachable vulnerabilities.
+- **TSIG secrets are redacted** from `GET /api/v1/config`. Before, an Operator-role user could read `transfer.tsig_keys` secrets, which also authorize dynamic updates.
+- **Dashboard dependencies**: zod 4.6.7 (GHSA-mrhx-c7xc-m3w5, shipped in the dashboard bundle). vite 8.3.5, vitest 4.1.12 and undici 7.30.1 are build- and test-time only. `npm audit` reports 0 vulnerabilities.
 
 ## [1.2.19] — 2026-10-10
 
