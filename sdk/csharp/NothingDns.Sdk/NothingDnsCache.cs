@@ -40,4 +40,24 @@ public sealed class NothingDnsCache
 
         return NothingDnsTransport.MessageOf(payload);
     }
+
+    /// <summary>Flush the cached entries of one name only, every type.</summary>
+    /// <param name="name">The owner name to drop from the cache.</param>
+    /// <param name="cancellationToken">Token to cancel the request.</param>
+    /// <returns>The server's message, which carries the number of entries removed.</returns>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="name"/> is empty; use <see cref="FlushAsync"/> to clear the whole cache.
+    /// </exception>
+    /// <exception cref="NothingDnsApiException">401 or 403 when the caller is not an admin.</exception>
+    public async Task<string> FlushNameAsync(string name, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+
+        var query = new[] { new KeyValuePair<string, object?>("name", name) };
+        var payload = await _transport
+            .PostAsync("/api/v1/cache/flush", query: query, cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+
+        return NothingDnsTransport.MessageOf(payload);
+    }
 }

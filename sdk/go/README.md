@@ -198,6 +198,11 @@ users, err := client.Auth.ListUsers(ctx)               // operator+
 user, err := client.Auth.CreateUser(ctx, "alice", pw, "viewer")  // admin
 err := client.Auth.DeleteUser(ctx, "alice")            // admin (path form)
 err := client.Auth.DeleteUserByQuery(ctx, "alice")     // admin (query form)
+user, err = client.Auth.UpdateUser(ctx, "alice", "", "operator") // admin; "" keeps a field
+
+// Your own password: the server revokes your tokens and returns a new
+// session; with storeToken=true the client switches to it.
+session, err := client.Auth.ChangePassword(ctx, oldPw, newPw, true)
 ```
 
 ### Zones — `/api/v1/zones`
@@ -245,6 +250,7 @@ stats, err := client.Cache.Stats(ctx)   // operator+
 fmt.Println(stats.Size, stats.Capacity, stats.Hits, stats.Misses, stats.HitRatio)
 
 msg, err := client.Cache.Flush(ctx)     // admin
+msg, err = client.Cache.FlushName(ctx, "www.example.com") // admin; one name only
 ```
 
 ### Config — `/api/v1/config`
@@ -447,7 +453,7 @@ if errors.As(err, &apiErr) {
 | `403` | Forbidden (role too low) | any admin-only or operator-only call |
 | `404` | Not found | `Zones.Get`/`Delete`, `Zones.ListRecords`, `Zones.DeleteRecord` (no record with that data), `RPZ`/`Blocklists` targets |
 | `405` | Method not allowed | `Auth.Session` on some deployments |
-| `409` | Conflict (`IsConflict`) | `Auth.CreateUser`, `Zones.Create`, `Upstreams.Add`, `Zones.AddRecord`/`ReplaceRecord` (duplicate record, CNAME conflict), `Auth.DeleteUser`/`DeleteUserByQuery`/`Bootstrap` (account defined in the config file) |
+| `409` | Conflict (`IsConflict`) | `Auth.CreateUser`, `Zones.Create`, `Upstreams.Add`, `Zones.AddRecord`/`ReplaceRecord` (duplicate record, CNAME conflict), `Auth.DeleteUser`/`DeleteUserByQuery`/`UpdateUser`/`ChangePassword`/`Bootstrap` (account defined in the config file), `Auth.UpdateUser` (last admin) |
 | `421` | Misdirected (this node is not the Raft leader) | `Zones.Create`, `Zones.AddRecord`/`ReplaceRecord`/`DeleteRecord(s)` |
 | `429` | Rate limited | any endpoint that has its own rate limit; `Auth.Login` also when another login from the same IP is in flight |
 | `500` | Internal server error (nothing was changed when a save failed) | `Config.Reload`, `Cluster.Leave`, `Config.Set*` (overrides file not writable), `Auth.CreateUser`/`DeleteUser`/`Bootstrap` (users file not writable) |
@@ -471,7 +477,7 @@ stats, err := client.Cache.Stats(ctx)
 
 ## Method → HTTP endpoint coverage
 
-All 71 operations of the management API, in contract order. The **Role** column shows the minimum role the server requires (`—` = no authentication).
+All 73 operations of the management API, in contract order. The **Role** column shows the minimum role the server requires (`—` = no authentication).
 
 | # | Go method | HTTP | Role |
 |---|-----------|------|------|
@@ -503,7 +509,7 @@ All 71 operations of the management API, in contract order. The **Role** column 
 | 26 | `Zones.PTRBulk` | `POST /api/v1/zones/{zone}/ptr-bulk` | operator |
 | 27 | `Zones.PTR6Lookup` | `GET /api/v1/zones/{zone}/ptr6-lookup?ip=` | operator |
 | 28 | `Cache.Stats` | `GET /api/v1/cache/stats` | operator |
-| 29 | `Cache.Flush` | `POST /api/v1/cache/flush` | admin |
+| 29 | `Cache.Flush` / `Cache.FlushName` | `POST /api/v1/cache/flush[?name=]` | admin |
 | 30 | `Config.Get` | `GET /api/v1/config` | operator |
 | 31 | `Config.Reload` | `POST /api/v1/config/reload` | admin |
 | 32 | `Config.SetLogging` | `PUT /api/v1/config/logging` | admin |
@@ -546,6 +552,8 @@ All 71 operations of the management API, in contract order. The **Role** column 
 | 69 | `Client.OpenAPISpec` | `GET /api/openapi.json` | any |
 | 70 | `Client.APIDocsScript` | `GET /api/docs/app.js` | any |
 | 71 | `Client.APIDocs` | `GET /api/docs` | any |
+| 72 | `Auth.ChangePassword` | `POST /api/v1/auth/password` | any (user login) |
+| 73 | `Auth.UpdateUser` | `PUT /api/v1/auth/users/{username}` | admin |
 
 ---
 

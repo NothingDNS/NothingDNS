@@ -70,6 +70,32 @@ export class AuthResource {
   }
 
   /**
+   * Change the password of the logged-in user.
+   *
+   * The server revokes every token of the account, including the one used for
+   * this call, and returns a new session. The legacy shared `auth_token`
+   * cannot use this call.
+   *
+   * @param storeToken - Switch the client to the new token (default `true`).
+   * @throws {@link NothingDNSApiError} 400 for a wrong current password or a
+   *   new password the server refuses, 403 for the legacy token, 409 for an
+   *   account defined in the server config file, 429 when too many attempts
+   *   failed.
+   */
+  async changePassword(
+    oldPassword: string,
+    newPassword: string,
+    options: { storeToken?: boolean } = {},
+  ): Promise<Session> {
+    const json = await this.transport.post<unknown>('/api/v1/auth/password', {
+      body: { old_password: oldPassword, new_password: newPassword },
+    });
+    const session = sessionFromJson(json);
+    if (options.storeToken !== false && session.token) this.transport.setToken(session.token);
+    return session;
+  }
+
+  /**
    * Return the current session: token, username and role.
    *
    * The dashboard calls this to rebuild its in-memory bearer after a page reload
@@ -111,6 +137,40 @@ export class AuthResource {
     }
     const json = await this.transport.post<unknown>('/api/v1/auth/users', {
       body: { username, password, role },
+    });
+    return userFromJson(json);
+  }
+
+  /**
+   * Set another account's password, role, or both (admin only).
+   *
+   * Changing either revokes the account's tokens. Use {@link changePassword}
+   * for your own account.
+   *
+   * @throws {@link NothingDNSValidationError} when neither field is given or
+   *   `role` is not a known role.
+   * @throws {@link NothingDNSApiError} 400 for the caller's own account, 403
+   *   for a role above the caller's, 404 for an unknown user, 409 for an
+   *   account defined in the server config file or when it would demote the
+   *   last admin.
+   */
+  async updateUser(
+    username: string,
+    changes: { password?: string; role?: RoleName },
+  ): Promise<User> {
+    const body: Record<string, string> = {};
+    if (changes.password) body.password = changes.password;
+    if (changes.role) {
+      if (!ROLES.includes(changes.role)) {
+        throw new NothingDNSValidationError(`role must be one of ${ROLES.join(', ')}`);
+      }
+      body.role = changes.role;
+    }
+    if (Object.keys(body).length === 0) {
+      throw new NothingDNSValidationError('password or role required');
+    }
+    const json = await this.transport.put<unknown>(`/api/v1/auth/users/${escapeSegment(username)}`, {
+      body,
     });
     return userFromJson(json);
   }

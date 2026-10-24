@@ -89,6 +89,53 @@ class ClientTest {
         assertEquals("Bearer " + MockApi.SERVICE_TOKEN, mock.last().auth());
     }
 
+    // -- password and user updates (issue #18) -------------------------------
+
+    @Test
+    void changePasswordSwitchesToRotatedToken() {
+        client.setToken(MockApi.TOKEN);
+
+        var session = client.auth().changePassword(MockApi.PASSWORD, "new-password-1");
+
+        assertEquals(MockApi.ROTATED_TOKEN, session.getToken());
+        assertEquals(MockApi.ROTATED_TOKEN, client.getToken());
+        assertEquals("POST", mock.last().method());
+        assertEquals("/api/v1/auth/password", mock.last().path());
+        assertEquals(MockApi.PASSWORD, mock.last().body().get("old_password").getAsString());
+        assertEquals("new-password-1", mock.last().body().get("new_password").getAsString());
+
+        NothingDnsException wrong = assertThrows(NothingDnsException.class,
+                () -> client.auth().changePassword("wrong", "new-password-2"));
+        assertEquals(400, wrong.getStatusCode());
+        assertEquals(MockApi.ROTATED_TOKEN, client.getToken());
+    }
+
+    @Test
+    void updateUserSendsOnlyGivenFields() {
+        client.setToken(MockApi.TOKEN);
+
+        var user = client.auth().updateUser("ops", null, "admin");
+
+        assertEquals("admin", user.getRole());
+        assertEquals("PUT", mock.last().method());
+        assertEquals("/api/v1/auth/users/ops", mock.last().path());
+        assertEquals(Set.of("role"), mock.last().body().keySet());
+
+        NothingDnsException conflict = assertThrows(NothingDnsException.class,
+                () -> client.auth().updateUser("root", "reset-pass-123", null));
+        assertEquals(409, conflict.getStatusCode());
+    }
+
+    @Test
+    void flushNameSendsQuery() {
+        client.setToken(MockApi.TOKEN);
+
+        assertThrows(NothingDnsException.class, () -> client.cache().flushName("www.example.com"));
+
+        assertEquals("POST", mock.last().method());
+        assertEquals("/api/v1/cache/flush?name=www.example.com", mock.last().path());
+    }
+
     @Test
     void logoutParsesTheAcknowledgementMessage() {
         client.setToken(MockApi.TOKEN);
@@ -295,6 +342,12 @@ class ClientTest {
                 () -> client.config().setLogging("loud"));
         assertThrows(IllegalArgumentException.class,
                 () -> client.rpz().addRule("ads.example.com", "DENY", null));
+        assertThrows(IllegalArgumentException.class,
+                () -> client.auth().updateUser("ops", null, null));
+        assertThrows(IllegalArgumentException.class,
+                () -> client.auth().updateUser("ops", null, "root"));
+        assertThrows(IllegalArgumentException.class,
+                () -> client.cache().flushName(""));
 
         assertTrue(mock.requests().isEmpty(),
                 "a rejected call must not have sent anything");

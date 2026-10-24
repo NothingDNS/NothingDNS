@@ -262,6 +262,20 @@ func (m *mockAPI) handle(w http.ResponseWriter, r *http.Request) {
 		})
 	case "/api/v1/auth/users/root":
 		sendJSON(http.StatusConflict, map[string]any{"error": "user is defined in the config file; change it there"})
+	case "/api/v1/auth/users/ops":
+		role, _ := body["role"].(string)
+		if role == "" {
+			role = "operator"
+		}
+		sendJSON(http.StatusOK, map[string]any{"username": "ops", "role": role, "updated_at": "2026-10-24T00:00:00Z"})
+	case "/api/v1/auth/password":
+		if old, _ := body["old_password"].(string); old != testPassword {
+			sendJSON(http.StatusBadRequest, map[string]any{"error": "Current password is incorrect"})
+			return
+		}
+		sendJSON(http.StatusOK, map[string]any{
+			"token": "rotated-token", "username": testUsername, "role": "admin", "expires": "2026-10-25T00:00:00Z",
+		})
 	case "/api/v1/upstreams":
 		if server, _ := body["server"].(string); r.Method == http.MethodPut && !strings.Contains(server, ":") {
 			sendJSON(http.StatusBadRequest, map[string]any{"error": "server must be host:port"})

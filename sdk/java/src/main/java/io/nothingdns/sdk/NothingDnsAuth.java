@@ -120,6 +120,44 @@ public final class NothingDnsAuth {
     }
 
     /**
+     * Change the password of the logged-in user.
+     *
+     * <p>The server revokes every token of the account, including the one used
+     * for this call, and returns a new session. The legacy shared
+     * {@code auth_token} cannot use this call.</p>
+     *
+     * @param oldPassword the current password
+     * @param newPassword the replacement password
+     * @param storeToken  switch the transport to the new token
+     * @return the new session
+     * @throws NothingDnsException 400 for a wrong current password or a new
+     *                             password the server refuses, 403 for the
+     *                             legacy token, 409 for an account defined in
+     *                             the server config file, 429 when too many
+     *                             attempts failed
+     */
+    public Session changePassword(String oldPassword, String newPassword, boolean storeToken) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("old_password", oldPassword);
+        payload.put("new_password", newPassword);
+        return storeSession(
+                transport.post("/api/v1/auth/password", payload), storeToken);
+    }
+
+    /**
+     * Change the password of the logged-in user and keep the new token.
+     *
+     * @param oldPassword the current password
+     * @param newPassword the replacement password
+     * @return the new session
+     * @throws NothingDnsException as for
+     *                              {@link #changePassword(String, String, boolean)}
+     */
+    public Session changePassword(String oldPassword, String newPassword) {
+        return changePassword(oldPassword, newPassword, true);
+    }
+
+    /**
      * Return the current session: token, username and role.
      *
      * <p>The dashboard calls this to rebuild its in-memory bearer after a page
@@ -206,6 +244,46 @@ public final class NothingDnsAuth {
      */
     public User createUser(String username, String password) {
         return createUser(username, password, "viewer");
+    }
+
+    /**
+     * Set another account's password, role, or both (admin only).
+     *
+     * <p>Changing either revokes the account's tokens. Use
+     * {@link #changePassword(String, String)} for your own account.</p>
+     *
+     * @param username the account to change
+     * @param password the new password, or {@code null} to keep it
+     * @param role     the new role, or {@code null} to keep it
+     * @return the updated account
+     * @throws NothingDnsException 400 for the caller's own account, 403 for a
+     *                             role above the caller's, 404 for an unknown
+     *                             user, 409 for an account defined in the
+     *                             server config file or when it would demote
+     *                             the last admin; or
+     *                             {@link IllegalArgumentException} when both
+     *                             are empty or {@code role} is not a known role
+     */
+    public User updateUser(String username, String password, String role) {
+        boolean hasPassword = password != null && !password.isEmpty();
+        boolean hasRole = role != null && !role.isEmpty();
+        if (!hasPassword && !hasRole) {
+            throw new IllegalArgumentException("password or role required");
+        }
+        if (hasRole && !ROLES.contains(role)) {
+            throw new IllegalArgumentException(
+                    "role must be one of " + String.join(", ", ROLES));
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        if (hasPassword) {
+            payload.put("password", password);
+        }
+        if (hasRole) {
+            payload.put("role", role);
+        }
+        JsonElement data = transport.put(
+                "/api/v1/auth/users/" + NothingDnsTransport.escape(username), payload);
+        return User.from(data, transport.gson());
     }
 
     /**

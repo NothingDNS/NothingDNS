@@ -28,6 +28,7 @@ final class MockApi {
     static final String PASSWORD = "correct";
     static final String TOKEN = "tok-123";
     static final String SERVICE_TOKEN = TOKEN + "-service";
+    static final String ROTATED_TOKEN = "tok-rotated";
 
     private static final String ZONE_FILE =
             "$ORIGIN example.com.\n@ IN SOA ns1 hostmaster 7 3600 600 86400 300\n";
@@ -102,6 +103,25 @@ final class MockApi {
                     json(exchange, 200, "{\"token\": \"" + TOKEN + "\", \"username\": \"" + USERNAME
                             + "\", \"role\": \"admin\", \"expires\": \"2026-10-02T12:00:00Z\"}");
                 }
+                return;
+            case "/api/v1/auth/password":
+                String oldPassword = body != null && body.has("old_password")
+                        ? body.get("old_password").getAsString() : null;
+                if (!PASSWORD.equals(oldPassword)) {
+                    json(exchange, 400, "{\"error\": \"Current password is incorrect\"}");
+                } else {
+                    json(exchange, 200, "{\"token\": \"" + ROTATED_TOKEN + "\", \"username\": \"" + USERNAME
+                            + "\", \"role\": \"admin\", \"expires\": \"2026-10-25T00:00:00Z\"}");
+                }
+                return;
+            case "/api/v1/auth/users/ops":
+                String role = body != null && body.has("role")
+                        ? body.get("role").getAsString() : "operator";
+                json(exchange, 200, "{\"username\": \"ops\", \"role\": \"" + role
+                        + "\", \"updated_at\": \"2026-10-24T00:00:00Z\"}");
+                return;
+            case "/api/v1/auth/users/root":
+                json(exchange, 409, "{\"error\": \"user is defined in the config file; change it there\"}");
                 return;
             case "/api/v1/auth/logout":
                 json(exchange, 200, "{\"message\": \"logged out\"}");

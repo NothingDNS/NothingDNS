@@ -25,3 +25,13 @@ func (s *CacheService) Stats(ctx context.Context) (*CacheStats, error) {
 func (s *CacheService) Flush(ctx context.Context) (string, error) {
 	return s.t.doMessage(ctx, "POST", "/api/v1/cache/flush", nil, nil)
 }
+
+// FlushName drops the cached entries of one name only (every type). It
+// requires the admin role. It returns the server's message, which carries the
+// number of entries removed.
+func (s *CacheService) FlushName(ctx context.Context, name string) (string, error) {
+	if name == "" {
+		return "", &ErrValidationError{Message: "name required (use Flush to clear the whole cache)"}
+	}
+	return s.t.doMessage(ctx, "POST", "/api/v1/cache/flush", map[string]any{"name": name}, nil)
+}

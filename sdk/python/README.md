@@ -8,7 +8,7 @@ GeoDNS, clustering, users and the dashboard/metrics endpoints.
 The SDK is a thin, well-typed layer over the REST API. It does **not** speak the
 DNS wire protocols; use a DNS library (for example `dnspython`) for actual lookups.
 
-- **API version covered:** NothingDNS 1.2.17 (see `GET /api/openapi.json`)
+- **API version covered:** NothingDNS 1.3.0 (see `GET /api/openapi.json`)
 - **Python:** 3.9+
 - **Runtime dependency:** `requests` only
 
@@ -243,13 +243,20 @@ for operators and admins.
 | `auth.list_users()` | `GET /api/v1/auth/users` | operator |
 | `auth.create_user(username, password, role="viewer")` | `POST /api/v1/auth/users` | admin |
 | `auth.delete_user(username)` | `DELETE /api/v1/auth/users/{username}` | admin |
+| `auth.update_user(username, password=None, role=None)` | `PUT /api/v1/auth/users/{username}` | admin |
+| `auth.change_password(old_password, new_password)` | `POST /api/v1/auth/password` | any (user login) |
 
 ```python
 for user in client.auth.list_users():
     print(user.username, user.role, user.created_at)
 
 client.auth.create_user("ops", os.environ["NDNS_OPS_PASSWORD"], role="operator")
+client.auth.update_user("ops", role="viewer")   # revokes the account's tokens
 client.auth.delete_user("ops")
+
+# Your own password: the server revokes your tokens and returns a new session,
+# which the client switches to.
+client.auth.change_password(old_password, new_password)
 ```
 
 ### Zones and records
@@ -325,6 +332,7 @@ if lookup.found:
 stats = client.cache.stats()   # GET /api/v1/cache/stats  (operator)
 print(stats.size, stats.capacity, stats.hit_ratio)
 client.cache.flush()           # POST /api/v1/cache/flush (admin)
+client.cache.flush_name("www.example.com")  # one name only (admin)
 ```
 
 ### Configuration
@@ -468,9 +476,9 @@ are browser-facing and have no SDK method.
 | --- | --- |
 | `health`, `ready`, `live` | `/health`, `/readyz`, `/livez` |
 | `status`, `server_config`, `openapi_spec` | `/api/v1/status`, `/api/v1/server/config`, `/api/openapi.json` |
-| `auth` | `login`, `bootstrap`, `session`, `logout`, `roles`, `list_users`, `create_user`, `delete_user` |
+| `auth` | `login`, `bootstrap`, `session`, `logout`, `roles`, `list_users`, `create_user`, `update_user`, `delete_user`, `change_password` |
 | `zones` | `list`, `create`, `get`, `delete`, `reload`, `transfers`, `list_records`, `add_record`, `replace_record`, `delete_records`, `export`, `ptr_bulk`, `ptr6_lookup` |
-| `cache` | `stats`, `flush` |
+| `cache` | `stats`, `flush`, `flush_name` |
 | `config` | `get`, `reload`, `set_logging`, `set_rrl`, `set_cache`, `set_resolution`, `set_dns64`, `set_cookie` |
 | `acl` | `get`, `set`, `recursion`, `set_recursion` |
 | `blocklists` | `stats`, `add`, `sources`, `toggle`, `toggle_source`, `remove` |

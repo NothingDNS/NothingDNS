@@ -19,6 +19,7 @@ from nothingdns import NothingDNSClient
 USERNAME = "admin"
 PASSWORD = "correct"
 TOKEN = "tok-123"
+ROTATED_TOKEN = "tok-rotated"
 
 
 class RecordedRequest(dict):
@@ -109,6 +110,25 @@ class MockNothingDNS:
                             "expires": "2026-10-02T12:00:00Z",
                         },
                     )
+                if route == "/api/v1/auth/password":
+                    if body.get("old_password") != PASSWORD:
+                        return self._send(400, {"error": "Current password is incorrect"})
+                    return self._send(
+                        200,
+                        {
+                            "token": ROTATED_TOKEN,
+                            "username": USERNAME,
+                            "role": "admin",
+                            "expires": "2026-10-25T00:00:00Z",
+                        },
+                    )
+                if route == "/api/v1/auth/users/ops" and method == "PUT":
+                    return self._send(
+                        200,
+                        {"username": "ops", "role": body.get("role", "operator"), "updated_at": "2026-10-24T00:00:00Z"},
+                    )
+                if route == "/api/v1/auth/users/root" and method == "PUT":
+                    return self._send(409, {"error": "user is defined in the config file; change it there"})
                 if route == "/api/v1/auth/logout":
                     return self._send(200, {"message": "logged out"})
                 if route == "/api/v1/status":

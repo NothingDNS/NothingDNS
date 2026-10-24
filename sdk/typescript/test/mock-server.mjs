@@ -11,6 +11,7 @@ export const USERNAME = 'admin';
 export const PASSWORD = 'correct';
 export const TOKEN = 'tok-123';
 export const SERVICE_TOKEN = `${TOKEN}-service`;
+export const ROTATED_TOKEN = 'tok-rotated';
 
 const ZONE_FILE = '$ORIGIN example.com.\n@ IN SOA ns1 hostmaster 7 3600 600 86400 300\n';
 
@@ -120,6 +121,11 @@ export async function createMockServer() {
           ]);
         case '/api/v1/auth/users/root':
           return json(409, { error: 'user is defined in the config file; change it there' });
+        case '/api/v1/auth/users/ops':
+          return json(200, { username: 'ops', role: body?.role ?? 'operator', updated_at: '2026-10-24T00:00:00Z' });
+        case '/api/v1/auth/password':
+          if (body.old_password !== PASSWORD) return json(400, { error: 'Current password is incorrect' });
+          return json(200, { token: ROTATED_TOKEN, username: USERNAME, role: 'admin', expires: '2026-10-25T00:00:00Z' });
         case '/api/v1/upstreams':
           if (req.method === 'PUT' && !String(body?.server ?? '').includes(':')) {
             return json(400, { error: 'server must be host:port' });

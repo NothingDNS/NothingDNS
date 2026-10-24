@@ -124,6 +124,39 @@ public sealed class NothingDnsAuth
         return Store(payload, storeToken);
     }
 
+    /// <summary>Change the password of the logged-in user.</summary>
+    /// <param name="oldPassword">The current password.</param>
+    /// <param name="newPassword">The replacement password.</param>
+    /// <param name="storeToken">
+    /// When <see langword="true"/> (the default), the client switches to the new
+    /// token. The server revokes every token of the account, including the one
+    /// used for this call.
+    /// </param>
+    /// <param name="cancellationToken">Token to cancel the request.</param>
+    /// <returns>The new session.</returns>
+    /// <exception cref="ArgumentException"><paramref name="oldPassword"/> or <paramref name="newPassword"/> is empty.</exception>
+    /// <exception cref="NothingDnsApiException">
+    /// 400 for a wrong current password or a new password the server refuses, 403
+    /// for the legacy static <c>auth_token</c>, 409 for an account defined in the
+    /// server config file, or 429 when too many attempts failed.
+    /// </exception>
+    public async Task<Session> ChangePasswordAsync(
+        string oldPassword,
+        string newPassword,
+        bool storeToken = true,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(oldPassword);
+        ArgumentException.ThrowIfNullOrEmpty(newPassword);
+
+        var body = NothingDnsTransport.Body(("old_password", oldPassword), ("new_password", newPassword));
+        var payload = await _transport
+            .PostAsync("/api/v1/auth/password", body, cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+
+        return Store(payload, storeToken);
+    }
+
     /// <summary>Return the current session: token, username and role.</summary>
     /// <param name="cancellationToken">Token to cancel the request.</param>
     /// <returns>The active session as the server sees it.</returns>
@@ -218,6 +251,58 @@ public sealed class NothingDnsAuth
 
         var payload = await _transport
             .PostAsync("/api/v1/auth/users", body, cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+
+        return NothingDnsTransport.Model<User>(payload);
+    }
+
+    /// <summary>Set another account's password, role, or both (admin only).</summary>
+    /// <param name="username">The account to change.</param>
+    /// <param name="password">The new password, or <see langword="null"/> to keep it.</param>
+    /// <param name="role">The new role, or <see langword="null"/> to keep it.</param>
+    /// <param name="cancellationToken">Token to cancel the request.</param>
+    /// <returns>The updated account.</returns>
+    /// <remarks>
+    /// Changing either field revokes the account's tokens. Use
+    /// <see cref="ChangePasswordAsync"/> for your own account.
+    /// </remarks>
+    /// <exception cref="ArgumentException"><paramref name="username"/> is empty.</exception>
+    /// <exception cref="NothingDnsValidationException">
+    /// Neither field is given, or <paramref name="role"/> is not a known role.
+    /// </exception>
+    /// <exception cref="NothingDnsApiException">
+    /// 400 for the caller's own account, 403 for a role above the caller's, 404 for
+    /// an unknown user, or 409 for an account defined in the server config file or
+    /// when it would demote the last admin.
+    /// </exception>
+    public async Task<User> UpdateUserAsync(
+        string username,
+        string? password = null,
+        string? role = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(username);
+
+        if (string.IsNullOrEmpty(password) && string.IsNullOrEmpty(role))
+        {
+            throw new NothingDnsValidationException("password or role required");
+        }
+
+        if (!string.IsNullOrEmpty(role) && !NothingDnsRoles.All.Contains(role, StringComparer.Ordinal))
+        {
+            throw new NothingDnsValidationException(
+                $"role must be one of {string.Join(", ", NothingDnsRoles.All)}, but was '{role}'.");
+        }
+
+        var body = NothingDnsTransport.Body(
+            ("password", string.IsNullOrEmpty(password) ? null : password),
+            ("role", string.IsNullOrEmpty(role) ? null : role));
+
+        var payload = await _transport
+            .PutAsync(
+                $"/api/v1/auth/users/{NothingDnsTransport.Escape(username)}",
+                body,
+                cancellationToken: cancellationToken)
             .ConfigureAwait(false);
 
         return NothingDnsTransport.Model<User>(payload);

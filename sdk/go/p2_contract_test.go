@@ -74,3 +74,70 @@ func TestConflictAndBadRequestMapToSentinels(t *testing.T) {
 	wantTrue(t, !IsConflict(errors.New("nope")), "plain error is not a 409")
 	wantTrue(t, !IsBadRequest(nil), "nil error is not a 400")
 }
+
+// Issue #18: POST /api/v1/auth/password and PUT /api/v1/auth/users/{username};
+// per-name cache flush (POST /api/v1/cache/flush?name=).
+
+func TestChangePasswordStoresRotatedToken(t *testing.T) {
+	m := newMockAPI(t)
+	c := newTestClient(t, m)
+	c.SetToken(testToken)
+	ctx := context.Background()
+
+	session, err := c.Auth.ChangePassword(ctx, testPassword, "new-password-1", true)
+	wantNoError(t, err)
+	wantEqual(t, "new token", session.Token, "rotated-token")
+	wantEqual(t, "client switched token", c.Token(), "rotated-token")
+	rec := m.last()
+	wantEqual(t, "method", rec.Method, "POST")
+	wantEqual(t, "path", rec.Path, "/api/v1/auth/password")
+	wantEqual(t, "body", bodyJSON(t, rec), `{"new_password":"new-password-1","old_password":"`+testPassword+`"}`)
+
+	_, err = c.Auth.ChangePassword(ctx, "wrong", "new-password-2", true)
+	wantTrue(t, IsBadRequest(err), "wrong current password is a 400")
+	wantEqual(t, "token kept after failure", c.Token(), "rotated-token")
+}
+
+func TestUpdateUserSendsOnlySetFields(t *testing.T) {
+	m := newMockAPI(t)
+	c := newTestClient(t, m)
+	c.SetToken(testToken)
+	ctx := context.Background()
+
+	user, err := c.Auth.UpdateUser(ctx, "ops", "", "admin")
+	wantNoError(t, err)
+	wantEqual(t, "role", user.Role, "admin")
+	rec := m.last()
+	wantEqual(t, "method", rec.Method, "PUT")
+	wantEqual(t, "path", rec.Path, "/api/v1/auth/users/ops")
+	wantEqual(t, "body", bodyJSON(t, rec), `{"role":"admin"}`)
+
+	_, err = c.Auth.UpdateUser(ctx, "root", "reset-pass-123", "")
+	wantTrue(t, IsConflict(err), "config-defined user is a 409")
+
+	before := m.count()
+	var verr *ErrValidationError
+	_, err = c.Auth.UpdateUser(ctx, "ops", "", "")
+	wantTrue(t, errors.As(err, &verr), "empty update is refused locally")
+	_, err = c.Auth.UpdateUser(ctx, "ops", "", "superuser")
+	wantTrue(t, errors.As(err, &verr), "unknown role is refused locally")
+	wantEqual(t, "no request sent", m.count(), before)
+}
+
+func TestFlushNameSendsQuery(t *testing.T) {
+	m := newMockAPI(t)
+	c := newTestClient(t, m)
+	c.SetToken(testToken)
+	ctx := context.Background()
+
+	_, _ = c.Cache.FlushName(ctx, "www.example.com")
+	rec := m.last()
+	wantEqual(t, "method", rec.Method, "POST")
+	wantEqual(t, "path", rec.Path, "/api/v1/cache/flush?name=www.example.com")
+
+	before := m.count()
+	var verr *ErrValidationError
+	_, err := c.Cache.FlushName(ctx, "")
+	wantTrue(t, errors.As(err, &verr), "empty name is refused locally")
+	wantEqual(t, "no request sent", m.count(), before)
+}

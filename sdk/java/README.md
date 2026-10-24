@@ -1,7 +1,7 @@
 # NothingDNS Java SDK
 
 A typed Java client for the [NothingDNS](../) management API. It covers all
-**71 documented operations** — authentication, zones and records, the response
+**73 documented operations** — authentication, zones and records, the response
 cache, runtime configuration, ACLs, blocklists, response policy zones, DNSSEC,
 upstreams, GeoDNS, clustering, the dashboard and metrics.
 
@@ -40,7 +40,7 @@ upstreams, GeoDNS, clustering, the dashboard and metrics.
 
 ## Features
 
-- **Complete.** All 71 contract operations, one Java method each.
+- **Complete.** All 73 contract operations, one Java method each.
 - **Typed.** Every response decodes into a documented model class; no raw JSON
   except for the effective config and the OpenAPI document, whose shape is
   server-defined.
@@ -270,7 +270,12 @@ var users = client.auth().listUsers();             // accounts (no passwords)
 var me    = client.auth().session();               // the current session
 
 client.auth().createUser("alice", "pw", "operator");   // admin only
+client.auth().updateUser("alice", null, "viewer");      // admin only; null keeps a field
 client.auth().deleteUser("alice");                      // admin only
+
+// Your own password: the server revokes your tokens and returns a new session,
+// which the client switches to.
+client.auth().changePassword(oldPassword, newPassword);
 
 client.auth().logout();
 ```
@@ -344,6 +349,7 @@ System.out.printf("%d/%d entries, hit ratio %.3f%n",
         stats.getSize(), stats.getCapacity(), stats.getHitRatio());
 
 client.cache().flush();   // admin
+client.cache().flushName("www.example.com");   // admin; one name only
 ```
 
 ### Config
@@ -623,7 +629,7 @@ higher role rather than retrying.
 
 ## Operation coverage
 
-All 71 operations in the API contract. `GET`/`POST`/`PUT`/`DELETE` is the HTTP
+All 73 operations in the API contract. `GET`/`POST`/`PUT`/`DELETE` is the HTTP
 verb; the last column is the exact SDK method.
 
 | # | Method | Endpoint | SDK call | Min. role |
@@ -660,7 +666,7 @@ verb; the last column is the exact SDK method.
 | 30 | POST | `/api/v1/zones/{zone}/ptr-bulk` | `client.zones().ptrBulkPreview(...)` / `ptrBulk(...)` | operator |
 | 31 | GET | `/api/v1/zones/{zone}/ptr6-lookup?ip=` | `client.zones().ptr6Lookup(zone, ip)` | operator |
 | 32 | GET | `/api/v1/cache/stats` | `client.cache().stats()` | operator |
-| 33 | POST | `/api/v1/cache/flush` | `client.cache().flush()` | admin |
+| 33 | POST | `/api/v1/cache/flush[?name=]` | `client.cache().flush()` / `flushName(name)` | admin |
 | 34 | GET | `/api/v1/config` | `client.config().get()` | operator |
 | 35 | POST | `/api/v1/config/reload` | `client.config().reload()` | admin |
 | 36 | PUT | `/api/v1/config/logging` | `client.config().setLogging(level)` | admin |
@@ -699,6 +705,8 @@ verb; the last column is the exact SDK method.
 | 69 | GET | `/api/v1/queries` | `client.metrics().queryLog([offset, limit, q])` | operator |
 | 70 | GET | `/api/v1/topdomains` | `client.metrics().topDomains([limit])` | operator |
 | 71 | GET | `/api/v1/metrics/history` | `client.metrics().history()` | operator |
+| 72 | POST | `/api/v1/auth/password` | `client.auth().changePassword(old, new)` | any (user login) |
+| 73 | PUT | `/api/v1/auth/users/{username}` | `client.auth().updateUser(name, pass, role)` | admin |
 
 Operations 17 and 18 are the two documented forms of the same delete-user
 endpoint. `deleteUser(name)` uses the path form (the usual choice) and

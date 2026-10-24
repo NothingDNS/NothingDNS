@@ -71,6 +71,61 @@ public sealed class NothingDnsClientTests
     }
 
     [Fact]
+    public async Task ChangePasswordSwitchesToTheRotatedToken()
+    {
+        using var mock = new MockApi();
+        await using var client = mock.CreateClient();
+        client.SetToken(MockApi.Token);
+
+        var session = await client.Auth.ChangePasswordAsync(MockApi.Password, "new-password-1");
+
+        Assert.Equal(MockApi.RotatedToken, session.Token);
+        Assert.Equal(MockApi.RotatedToken, client.Token);
+        Assert.Equal("POST", mock.Last.Method);
+        Assert.Equal("/api/v1/auth/password", mock.Last.Path);
+        var expected = new JsonObject { ["old_password"] = MockApi.Password, ["new_password"] = "new-password-1" };
+        Assert.True(JsonNode.DeepEquals(expected, mock.Last.BodyJson), $"body was {mock.Last.BodyText}");
+
+        var wrong = await Assert.ThrowsAsync<NothingDnsApiException>(
+            () => client.Auth.ChangePasswordAsync("wrong", "new-password-2"));
+        Assert.Equal(400, wrong.StatusCode);
+        Assert.Equal(MockApi.RotatedToken, client.Token);
+    }
+
+    [Fact]
+    public async Task UpdateUserSendsOnlyTheGivenFields()
+    {
+        using var mock = new MockApi();
+        await using var client = mock.CreateClient();
+        client.SetToken(MockApi.Token);
+
+        var user = await client.Auth.UpdateUserAsync("ops", role: NothingDnsRoles.Admin);
+
+        Assert.Equal("admin", user.Role);
+        Assert.Equal("PUT", mock.Last.Method);
+        Assert.Equal("/api/v1/auth/users/ops", mock.Last.Path);
+        var expected = new JsonObject { ["role"] = "admin" };
+        Assert.True(JsonNode.DeepEquals(expected, mock.Last.BodyJson), $"body was {mock.Last.BodyText}");
+
+        var conflict = await Assert.ThrowsAsync<NothingDnsApiException>(
+            () => client.Auth.UpdateUserAsync("root", password: "reset-pass-123"));
+        Assert.Equal(409, conflict.StatusCode);
+    }
+
+    [Fact]
+    public async Task FlushNameSendsTheNameQuery()
+    {
+        using var mock = new MockApi();
+        await using var client = mock.CreateClient();
+        client.SetToken(MockApi.Token);
+
+        await Assert.ThrowsAsync<NothingDnsApiException>(() => client.Cache.FlushNameAsync("www.example.com"));
+
+        Assert.Equal("POST", mock.Last.Method);
+        Assert.Equal("/api/v1/cache/flush?name=www.example.com", mock.Last.Path);
+    }
+
+    [Fact]
     public async Task LoginCanSkipStoringTheToken()
     {
         using var mock = new MockApi();
@@ -465,6 +520,8 @@ public sealed class NothingDnsClientTests
             ("blocklist-without-source", () => client.Blocklists.AddAsync()),
             ("blocklist-with-both-sources", () => client.Blocklists.AddAsync("/etc/hosts", "https://example.com/hosts")),
             ("unknown-role", () => client.Auth.CreateUserAsync("ops", "pw-op-1", role: "root")),
+            ("empty-user-update", () => client.Auth.UpdateUserAsync("ops")),
+            ("update-unknown-role", () => client.Auth.UpdateUserAsync("ops", role: "root")),
             ("unknown-rpz-action", () => client.Rpz.AddRuleAsync("ads.example.com", action: "DENY")),
             ("zone-without-nameservers", () => client.Zones.CreateAsync("example.com", [])),
         };
@@ -490,6 +547,8 @@ public sealed class NothingDnsClientTests
         await Assert.ThrowsAsync<ArgumentException>(() => client.Zones.GetAsync(""));
         await Assert.ThrowsAsync<ArgumentException>(() => client.Zones.AddRecordAsync("example.com", "", "A", "1.2.3.4"));
         await Assert.ThrowsAsync<ArgumentException>(() => client.Auth.LoginAsync("", "pw"));
+        await Assert.ThrowsAsync<ArgumentException>(() => client.Auth.ChangePasswordAsync("", "new-password-1"));
+        await Assert.ThrowsAsync<ArgumentException>(() => client.Cache.FlushNameAsync(""));
 
         Assert.Empty(mock.Requests);
     }

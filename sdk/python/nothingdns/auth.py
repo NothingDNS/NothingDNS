@@ -93,6 +93,39 @@ class AuthResource:
             self._t.set_token(session.token)
         return session
 
+    def change_password(
+        self,
+        old_password: str,
+        new_password: str,
+        *,
+        store_token: bool = True,
+    ) -> m.Session:
+        """Change the password of the logged-in user.
+
+        The server revokes every token of the account, including the one
+        used for this call, and returns a new session. The legacy shared
+        ``auth_token`` cannot use this call.
+
+        Args:
+            old_password: Current password.
+            new_password: Replacement password.
+            store_token: Switch the client to the new token.
+
+        Raises:
+            NothingDNSApiError: 400 for a wrong current password or a new
+                password the server refuses, 403 for the legacy token, 409
+                for an account defined in the server config file, 429 when
+                too many attempts failed.
+        """
+        data = self._t.post(
+            "/api/v1/auth/password",
+            json={"old_password": old_password, "new_password": new_password},
+        )
+        session = m.Session.from_dict(data)
+        if store_token and session.token:
+            self._t.set_token(session.token)
+        return session
+
     def session(self) -> m.Session:
         """Return the current session: token, username and role.
 
@@ -145,6 +178,46 @@ class AuthResource:
             "/api/v1/auth/users",
             json={"username": username, "password": password, "role": role},
         )
+        return m.User.from_dict(data)
+
+    def update_user(
+        self,
+        username: str,
+        *,
+        password: Optional[str] = None,
+        role: Optional[str] = None,
+    ) -> m.User:
+        """Set another account's password, role, or both (admin only).
+
+        Changing either revokes the account's tokens. Use
+        :meth:`change_password` for your own account.
+
+        Args:
+            username: Account to change.
+            password: New password; ``None`` leaves it unchanged.
+            role: New role; ``None`` leaves it unchanged.
+
+        Returns:
+            The updated account.
+
+        Raises:
+            NothingDNSValidationError: when neither field is given or *role*
+                is not a known role.
+            NothingDNSApiError: 400 for the caller's own account, 403 for a
+                role above the caller's, 404 for an unknown user, 409 for an
+                account defined in the server config file or when it would
+                demote the last admin.
+        """
+        if not password and not role:
+            raise NothingDNSValidationError("password or role required")
+        if role and role not in ROLES:
+            raise NothingDNSValidationError(f"role must be one of {', '.join(ROLES)}")
+        payload = {}
+        if password:
+            payload["password"] = password
+        if role:
+            payload["role"] = role
+        data = self._t.put(f"/api/v1/auth/users/{self._t.escape(username)}", json=payload)
         return m.User.from_dict(data)
 
     def delete_user(self, username: str) -> str:

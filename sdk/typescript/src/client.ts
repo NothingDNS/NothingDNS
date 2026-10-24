@@ -292,6 +292,22 @@ export class CacheResource {
   async flush(): Promise<string> {
     return messageOf(await this.t.post('/api/v1/cache/flush', { expectJson: false }));
   }
+
+  /**
+   * Drop the cached entries of one name only, every type (admin only). The
+   * returned message carries the number of entries removed.
+   *
+   * @throws {@link NothingDNSValidationError} when `name` is empty (use
+   *   {@link flush} to clear the whole cache).
+   */
+  async flushName(name: string): Promise<string> {
+    if (!name) {
+      throw new NothingDNSValidationError('name required (use flush to clear the whole cache)');
+    }
+    return messageOf(
+      await this.t.post('/api/v1/cache/flush', { query: { name }, expectJson: false }),
+    );
+  }
 }
 
 /** Options for the partial runtime-config setters. All fields are optional. */

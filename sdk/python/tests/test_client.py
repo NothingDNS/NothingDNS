@@ -16,7 +16,7 @@ from nothingdns import (
 )
 from nothingdns.models import PTRBulkPreview
 
-from .conftest import PASSWORD, TOKEN, USERNAME
+from .conftest import PASSWORD, ROTATED_TOKEN, TOKEN, USERNAME
 
 SERVICE_TOKEN = f"{TOKEN}-service"
 """A second, distinct token value used to test client.set_token."""
@@ -66,6 +66,48 @@ def test_logout_invalidates_and_returns_message(client):
     client.set_token(TOKEN)
 
     assert client.auth.logout() == "logged out"
+
+
+def test_change_password_switches_to_rotated_token(client, mock_api):
+    client.set_token(TOKEN)
+
+    session = client.auth.change_password(PASSWORD, "new-password-1")
+
+    assert session.token == ROTATED_TOKEN
+    assert client.token == ROTATED_TOKEN
+    assert mock_api.last.method == "POST"
+    assert mock_api.last.path == "/api/v1/auth/password"
+    assert mock_api.last.body == {"old_password": PASSWORD, "new_password": "new-password-1"}
+
+    with pytest.raises(NothingDNSApiError) as excinfo:
+        client.auth.change_password("wrong", "new-password-2")
+    assert excinfo.value.status_code == 400
+    assert client.token == ROTATED_TOKEN
+
+
+def test_update_user_sends_only_given_fields(client, mock_api):
+    client.set_token(TOKEN)
+
+    user = client.auth.update_user("ops", role="admin")
+
+    assert user.role == "admin"
+    assert mock_api.last.method == "PUT"
+    assert mock_api.last.path == "/api/v1/auth/users/ops"
+    assert mock_api.last.body == {"role": "admin"}
+
+    with pytest.raises(NothingDNSApiError) as excinfo:
+        client.auth.update_user("root", password="reset-pass-123")
+    assert excinfo.value.status_code == 409
+
+
+def test_flush_name_sends_query(client, mock_api):
+    client.set_token(TOKEN)
+
+    with pytest.raises(NothingDNSApiError):
+        client.cache.flush_name("www.example.com")
+
+    assert mock_api.last.method == "POST"
+    assert mock_api.last.path == "/api/v1/cache/flush?name=www.example.com"
 
 
 # --------------------------------------------------------------------------
@@ -238,6 +280,9 @@ def test_upstream_listing_and_add(client, mock_api):
         lambda c: c.blocklists.add(),
         lambda c: c.blocklists.add(file="a.hosts", url="https://example.invalid/hosts"),
         lambda c: c.auth.create_user("ops", "pw-op-1", role="root"),
+        lambda c: c.auth.update_user("ops"),
+        lambda c: c.auth.update_user("ops", role="root"),
+        lambda c: c.cache.flush_name(""),
         lambda c: c.rpz.add_rule("ads.example.com", action="DENY"),
         lambda c: c.zones.create("example.com", nameservers=[]),
     ],
@@ -247,6 +292,9 @@ def test_upstream_listing_and_add(client, mock_api):
         "blocklist-without-source",
         "blocklist-with-both-sources",
         "unknown-role",
+        "empty-user-update",
+        "update-unknown-role",
+        "flush-empty-name",
         "unknown-rpz-action",
         "zone-without-nameservers",
     ],

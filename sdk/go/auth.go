@@ -51,6 +51,19 @@ type createUserRequest struct {
 	Role     string `json:"role"`
 }
 
+// updateUserRequest is the JSON body of PUT /api/v1/auth/users/{username}.
+// At least one field must be set.
+type updateUserRequest struct {
+	Password string `json:"password,omitempty"`
+	Role     string `json:"role,omitempty"`
+}
+
+// changePasswordRequest is the JSON body of POST /api/v1/auth/password.
+type changePasswordRequest struct {
+	OldPassword string `json:"old_password"`
+	NewPassword string `json:"new_password"`
+}
+
 // Login logs in and receives a bearer token.
 //
 // username and password are the account credentials. The returned token is
@@ -90,6 +103,29 @@ func (a *AuthService) Bootstrap(ctx context.Context, username, password string, 
 	var session Session
 	body := bootstrapRequest{Username: username, Password: password, OldPassword: oldPassword}
 	if err := a.t.doJSON(ctx, "POST", "/api/v1/auth/bootstrap", nil, body, &session); err != nil {
+		return nil, err
+	}
+	if storeToken && session.Token != "" {
+		a.t.SetToken(session.Token)
+	}
+	return &session, nil
+}
+
+// ChangePassword changes the password of the logged-in user.
+//
+// oldPassword is the current password and newPassword the replacement. The
+// server revokes every token of the account, including the one used for this
+// call, and returns a new Session; with storeToken the client switches to the
+// new token. The legacy shared auth_token cannot use this call.
+//
+// It fails with an *ErrAPIError carrying status 400 for a wrong current
+// password or a new password the server refuses, 403 for the legacy token,
+// 409 (see IsConflict) for an account defined in the server config file, or
+// 429 when too many attempts failed.
+func (a *AuthService) ChangePassword(ctx context.Context, oldPassword, newPassword string, storeToken bool) (*Session, error) {
+	var session Session
+	body := changePasswordRequest{OldPassword: oldPassword, NewPassword: newPassword}
+	if err := a.t.doJSON(ctx, "POST", "/api/v1/auth/password", nil, body, &session); err != nil {
 		return nil, err
 	}
 	if storeToken && session.Token != "" {
@@ -156,6 +192,31 @@ func (a *AuthService) CreateUser(ctx context.Context, username, password, role s
 	var user User
 	body := createUserRequest{Username: username, Password: password, Role: role}
 	if err := a.t.doJSON(ctx, "POST", "/api/v1/auth/users", nil, body, &user); err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+// UpdateUser sets another account's password, role, or both (admin only).
+// An empty password or role leaves that field unchanged; at least one must be
+// set. Changing either revokes the account's tokens. Use ChangePassword for
+// your own account. It returns the updated account.
+//
+// It fails with an *ErrValidationError when both are empty or role is not a
+// known role, and with an *ErrAPIError carrying status 400 for the caller's
+// own account, 403 for a role above the caller's, 404 for an unknown user, or
+// 409 (see IsConflict) for an account defined in the server config file or
+// when it would demote the last admin.
+func (a *AuthService) UpdateUser(ctx context.Context, username, password, role string) (*User, error) {
+	if password == "" && role == "" {
+		return nil, &ErrValidationError{Message: "password or role required"}
+	}
+	if role != "" && !IsValidRole(role) {
+		return nil, &ErrValidationError{Message: "role must be one of viewer, operator, admin"}
+	}
+	var user User
+	body := updateUserRequest{Password: password, Role: role}
+	if err := a.t.doJSON(ctx, "PUT", "/api/v1/auth/users/"+a.t.escape(username), nil, body, &user); err != nil {
 		return nil, err
 	}
 	return &user, nil

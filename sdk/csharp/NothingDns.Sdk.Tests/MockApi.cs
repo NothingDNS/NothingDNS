@@ -40,6 +40,7 @@ public sealed class MockApi : IDisposable
     public const string Username = "admin";
     public const string Password = "correct";
     public const string Token = "tok-123";
+    public const string RotatedToken = "tok-rotated";
 
     private readonly TcpListener _listener;
     private readonly CancellationTokenSource _cts = new();
@@ -339,6 +340,28 @@ public sealed class MockApi : IDisposable
 
             case "/api/v1/auth/logout":
                 return (200, "application/json", """{"message":"logged out"}""");
+
+            case "/api/v1/auth/password":
+            {
+                var oldPassword = body?["old_password"]?.GetValue<string>();
+                if (oldPassword != Password)
+                {
+                    return (400, "application/json", """{"error":"Current password is incorrect"}""");
+                }
+
+                return (200, "application/json",
+                    $$"""{"token":"{{RotatedToken}}","username":"{{Username}}","role":"admin","expires":"2026-10-25T00:00:00Z"}""");
+            }
+
+            case "/api/v1/auth/users/ops" when method == "PUT":
+            {
+                var role = body?["role"]?.GetValue<string>() ?? "operator";
+                return (200, "application/json",
+                    $$"""{"username":"ops","role":"{{role}}","updated_at":"2026-10-24T00:00:00Z"}""");
+            }
+
+            case "/api/v1/auth/users/root" when method == "PUT":
+                return (409, "application/json", """{"error":"user is defined in the config file; change it there"}""");
 
             case "/api/v1/status":
                 return (200, "application/json",

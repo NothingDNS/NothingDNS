@@ -9,7 +9,7 @@ The SDK is a thin, well-typed layer over the REST API. It does **not** speak the
 DNS wire protocols; use a DNS library (for example `dns-packet`) for actual
 lookups.
 
-- **API version covered:** NothingDNS 1.2.17 (see `GET /api/openapi.json`)
+- **API version covered:** NothingDNS 1.3.0 (see `GET /api/openapi.json`)
 - **Runtime:** Node.js 18+, Deno, Bun, Cloudflare Workers, browsers
 - **Dependencies:** none — uses the platform `fetch`
 
@@ -250,6 +250,8 @@ for operators and admins.
 | `auth.listUsers()` | `GET /api/v1/auth/users` | operator |
 | `auth.createUser(username, password, role)` | `POST /api/v1/auth/users` | admin |
 | `auth.deleteUser(username)` | `DELETE /api/v1/auth/users/{username}` | admin |
+| `auth.updateUser(username, { password?, role? })` | `PUT /api/v1/auth/users/{username}` | admin |
+| `auth.changePassword(oldPassword, newPassword)` | `POST /api/v1/auth/password` | any (user login) |
 
 ```ts
 for (const user of await client.auth.listUsers()) {
@@ -259,7 +261,12 @@ for (const user of await client.auth.listUsers()) {
 }
 
 await client.auth.createUser('ops', process.env.NDNS_OPS_PASSWORD!, 'operator');
+await client.auth.updateUser('ops', { role: 'viewer' }); // revokes the account's tokens
 await client.auth.deleteUser('ops');
+
+// Your own password: the server revokes your tokens and returns a new session,
+// which the client switches to.
+await client.auth.changePassword(oldPassword, newPassword);
 ```
 
 ### Zones and records
@@ -336,6 +343,7 @@ if (lookup.found) console.log(lookup.target, lookup.ttl);
 const stats = await client.cache.stats();   // GET /api/v1/cache/stats (operator)
 console.log(stats.size, stats.capacity, stats.hitRatio);
 await client.cache.flush();                 // POST /api/v1/cache/flush (admin)
+await client.cache.flushName('www.example.com'); // one name only (admin)
 ```
 
 ### Configuration
@@ -485,9 +493,9 @@ are browser-facing and have no SDK method.
 | --- | --- |
 | `health`, `ready`, `live` | `/health`, `/readyz`, `/livez` |
 | `status`, `serverConfig`, `openapiSpec` | `/api/v1/status`, `/api/v1/server/config`, `/api/openapi.json` |
-| `auth` | `login`, `bootstrap`, `session`, `logout`, `roles`, `listUsers`, `createUser`, `deleteUser` |
+| `auth` | `login`, `bootstrap`, `session`, `logout`, `roles`, `listUsers`, `createUser`, `updateUser`, `deleteUser`, `changePassword` |
 | `zones` | `list`, `create`, `get`, `delete`, `reload`, `transfers`, `listRecords`, `addRecord`, `replaceRecord`, `deleteRecords`, `deleteRecord`, `export`, `ptrBulk`, `ptr6Lookup` |
-| `cache` | `stats`, `flush` |
+| `cache` | `stats`, `flush`, `flushName` |
 | `config` | `get`, `reload`, `setLogging`, `setRRL`, `setCache`, `setResolution`, `setDns64`, `setCookie` |
 | `acl` | `get`, `set`, `recursion`, `setRecursion` |
 | `blocklists` | `stats`, `add`, `sources`, `toggle`, `toggleSource`, `remove` |

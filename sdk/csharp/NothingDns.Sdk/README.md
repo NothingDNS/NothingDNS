@@ -6,7 +6,7 @@ Targets `net8.0` and uses only the .NET base class library — `System.Net.Http.
 for transport and `System.Text.Json` for serialization. There are no NuGet dependencies
 to audit, no transitive supply chain, and nothing to keep in sync with a third party.
 
-The SDK covers **all 71 operations** of the NothingDNS management API, including health
+The SDK covers **all 73 operations** of the NothingDNS management API, including health
 probes, zone and record management, the response cache, runtime configuration, ACLs,
 blocklists, response policy zones, DNSSEC, upstream health, GeoIP, clustering, the
 dashboard counters and the query log.
@@ -45,7 +45,7 @@ dashboard counters and the query log.
 
 ## Features
 
-- **Complete.** All 71 API operations, including the health probes, the CSP report sink
+- **Complete.** All 73 API operations, including the health probes, the CSP report sink
   and the API explorer documents.
 - **No dependencies.** BCL only. Nothing to audit, nothing to upgrade.
 - **Strongly typed.** Every response shape has a model with an explicit
@@ -215,7 +215,12 @@ foreach (var user in await client.Auth.ListUsersAsync(ct))
 }
 
 await client.Auth.CreateUserAsync("alice", "s3cret", NothingDnsRoles.Operator, ct);
+await client.Auth.UpdateUserAsync("alice", role: NothingDnsRoles.Viewer, cancellationToken: ct);
 await client.Auth.DeleteUserAsync("alice", ct);
+
+// Your own password: the server revokes your tokens and returns a new session,
+// which the client switches to.
+await client.Auth.ChangePasswordAsync(oldPassword, newPassword, cancellationToken: ct);
 ```
 
 `CreateUserAsync` validates the role locally against
@@ -396,6 +401,7 @@ var stats = await client.Cache.StatsAsync(ct);
 Console.WriteLine($"{stats.Size}/{stats.Capacity} entries, {stats.HitRatio:P1} hit ratio");
 
 await client.Cache.FlushAsync(ct);   // admin only
+await client.Cache.FlushNameAsync("www.example.com", ct);   // admin only; one name
 ```
 
 ### Config
@@ -757,7 +763,7 @@ An injected `HttpClient` is never disposed by the SDK — you keep ownership of 
 
 ## Full operation coverage
 
-All **71 operations** in the NothingDNS management API are covered.
+All **73 operations** in the NothingDNS management API are covered.
 
 ### Health, status and documents (9)
 
@@ -773,7 +779,7 @@ All **71 operations** in the NothingDNS management API are covered.
 | 8 | `client.ApiDocsScriptAsync` | `GET /api/docs/app.js` | any |
 | 9 | `client.ReportCspAsync` | `POST /api/v1/csp-report` | any |
 
-### Auth (9)
+### Auth (11)
 
 | # | Method | HTTP | Role |
 | --- | --- | --- | --- |
@@ -786,6 +792,8 @@ All **71 operations** in the NothingDNS management API are covered.
 | 16 | `client.Auth.CreateUserAsync` | `POST /api/v1/auth/users` | admin |
 | 17 | `client.Auth.DeleteUserAsync` | `DELETE /api/v1/auth/users/{username}` | admin |
 | 18 | `client.Auth.DeleteUserByQueryAsync` | `DELETE /api/v1/auth/users?username=` | admin |
+| 72 | `client.Auth.ChangePasswordAsync` | `POST /api/v1/auth/password` | any (user login) |
+| 73 | `client.Auth.UpdateUserAsync` | `PUT /api/v1/auth/users/{username}` | admin |
 
 ### Zones (13)
 
@@ -810,7 +818,7 @@ All **71 operations** in the NothingDNS management API are covered.
 | # | Method | HTTP | Role |
 | --- | --- | --- | --- |
 | 32 | `client.Cache.StatsAsync` | `GET /api/v1/cache/stats` | operator |
-| 33 | `client.Cache.FlushAsync` | `POST /api/v1/cache/flush` | admin |
+| 33 | `client.Cache.FlushAsync` / `FlushNameAsync` | `POST /api/v1/cache/flush[?name=]` | admin |
 
 ### Config (8)
 

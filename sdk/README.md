@@ -15,7 +15,7 @@ the server.
 | [C#](csharp/) | `sdk/csharp` | `NothingDns.Sdk` (NuGet) | none (BCL) |
 | [Java](java/) | `sdk/java` | `io.nothingdns:nothingdns-sdk` (Maven) | Gson |
 
-**API version covered:** NothingDNS 1.2.17 — all 71 operations in the server's
+**API version covered:** NothingDNS 1.3.0 — all 73 operations in the server's
 OpenAPI document (`GET /api/openapi.json` on any running node).
 
 ---
@@ -28,9 +28,9 @@ Every REST operation the server exposes:
 | --- | --- |
 | Health | `/health`, `/readyz`, `/livez` |
 | Status | `/api/v1/status`, `/api/v1/server/config`, `/api/openapi.json` |
-| Auth & users | login, bootstrap, session, logout, roles, list/create/delete users |
+| Auth & users | login, bootstrap, session, logout, roles, list/create/update/delete users, change own password |
 | Zones | list, create, get, delete, reload, transfers, records (add/replace/delete/list), export, bulk PTR, IPv6 PTR lookup |
-| Cache | statistics, flush |
+| Cache | statistics, flush (all or one name) |
 | Config | effective config, reload, runtime logging/RRL/cache/resolution/DNS64/cookie |
 | ACL | rules, recursion allow list |
 | Blocklists | stats, sources, add/remove/toggle |

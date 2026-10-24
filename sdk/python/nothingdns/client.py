@@ -341,6 +341,22 @@ class CacheResource(_Namespace):
         """
         return message_of(self._t.post("/api/v1/cache/flush", expect_json=False))
 
+    def flush_name(self, name: str) -> str:
+        """Drop the cached entries of one name only, every type (admin only).
+
+        Returns:
+            The server's message, which carries the number of entries removed.
+
+        Raises:
+            NothingDNSValidationError: when *name* is empty (use :meth:`flush`
+                to clear the whole cache).
+        """
+        if not name:
+            raise NothingDNSValidationError("name required (use flush to clear the whole cache)")
+        return message_of(
+            self._t.post("/api/v1/cache/flush", params={"name": name}, expect_json=False)
+        )
+
 
 class ConfigResource(_Namespace):
     """Configuration inspection and runtime tunables (``/api/v1/config``).
