@@ -43,7 +43,7 @@ check_prereq() {
     if [ ${#missing[@]} -gt 0 ]; then
         print_error "Missing dependencies: ${missing[*]}"
         echo "Please install:"
-        echo "  - Go 1.25+: https://go.dev/dl/"
+        echo "  - Go 1.26.9+: https://go.dev/dl/"
         echo "  - Git: https://git-scm.com/"
         exit 1
     fi
