@@ -45,7 +45,7 @@
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.6.0",
     "tailwindcss": "^4.3.1",
-    "zod": "^4.4.3",
+    "zod": "^4.6.7",
     "zustand": "^5.0.14"
   },
   "overridesComment": "eslint-plugin-jsx-a11y@6.10.2 caps its eslint peer at ^9 (upstream: jsx-eslint/eslint-plugin-jsx-a11y#1075 tracks v10 support). The plugin itself runs correctly on eslint 10, so this override aligns the peer with the installed eslint and lets `npm ci` resolve without --legacy-peer-deps. Remove once a release declares ^10.",
