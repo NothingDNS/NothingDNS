@@ -264,7 +264,7 @@ client.auth.change_password(old_password, new_password)
 | Method | Endpoint | Role |
 | --- | --- | --- |
 | `zones.list()` | `GET /api/v1/zones` | operator |
-| `zones.create(name, nameservers, admin_email=None, ttl=None)` | `POST /api/v1/zones` | operator |
+| `zones.create(name, nameservers, admin_email=None, ttl=None, refresh=None, retry=None, expire=None, minimum=None)` | `POST /api/v1/zones` | operator |
 | `zones.get(zone)` | `GET /api/v1/zones/{zone}` | operator |
 | `zones.delete(zone)` | `DELETE /api/v1/zones/{zone}` | operator |
 | `zones.reload(zone)` | `POST /api/v1/zones/reload` | admin |
@@ -276,6 +276,12 @@ client.auth.change_password(old_password, new_password)
 | `zones.export(zone)` | `GET /api/v1/zones/{zone}/export` | operator |
 | `zones.ptr_bulk(zone, cidr, pattern, ...)` | `POST /api/v1/zones/{zone}/ptr-bulk` | operator |
 | `zones.ptr6_lookup(zone, ip)` | `GET /api/v1/zones/{zone}/ptr6-lookup` | operator |
+| `zones.get_soa(zone)` | `GET /api/v1/zones/{zone}/soa` | operator |
+| `zones.update_soa(zone, *, mname, rname, ttl, refresh, retry, expire, minimum)` | `PUT /api/v1/zones/{zone}/soa` | operator |
+
+`zones.create` also takes `refresh`, `retry`, `expire` and `minimum` for the
+new zone's SOA. `get_soa`/`update_soa` and these timers need a server newer
+than 1.3.1.
 
 ```python
 # Create a zone and populate it.
@@ -297,6 +303,9 @@ client.zones.replace_record("example.com", "www", "A", "192.0.2.1", "192.0.2.9")
 # Inspect and export.
 detail = client.zones.get("example.com")
 print(detail.soa.serial, detail.nameservers)
+
+# Change the admin address and the negative-caching TTL; the server bumps the serial.
+soa = client.zones.update_soa("example.com", rname="dns@example.com", minimum=300)
 
 for record in client.zones.list_records("example.com", name="www").records:
     print(record.type, record.ttl, record.data)

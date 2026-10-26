@@ -6,7 +6,7 @@ Targets `net8.0` and uses only the .NET base class library — `System.Net.Http.
 for transport and `System.Text.Json` for serialization. There are no NuGet dependencies
 to audit, no transitive supply chain, and nothing to keep in sync with a third party.
 
-The SDK covers **all 73 operations** of the NothingDNS management API, including health
+The SDK covers **all 75 operations** of the NothingDNS management API, including health
 probes, zone and record management, the response cache, runtime configuration, ACLs,
 blocklists, response policy zones, DNSSEC, upstream health, GeoIP, clustering, the
 dashboard counters and the query log.
@@ -45,7 +45,7 @@ dashboard counters and the query log.
 
 ## Features
 
-- **Complete.** All 73 API operations, including the health probes, the CSP report sink
+- **Complete.** All 75 API operations, including the health probes, the CSP report sink
   and the API explorer documents.
 - **No dependencies.** BCL only. Nothing to audit, nothing to upgrade.
 - **Strongly typed.** Every response shape has a model with an explicit
@@ -326,6 +326,11 @@ await client.Zones.CreateAsync(
 // Inspect it.
 var detail = await client.Zones.GetAsync("example.com", ct);
 Console.WriteLine($"serial {detail.Serial}, SOA {detail.Soa?.Mname}, NS {string.Join(", ", detail.Nameservers)}");
+
+// Change the admin address and the negative-caching TTL; the server bumps the serial
+// (GetSoaAsync/UpdateSoaAsync need a server newer than 1.3.1).
+var soa = await client.Zones.UpdateSoaAsync(
+    "example.com", new SoaUpdate { Rname = "dns@example.com", Minimum = 300 }, ct);
 
 // Records.
 await client.Zones.AddRecordAsync("example.com", "www", "A", "203.0.113.10", ttl: 300, cancellationToken: ct);
@@ -763,7 +768,7 @@ An injected `HttpClient` is never disposed by the SDK — you keep ownership of 
 
 ## Full operation coverage
 
-All **73 operations** in the NothingDNS management API are covered.
+All **75 operations** in the NothingDNS management API are covered.
 
 ### Health, status and documents (9)
 
@@ -795,7 +800,7 @@ All **73 operations** in the NothingDNS management API are covered.
 | 72 | `client.Auth.ChangePasswordAsync` | `POST /api/v1/auth/password` | any (user login) |
 | 73 | `client.Auth.UpdateUserAsync` | `PUT /api/v1/auth/users/{username}` | admin |
 
-### Zones (13)
+### Zones (15)
 
 | # | Method | HTTP | Role |
 | --- | --- | --- | --- |
@@ -812,6 +817,8 @@ All **73 operations** in the NothingDNS management API are covered.
 | 29 | `client.Zones.ExportAsync` | `GET /api/v1/zones/{zone}/export` | operator |
 | 30 | `client.Zones.PtrBulkAsync` | `POST /api/v1/zones/{zone}/ptr-bulk` | operator |
 | 31 | `client.Zones.Ptr6LookupAsync` | `GET /api/v1/zones/{zone}/ptr6-lookup?ip=` | operator |
+| 74 | `client.Zones.GetSoaAsync` | `GET /api/v1/zones/{zone}/soa` | operator |
+| 75 | `client.Zones.UpdateSoaAsync` | `PUT /api/v1/zones/{zone}/soa` | operator |
 
 ### Cache (2)
 

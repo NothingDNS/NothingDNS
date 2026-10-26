@@ -1,7 +1,7 @@
 # NothingDNS Java SDK
 
 A typed Java client for the [NothingDNS](../) management API. It covers all
-**73 documented operations** — authentication, zones and records, the response
+**75 documented operations** — authentication, zones and records, the response
 cache, runtime configuration, ACLs, blocklists, response policy zones, DNSSEC,
 upstreams, GeoDNS, clustering, the dashboard and metrics.
 
@@ -40,7 +40,7 @@ upstreams, GeoDNS, clustering, the dashboard and metrics.
 
 ## Features
 
-- **Complete.** All 73 contract operations, one Java method each.
+- **Complete.** All 75 contract operations, one Java method each.
 - **Typed.** Every response decodes into a documented model class; no raw JSON
   except for the effective config and the OpenAPI document, whose shape is
   server-defined.
@@ -301,6 +301,10 @@ client.zones().create("example.com",
                       List.of("ns1.example.com", "ns2.example.com"),
                       "hostmaster@example.com",
                       3600);
+
+// SOA: the server bumps the serial (needs a server newer than 1.3.1)
+Soa soa = client.zones().updateSoa("example.com",
+        new SoaUpdate().rname("dns@example.com").minimum(300));
 
 // Records
 client.zones().addRecord("example.com", "www", "A", "192.0.2.1", 3600);
@@ -629,7 +633,7 @@ higher role rather than retrying.
 
 ## Operation coverage
 
-All 73 operations in the API contract. `GET`/`POST`/`PUT`/`DELETE` is the HTTP
+All 75 operations in the API contract. `GET`/`POST`/`PUT`/`DELETE` is the HTTP
 verb; the last column is the exact SDK method.
 
 | # | Method | Endpoint | SDK call | Min. role |
@@ -653,7 +657,7 @@ verb; the last column is the exact SDK method.
 | 17 | DELETE | `/api/v1/auth/users?username=` | `client.auth().deleteUserByQuery(name)` | admin |
 | 18 | DELETE | `/api/v1/auth/users/{username}` | `client.auth().deleteUser(name)` | admin |
 | 19 | GET | `/api/v1/zones` | `client.zones().list()` | operator |
-| 20 | POST | `/api/v1/zones` | `client.zones().create(name, ns[, email, ttl])` | operator |
+| 20 | POST | `/api/v1/zones` | `client.zones().create(name, ns[, email, ttl[, soaTimers]])` | operator |
 | 21 | POST | `/api/v1/zones/reload?zone=` | `client.zones().reload(zone)` | admin |
 | 22 | GET | `/api/v1/zones/transfers` | `client.zones().transfers()` | operator |
 | 23 | GET | `/api/v1/zones/{zone}` | `client.zones().get(zone)` | operator |
@@ -707,6 +711,8 @@ verb; the last column is the exact SDK method.
 | 71 | GET | `/api/v1/metrics/history` | `client.metrics().history()` | operator |
 | 72 | POST | `/api/v1/auth/password` | `client.auth().changePassword(old, new)` | any (user login) |
 | 73 | PUT | `/api/v1/auth/users/{username}` | `client.auth().updateUser(name, pass, role)` | admin |
+| 74 | GET | `/api/v1/zones/{zone}/soa` | `client.zones().getSoa(zone)` | operator |
+| 75 | PUT | `/api/v1/zones/{zone}/soa` | `client.zones().updateSoa(zone, soaUpdate)` | operator |
 
 Operations 17 and 18 are the two documented forms of the same delete-user
 endpoint. `deleteUser(name)` uses the path form (the usual choice) and

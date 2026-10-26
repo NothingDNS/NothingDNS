@@ -274,7 +274,7 @@ await client.auth.changePassword(oldPassword, newPassword);
 | Method | Endpoint | Role |
 | --- | --- | --- |
 | `zones.list()` | `GET /api/v1/zones` | operator |
-| `zones.create(name, nameservers, { adminEmail, ttl })` | `POST /api/v1/zones` | operator |
+| `zones.create(name, nameservers, { adminEmail, ttl, refresh, retry, expire, minimum })` | `POST /api/v1/zones` | operator |
 | `zones.get(zone)` | `GET /api/v1/zones/{zone}` | operator |
 | `zones.delete(zone)` | `DELETE /api/v1/zones/{zone}` | operator |
 | `zones.reload(zone)` | `POST /api/v1/zones/reload` | admin |
@@ -287,6 +287,11 @@ await client.auth.changePassword(oldPassword, newPassword);
 | `zones.export(zone)` | `GET /api/v1/zones/{zone}/export` | operator |
 | `zones.ptrBulk(zone, cidr, pattern, options)` | `POST /api/v1/zones/{zone}/ptr-bulk` | operator |
 | `zones.ptr6Lookup(zone, ip)` | `GET /api/v1/zones/{zone}/ptr6-lookup` | operator |
+| `zones.getSOA(zone)` | `GET /api/v1/zones/{zone}/soa` | operator |
+| `zones.updateSOA(zone, { mname?, rname?, ttl?, refresh?, retry?, expire?, minimum? })` | `PUT /api/v1/zones/{zone}/soa` | operator |
+
+`getSOA`/`updateSOA` and the SOA timers of `create` need a server newer than
+1.3.1.
 
 ```ts
 // Create a zone and populate it.
@@ -297,6 +302,9 @@ await client.zones.create(
 );
 
 await client.zones.addRecord('example.com', 'www', 'A', '192.0.2.1');
+
+// Change the admin address and the negative-caching TTL; the server bumps the serial.
+const soa = await client.zones.updateSOA('example.com', { rname: 'dns@example.com', minimum: 300 });
 await client.zones.addRecord('example.com', 'mail', 'A', '192.0.2.2', { ttl: 600 });
 await client.zones.addRecord('example.com', '@', 'MX', '10 mail.example.com');
 await client.zones.addRecord('example.com', '@', 'TXT', '"v=spf1 mx -all"');

@@ -391,6 +391,38 @@ public sealed class MockApi : IDisposable
                     _ => (200, "application/json", """{"message":"records deleted"}"""),
                 };
 
+            case "/api/v1/zones/example.com/soa":
+            {
+                var soa = new JsonObject
+                {
+                    ["mname"] = "ns1.example.com.", ["rname"] = "hostmaster.example.com.", ["ttl"] = 3600,
+                    ["serial"] = 7, ["refresh"] = 3600, ["retry"] = 600, ["expire"] = 86400, ["minimum"] = 300,
+                };
+                if (method == "PUT" && body is not null)
+                {
+                    if (body["retry"] is JsonNode retry && retry.GetValue<long>() >= 3600)
+                    {
+                        return (400, "application/json", """{"error":"SOA retry (3600) must be shorter than refresh (3600)"}""");
+                    }
+
+                    foreach (var (key, value) in body)
+                    {
+                        soa[key] = value?.DeepClone();
+                    }
+
+                    var rname = soa["rname"]!.GetValue<string>();
+                    var at = rname.IndexOf('@');
+                    if (at >= 0)
+                    {
+                        soa["rname"] = rname[..at] + "." + rname[(at + 1)..] + ".";
+                    }
+
+                    soa["serial"] = 8;
+                }
+
+                return (200, "application/json", soa.ToJsonString());
+            }
+
             case "/api/v1/zones/example.com/export":
                 return (200, "text/plain", "$ORIGIN example.com.\n@ IN SOA ns1 hostmaster 7 3600 600 86400 300\n");
 

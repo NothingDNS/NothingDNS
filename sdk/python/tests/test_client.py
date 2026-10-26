@@ -12,6 +12,7 @@ from nothingdns import (
     ACLRule,
     NothingDNSApiError,
     NothingDNSClient,
+    NothingDNSValidationError,
     is_not_found,
 )
 from nothingdns.models import PTRBulkPreview
@@ -108,6 +109,45 @@ def test_flush_name_sends_query(client, mock_api):
 
     assert mock_api.last.method == "POST"
     assert mock_api.last.path == "/api/v1/cache/flush?name=www.example.com"
+
+
+def test_update_soa_sends_only_given_fields(client, mock_api):
+    client.set_token(TOKEN)
+
+    soa = client.zones.get_soa("example.com")
+    assert soa.ttl == 3600
+    assert mock_api.last.path == "/api/v1/zones/example.com/soa"
+
+    soa = client.zones.update_soa("example.com", rname="dns@example.com", minimum=60)
+
+    assert soa.serial == 8
+    assert soa.rname == "dns.example.com."
+    assert soa.minimum == 60
+    assert mock_api.last.method == "PUT"
+    assert mock_api.last.path == "/api/v1/zones/example.com/soa"
+    assert mock_api.last.body == {"rname": "dns@example.com", "minimum": 60}
+
+    with pytest.raises(NothingDNSApiError) as excinfo:
+        client.zones.update_soa("example.com", retry=3600)
+    assert excinfo.value.status_code == 400
+
+    before = len(mock_api.requests)
+    with pytest.raises(NothingDNSValidationError):
+        client.zones.update_soa("example.com")
+    assert len(mock_api.requests) == before
+
+
+def test_create_zone_sends_soa_timers(client, mock_api):
+    client.set_token(TOKEN)
+
+    client.zones.create("new.example", ["ns1.new.example"], refresh=7200, minimum=300)
+
+    assert mock_api.last.body == {
+        "name": "new.example",
+        "nameservers": ["ns1.new.example"],
+        "refresh": 7200,
+        "minimum": 300,
+    }
 
 
 # --------------------------------------------------------------------------

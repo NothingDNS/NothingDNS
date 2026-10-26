@@ -19,6 +19,32 @@ type CreateZoneOptions struct {
 	AdminEmail *string
 	// TTL is the default TTL for records in the new zone, in seconds.
 	TTL *int
+	// Refresh, Retry, Expire and Minimum set the new zone's SOA timers, in
+	// seconds; the server defaults are 3600, 600, 604800 and 86400.
+	Refresh *int
+	Retry   *int
+	Expire  *int
+	Minimum *int
+}
+
+// SOAUpdate carries the SOA fields Zones.UpdateSOA changes. A nil field keeps
+// its current value. The serial is not settable: the server bumps it.
+type SOAUpdate struct {
+	// MName is the primary nameserver.
+	MName *string `json:"mname,omitempty"`
+	// RName is the admin address, as user@domain or in DNS form.
+	RName *string `json:"rname,omitempty"`
+	// TTL is the TTL of the SOA record, in seconds.
+	TTL *int `json:"ttl,omitempty"`
+	// Refresh is the secondary refresh interval, in seconds.
+	Refresh *int `json:"refresh,omitempty"`
+	// Retry is the secondary retry interval, in seconds; shorter than Refresh.
+	Retry *int `json:"retry,omitempty"`
+	// Expire is when a secondary stops serving the zone, in seconds; longer
+	// than Refresh.
+	Expire *int `json:"expire,omitempty"`
+	// Minimum is the negative-caching TTL, in seconds.
+	Minimum *int `json:"minimum,omitempty"`
 }
 
 // AddRecordOptions carries the optional fields of a record create or replace.
@@ -44,6 +70,10 @@ type createZoneRequest struct {
 	NameServers []string `json:"nameservers"`
 	AdminEmail  *string  `json:"admin_email,omitempty"`
 	TTL         *int     `json:"ttl,omitempty"`
+	Refresh     *int     `json:"refresh,omitempty"`
+	Retry       *int     `json:"retry,omitempty"`
+	Expire      *int     `json:"expire,omitempty"`
+	Minimum     *int     `json:"minimum,omitempty"`
 }
 
 // addRecordRequest is the JSON body of POST /api/v1/zones/{zone}/records.
@@ -116,6 +146,10 @@ func (s *ZonesService) Create(ctx context.Context, name string, nameServers []st
 	if opts != nil {
 		body.AdminEmail = opts.AdminEmail
 		body.TTL = opts.TTL
+		body.Refresh = opts.Refresh
+		body.Retry = opts.Retry
+		body.Expire = opts.Expire
+		body.Minimum = opts.Minimum
 	}
 	return s.t.doMessage(ctx, "POST", "/api/v1/zones", nil, body)
 }
@@ -128,6 +162,38 @@ func (s *ZonesService) Create(ctx context.Context, name string, nameServers []st
 func (s *ZonesService) Get(ctx context.Context, zone string) (*ZoneDetail, error) {
 	var out ZoneDetail
 	if err := s.t.doJSON(ctx, "GET", "/api/v1/zones/"+s.t.escape(zone), nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// GetSOA returns the zone's SOA record. It requires the operator role or
+// higher. zone is the zone name; a trailing dot is optional.
+//
+// It fails with an *ErrAPIError carrying status 404 when the zone does not
+// exist, or 409 when it has no SOA record.
+func (s *ZonesService) GetSOA(ctx context.Context, zone string) (*SOA, error) {
+	var out SOA
+	if err := s.t.doJSON(ctx, "GET", "/api/v1/zones/"+s.t.escape(zone)+"/soa", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// UpdateSOA changes the SOA fields set in update and returns the new SOA. It
+// requires the operator role or higher. The server bumps the serial, so
+// secondaries are notified and transfer the change.
+//
+// It fails with an *ErrValidationError when update sets no field, or an
+// *ErrAPIError carrying status 400 when a value is refused (every value at
+// most 2147483647; refresh, retry and expire above zero; retry shorter than
+// refresh; expire longer than refresh) or 404 when the zone does not exist.
+func (s *ZonesService) UpdateSOA(ctx context.Context, zone string, update SOAUpdate) (*SOA, error) {
+	if update == (SOAUpdate{}) {
+		return nil, &ErrValidationError{Message: "update must set at least one SOA field"}
+	}
+	var out SOA
+	if err := s.t.doJSON(ctx, "PUT", "/api/v1/zones/"+s.t.escape(zone)+"/soa", nil, update, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil

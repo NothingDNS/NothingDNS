@@ -219,6 +219,10 @@ public sealed class Soa
     [JsonPropertyName("rname")]
     public string Rname { get; set; } = string.Empty;
 
+    /// <summary>Gets or sets the TTL the SOA record is served with, in seconds.</summary>
+    [JsonPropertyName("ttl")]
+    public long Ttl { get; set; }
+
     /// <summary>Gets or sets the zone serial number.</summary>
     [JsonPropertyName("serial")]
     public long Serial { get; set; }
@@ -270,6 +274,34 @@ public sealed class ZoneList
     /// <summary>Gets or sets a value indicating whether the server capped the returned list.</summary>
     [JsonPropertyName("truncated")]
     public bool Truncated { get; set; }
+}
+
+/// <summary>
+/// SOA fields to change with <see cref="NothingDnsZones.UpdateSoaAsync"/>. A null
+/// property keeps its current value. The serial is not settable: the server bumps it.
+/// </summary>
+public sealed class SoaUpdate
+{
+    /// <summary>Gets or sets the primary nameserver.</summary>
+    public string? Mname { get; set; }
+
+    /// <summary>Gets or sets the admin address, as <c>user@domain</c> or in DNS form.</summary>
+    public string? Rname { get; set; }
+
+    /// <summary>Gets or sets the TTL of the SOA record, in seconds.</summary>
+    public long? Ttl { get; set; }
+
+    /// <summary>Gets or sets the secondary refresh interval, in seconds.</summary>
+    public long? Refresh { get; set; }
+
+    /// <summary>Gets or sets the secondary retry interval, in seconds; shorter than <see cref="Refresh"/>.</summary>
+    public long? Retry { get; set; }
+
+    /// <summary>Gets or sets when a secondary stops serving the zone, in seconds; longer than <see cref="Refresh"/>.</summary>
+    public long? Expire { get; set; }
+
+    /// <summary>Gets or sets the negative-caching TTL, in seconds.</summary>
+    public long? Minimum { get; set; }
 }
 
 /// <summary>Result of <c>GET /api/v1/zones/{zone}</c>.</summary>

@@ -56,6 +56,7 @@ import type {
   RecordList,
   RecursionAllowList,
   ServerConfig,
+  SOA,
   SlaveZone,
   StatusResponse,
   TopDomains,
@@ -84,6 +85,24 @@ export const RPZ_ACTIONS = [
 ] as const;
 
 /** Zones, records, export and bulk PTR generation (`/api/v1/zones`). */
+/** SOA fields for {@link ZonesResource.updateSOA}; omitted ones keep their value. */
+export interface SOAUpdate {
+  /** Primary nameserver. */
+  mname?: string;
+  /** Admin address, as `user@domain` or in DNS form. */
+  rname?: string;
+  /** TTL of the SOA record, in seconds. */
+  ttl?: number;
+  /** Secondary refresh interval, in seconds. */
+  refresh?: number;
+  /** Secondary retry interval, in seconds; shorter than `refresh`. */
+  retry?: number;
+  /** When a secondary stops serving the zone, in seconds; longer than `refresh`. */
+  expire?: number;
+  /** Negative-caching TTL, in seconds. */
+  minimum?: number;
+}
+
 export class ZonesResource {
   constructor(private readonly t: Transport) {}
 
@@ -103,13 +122,22 @@ export class ZonesResource {
    * @param name - Zone name; a trailing dot is added when missing.
    * @param nameservers - NS hostnames written into the zone's SOA record.
    * @param adminEmail - Zone admin e-mail; the server derives the SOA `rname`.
+   *   `refresh`, `retry`, `expire` and `minimum` set the SOA timers (server
+   *   defaults 3600, 600, 604800 and 86400).
    * @throws {@link NothingDNSApiError} 409 when the zone exists, 421 when the
    *   name cannot become its own zone.
    */
   async create(
     name: string,
     nameservers: string[],
-    options: { adminEmail?: string; ttl?: number } = {},
+    options: {
+      adminEmail?: string;
+      ttl?: number;
+      refresh?: number;
+      retry?: number;
+      expire?: number;
+      minimum?: number;
+    } = {},
   ): Promise<string> {
     if (nameservers.length === 0) {
       throw new NothingDNSValidationError('nameservers must contain at least one hostname');
@@ -121,6 +149,10 @@ export class ZonesResource {
           nameservers,
           admin_email: options.adminEmail,
           ttl: options.ttl,
+          refresh: options.refresh,
+          retry: options.retry,
+          expire: options.expire,
+          minimum: options.minimum,
         }),
       }),
     );
@@ -129,6 +161,32 @@ export class ZonesResource {
   /** Get one zone with its SOA record and NS set (operator+). Throws 404 when absent. */
   async get(zone: string): Promise<ZoneDetail> {
     return zoneDetailFromJson(await this.t.get(`/api/v1/zones/${escapeSegment(zone)}`));
+  }
+
+  /** Get the zone's SOA record (operator+). Throws 404 when the zone is absent, 409 when it has no SOA. */
+  async getSOA(zone: string): Promise<SOA> {
+    return internalMappers.soaFromJson(await this.t.get(`/api/v1/zones/${escapeSegment(zone)}/soa`));
+  }
+
+  /**
+   * Change the SOA fields in `update` and return the new SOA (operator+).
+   *
+   * The serial is not settable: the server bumps it, so secondaries are
+   * notified and transfer the change.
+   *
+   * @throws {@link NothingDNSValidationError} when `update` sets no field.
+   * @throws {@link NothingDNSApiError} 400 when a value is refused (retry must
+   *   be shorter than refresh, expire longer than refresh), 404 when the zone
+   *   is absent.
+   */
+  async updateSOA(zone: string, update: SOAUpdate): Promise<SOA> {
+    const body = dropNone({ ...update });
+    if (Object.keys(body).length === 0) {
+      throw new NothingDNSValidationError('updateSOA needs at least one SOA field');
+    }
+    return internalMappers.soaFromJson(
+      await this.t.put(`/api/v1/zones/${escapeSegment(zone)}/soa`, { body }),
+    );
   }
 
   /** Delete a zone together with all of its records (operator+). */

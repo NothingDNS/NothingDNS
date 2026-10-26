@@ -32,6 +32,7 @@ export type {
   CacheConfigOptions,
   ResolutionOptions,
   RRLOptions,
+  SOAUpdate,
 } from './client.js';
 
 export { AuthResource, ROLES } from './auth.js';

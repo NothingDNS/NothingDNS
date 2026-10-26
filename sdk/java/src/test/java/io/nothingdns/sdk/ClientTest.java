@@ -4,6 +4,8 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import io.nothingdns.sdk.model.AclRule;
 import io.nothingdns.sdk.model.SlaveZone;
+import io.nothingdns.sdk.model.Soa;
+import io.nothingdns.sdk.model.SoaUpdate;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -134,6 +136,46 @@ class ClientTest {
 
         assertEquals("POST", mock.last().method());
         assertEquals("/api/v1/cache/flush?name=www.example.com", mock.last().path());
+    }
+
+    @Test
+    void updateSoaSendsOnlySetFields() {
+        client.setToken(MockApi.TOKEN);
+
+        Soa soa = client.zones().getSoa("example.com");
+        assertEquals(3600, soa.getTtl());
+        assertEquals("/api/v1/zones/example.com/soa", mock.last().path());
+
+        soa = client.zones().updateSoa("example.com", new SoaUpdate().rname("dns@example.com").minimum(60));
+        assertEquals(8, soa.getSerial());
+        assertEquals("dns.example.com.", soa.getRname());
+        assertEquals(60, soa.getMinimum());
+        assertEquals("PUT", mock.last().method());
+        assertEquals("/api/v1/zones/example.com/soa", mock.last().path());
+        assertEquals(Set.of("rname", "minimum"), mock.last().body().keySet());
+
+        NothingDnsException refused = assertThrows(NothingDnsException.class,
+                () -> client.zones().updateSoa("example.com", new SoaUpdate().retry(3600)));
+        assertEquals(400, refused.getStatusCode());
+
+        int before = mock.requests().size();
+        assertThrows(IllegalArgumentException.class,
+                () -> client.zones().updateSoa("example.com", new SoaUpdate()));
+        assertEquals(before, mock.requests().size());
+    }
+
+    @Test
+    void createZoneSendsSoaTimers() {
+        client.setToken(MockApi.TOKEN);
+
+        try {
+            client.zones().create("new.example", List.of("ns1.new.example"), null, null,
+                    new SoaUpdate().refresh(7200).minimum(300).mname("ignored"));
+        } catch (NothingDnsException ignored) {
+            // the mock answers the zone list; only the request matters
+        }
+        assertEquals(Set.of("name", "nameservers", "refresh", "minimum"), mock.last().body().keySet());
+        assertEquals(7200, mock.last().body().get("refresh").getAsInt());
     }
 
     @Test

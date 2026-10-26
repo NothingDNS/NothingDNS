@@ -156,6 +156,27 @@ final class MockApi {
                     json(exchange, 200, "{\"message\": \"records deleted\"}");
                 }
                 return;
+            case "/api/v1/zones/example.com/soa":
+                JsonObject soa = JsonParser.parseString("""
+                        {"mname": "ns1.example.com.", "rname": "hostmaster.example.com.", "ttl": 3600,
+                         "serial": 7, "refresh": 3600, "retry": 600, "expire": 86400, "minimum": 300}
+                        """).getAsJsonObject();
+                if ("PUT".equals(exchange.getRequestMethod()) && body != null) {
+                    if (body.has("retry") && body.get("retry").getAsInt() >= 3600) {
+                        json(exchange, 400, "{\"error\": \"SOA retry (3600) must be shorter than refresh (3600)\"}");
+                        return;
+                    }
+                    for (String key : body.keySet()) {
+                        soa.add(key, body.get(key));
+                    }
+                    String rname = soa.get("rname").getAsString();
+                    if (rname.contains("@")) {
+                        soa.addProperty("rname", rname.replaceFirst("@", ".") + ".");
+                    }
+                    soa.addProperty("serial", 8);
+                }
+                json(exchange, 200, soa.toString());
+                return;
             case "/api/v1/zones/example.com/export":
                 text(exchange, 200, ZONE_FILE);
                 return;

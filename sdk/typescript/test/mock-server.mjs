@@ -70,6 +70,20 @@ export async function createMockServer() {
           // Single-record delete (F419): 404 when no record carries the data.
           if (body?.data === '192.0.2.250') return json(404, { error: 'record not found: api A 192.0.2.250' });
           return json(200, { message: 'records deleted' });
+        case '/api/v1/zones/example.com/soa': {
+          const soa = {
+            mname: 'ns1.example.com.', rname: 'hostmaster.example.com.', ttl: 3600, serial: 7,
+            refresh: 3600, retry: 600, expire: 86400, minimum: 300,
+          };
+          if (req.method === 'PUT') {
+            if ((body?.retry ?? 0) >= 3600) {
+              return json(400, { error: 'SOA retry (3600) must be shorter than refresh (3600)' });
+            }
+            Object.assign(soa, body, { serial: 8 });
+            if (soa.rname.includes('@')) soa.rname = `${soa.rname.replace('@', '.')}.`;
+          }
+          return json(200, soa);
+        }
         case '/api/v1/zones/example.com/export':
           return text(200, ZONE_FILE);
         case '/api/v1/zones/missing.com':

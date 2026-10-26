@@ -170,6 +170,25 @@ class MockNothingDNS:
                     if method == "PUT":
                         return self._send(200, {"message": "record replaced"})
                     return self._send(200, {"message": "records deleted"})
+                if route == "/api/v1/zones/example.com/soa":
+                    soa = {
+                        "mname": "ns1.example.com.",
+                        "rname": "hostmaster.example.com.",
+                        "ttl": 3600,
+                        "serial": 7,
+                        "refresh": 3600,
+                        "retry": 600,
+                        "expire": 86400,
+                        "minimum": 300,
+                    }
+                    if method == "PUT":
+                        if body.get("retry", 0) >= 3600:
+                            return self._send(400, {"error": "SOA retry (3600) must be shorter than refresh (3600)"})
+                        soa.update(body)
+                        if "@" in soa["rname"]:
+                            soa["rname"] = soa["rname"].replace("@", ".", 1) + "."
+                        soa["serial"] = 8
+                    return self._send(200, soa)
                 if route == "/api/v1/zones/example.com/export":
                     text = "$ORIGIN example.com.\n@ IN SOA ns1 hostmaster 7 3600 600 86400 300\n"
                     return self._send(200, text, raw=True)

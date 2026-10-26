@@ -5,6 +5,8 @@ import io.nothingdns.sdk.NothingDnsTransport;
 import io.nothingdns.sdk.model.PtrModels;
 import io.nothingdns.sdk.model.RecordList;
 import io.nothingdns.sdk.model.SlaveZone;
+import io.nothingdns.sdk.model.Soa;
+import io.nothingdns.sdk.model.SoaUpdate;
 import io.nothingdns.sdk.model.ZoneDetail;
 import io.nothingdns.sdk.model.ZoneList;
 
@@ -57,11 +59,38 @@ public final class ZonesResource extends ApiResource {
      *                                                is out of range
      */
     public String create(String name, List<String> nameservers, String adminEmail, Integer ttl) {
+        return create(name, nameservers, adminEmail, ttl, null);
+    }
+
+    /**
+     * Create a zone with SOA timers (operator+).
+     *
+     * @param name        the zone name, e.g. {@code example.com}
+     * @param nameservers the zone's nameserver hostnames; must have at least
+     *                    one entry
+     * @param adminEmail  the responsible email, optional
+     * @param ttl         the default record TTL, optional
+     * @param timers      the refresh, retry, expire and minimum of the SOA,
+     *                    optional; the server defaults are 3600, 600, 604800
+     *                    and 86400. Its mname, rname and ttl are ignored.
+     * @return the server's confirmation message
+     * @throws io.nothingdns.sdk.NothingDnsException 400 for a bad name or
+     *                                                timers, 409 when the zone
+     *                                                already exists
+     */
+    public String create(String name, List<String> nameservers, String adminEmail, Integer ttl,
+                         SoaUpdate timers) {
         Map<String, Object> payload = body();
         payload.put("name", name);
         payload.put("nameservers", nameservers);
         put(payload, "admin_email", adminEmail);
         put(payload, "ttl", ttl);
+        if (timers != null) {
+            Map<String, Object> t = timers.toBody();
+            for (String key : List.of("refresh", "retry", "expire", "minimum")) {
+                put(payload, key, t.get(key));
+            }
+        }
         return message(transport.post("/api/v1/zones", payload));
     }
 
@@ -85,6 +114,41 @@ public final class ZonesResource extends ApiResource {
      */
     public ZoneDetail get(String zone) {
         return model(transport.get("/api/v1/zones/" + escape(zone)), ZoneDetail.class);
+    }
+
+    /**
+     * Get a zone's SOA record (operator+).
+     *
+     * @param zone the zone name
+     * @return the SOA record
+     * @throws io.nothingdns.sdk.NothingDnsException 404 when the zone is
+     *                                                unknown, 409 when it has
+     *                                                no SOA
+     */
+    public Soa getSoa(String zone) {
+        return Soa.from(transport.get("/api/v1/zones/" + escape(zone) + "/soa"), gson);
+    }
+
+    /**
+     * Change SOA fields (operator+). The server bumps the serial.
+     *
+     * @param zone   the zone name
+     * @param update the fields to change; unset ones keep their value
+     * @return the new SOA record
+     * @throws IllegalArgumentException                when {@code update} sets
+     *                                                  no field
+     * @throws io.nothingdns.sdk.NothingDnsException 400 when a value is
+     *                                                refused (retry must be
+     *                                                shorter than refresh,
+     *                                                expire longer than
+     *                                                refresh), 404 when the
+     *                                                zone is unknown
+     */
+    public Soa updateSoa(String zone, SoaUpdate update) {
+        if (update == null || update.isEmpty()) {
+            throw new IllegalArgumentException("update must set at least one SOA field");
+        }
+        return Soa.from(transport.put("/api/v1/zones/" + escape(zone) + "/soa", update.toBody()), gson);
     }
 
     /**

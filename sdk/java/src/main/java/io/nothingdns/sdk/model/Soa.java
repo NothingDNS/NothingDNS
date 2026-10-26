@@ -7,12 +7,14 @@ import com.google.gson.JsonObject;
 /**
  * The start-of-authority record of a zone.
  *
- * <p>Embedded in the {@code soa} block of {@code GET /api/v1/zones/{zone}}.</p>
+ * <p>Embedded in the {@code soa} block of {@code GET /api/v1/zones/{zone}}, and
+ * the body of {@code GET/PUT /api/v1/zones/{zone}/soa}.</p>
  */
 public final class Soa {
 
     private String mname;
     private String rname;
+    private int ttl;
     private int serial;
     private int refresh;
     private int retry;
@@ -34,6 +36,7 @@ public final class Soa {
         Soa s = new Soa();
         s.mname = Json.str(o, "mname");
         s.rname = Json.str(o, "rname");
+        s.ttl = Json.integer(o, "ttl");
         s.serial = Json.integer(o, "serial");
         s.refresh = Json.integer(o, "refresh");
         s.retry = Json.integer(o, "retry");
@@ -54,6 +57,13 @@ public final class Soa {
      */
     public String getRname() {
         return rname;
+    }
+
+    /**
+     * @return the TTL the SOA record is served with, in seconds
+     */
+    public int getTtl() {
+        return ttl;
     }
 
     /**

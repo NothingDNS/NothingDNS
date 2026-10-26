@@ -164,6 +164,26 @@ func (m *mockAPI) handle(w http.ResponseWriter, r *http.Request) {
 			sendJSON(http.StatusOK, map[string]any{"message": "records deleted"})
 		}
 		return
+	case "/api/v1/zones/example.com/soa":
+		soa := map[string]any{
+			"mname": "ns1.example.com.", "rname": "hostmaster.example.com.", "ttl": 3600, "serial": 7,
+			"refresh": 3600, "retry": 600, "expire": 86400, "minimum": 300,
+		}
+		if r.Method == http.MethodPut {
+			if retry, _ := body["retry"].(float64); retry >= 3600 {
+				sendJSON(http.StatusBadRequest, map[string]any{"error": "SOA retry (3600) must be shorter than refresh (3600)"})
+				return
+			}
+			for k, v := range body {
+				soa[k] = v
+			}
+			if rname, _ := body["rname"].(string); strings.Contains(rname, "@") {
+				soa["rname"] = strings.Replace(rname, "@", ".", 1) + "."
+			}
+			soa["serial"] = 8
+		}
+		sendJSON(http.StatusOK, soa)
+		return
 	case "/api/v1/zones/example.com/export":
 		sendText(http.StatusOK, testZoneFile)
 		return

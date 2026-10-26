@@ -229,6 +229,7 @@ class Role:
 class SOA:
     mname: str = ""
     rname: str = ""
+    ttl: int = 0
     serial: int = 0
     refresh: int = 0
     retry: int = 0
@@ -241,6 +242,7 @@ class SOA:
         return cls(
             mname=d.get("mname", ""),
             rname=d.get("rname", ""),
+            ttl=int(d.get("ttl", 0) or 0),
             serial=int(d.get("serial", 0) or 0),
             refresh=int(d.get("refresh", 0) or 0),
             retry=int(d.get("retry", 0) or 0),

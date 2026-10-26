@@ -222,6 +222,12 @@ _, err = client.Zones.Create(ctx, "example.com", ns, &nothingdns.CreateZoneOptio
     TTL:        &ttl,
 })
 
+// SOA: change the admin address and the negative-caching TTL; the server
+// bumps the serial (GetSOA/UpdateSOA need a server newer than 1.3.1)
+soa, err := client.Zones.GetSOA(ctx, "example.com")
+rname, minimum := "dns@example.com", 300
+soa, err = client.Zones.UpdateSOA(ctx, "example.com", nothingdns.SOAUpdate{RName: &rname, Minimum: &minimum})
+
 // Records
 records, err := client.Zones.ListRecords(ctx, "example.com", "")            // all
 records, err = client.Zones.ListRecords(ctx, "example.com", "www")           // filtered
@@ -448,7 +454,7 @@ if errors.As(err, &apiErr) {
 | `200` | Success (JSON or plain text) | most reads and mutations; `Zones.Export` returns the zone file |
 | `201` | Created | `Zones.Create`, `Zones.AddRecord`, `Auth.CreateUser`, `RPZ.AddRule`, `Blocklists.Add` |
 | `204` | No content | `Client.ReportCSPViolation` |
-| `400` | Bad request / invalid data (`IsBadRequest`) | `Login`, `Zones.Create`, `Zones.AddRecord`/`ReplaceRecord` (RDATA that does not parse for the type, SOA), `Zones.DeleteRecord(s)` (SOA, apex NS), `Config.Set*` (a value the config loader would reject), `Blocklists.Add`, `RPZ.AddRule` (CNAME/OVERRIDE without valid override data), `Upstreams.Add`/`Remove` (no port, last server), `ACL.Set` |
+| `400` | Bad request / invalid data (`IsBadRequest`) | `Login`, `Zones.Create`, `Zones.AddRecord`/`ReplaceRecord` (RDATA that does not parse for the type, SOA), `Zones.UpdateSOA` (retry not shorter than refresh, expire not longer than refresh, bad mailbox), `Zones.DeleteRecord(s)` (SOA, apex NS), `Config.Set*` (a value the config loader would reject), `Blocklists.Add`, `RPZ.AddRule` (CNAME/OVERRIDE without valid override data), `Upstreams.Add`/`Remove` (no port, last server), `ACL.Set` |
 | `401` | Unauthorized (missing/expired/rejected token) | any authenticated call |
 | `403` | Forbidden (role too low) | any admin-only or operator-only call |
 | `404` | Not found | `Zones.Get`/`Delete`, `Zones.ListRecords`, `Zones.DeleteRecord` (no record with that data), `RPZ`/`Blocklists` targets |
@@ -477,7 +483,7 @@ stats, err := client.Cache.Stats(ctx)
 
 ## Method → HTTP endpoint coverage
 
-All 73 operations of the management API, in contract order. The **Role** column shows the minimum role the server requires (`—` = no authentication).
+All 75 operations of the management API, in contract order. The **Role** column shows the minimum role the server requires (`—` = no authentication).
 
 | # | Go method | HTTP | Role |
 |---|-----------|------|------|
@@ -554,6 +560,8 @@ All 73 operations of the management API, in contract order. The **Role** column 
 | 71 | `Client.APIDocs` | `GET /api/docs` | any |
 | 72 | `Auth.ChangePassword` | `POST /api/v1/auth/password` | any (user login) |
 | 73 | `Auth.UpdateUser` | `PUT /api/v1/auth/users/{username}` | admin |
+| 74 | `Zones.GetSOA` | `GET /api/v1/zones/{zone}/soa` | operator |
+| 75 | `Zones.UpdateSOA` | `PUT /api/v1/zones/{zone}/soa` | operator |
 
 ---
 

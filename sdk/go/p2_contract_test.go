@@ -141,3 +141,49 @@ func TestFlushNameSendsQuery(t *testing.T) {
 	wantTrue(t, errors.As(err, &verr), "empty name is refused locally")
 	wantEqual(t, "no request sent", m.count(), before)
 }
+
+// Issue #19: GET/PUT /api/v1/zones/{zone}/soa and SOA timers on zone create.
+
+func TestUpdateSOASendsOnlySetFields(t *testing.T) {
+	m := newMockAPI(t)
+	c := newTestClient(t, m)
+	c.SetToken(testToken)
+	ctx := context.Background()
+
+	soa, err := c.Zones.GetSOA(ctx, "example.com")
+	wantNoError(t, err)
+	wantEqual(t, "get ttl", soa.TTL, 3600)
+	wantEqual(t, "get path", m.last().Path, "/api/v1/zones/example.com/soa")
+
+	rname, minimum := "dns@example.com", 60
+	soa, err = c.Zones.UpdateSOA(ctx, "example.com", SOAUpdate{RName: &rname, Minimum: &minimum})
+	wantNoError(t, err)
+	wantEqual(t, "serial bumped", soa.Serial, 8)
+	wantEqual(t, "rname", soa.RName, "dns.example.com.")
+	wantEqual(t, "minimum", soa.Minimum, 60)
+	rec := m.last()
+	wantEqual(t, "method", rec.Method, "PUT")
+	wantEqual(t, "path", rec.Path, "/api/v1/zones/example.com/soa")
+	wantEqual(t, "body", bodyJSON(t, rec), `{"minimum":60,"rname":"dns@example.com"}`)
+
+	retry := 3600
+	_, err = c.Zones.UpdateSOA(ctx, "example.com", SOAUpdate{Retry: &retry})
+	wantTrue(t, IsBadRequest(err), "retry >= refresh is a 400")
+
+	before := m.count()
+	var verr *ErrValidationError
+	_, err = c.Zones.UpdateSOA(ctx, "example.com", SOAUpdate{})
+	wantTrue(t, errors.As(err, &verr), "empty update is refused locally")
+	wantEqual(t, "no request sent", m.count(), before)
+}
+
+func TestCreateZoneSendsSOATimers(t *testing.T) {
+	m := newMockAPI(t)
+	c := newTestClient(t, m)
+	c.SetToken(testToken)
+
+	refresh, minimum := 7200, 300
+	_, _ = c.Zones.Create(context.Background(), "new.example", []string{"ns1.new.example"},
+		&CreateZoneOptions{Refresh: &refresh, Minimum: &minimum})
+	wantEqual(t, "body", bodyJSON(t, m.last()), `{"minimum":300,"name":"new.example","nameservers":["ns1.new.example"],"refresh":7200}`)
+}

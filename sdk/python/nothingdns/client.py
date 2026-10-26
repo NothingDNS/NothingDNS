@@ -70,6 +70,10 @@ class ZonesResource(_Namespace):
         *,
         admin_email: Optional[str] = None,
         ttl: Optional[int] = None,
+        refresh: Optional[int] = None,
+        retry: Optional[int] = None,
+        expire: Optional[int] = None,
+        minimum: Optional[int] = None,
     ) -> str:
         """Create a new authoritative zone (operator+).
 
@@ -80,6 +84,8 @@ class ZonesResource(_Namespace):
             admin_email: Zone admin e-mail; the server derives the SOA
                 ``rname`` from it.
             ttl: Default TTL for records in the new zone.
+            refresh, retry, expire, minimum: SOA timers in seconds; the server
+                defaults are 3600, 600, 604800 and 86400.
 
         Returns:
             The server's confirmation message.
@@ -101,6 +107,10 @@ class ZonesResource(_Namespace):
                         "nameservers": list(nameservers),
                         "admin_email": admin_email,
                         "ttl": ttl,
+                        "refresh": refresh,
+                        "retry": retry,
+                        "expire": expire,
+                        "minimum": minimum,
                     }
                 ),
             )
@@ -116,6 +126,63 @@ class ZonesResource(_Namespace):
             NothingDNSApiError: 404 when the zone does not exist.
         """
         return m.ZoneDetail.from_dict(self._t.get(f"/api/v1/zones/{self._t.escape(zone)}"))
+
+    def get_soa(self, zone: str) -> m.SOA:
+        """Get the zone's SOA record (operator+).
+
+        Args:
+            zone: Zone name; a trailing dot is optional.
+
+        Raises:
+            NothingDNSApiError: 404 when the zone does not exist, 409 when it
+                has no SOA record.
+        """
+        return m.SOA.from_dict(self._t.get(f"/api/v1/zones/{self._t.escape(zone)}/soa"))
+
+    def update_soa(
+        self,
+        zone: str,
+        *,
+        mname: Optional[str] = None,
+        rname: Optional[str] = None,
+        ttl: Optional[int] = None,
+        refresh: Optional[int] = None,
+        retry: Optional[int] = None,
+        expire: Optional[int] = None,
+        minimum: Optional[int] = None,
+    ) -> m.SOA:
+        """Change the SOA fields given and return the new SOA (operator+).
+
+        Omitted fields keep their value. The serial is not settable: the
+        server bumps it, so secondaries are notified and transfer the change.
+
+        Args:
+            zone: Zone name; a trailing dot is optional.
+            mname: Primary nameserver.
+            rname: Admin address, as ``user@domain`` or in DNS form.
+            ttl: TTL of the SOA record.
+            refresh, retry, expire, minimum: SOA timers in seconds. Retry must
+                be shorter than refresh and expire longer than refresh.
+
+        Raises:
+            NothingDNSApiError: 400 when a value is refused, 404 when the zone
+                does not exist.
+            NothingDNSValidationError: when no field is given.
+        """
+        body = drop_none(
+            {
+                "mname": mname,
+                "rname": rname,
+                "ttl": ttl,
+                "refresh": refresh,
+                "retry": retry,
+                "expire": expire,
+                "minimum": minimum,
+            }
+        )
+        if not body:
+            raise NothingDNSValidationError("update_soa needs at least one SOA field")
+        return m.SOA.from_dict(self._t.put(f"/api/v1/zones/{self._t.escape(zone)}/soa", json=body))
 
     def delete(self, zone: str) -> str:
         """Delete a zone together with all of its records (operator+).

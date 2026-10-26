@@ -225,6 +225,8 @@ export const roleFromJson = (json: unknown): Role => {
 export interface SOA {
   mname: string;
   rname: string;
+  /** TTL the SOA record is served with, in seconds. */
+  ttl: number;
   serial: number;
   refresh: number;
   retry: number;
@@ -237,6 +239,7 @@ const soaFromJson = (json: unknown): SOA => {
   return {
     mname: str(d.mname),
     rname: str(d.rname),
+    ttl: num(d.ttl),
     serial: num(d.serial),
     refresh: num(d.refresh),
     retry: num(d.retry),
@@ -999,6 +1002,7 @@ const metricsHistoryFromJson = (json: unknown): MetricsHistory => {
 /* -------------------------------------------------------------------------- */
 
 export const internalMappers = {
+  soaFromJson,
   aclRuleFromJson,
   recursionFromJson,
   blocklistStatsFromJson,

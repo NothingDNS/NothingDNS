@@ -157,6 +157,8 @@ type SOA struct {
 	MName string `json:"mname"`
 	// RName is the zone administrator e-mail in DNS form.
 	RName string `json:"rname"`
+	// TTL is the TTL the SOA record is served with, in seconds.
+	TTL int `json:"ttl"`
 	// Serial is the zone serial number.
 	Serial int `json:"serial"`
 	// Refresh is the secondary refresh interval, in seconds.

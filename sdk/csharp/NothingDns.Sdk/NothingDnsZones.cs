@@ -38,6 +38,10 @@ public sealed class NothingDnsZones
     /// <param name="nameservers">NS hostnames written into the zone's SOA record. At least one is required.</param>
     /// <param name="adminEmail">Zone admin e-mail; the server derives the SOA <c>rname</c> from it.</param>
     /// <param name="ttl">Default TTL in seconds for records in the new zone.</param>
+    /// <param name="soaTimers">
+    /// SOA refresh, retry, expire and minimum of the new zone; the server defaults are 3600, 600,
+    /// 604800 and 86400. Its <c>Mname</c>, <c>Rname</c> and <c>Ttl</c> are ignored.
+    /// </param>
     /// <param name="cancellationToken">Token to cancel the request.</param>
     /// <returns>The server's confirmation message.</returns>
     /// <exception cref="ArgumentException"><paramref name="name"/> is empty or <paramref name="nameservers"/> is empty.</exception>
@@ -50,6 +54,7 @@ public sealed class NothingDnsZones
         IEnumerable<string> nameservers,
         string? adminEmail = null,
         long? ttl = null,
+        SoaUpdate? soaTimers = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(name);
@@ -65,7 +70,11 @@ public sealed class NothingDnsZones
             ("name", name),
             ("nameservers", servers),
             ("admin_email", adminEmail),
-            ("ttl", ttl));
+            ("ttl", ttl),
+            ("refresh", soaTimers?.Refresh),
+            ("retry", soaTimers?.Retry),
+            ("expire", soaTimers?.Expire),
+            ("minimum", soaTimers?.Minimum));
 
         var payload = await _transport
             .PostAsync("/api/v1/zones", body, cancellationToken: cancellationToken)
@@ -89,6 +98,59 @@ public sealed class NothingDnsZones
             .ConfigureAwait(false);
 
         return NothingDnsTransport.Model<ZoneDetail>(payload);
+    }
+
+    /// <summary>Get the zone's SOA record.</summary>
+    /// <param name="zone">The zone name.</param>
+    /// <param name="cancellationToken">Token to cancel the request.</param>
+    /// <returns>The SOA record.</returns>
+    /// <exception cref="ArgumentException"><paramref name="zone"/> is empty.</exception>
+    /// <exception cref="NothingDnsApiException">404 when the zone does not exist, or 409 when it has no SOA.</exception>
+    public async Task<Soa> GetSoaAsync(string zone, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(zone);
+
+        var payload = await _transport
+            .GetAsync($"/api/v1/zones/{NothingDnsTransport.Escape(zone)}/soa", cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+
+        return NothingDnsTransport.Model<Soa>(payload);
+    }
+
+    /// <summary>Change the SOA fields set in <paramref name="update"/>; the server bumps the serial.</summary>
+    /// <param name="zone">The zone name.</param>
+    /// <param name="update">The fields to change; null properties keep their value.</param>
+    /// <param name="cancellationToken">Token to cancel the request.</param>
+    /// <returns>The new SOA record.</returns>
+    /// <exception cref="ArgumentException"><paramref name="zone"/> is empty.</exception>
+    /// <exception cref="NothingDnsValidationException"><paramref name="update"/> sets no field.</exception>
+    /// <exception cref="NothingDnsApiException">
+    /// 400 when a value is refused (retry must be shorter than refresh, expire longer than
+    /// refresh), or 404 when the zone does not exist.
+    /// </exception>
+    public async Task<Soa> UpdateSoaAsync(string zone, SoaUpdate update, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(zone);
+        ArgumentNullException.ThrowIfNull(update);
+
+        var body = NothingDnsTransport.Body(
+            ("mname", update.Mname),
+            ("rname", update.Rname),
+            ("ttl", update.Ttl),
+            ("refresh", update.Refresh),
+            ("retry", update.Retry),
+            ("expire", update.Expire),
+            ("minimum", update.Minimum));
+        if (body.Count == 0)
+        {
+            throw new NothingDnsValidationException("update must set at least one SOA field.");
+        }
+
+        var payload = await _transport
+            .PutAsync($"/api/v1/zones/{NothingDnsTransport.Escape(zone)}/soa", body, cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+
+        return NothingDnsTransport.Model<Soa>(payload);
     }
 
     /// <summary>Delete a zone.</summary>

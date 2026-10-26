@@ -113,6 +113,60 @@ public sealed class NothingDnsClientTests
     }
 
     [Fact]
+    public async Task UpdateSoaSendsOnlyTheSetFields()
+    {
+        using var mock = new MockApi();
+        await using var client = mock.CreateClient();
+        client.SetToken(MockApi.Token);
+
+        var soa = await client.Zones.GetSoaAsync("example.com");
+        Assert.Equal(3600, soa.Ttl);
+        Assert.Equal("/api/v1/zones/example.com/soa", mock.Last.Path);
+
+        soa = await client.Zones.UpdateSoaAsync("example.com", new SoaUpdate { Rname = "dns@example.com", Minimum = 60 });
+        Assert.Equal(8, soa.Serial);
+        Assert.Equal("dns.example.com.", soa.Rname);
+        Assert.Equal(60, soa.Minimum);
+        Assert.Equal("PUT", mock.Last.Method);
+        Assert.Equal("/api/v1/zones/example.com/soa", mock.Last.Path);
+        var expected = new JsonObject { ["rname"] = "dns@example.com", ["minimum"] = 60 };
+        Assert.True(JsonNode.DeepEquals(expected, mock.Last.BodyJson), $"body was {mock.Last.BodyText}");
+
+        var refused = await Assert.ThrowsAsync<NothingDnsApiException>(
+            () => client.Zones.UpdateSoaAsync("example.com", new SoaUpdate { Retry = 3600 }));
+        Assert.Equal(400, refused.StatusCode);
+
+        var before = mock.Requests.Count;
+        await Assert.ThrowsAsync<NothingDnsValidationException>(
+            () => client.Zones.UpdateSoaAsync("example.com", new SoaUpdate()));
+        Assert.Equal(before, mock.Requests.Count);
+    }
+
+    [Fact]
+    public async Task CreateZoneSendsSoaTimers()
+    {
+        using var mock = new MockApi();
+        await using var client = mock.CreateClient();
+        client.SetToken(MockApi.Token);
+
+        try
+        {
+            await client.Zones.CreateAsync(
+                "new.example", ["ns1.new.example"], soaTimers: new SoaUpdate { Refresh = 7200, Minimum = 300, Mname = "ignored" });
+        }
+        catch (NothingDnsException)
+        {
+            // Only the request matters here.
+        }
+
+        var expected = new JsonObject
+        {
+            ["name"] = "new.example", ["nameservers"] = new JsonArray("ns1.new.example"), ["refresh"] = 7200, ["minimum"] = 300,
+        };
+        Assert.True(JsonNode.DeepEquals(expected, mock.Last.BodyJson), $"body was {mock.Last.BodyText}");
+    }
+
+    [Fact]
     public async Task FlushNameSendsTheNameQuery()
     {
         using var mock = new MockApi();
