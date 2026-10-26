@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.1] — 2026-10-26
+
+### Fixed
+
+- **Record changes to zones listed under `zones:` were lost on restart**: without `zone_dir`, a change made through the dashboard or the API was saved only to the persistent database, while the zone was loaded from its unchanged file at start, so every change since the file was last written was silently reverted. Changes are now written back to the zone's own file (rewritten in canonical form; existing permissions are kept). At start, a database copy with a newer SOA serial than the file, such as a change made by an earlier version, is restored and written to the file with a warning.
+- **A zone removed from `zones:` came back from the persistent database** if it had been changed through the API. The database copy of a file-backed zone is now marked as a backup and is not restored once the file is no longer configured. Copies written by earlier versions get the mark when the zone is next loaded from its file.
+
 ## [1.3.0] — 2026-10-24
 
 ### Added
