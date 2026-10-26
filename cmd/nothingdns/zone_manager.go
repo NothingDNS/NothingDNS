@@ -185,15 +185,22 @@ func synchronizeKVZones(mgr *ZoneManager, zoneManager *zone.Manager, kvPersisten
 		logger.Warnf("Failed to list persistent database zones: %v", err)
 	} else {
 		for _, origin := range kvZones {
-			if _, ok := zoneManager.Get(origin); ok {
-				continue
-			}
-			z, found, err := kvPersistence.LoadFromKV(origin)
+			z, fileBacked, found, err := kvPersistence.LoadStoredZone(origin)
 			if err != nil {
 				logger.Warnf("Failed to load persistent database zone %s: %v", origin, err)
 				continue
 			}
 			if !found || z == nil {
+				continue
+			}
+			if loaded, ok := zoneManager.Get(origin); ok {
+				reconcileFileZoneWithKV(mgr, zoneManager, kvPersistence, loaded, z, fileBacked, logger)
+				continue
+			}
+			// The backup of a zone file that is no longer configured: the
+			// operator removed the zone, so it must not come back from here.
+			if fileBacked {
+				logger.Infof("Not restoring zone %s from the persistent database: it backs up a zone file that is no longer configured", origin)
 				continue
 			}
 			// Round 026: a KV entry without a parseable SOA (legacy data, an
@@ -219,12 +226,42 @@ func synchronizeKVZones(mgr *ZoneManager, zoneManager *zone.Manager, kvPersisten
 		}
 	}
 
-	// Deliberately NO PersistAll() here: file-backed (config) zones must not
-	// be mirrored into the KV database. Their durable source of truth is the
-	// zone file; copying them into the KV store would resurrect them at the
-	// next boot even after the operator removed them from the config — the
-	// KV store is the durability layer for API-created zones only, and those
-	// are persisted explicitly at mutation time by the API handlers.
+	// Deliberately NO PersistAll() here: an unchanged file-backed zone needs
+	// no copy in the KV database, whose durable source of truth is the zone
+	// file. The mutation hook stores a file-backed zone's copy (flagged
+	// storage.ZoneMeta.FileBacked) only once the API changes it.
+}
+
+// reconcileFileZoneWithKV handles a zone loaded from its file that also has a
+// copy in the persistent database. API changes are written back to the file,
+// but versions before that wrote them only to the database, and a failed file
+// write still leaves them only there: a database copy with a newer SOA serial
+// holds changes the file lacks, so it replaces the file's zone and is written
+// to the file. Otherwise the file wins. A copy stored without the FileBacked
+// flag (older versions) is rewritten with it, so the zone is not restored from
+// the database once its file is removed from the config.
+func reconcileFileZoneWithKV(mgr *ZoneManager, zoneManager *zone.Manager, kvPersistence *zone.KVPersistence, fileZone, kvZone *zone.Zone, fileBacked bool, logger *util.Logger) {
+	origin := fileZone.Origin
+	path := zoneManager.ZoneFile(origin)
+	if path == "" {
+		return
+	}
+	restored := false
+	if kvZone.SOA != nil && fileZone.SOA != nil && zone.SerialIsNewer(kvZone.SOA.Serial, fileZone.SOA.Serial) {
+		logger.Warnf("Zone %s: the persistent database holds serial %d, newer than serial %d in %s; restoring the changes made through the API and writing them to the file",
+			origin, kvZone.SOA.Serial, fileZone.SOA.Serial, path)
+		mgr.result.Zones[origin] = kvZone
+		zoneManager.LoadZone(kvZone, path)
+		if err := zoneManager.PersistZone(origin); err != nil {
+			logger.Warnf("Zone %s: writing the restored zone to %s failed: %v (serving it from the persistent database)", origin, path, err)
+		}
+		restored = true
+	}
+	if restored || !fileBacked {
+		if err := kvPersistence.PersistZone(origin); err != nil {
+			logger.Warnf("Zone %s: updating its persistent database copy failed: %v", origin, err)
+		}
+	}
 }
 
 func discoverStartupZoneFiles(cfg *config.Config) ([]string, error) {

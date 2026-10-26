@@ -30,6 +30,11 @@ type ZoneStore struct {
 type ZoneMeta struct {
 	Origin     string
 	DefaultTTL uint32
+	// FileBacked marks a copy of a zone whose source of truth is a zone file
+	// (a `zones:` entry or zone_dir). Such a copy is a backup of the file:
+	// it is never restored as a zone of its own once the file is no longer
+	// configured.
+	FileBacked bool
 }
 
 // StoredRecord represents a DNS record in storage.
@@ -220,12 +225,20 @@ func (zs *ZoneStore) SaveRecords(origin, name string, records []StoredRecord) er
 
 // Wire format for ZoneMeta:
 // [4 bytes originLen][origin string][4 bytes defaultTTL]
+// Meta wire format: [4 bytes originLen][origin][4 bytes default TTL]
+// [1 byte flags]. The flags byte was added later; readers that predate it
+// ignore it, and a meta without it decodes with every flag clear.
+const zoneMetaFlagFileBacked = 1 << 0
+
 func encodeZoneMeta(meta ZoneMeta) []byte {
 	originBytes := []byte(meta.Origin)
-	buf := make([]byte, 4+len(originBytes)+4)
+	buf := make([]byte, 4+len(originBytes)+4+1)
 	binary.BigEndian.PutUint32(buf[0:4], uint32(len(originBytes)))
 	copy(buf[4:4+len(originBytes)], originBytes)
 	binary.BigEndian.PutUint32(buf[4+len(originBytes):], meta.DefaultTTL)
+	if meta.FileBacked {
+		buf[8+len(originBytes)] |= zoneMetaFlagFileBacked
+	}
 	return buf
 }
 
@@ -239,9 +252,14 @@ func decodeZoneMeta(data []byte) (ZoneMeta, error) {
 	}
 	origin := string(data[4 : 4+originLen])
 	defaultTTL := binary.BigEndian.Uint32(data[4+originLen:])
+	var flags byte
+	if rest := data[8+originLen:]; len(rest) > 0 {
+		flags = rest[0]
+	}
 	return ZoneMeta{
 		Origin:     origin,
 		DefaultTTL: defaultTTL,
+		FileBacked: flags&zoneMetaFlagFileBacked != 0,
 	}, nil
 }
 

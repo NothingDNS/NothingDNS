@@ -393,3 +393,31 @@ func TestZoneStoreLoadKeepsUnderscoreOwnerNames(t *testing.T) {
 		t.Error("metadata key must not be returned as a record set")
 	}
 }
+
+func TestZoneMetaFileBackedRoundTrip(t *testing.T) {
+	for _, fileBacked := range []bool{false, true} {
+		got, err := decodeZoneMeta(encodeZoneMeta(ZoneMeta{Origin: "example.com.", DefaultTTL: 300, FileBacked: fileBacked}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Origin != "example.com." || got.DefaultTTL != 300 || got.FileBacked != fileBacked {
+			t.Errorf("round trip = %+v, want FileBacked=%v", got, fileBacked)
+		}
+	}
+}
+
+// Metadata written before the flags byte existed decodes with no flags set.
+func TestZoneMetaDecodesLegacyFormat(t *testing.T) {
+	origin := "example.com."
+	legacy := make([]byte, 4+len(origin)+4)
+	binary.BigEndian.PutUint32(legacy[0:4], uint32(len(origin)))
+	copy(legacy[4:], origin)
+	binary.BigEndian.PutUint32(legacy[4+len(origin):], 300)
+	got, err := decodeZoneMeta(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Origin != origin || got.DefaultTTL != 300 || got.FileBacked {
+		t.Errorf("legacy meta = %+v", got)
+	}
+}

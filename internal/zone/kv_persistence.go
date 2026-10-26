@@ -96,6 +96,7 @@ func (k *KVPersistence) PersistZone(zoneName string) error {
 	meta := storage.ZoneMeta{
 		Origin:     z.Origin,
 		DefaultTTL: z.DefaultTTL,
+		FileBacked: manager.ZoneFile(zoneName) != "",
 	}
 
 	// Convert zone records to storage.StoredRecord format
@@ -138,27 +139,32 @@ func (k *KVPersistence) PersistAll() error {
 // LoadFromKV attempts to load a zone from the KV store.
 // Returns (zone, true) if found, or (nil, false) if not in KV store.
 func (k *KVPersistence) LoadFromKV(zoneName string) (*Zone, bool, error) {
+	z, _, found, err := k.LoadStoredZone(zoneName)
+	return z, found, err
+}
+
+// LoadStoredZone is LoadFromKV that also reports whether the stored copy is
+// the backup of a file-backed zone (storage.ZoneMeta.FileBacked).
+func (k *KVPersistence) LoadStoredZone(zoneName string) (z *Zone, fileBacked, found bool, err error) {
 	k.mu.RLock()
 	store := k.store
 	enabled := k.enabled
 	k.mu.RUnlock()
 
 	if !enabled {
-		return nil, false, nil
+		return nil, false, false, nil
 	}
 
 	meta, records, err := store.LoadZone(zoneName)
 	if err != nil {
 		if errors.Is(err, storage.ErrZoneNotFound) {
-			return nil, false, nil
+			return nil, false, false, nil
 		}
-		return nil, false, err
+		return nil, false, false, err
 	}
 
 	// Convert stored records back to zone records
-	z := k.storedRecordsToZone(meta, records)
-
-	return z, true, nil
+	return k.storedRecordsToZone(meta, records), meta.FileBacked, true, nil
 }
 
 // DeleteFromKV removes a zone from the KV store.

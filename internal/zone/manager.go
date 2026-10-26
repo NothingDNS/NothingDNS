@@ -105,10 +105,10 @@ type Manager struct {
 	// is covered without each caller persisting explicitly.
 	//
 	// The hook is deliberately NOT fired by Load/LoadZone/Reload/Remove:
-	// those (re)load file-backed zones into memory and must not push
-	// config zones into the KV store (KV is durability for API-created
-	// zones only; persisting config zones would resurrect them after
-	// config removal).
+	// those (re)load file-backed zones into memory, and an unchanged config
+	// zone needs no KV copy. A file-backed zone the API changes is written
+	// back to its file and its KV copy is flagged FileBacked, so it is never
+	// restored once the file is removed from the config.
 	mutationHook func(zoneName string, deleted bool)
 }
 
@@ -647,16 +647,7 @@ func (m *Manager) AddRecord(zoneName string, record Record) error {
 	m.bumpSerial(z)
 	z.Unlock()
 
-	if m.zoneDir != "" {
-		m.mu.RLock()
-		path := m.files[zoneName]
-		m.mu.RUnlock()
-		if path != "" {
-			if err := m.writeZoneFile(z, path); err != nil {
-				m.warnf("zone: failed to persist zone %s to %s: %v", zoneName, path, err)
-			}
-		}
-	}
+	m.writeBackZoneFile(zoneName, z)
 
 	m.notifyMutation(zoneName, false)
 	return nil
@@ -719,16 +710,7 @@ func (m *Manager) DeleteRecord(zoneName, name, rtype string) error {
 	m.bumpSerial(z)
 	z.Unlock()
 
-	if m.zoneDir != "" {
-		m.mu.RLock()
-		path := m.files[zoneName]
-		m.mu.RUnlock()
-		if path != "" {
-			if err := m.writeZoneFile(z, path); err != nil {
-				m.warnf("zone: failed to persist zone %s to %s: %v", zoneName, path, err)
-			}
-		}
-	}
+	m.writeBackZoneFile(zoneName, z)
 
 	m.notifyMutation(zoneName, false)
 	return nil
@@ -790,16 +772,7 @@ func (m *Manager) DeleteRecordData(zoneName, name, rtype, rdata string) error {
 	m.bumpSerial(z)
 	z.Unlock()
 
-	if m.zoneDir != "" {
-		m.mu.RLock()
-		path := m.files[zoneName]
-		m.mu.RUnlock()
-		if path != "" {
-			if err := m.writeZoneFile(z, path); err != nil {
-				m.warnf("zone: failed to persist zone %s to %s: %v", zoneName, path, err)
-			}
-		}
-	}
+	m.writeBackZoneFile(zoneName, z)
 
 	m.notifyMutation(zoneName, false)
 	return nil
@@ -907,16 +880,7 @@ func (m *Manager) UpdateRecord(zoneName string, name, rtype, oldData string, new
 	m.bumpSerial(z)
 	z.Unlock()
 
-	if m.zoneDir != "" {
-		m.mu.RLock()
-		path := m.files[zoneName]
-		m.mu.RUnlock()
-		if path != "" {
-			if err := m.writeZoneFile(z, path); err != nil {
-				m.warnf("zone: failed to persist zone %s to %s: %v", zoneName, path, err)
-			}
-		}
-	}
+	m.writeBackZoneFile(zoneName, z)
 
 	m.notifyMutation(zoneName, false)
 	return nil
@@ -1067,6 +1031,14 @@ func (m *Manager) writeZoneFile(z *Zone, path string) (err error) {
 		return err
 	}
 
+	// Keep an existing zone file's permissions (an operator's 0640 file must
+	// not become world-readable). A symlink is not followed: the rename below
+	// replaces the link itself.
+	mode := os.FileMode(0644)
+	if info, statErr := os.Lstat(path); statErr == nil && info.Mode().IsRegular() {
+		mode = info.Mode().Perm()
+	}
+
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
@@ -1085,7 +1057,7 @@ func (m *Manager) writeZoneFile(z *Zone, path string) (err error) {
 			}
 		}
 	}()
-	if err := os.Chmod(tmpName, 0644); err != nil {
+	if err := os.Chmod(tmpName, mode); err != nil {
 		tmp.Close()
 		return fmt.Errorf("chmod temp: %w", err)
 	}
@@ -1127,8 +1099,9 @@ func syncDir(dir string) (err error) {
 	return nil
 }
 
-// PersistZone writes a zone file to disk if zoneDir is configured.
-// The caller must NOT hold the zone lock.
+// PersistZone writes a zone to its file: the file it was loaded from (a
+// `zones:` entry or zone_dir), or, for a zone without one, a new file in
+// zone_dir when that is configured. The caller must NOT hold the zone lock.
 func (m *Manager) PersistZone(zoneName string) error {
 	m.mu.RLock()
 	z, ok := m.zones[zoneName]
@@ -1136,7 +1109,7 @@ func (m *Manager) PersistZone(zoneName string) error {
 	dir := m.zoneDir
 	m.mu.RUnlock()
 
-	if !ok || dir == "" {
+	if !ok || (path == "" && dir == "") {
 		return nil
 	}
 
@@ -1149,4 +1122,31 @@ func (m *Manager) PersistZone(zoneName string) error {
 	}
 
 	return m.writeZoneFile(z, path)
+}
+
+// writeBackZoneFile writes a mutated zone to the file it was loaded from, so
+// a record change made through the API survives a restart. Zones listed
+// under `zones:` are written back like zone_dir zones: the file is their
+// source of truth at start. Zones without a file (API-created without
+// zone_dir, KV-restored) are left to the KV store. A failure is logged and
+// does not fail the mutation; the KV copy (see KVPersistence) keeps the
+// change and is restored over the older file at the next start.
+func (m *Manager) writeBackZoneFile(zoneName string, z *Zone) {
+	m.mu.RLock()
+	path := m.files[zoneName]
+	m.mu.RUnlock()
+	if path == "" {
+		return
+	}
+	if err := m.writeZoneFile(z, path); err != nil {
+		m.warnf("zone: failed to persist zone %s to %s: %v", zoneName, path, err)
+	}
+}
+
+// ZoneFile returns the file zoneName was loaded from or is written to, or ""
+// when the zone has none.
+func (m *Manager) ZoneFile(zoneName string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.files[normalizeZoneName(zoneName)]
 }

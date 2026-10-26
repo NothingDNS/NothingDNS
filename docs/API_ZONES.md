@@ -71,10 +71,16 @@ names; responses always show absolute names.
 **Persistence.** Every successful zone or record change is:
 
 1. applied in memory and served immediately;
-2. saved to the embedded database under `storage.data_dir` (when configured)
-   and reloaded from there at start;
-3. written to a zone file when `zone_dir` is configured: new zones as
-   `<zone_dir>/<zone>.zone`, record changes to the zone's file.
+2. written to the zone's file when it has one: record changes to the file the
+   zone was loaded from (a `zones:` entry or `zone_dir`), new zones to
+   `<zone_dir>/<zone>.zone` when `zone_dir` is configured. The file is
+   rewritten in canonical form, so comments, `$INCLUDE` and `$GENERATE`
+   lines in it are not kept;
+3. saved to the embedded database under `storage.data_dir` (when configured).
+   A zone without a file is reloaded from there at start. For a zone with a
+   file the database copy is a backup: at start it replaces the file's zone
+   only when its SOA serial is newer (a change whose file write failed), and
+   it is not restored once the file is removed from the configuration.
 
 File and database write failures are logged but do not fail the request.
 The SOA serial is bumped (`YYYYMMDDnn`) on every record change.
