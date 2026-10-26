@@ -823,6 +823,7 @@ newer snapshot.
 | Per-RR delete (`del_record` with RDATA) | ignores RDATA and deletes the whole RRset | upgrade all nodes before API single-record deletes |
 | Atomic zone batch (`create_zone` envelope, payload v1) | logs "create_zone … missing nameservers", applies nothing | upgrade all nodes before Raft-mode Dynamic DNS |
 | SOA-prerequisite guard (payload v2, `"zone": true`) | a v1-only node rejects it deterministically (nothing applied, warning logged) | upgrade all nodes before UPDATEs with SOA prerequisites |
+| SOA edit (`create_zone` envelope without nameservers, `{"zone_soa":{"v":1,…}}`); SOA timers on `create_zone` (same payload, with nameservers) | logs "create_zone … missing nameservers" and keeps its SOA; creates the zone with the default timers | upgrade all nodes before `PUT /zones/{zone}/soa` or `POST /zones` with timers |
 | Leader DNS address trailer on AppendEntries | old followers ignore it; an old leader sends none, so forwarding followers answer SERVFAIL | upgrade before enabling `forward_updates` |
 | Deterministic SOA serials for Raft-applied single-record changes (`add_record`, `update_record`, `del_record` bump the serial by plain RFC 1982 increment, not the date-style `YYYYMMDDNN`) | an older node bumps from its own clock, so its serial for the same log entries differs from upgraded nodes (same data, different serial) until the zone is next replaced by a snapshot | upgrade all nodes before relying on equal serials across replicas (for example as AXFR/IXFR sources behind a shared name); serials of Raft-mode zones are no longer date-shaped |
 | RFC 8945 TSIG chain on multi-message AXFR/IXFR | pre-fix servers sent an unbound chain that new clients reject (keyed AXFR between NothingDNS nodes never worked before the fix) | upgrade primaries and secondaries together for keyed transfers; single-message TSIG is unchanged; third-party interop of the multi-message chain is not yet proven |
@@ -875,6 +876,7 @@ query parameter shown, not by an id in the path. Paths starting with `/api/`,
 | POST | /zones/reload?zone= | Reload a zone from its file |
 | GET | /zones/transfers | Secondary-zone transfer state |
 | GET, POST, PUT, DELETE | /zones/{name}/records | List, add, update, delete records (JSON body names the record) |
+| GET, PUT | /zones/{name}/soa | Read or edit the SOA fields (the serial is bumped, not set) |
 | GET | /zones/{name}/export | Export a BIND zone file |
 | POST | /zones/{name}/ptr-bulk | Bulk PTR (and A) creation from a CIDR |
 | GET | /zones/{name}/ptr6-lookup?ip= | IPv6 reverse lookup in an ip6.arpa zone |

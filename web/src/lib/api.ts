@@ -184,21 +184,26 @@ export const ZoneSchema = z.object({
 
 export type Zone = z.infer<typeof ZoneSchema>;
 
+// SoaSchema is a zone's SOA as GET/PUT /api/v1/zones/{zone}/soa and the zone
+// detail return it. ttl is the TTL the SOA record is served with.
+export const SoaSchema = z.object({
+	mname: z.string(),
+	rname: z.string(),
+	ttl: z.number().optional(),
+	serial: z.number(),
+	refresh: z.number(),
+	retry: z.number(),
+	expire: z.number(),
+	minimum: z.number(),
+});
+
+export type Soa = z.infer<typeof SoaSchema>;
+
 export const ZoneDetailSchema = z.object({
 	name: z.string(),
 	records: z.number(),
 	serial: z.number().optional(),
-	soa: z
-		.object({
-			mname: z.string(),
-			rname: z.string(),
-			serial: z.number(),
-			refresh: z.number(),
-			retry: z.number(),
-			expire: z.number(),
-			minimum: z.number(),
-		})
-		.optional(),
+	soa: SoaSchema.optional(),
 	nameservers: z.array(z.string()).optional(),
 });
 

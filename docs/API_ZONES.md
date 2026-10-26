@@ -40,6 +40,8 @@ There is no per-zone access control: an operator can change every zone.
 | `POST` | `/zones/{zone}/records` | operator | Add a record |
 | `PUT` | `/zones/{zone}/records` | operator | Replace a record |
 | `DELETE` | `/zones/{zone}/records` | operator | Delete records |
+| `GET` | `/zones/{zone}/soa` | operator | Read the SOA fields |
+| `PUT` | `/zones/{zone}/soa` | operator | Edit the SOA fields |
 | `GET` | `/zones/{zone}/export` | operator | Export as a BIND zone file |
 | `POST` | `/zones/{zone}/ptr-bulk` | operator | Bulk PTR generation for an IPv4 range |
 | `GET` | `/zones/{zone}/ptr6-lookup` | operator | IPv6 PTR lookup |
@@ -58,8 +60,8 @@ Any other sub-path under `/zones/{zone}/` returns `404 {"error":"Not found"}`.
 - `GET /zones/{zone}`, `POST /zones/{zone}/ptr-bulk` and
   `GET /zones/{zone}/ptr6-lookup` look the name up **exactly**: `example.com`
   (no dot) or `Example.com.` returns 404.
-- `DELETE /zones/{zone}`, `POST /zones/reload?zone=`, the `/records` endpoints
-  and `/export` normalise the name (lowercase, trailing dot added), so
+- `DELETE /zones/{zone}`, `POST /zones/reload?zone=`, the `/records` and
+  `/soa` endpoints and `/export` normalise the name (lowercase, trailing dot added), so
   `example.com` also works there.
 - A zone name that is itself `reload` or `transfers` cannot be addressed with
   `GET /zones/{zone}` because those paths are separate routes.
@@ -83,10 +85,11 @@ names; responses always show absolute names.
    it is not restored once the file is removed from the configuration.
 
 File and database write failures are logged but do not fail the request.
-The SOA serial is bumped (`YYYYMMDDnn`) on every record change.
+The SOA serial is bumped (`YYYYMMDDnn`; plain `+1` in a Raft cluster) on
+every record or SOA change.
 
 **Raft clusters.** When the cluster runs in Raft mode, create zone, delete
-zone and the four record operations are proposed through Raft and applied on
+zone, the four record operations and SOA edits are proposed through Raft and applied on
 every node before the API answers. A node that is not the leader answers
 `421 {"error":"not the Raft leader; retry against <leader>"}`; other replication
 failures return `503`. `ptr-bulk` is applied locally and is not replicated.
@@ -152,9 +155,13 @@ curl -s -X POST http://127.0.0.1:8080/api/v1/zones \
 | `nameservers` | string[] | **Yes** | At least one. The first one becomes the SOA MNAME; each becomes an NS record at the apex. Dotted names are taken as fully qualified (`ns1.example.org` → `ns1.example.org.`), single labels are relative to the zone (`ns1` → `ns1.example.org.`). |
 | `admin_email` | string | No | Administrator address, as `user@domain` or in DNS form (`hostmaster.example.org.`). Converted to the SOA RNAME; defaults to `hostmaster.<zone>`. A user part containing dots (`first.last@…`) is rejected with `400`. |
 | `ttl` | uint32 | No | Default TTL, also used for the SOA and NS records. `0` or omitted means 3600. |
+| `refresh` | uint32 | No | SOA refresh; `3600` when omitted. |
+| `retry` | uint32 | No | SOA retry; `600` when omitted. Must be shorter than `refresh`. |
+| `expire` | uint32 | No | SOA expire; `604800` when omitted. Must be longer than `refresh`. |
+| `minimum` | uint32 | No | SOA minimum, the negative-caching TTL (RFC 2308); `86400` when omitted. |
 
-The SOA gets serial `1`, refresh `3600`, retry `600`, expire `604800` and
-minimum `86400`. These cannot be set through the API.
+The SOA gets serial `1`. The timers follow the rules of
+[`PUT /zones/{zone}/soa`](#put-zoneszonesoa); change them later there.
 
 ### Response
 
@@ -175,6 +182,7 @@ minimum `86400`. These cannot be set through the API.
 | `400` | `Zone name is required` | Missing `name` |
 | `400` | `At least one nameserver is required` | Missing or empty `nameservers` |
 | `400` | `invalid admin email "first.last@example.org": ...` | `admin_email` cannot be expressed as an SOA RNAME |
+| `400` | `SOA retry (3600) must be shorter than refresh (3600)` etc. | SOA timers fail validation |
 | `400` | `Invalid request body` | Malformed JSON or body over 64 KiB |
 | `409` | `zone example.org. already exists` | Duplicate |
 | `409` | `invalid zone origin` / `zone origin "..." is reserved and cannot be created` | Bad name |
@@ -204,6 +212,7 @@ curl -s http://127.0.0.1:8080/api/v1/zones/example.com. -H "Authorization: Beare
   "soa": {
     "mname": "ns1.example.com.",
     "rname": "admin.example.com.",
+    "ttl": 3600,
     "serial": 2024010101,
     "refresh": 3600,
     "retry": 900,
@@ -219,7 +228,7 @@ curl -s http://127.0.0.1:8080/api/v1/zones/example.com. -H "Authorization: Beare
 | `name` | string | Zone origin |
 | `serial` | uint32 | SOA serial (omitted when 0) |
 | `records` | int | Total record count |
-| `soa` | object | SOA fields; omitted when the zone has no SOA |
+| `soa` | object | SOA fields (as in [`GET /zones/{zone}/soa`](#get-zoneszonesoa)); omitted when the zone has no SOA |
 | `nameservers` | string[] | Apex NS targets; `null` when none |
 
 ### Error responses
@@ -488,6 +497,109 @@ curl -s -X DELETE http://127.0.0.1:8080/api/v1/zones/example.com./records \
 | `404` | `no records found for www.example.com.` | No records at that name |
 | `404` | `no A record found for www.example.com.` | No record of that type |
 | `421` | `not the Raft leader; ...` | Raft follower |
+
+---
+
+## GET /zones/{zone}/soa
+
+Read the zone's SOA fields.
+
+### Request
+
+```bash
+curl -s http://127.0.0.1:8080/api/v1/zones/example.com./soa -H "Authorization: Bearer $TOKEN"
+```
+
+### Response
+
+**200 OK**
+```json
+{
+  "mname": "ns1.example.com.",
+  "rname": "admin.example.com.",
+  "ttl": 3600,
+  "serial": 2024010101,
+  "refresh": 3600,
+  "retry": 600,
+  "expire": 604800,
+  "minimum": 86400
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `mname` | string | Primary nameserver |
+| `rname` | string | Administrator mailbox in DNS form (`admin.example.com.` is `admin@example.com`) |
+| `ttl` | uint32 | TTL the SOA record is served with |
+| `serial` | uint32 | Current serial |
+| `refresh`, `retry`, `expire` | uint32 | Secondary timers, in seconds |
+| `minimum` | uint32 | Negative-caching TTL (RFC 2308), in seconds |
+
+### Error responses
+
+| Status | Error | Cause |
+|--------|-------|-------|
+| `404` | `zone not found: example.com.` | Unknown zone |
+| `409` | `zone has no SOA record: example.com.` | The zone has no SOA |
+
+---
+
+## PUT /zones/{zone}/soa
+
+Change SOA fields. Only the fields in the body change; the others keep their
+value. The serial cannot be set: the server bumps it, so the
+`transfer.also_notify` secondaries are notified and transfer the change. The
+answer is served at once, including negative answers with the new `minimum`.
+
+### Request
+
+```bash
+curl -s -X PUT http://127.0.0.1:8080/api/v1/zones/example.com./soa \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"rname": "dns@example.com", "minimum": 300}'
+```
+
+### Request fields
+
+At least one field is required.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `mname` | string | Primary nameserver. Dotted names are taken as fully qualified, single labels are relative to the zone. |
+| `rname` | string | Administrator address, as `user@domain` or in DNS form. A user part containing dots is rejected. |
+| `ttl` | uint32 | TTL of the SOA record |
+| `refresh` | uint32 | Seconds between a secondary's serial checks |
+| `retry` | uint32 | Seconds before a failed check is retried |
+| `expire` | uint32 | Seconds after which a secondary that cannot reach the primary stops answering |
+| `minimum` | uint32 | Negative-caching TTL |
+
+Rules: every value is at most `2147483647`; `refresh`, `retry` and `expire`
+are greater than zero; `retry` is shorter than `refresh`; `expire` is longer
+than `refresh`. They apply to the SOA as it is after the change, so an edit of
+one field can fail because of another field's current value.
+
+### Response
+
+**200 OK** with the new SOA, in the form of `GET /zones/{zone}/soa`.
+
+### Error responses
+
+| Status | Error | Cause |
+|--------|-------|-------|
+| `400` | `no SOA field to update` | Empty body |
+| `400` | `the SOA serial is managed by the server ...` | `serial` in the body |
+| `400` | `SOA retry (3600) must be shorter than refresh (3600)` and similar | A value fails the rules above |
+| `400` | `invalid admin email ...` / `SOA mname ...` | Bad name or address |
+| `400` | `Invalid request body` | Malformed JSON, an unknown field, a negative value or one over 2^32-1 |
+| `404` | `zone not found: example.com.` | Unknown zone |
+| `409` | `zone has no SOA record: example.com.` | The zone has no SOA |
+| `421` | `not the Raft leader; ...` | Raft follower |
+| `503` | replication error | The Raft write failed, or the edit was rejected when applied |
+
+In a Raft cluster every node must run a release with SOA edits (newer than
+1.3.1) before one is made: an older node keeps its old SOA until it next
+installs a snapshot. Likewise an older node creates a zone with the default
+timers when `POST /zones` sets them.
 
 ---
 

@@ -94,9 +94,17 @@ func (s *ZoneService) GetZone(name string) (*ZoneDetailResponse, bool) {
 
 	if z.SOA != nil {
 		result.Serial = z.SOA.Serial
+		soaTTL := z.SOA.TTL
+		for _, r := range z.Records[z.Origin] {
+			if strings.EqualFold(r.Type, "SOA") {
+				soaTTL = r.TTL
+				break
+			}
+		}
 		result.SOA = &SOADetail{
 			MName:   z.SOA.MName,
 			RName:   z.SOA.RName,
+			TTL:     soaTTL,
 			Serial:  z.SOA.Serial,
 			Refresh: z.SOA.Refresh,
 			Retry:   z.SOA.Retry,

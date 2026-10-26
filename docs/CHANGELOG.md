@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Edit a zone's SOA from the dashboard and the API** ([#19](https://github.com/NothingDNS/NothingDNS/issues/19)): before, changing the admin e-mail or a timer meant editing the zone file over SSH.
+  - `GET`/`PUT /api/v1/zones/{zone}/soa` read and change MNAME, RNAME (as `user@domain`), the SOA TTL, refresh, retry, expire and minimum. Omitted fields keep their value. The serial is bumped, not set, so `also_notify` secondaries are notified and transfer the change.
+  - Values are checked: at most 2^31-1, refresh/retry/expire non-zero, retry shorter than refresh, expire longer than refresh.
+  - `POST /api/v1/zones` takes optional `refresh`, `retry`, `expire` and `minimum`.
+  - The zone editor has an **Edit SOA** action.
+  - The SDKs gain `GetSOA`/`get_soa`/`getSOA` and `UpdateSOA`/`update_soa`/`updateSOA`, and the SOA timers on zone create (Go, Python, TypeScript, Java, C#).
+  - In a Raft cluster the edit is replicated. Upgrade every node first: an older node keeps its SOA (and creates new zones with the default timers) until its next snapshot.
+
 ## [1.3.1] — 2026-10-26
 
 ### Fixed

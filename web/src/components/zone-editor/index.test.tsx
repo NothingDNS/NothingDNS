@@ -61,3 +61,19 @@ it('preserves an explicit TTL 0 in the inline edit', async () => {
   const sentBody = JSON.parse((putCall as unknown[])[1].body as string);
   expect(sentBody.ttl).toBe(0);
 });
+
+// #19: the SOA row offers "Edit SOA" (opening the page's SOA dialog) instead of
+// the record edit/delete actions, which the server refuses for SOA.
+it('offers Edit SOA on the SOA row', async () => {
+  const user = userEvent.setup();
+  const onEditSOA = vi.fn();
+  const withSOA = [
+    { name: 'example.com.', type: 'SOA', ttl: 3600, class: 'IN', data: 'ns1.example.com. hostmaster.example.com. 1 3600 600 604800 86400' },
+    ...records,
+  ];
+  render(<ZoneEditor zoneName="example.com." initialRecords={withSOA} onRefresh={() => {}} onEditSOA={onEditSOA} />);
+
+  expect(screen.queryByLabelText('Delete SOA record example.com.')).not.toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: 'Edit SOA' }));
+  expect(onEditSOA).toHaveBeenCalledTimes(1);
+});

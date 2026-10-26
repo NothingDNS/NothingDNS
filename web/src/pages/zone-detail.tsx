@@ -5,7 +5,9 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { api, downloadAuthenticated, ZoneDetailSchema, type ZoneDetail, type DnsRecord } from '@/lib/api';
 import { ZoneEditor } from '@/components/zone-editor';
-import { ChevronRight, Download, Shield, Zap, Database, Clock, Globe } from 'lucide-react';
+import { EditSoaDialog } from '@/components/edit-soa-dialog';
+import { rnameToEmail } from '@/lib/soa';
+import { ChevronRight, Download, Shield, Zap, Database, Clock, Globe, Pencil } from 'lucide-react';
 
 export function ZoneDetailPage() {
   const { name } = useParams<{ name: string }>();
@@ -15,6 +17,7 @@ export function ZoneDetailPage() {
   const [records, setRecords] = useState<DnsRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [editSOA, setEditSOA] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -127,6 +130,11 @@ export function ZoneDetailPage() {
               }}>
                 <Download className="h-4 w-4 mr-2" /> Export Zone
               </Button>
+              {zone?.soa && (
+                <Button variant="outline" size="sm" onClick={() => setEditSOA(true)}>
+                  <Pencil className="h-4 w-4 mr-2" /> Edit SOA
+                </Button>
+              )}
             </div>
           </div>
 
@@ -135,10 +143,14 @@ export function ZoneDetailPage() {
             <div className="mt-4 pt-4 border-t">
               <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">SOA Record</h3>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <SoaField label="MName" value={zone.soa.mname} />
-                <SoaField label="RName" value={zone.soa.rname} />
+                <SoaField label="Primary NS" value={zone.soa.mname} />
+                <SoaField label="Admin e-mail" value={rnameToEmail(zone.soa.rname)} />
                 <SoaField label="Serial" value={String(zone.soa.serial)} mono />
-                <SoaField label="Minimum" value={String(zone.soa.minimum)} />
+                {zone.soa.ttl !== undefined && <SoaField label="TTL" value={`${zone.soa.ttl}s`} mono />}
+                <SoaField label="Refresh" value={`${zone.soa.refresh}s`} mono />
+                <SoaField label="Retry" value={`${zone.soa.retry}s`} mono />
+                <SoaField label="Expire" value={`${zone.soa.expire}s`} mono />
+                <SoaField label="Minimum (negative TTL)" value={`${zone.soa.minimum}s`} mono />
               </div>
             </div>
           )}
@@ -150,7 +162,18 @@ export function ZoneDetailPage() {
         zoneName={zn}
         initialRecords={records}
         onRefresh={load}
+        onEditSOA={zone?.soa ? () => setEditSOA(true) : undefined}
       />
+
+      {zone?.soa && (
+        <EditSoaDialog
+          zoneName={zn}
+          soa={zone.soa}
+          open={editSOA}
+          onClose={() => setEditSOA(false)}
+          onSaved={() => { load(); }}
+        />
+      )}
     </div>
   );
 }

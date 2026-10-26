@@ -94,6 +94,7 @@ const ZoneListMaxResults = 5000
 type SOADetail struct {
 	MName   string `json:"mname"`
 	RName   string `json:"rname"`
+	TTL     uint32 `json:"ttl"`
 	Serial  uint32 `json:"serial"`
 	Refresh uint32 `json:"refresh"`
 	Retry   uint32 `json:"retry"`

@@ -90,6 +90,7 @@ including `viewer`.
 | GET | `/api/v1/zones/transfers` | operator | Secondary zones |
 | GET, DELETE | `/api/v1/zones/{zone}` | operator | |
 | GET, POST, PUT, DELETE | `/api/v1/zones/{zone}/records` | operator | |
+| GET, PUT | `/api/v1/zones/{zone}/soa` | operator | SOA fields |
 | GET | `/api/v1/zones/{zone}/export` | operator | BIND text |
 | POST | `/api/v1/zones/{zone}/ptr-bulk` | operator | |
 | GET | `/api/v1/zones/{zone}/ptr6-lookup?ip=` | operator | |
@@ -644,13 +645,15 @@ Full request/response details, examples and error tables are in
 | Method | Path | Role | Purpose |
 |---|---|---|---|
 | GET | `/api/v1/zones` | operator | List zones (`name`, `serial`, `records`; max 5000) |
-| POST | `/api/v1/zones` | operator | Create a zone: `{"name","nameservers":[...],"admin_email","ttl"}` |
+| POST | `/api/v1/zones` | operator | Create a zone: `{"name","nameservers":[...],"admin_email","ttl"}`, optionally `refresh`, `retry`, `expire`, `minimum` |
 | GET | `/api/v1/zones/{zone}` | operator | Zone detail with SOA and nameservers |
 | DELETE | `/api/v1/zones/{zone}` | operator | Delete a zone (its file is removed only when it lives in `zone_dir`) |
 | GET | `/api/v1/zones/{zone}/records?name=` | operator | List records (exact owner filter; max 5000) |
 | POST | `/api/v1/zones/{zone}/records` | operator | Add `{"name","type","ttl","data"}` |
 | PUT | `/api/v1/zones/{zone}/records` | operator | Replace `{"name","type","old_data","data","ttl"}` |
 | DELETE | `/api/v1/zones/{zone}/records` | operator | `{"name","type","data"}` deletes the one record with that RDATA (`404` if none); without `data`, every record of `{"name","type"}` |
+| GET | `/api/v1/zones/{zone}/soa` | operator | SOA fields (`mname`, `rname`, `ttl`, `serial`, timers) |
+| PUT | `/api/v1/zones/{zone}/soa` | operator | Change any of `mname`, `rname`, `ttl`, `refresh`, `retry`, `expire`, `minimum`; the serial is bumped |
 | GET | `/api/v1/zones/{zone}/export` | operator | BIND zone file (`text/plain`, attachment) |
 | POST | `/api/v1/zones/{zone}/ptr-bulk` | operator | Generate PTR (and A) records for an IPv4 CIDR |
 | GET | `/api/v1/zones/{zone}/ptr6-lookup?ip=` | operator | Find the PTR of an IPv6 address |
@@ -658,7 +661,7 @@ Full request/response details, examples and error tables are in
 
 - Zone names in paths should be lowercase with a trailing dot
   (`example.com.`). `GET /api/v1/zones/{zone}` and the reload endpoint match the
-  name exactly; the record endpoints also accept the name without the dot.
+  name exactly; the record and SOA endpoints also accept the name without the dot.
 - Zone and record changes are persisted to the embedded store under
   `storage.data_dir` (reloaded at start) and, when `zone_dir` is set, written
   to zone files. In a Raft cluster the write is replicated first; a follower

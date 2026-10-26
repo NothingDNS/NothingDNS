@@ -44,6 +44,8 @@ func (s *Server) handleListZones(w http.ResponseWriter, _ *http.Request) {
 //	POST   /api/v1/zones/{name}/records
 //	PUT    /api/v1/zones/{name}/records
 //	DELETE /api/v1/zones/{name}/records
+//	GET    /api/v1/zones/{name}/soa
+//	PUT    /api/v1/zones/{name}/soa
 //	GET    /api/v1/zones/{name}/export
 //
 // SECURITY: All authenticated operators have global access to all zones.
@@ -95,6 +97,15 @@ func (s *Server) handleZoneActions(w http.ResponseWriter, r *http.Request) {
 			s.handleUpdateRecord(w, r, zoneName)
 		case http.MethodDelete:
 			s.handleDeleteRecord(w, r, zoneName)
+		default:
+			s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		}
+	case "soa":
+		switch r.Method {
+		case http.MethodGet:
+			s.handleGetSOA(w, r, zoneName)
+		case http.MethodPut:
+			s.handleUpdateSOA(w, r, zoneName)
 		default:
 			s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		}
@@ -178,6 +189,11 @@ func (s *Server) handleCreateZone(w http.ResponseWriter, r *http.Request) {
 		TTL         uint32   `json:"ttl"`
 		AdminEmail  string   `json:"admin_email"`
 		Nameservers []string `json:"nameservers"`
+		// Optional SOA timers (#19); omitted ones take the defaults below.
+		Refresh *uint32 `json:"refresh"`
+		Retry   *uint32 `json:"retry"`
+		Expire  *uint32 `json:"expire"`
+		Minimum *uint32 `json:"minimum"`
 	}
 	if !s.decode(w, r, &req) {
 		return
@@ -192,7 +208,8 @@ func (s *Server) handleCreateZone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := zone.SOAMailbox(req.AdminEmail, req.Name); err != nil {
+	rname, err := zone.SOAMailbox(req.AdminEmail, req.Name)
+	if err != nil {
 		s.writeError(w, http.StatusBadRequest, sanitizeError(err, "Invalid admin email"))
 		return
 	}
@@ -212,6 +229,24 @@ func (s *Server) handleCreateZone(w http.ResponseWriter, r *http.Request) {
 		Expire:  604800,
 		Minimum: 86400,
 	}
+	timers := zone.SOAUpdate{Refresh: req.Refresh, Retry: req.Retry, Expire: req.Expire, Minimum: req.Minimum}
+	if !timers.IsEmpty() {
+		check := *soa
+		names := zone.SOAUpdate{MName: &req.Nameservers[0], RName: &rname}
+		if err := names.ApplyTo(&check, req.Name); err != nil {
+			s.writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := timers.ApplyTo(&check, req.Name); err != nil {
+			s.writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := zone.ValidateSOA(&check); err != nil {
+			s.writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		soa.Refresh, soa.Retry, soa.Expire, soa.Minimum = check.Refresh, check.Retry, check.Expire, check.Minimum
+	}
 
 	var nsRecords []zone.NSRecord
 	for _, ns := range req.Nameservers {
@@ -222,7 +257,7 @@ func (s *Server) handleCreateZone(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if routed, ok := s.proposeZoneWrite(w, func() error {
-		return s.cluster.ProposeCreateZone(req.Name, ttl, req.AdminEmail, req.Nameservers)
+		return s.cluster.ProposeCreateZoneSOA(req.Name, ttl, req.AdminEmail, req.Nameservers, timers)
 	}); routed {
 		if !ok {
 			return
@@ -553,7 +588,95 @@ func (s *Server) handleDeleteRecord(w http.ResponseWriter, r *http.Request, zone
 	})
 }
 
-const soaManagedMessage = "the SOA record is managed by the server (its serial is bumped on every change) and cannot be added, edited, or deleted through the records API"
+const soaManagedMessage = "the SOA record is managed by the server (its serial is bumped on every change) and cannot be added, edited, or deleted through the records API; edit its fields with PUT /api/v1/zones/{zone}/soa"
+
+// handleGetSOA returns the zone's SOA fields.
+func (s *Server) handleGetSOA(w http.ResponseWriter, _ *http.Request, zoneName string) {
+	soa, err := s.zoneManager.SOA(zoneName)
+	if err != nil {
+		s.writeSOAError(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, soaDetail(soa))
+}
+
+// handleUpdateSOA changes the SOA fields the request sets (#19). The serial
+// is not editable: the server bumps it, so secondaries are notified and
+// transfer the change.
+func (s *Server) handleUpdateSOA(w http.ResponseWriter, r *http.Request, zoneName string) {
+	if s.requireOperator(w, r) {
+		return
+	}
+	var req struct {
+		MName   *string `json:"mname"`
+		RName   *string `json:"rname"`
+		TTL     *uint32 `json:"ttl"`
+		Refresh *uint32 `json:"refresh"`
+		Retry   *uint32 `json:"retry"`
+		Expire  *uint32 `json:"expire"`
+		Minimum *uint32 `json:"minimum"`
+		Serial  *uint32 `json:"serial"`
+	}
+	if !s.decode(w, r, &req) {
+		return
+	}
+	if req.Serial != nil {
+		s.writeError(w, http.StatusBadRequest, "the SOA serial is managed by the server and bumped on every change")
+		return
+	}
+	u := zone.SOAUpdate{
+		MName: req.MName, RName: req.RName, TTL: req.TTL,
+		Refresh: req.Refresh, Retry: req.Retry, Expire: req.Expire, Minimum: req.Minimum,
+	}
+	// Validate here so a bad edit is a 400 before it reaches the Raft log;
+	// the apply validates again against the zone as it is then.
+	if _, err := s.zoneManager.PlanSOAUpdate(zoneName, u); err != nil {
+		s.writeSOAError(w, err)
+		return
+	}
+
+	if routed, ok := s.proposeZoneWrite(w, func() error {
+		return s.cluster.ProposeUpdateSOA(zoneName, u)
+	}); routed {
+		if !ok {
+			return
+		}
+	} else if _, err := s.zoneManager.UpdateSOA(zoneName, u); err != nil {
+		s.writeSOAError(w, err)
+		return
+	}
+
+	soa, err := s.zoneManager.SOA(zoneName)
+	if err != nil {
+		s.writeSOAError(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, soaDetail(soa))
+}
+
+func (s *Server) writeSOAError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, zone.ErrZoneNotFound):
+		s.writeError(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, zone.ErrNoSOA):
+		s.writeError(w, http.StatusConflict, err.Error())
+	default:
+		s.writeError(w, http.StatusBadRequest, err.Error())
+	}
+}
+
+func soaDetail(soa zone.SOARecord) *SOADetail {
+	return &SOADetail{
+		MName:   soa.MName,
+		RName:   soa.RName,
+		TTL:     soa.TTL,
+		Serial:  soa.Serial,
+		Refresh: soa.Refresh,
+		Retry:   soa.Retry,
+		Expire:  soa.Expire,
+		Minimum: soa.Minimum,
+	}
+}
 
 // validateRecordRoundTrip rejects a record type/data pair that the zone file
 // parser cannot read back. Every API mutation is written to the zone file in

@@ -200,6 +200,10 @@ const OpenAPISpec = `{
           "rname": {
             "type": "string"
           },
+          "ttl": {
+            "type": "integer",
+            "description": "TTL of the SOA record"
+          },
           "serial": {
             "type": "integer"
           },
@@ -285,12 +289,65 @@ const OpenAPISpec = `{
           "ttl": {
             "type": "integer",
             "description": "Default TTL, 3600 when 0 or omitted"
+          },
+          "refresh": {
+            "type": "integer",
+            "description": "SOA refresh, 3600 when omitted"
+          },
+          "retry": {
+            "type": "integer",
+            "description": "SOA retry, 600 when omitted; must be shorter than refresh"
+          },
+          "expire": {
+            "type": "integer",
+            "description": "SOA expire, 604800 when omitted; must be longer than refresh"
+          },
+          "minimum": {
+            "type": "integer",
+            "description": "SOA minimum (negative-caching TTL), 86400 when omitted"
           }
         },
         "required": [
           "name",
           "nameservers"
         ]
+      },
+      "UpdateSOARequest": {
+        "type": "object",
+        "properties": {
+          "mname": {
+            "type": "string",
+            "description": "Primary nameserver",
+            "example": "ns1.example.org."
+          },
+          "rname": {
+            "type": "string",
+            "description": "Admin mailbox: user@domain or DNS form",
+            "example": "hostmaster@example.org"
+          },
+          "ttl": {
+            "type": "integer",
+            "description": "TTL of the SOA record"
+          },
+          "refresh": {
+            "type": "integer",
+            "example": 3600
+          },
+          "retry": {
+            "type": "integer",
+            "example": 600
+          },
+          "expire": {
+            "type": "integer",
+            "example": 604800
+          },
+          "minimum": {
+            "type": "integer",
+            "description": "Negative-caching TTL (RFC 2308)",
+            "example": 300
+          }
+        },
+        "minProperties": 1
       },
       "AddRecordRequest": {
         "type": "object",
@@ -2821,7 +2878,7 @@ const OpenAPISpec = `{
         ],
         "summary": "Create a zone",
         "x-required-role": "operator",
-        "description": "Requires the operator role. Creates SOA (serial 1, refresh 3600, retry 600, expire 604800, minimum 86400) and NS records. In Raft mode the write is replicated first.",
+        "description": "Requires the operator role. Creates SOA (serial 1; refresh, retry, expire and minimum from the request or 3600, 600, 604800 and 86400) and NS records. Edit the SOA later with PUT /api/v1/zones/{zone}/soa. In Raft mode the write is replicated first.",
         "requestBody": {
           "required": true,
           "content": {
@@ -3418,7 +3475,7 @@ const OpenAPISpec = `{
         ],
         "summary": "Replace a record",
         "x-required-role": "operator",
-        "description": "Requires the operator role. Replaces the first record matching name, type and old_data. The new data must parse for the type; SOA records cannot be edited (the server manages the SOA and bumps its serial).",
+        "description": "Requires the operator role. Replaces the first record matching name, type and old_data. The new data must parse for the type; SOA records cannot be edited here (the server manages the SOA and bumps its serial); use PUT /api/v1/zones/{zone}/soa.",
         "parameters": [
           {
             "name": "zone",
@@ -3616,6 +3673,212 @@ const OpenAPISpec = `{
           },
           "429": {
             "description": "API rate limit exceeded (per client IP; see server.http.api_rate_limit)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/zones/{zone}/soa": {
+      "get": {
+        "tags": [
+          "Zones"
+        ],
+        "summary": "Get the zone's SOA",
+        "x-required-role": "operator",
+        "description": "Requires the operator role. ttl is the TTL the SOA record is served with.",
+        "parameters": [
+          {
+            "name": "zone",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Zone origin, lowercase with trailing dot. URL-encode it if needed.",
+            "example": "example.com."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The zone's SOA",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SOARecord"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Zone not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The zone has no SOA record",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "API rate limit exceeded (per client IP; see server.http.api_rate_limit)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Zones"
+        ],
+        "summary": "Edit the zone's SOA",
+        "x-required-role": "operator",
+        "description": "Requires the operator role. Changes the SOA fields present in the body; omitted fields keep their value. The serial cannot be set: the server bumps it, so also_notify secondaries are notified and transfer the change. rname takes user@domain or the DNS mailbox form; relative names are relative to the zone. Validation: every value at most 2147483647; refresh, retry and expire non-zero; retry < refresh; expire > refresh. In Raft mode the edit is replicated first, and every node must run a version that understands SOA edits (older nodes keep their SOA until their next snapshot).",
+        "parameters": [
+          {
+            "name": "zone",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Zone origin, lowercase with trailing dot. URL-encode it if needed.",
+            "example": "example.com."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSOARequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The zone's SOA",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SOARecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No field, a serial, an invalid name or mailbox, or values that fail validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Zone not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The zone has no SOA record",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "Not the Raft leader",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "API rate limit exceeded (per client IP; see server.http.api_rate_limit)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The Raft write failed or the edit was rejected on apply",
             "content": {
               "application/json": {
                 "schema": {

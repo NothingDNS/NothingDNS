@@ -24,9 +24,12 @@ interface ZoneEditorProps {
   zoneName: string;
   initialRecords: DnsRecord[];
   onRefresh: () => void;
+  // onEditSOA opens the SOA editor; the SOA row offers it instead of the
+  // record edit/delete actions, which the server refuses for SOA.
+  onEditSOA?: () => void;
 }
 
-export function ZoneEditor({ zoneName, initialRecords, onRefresh }: ZoneEditorProps) {
+export function ZoneEditor({ zoneName, initialRecords, onRefresh, onEditSOA }: ZoneEditorProps) {
   const [records, setRecords] = useState<EditableRecord[]>(
     sortZoneRecords(initialRecords, zoneName).map(r => ({ ...r, selected: false }))
   );
@@ -473,6 +476,11 @@ export function ZoneEditor({ zoneName, initialRecords, onRefresh }: ZoneEditorPr
                       {r.edited && (
                         <Button variant="ghost" size="icon" className="h-8 w-8 text-success" onClick={() => saveEdit(i)} aria-label="Save changes">
                           <Check className="h-4 w-4" />
+                        </Button>
+                      )}
+                      {r.type === 'SOA' && onEditSOA && (
+                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onEditSOA} aria-label="Edit SOA">
+                          <Pencil className="h-3.5 w-3.5" />
                         </Button>
                       )}
                       {r.type !== 'SOA' && !r.edited && (

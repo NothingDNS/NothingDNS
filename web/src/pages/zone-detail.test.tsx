@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ZoneDetailPage } from './zone-detail';
 
@@ -116,6 +116,19 @@ describe('ZoneDetailPage', () => {
     render(<ZoneDetailPage />);
 
     expect(await screen.findByText('SOA Record')).toBeInTheDocument();
-    expect(screen.getByText('admin.example.com.')).toBeInTheDocument();
+    // #19: the RNAME is shown as the address it stands for.
+    expect(screen.getByText('admin@example.com')).toBeInTheDocument();
+    expect(screen.getByText('86400s')).toBeInTheDocument();
+  });
+
+  it('opens the SOA editor from the header', async () => {
+    mockFetch.mockResolvedValueOnce(mockJsonResponse(sampleZone));
+    mockFetch.mockResolvedValueOnce(mockJsonResponse(sampleRecords));
+    render(<ZoneDetailPage />);
+
+    await screen.findByText('SOA Record');
+    fireEvent.click(screen.getAllByRole('button', { name: /Edit SOA/ })[0]);
+    expect(await screen.findByRole('dialog', { name: 'Edit SOA' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Admin e-mail')).toHaveValue('admin@example.com');
   });
 });

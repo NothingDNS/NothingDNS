@@ -1299,6 +1299,13 @@ func (c *Cluster) applyRaftZoneCommand(cmd raft.ZoneCommand) {
 		c.applyZoneBatchCommand(cmd, batch, decodeErr)
 		return
 	}
+	// #19: an SOA edit is a create_zone envelope without nameservers (see
+	// zone_soa.go); with nameservers the payload sets the new zone's SOA.
+	soaPayload, hasSOA, soaErr := decodeZoneSOA(cmd)
+	if hasSOA && len(cmd.Nameservers) == 0 {
+		c.applyZoneSOACommand(cmd, soaPayload, soaErr)
+		return
+	}
 	class := cmd.Class
 	if class == "" {
 		class = "IN"
@@ -1333,6 +1340,19 @@ func (c *Cluster) applyRaftZoneCommand(cmd raft.ZoneCommand) {
 		soa := &zone.SOARecord{
 			TTL: ttl, MName: cmd.Nameservers[0], RName: cmd.AdminEmail,
 			Serial: 1, Refresh: 3600, Retry: 600, Expire: 604800, Minimum: 86400,
+		}
+		if hasSOA {
+			// The proposer validated the timers; a payload this node cannot
+			// read leaves the defaults, as on a node that predates it.
+			if soaErr == nil {
+				timers := soaPayload.Update
+				timers.MName, timers.RName, timers.TTL = nil, nil, nil
+				err = timers.ApplyTo(soa, cmd.Zone)
+			}
+			if soaErr != nil || err != nil {
+				c.logger.Warnf("raft apply: create_zone %s: SOA fields ignored: %v", cmd.Zone, errors.Join(soaErr, err))
+				err = nil
+			}
 		}
 		var ns []zone.NSRecord
 		for _, n := range cmd.Nameservers {
