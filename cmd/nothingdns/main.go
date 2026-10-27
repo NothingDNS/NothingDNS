@@ -114,16 +114,22 @@ func reloadConfiguredZoneFiles(handler *integratedHandler, zoneManager *zone.Man
 type loadedZoneFile struct {
 	zone *zone.Zone
 	file string
+	// read is the file as it was when zone was parsed from it, and load
+	// parses it again; applyConfiguredZoneFiles uses them to catch a file
+	// that changed after it was read (F733).
+	read os.FileInfo
+	load func(string) (*zone.Zone, error)
 }
 
 func prepareConfiguredZoneFiles(configuredZoneFiles []string, loadZoneFileFunc func(string) (*zone.Zone, error)) ([]loadedZoneFile, error) {
 	loaded := make([]loadedZoneFile, 0, len(configuredZoneFiles))
 	for _, zoneFile := range configuredZoneFiles {
+		read, _ := os.Stat(zoneFile)
 		z, err := loadZoneFileFunc(zoneFile)
 		if err != nil {
 			return nil, fmt.Errorf("loading zone file %s: %w", zoneFile, err)
 		}
-		loaded = append(loaded, loadedZoneFile{zone: z, file: zoneFile})
+		loaded = append(loaded, loadedZoneFile{zone: z, file: zoneFile, read: read, load: loadZoneFileFunc})
 	}
 	return loaded, nil
 }
@@ -154,6 +160,28 @@ func applyConfiguredZoneFiles(handler *integratedHandler, zoneManager *zone.Mana
 	// older file would drop them from service, and the next mutation would
 	// overwrite the database copy, losing them for good: keep the zone and
 	// retry the write.
+	// F733: a reload reads the files long before it applies them (blocklist
+	// downloads and upstream setup run in between). A record change made
+	// meanwhile is written back to the file, so the copy read earlier lacks
+	// it: installing that copy dropped the change, and the next write-back
+	// removed it from the file too. Read a file that changed since again;
+	// if it no longer parses, keep the running zone the server wrote.
+	for i, item := range loaded {
+		if item.read == nil || item.load == nil {
+			continue
+		}
+		if now, err := os.Stat(item.file); err == nil && os.SameFile(item.read, now) &&
+			now.ModTime().Equal(item.read.ModTime()) && now.Size() == item.read.Size() {
+			continue
+		}
+		if z, err := item.load(item.file); err == nil {
+			loaded[i].zone = z
+		} else if cur, ok := zoneManager.Get(item.zone.Origin); ok && zoneManager.ZoneFile(item.zone.Origin) == item.file {
+			logger.Warnf("Zone %s: %s changed during the reload and no longer loads (%v); keeping the running zone", cur.Origin, item.file, err)
+			loaded[i].zone = cur
+		}
+	}
+
 	var kept []loadedZoneFile
 	for i, item := range loaded {
 		if item.zone.SOA == nil {

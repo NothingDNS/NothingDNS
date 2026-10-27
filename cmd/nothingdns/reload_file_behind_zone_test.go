@@ -120,3 +120,54 @@ func splitLines(s string) []string {
 	}
 	return append(out, s[start:])
 }
+
+// F733: a reload reads the zone files long before it applies them. A record
+// change made in between was written to the file but missing from the copy
+// the reload installed, and the next write-back removed it from the file too.
+// A file that changed since it was read is now read again at apply time.
+func TestReloadKeepsChangesMadeWhileItRuns(t *testing.T) {
+	setup := func(t *testing.T) (*reloadRTEnv, string, []loadedZoneFile) {
+		env, _, file, _ := f726Env(t)
+		plan, err := prepareConfiguredZoneFiles([]string{file}, loadZoneFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := env.s.zoneMgr.AddRecord("f726.test.", zone.Record{Name: "api", Type: "A", TTL: 300, RData: "192.0.2.77"}); err != nil {
+			t.Fatal(err)
+		}
+		return env, file, plan
+	}
+	apply := func(env *reloadRTEnv, plan []loadedZoneFile) {
+		applyConfiguredZoneFiles(env.h, env.s.zoneMgr, *env.s.zoneFiles, plan, env.s.logger)
+	}
+	t.Run("change made during the reload is kept", func(t *testing.T) {
+		env, file, plan := setup(t)
+		apply(env, plan)
+		if err := env.s.zoneMgr.AddRecord("f726.test.", zone.Record{Name: "later", Type: "A", TTL: 300, RData: "192.0.2.78"}); err != nil {
+			t.Fatal(err)
+		}
+		b, _ := os.ReadFile(file)
+		if !f726Has(env, "api") || !containsLine(string(b), "api") {
+			t.Fatalf("change lost:\n%s", b)
+		}
+	})
+	t.Run("operator edit after it still wins", func(t *testing.T) {
+		env, file, plan := setup(t)
+		z, _ := env.h.zoneManager.Get("f726.test.")
+		writeF726(t, file, int(z.SOA.Serial)+10, "edited IN A 192.0.2.99\n")
+		apply(env, plan)
+		if !f726Has(env, "edited") || f726Has(env, "api") {
+			t.Fatal("the operator's edit did not win")
+		}
+	})
+	t.Run("file broken meanwhile: the running zone is kept", func(t *testing.T) {
+		env, file, plan := setup(t)
+		if err := os.WriteFile(file, []byte("$ORIGIN f726.test.\n@ IN SOA broken\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		apply(env, plan)
+		if !f726Has(env, "api") {
+			t.Fatal("running zone not kept")
+		}
+	})
+}
