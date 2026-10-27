@@ -84,7 +84,6 @@ export const RPZ_ACTIONS = [
   'TCPONLY',
 ] as const;
 
-/** Zones, records, export and bulk PTR generation (`/api/v1/zones`). */
 /** SOA fields for {@link ZonesResource.updateSOA}; omitted ones keep their value. */
 export interface SOAUpdate {
   /** Primary nameserver. */
@@ -103,6 +102,7 @@ export interface SOAUpdate {
   minimum?: number;
 }
 
+/** Zones, records, export and bulk PTR generation (`/api/v1/zones`). */
 export class ZonesResource {
   constructor(private readonly t: Transport) {}
 
