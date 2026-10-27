@@ -577,6 +577,26 @@ func ValidateUsername(username string) error {
 	return nil
 }
 
+// MaxNewUsernameBytes is the longest username CreateUser accepts.
+const MaxNewUsernameBytes = 128
+
+// validateNewUsername is ValidateUsername plus the limits for a user being
+// created: a length cap, and no "/" since the API addresses a user by path
+// (PUT/DELETE /auth/users/{username}), which could never reach such a name.
+// Users already stored are not re-checked against these (F761).
+func validateNewUsername(username string) error {
+	if err := ValidateUsername(username); err != nil {
+		return err
+	}
+	if len(username) > MaxNewUsernameBytes {
+		return fmt.Errorf("username must be at most %d bytes", MaxNewUsernameBytes)
+	}
+	if strings.Contains(username, "/") {
+		return fmt.Errorf("username must not contain '/'")
+	}
+	return nil
+}
+
 // ValidateRole rejects unknown RBAC roles.
 func ValidateRole(role Role) error {
 	switch role {
@@ -589,7 +609,7 @@ func ValidateRole(role Role) error {
 
 // CreateUser creates a new user.
 func (s *Store) CreateUser(username, password string, role Role) (*User, error) {
-	if err := ValidateUsername(username); err != nil {
+	if err := validateNewUsername(username); err != nil {
 		return nil, err
 	}
 	if err := ValidatePassword(password); err != nil {
