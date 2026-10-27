@@ -20,6 +20,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+
+	"github.com/nothingdns/nothingdns/internal/protocol"
 )
 
 // ODoH application labels (RFC 9230 §4).
@@ -370,10 +372,16 @@ func (rc *responseContext) encryptResponse(dnsResponse []byte) ([]byte, error) {
 	aad := responseAAD(responseNonce)
 
 	// Plaintext envelope:  u16 dns_len || dns || u16 pad_len || pad
-	pt := make([]byte, 0, 4+len(dnsResponse))
+	// The proxy knows the client and sees the ciphertext length, so the
+	// answer is padded with zeros to a multiple of the RFC 8467 response
+	// block (RFC 9230 §11) (F738), within the u16 encrypted_message limit.
+	padLen := (protocol.PaddingBlockSize - len(dnsResponse)%protocol.PaddingBlockSize) % protocol.PaddingBlockSize
+	padLen = max(0, min(padLen, 0xFFFF-aead.Overhead()-4-len(dnsResponse)))
+	pt := make([]byte, 0, 4+len(dnsResponse)+padLen)
 	pt = append(pt, u16BE(dnsLen)...)
 	pt = append(pt, dnsResponse...)
-	pt = append(pt, u16BE(0)...) // padding_len = 0
+	pt = append(pt, u16BE(uint16(padLen))...)
+	pt = append(pt, make([]byte, padLen)...)
 
 	ct := aead.Seal(nil, nonce, pt, aad)
 

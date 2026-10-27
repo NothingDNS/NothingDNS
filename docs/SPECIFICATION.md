@@ -1518,7 +1518,8 @@ What the code implements. Where an RFC is only partly covered, the line says so.
 - RFC 8484 — DNS over HTTPS (DoH); DNS over WebSocket on the same listener
 - RFC 9250 — DNS over QUIC (DoQ), through `quic-go`
 - RFC 9103 — Zone transfer over TLS (XoT)
-- RFC 9230 — Oblivious DoH, with RFC 9180 HPKE
+- RFC 9230 — Oblivious DoH, with RFC 9180 HPKE; target answers padded to
+  RFC 8467 468-byte blocks
 - RFC 8490 — DNS Stateful Operations
 
 ### EDNS

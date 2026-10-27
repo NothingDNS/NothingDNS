@@ -171,8 +171,11 @@ func TestODoHTargetResponseDecryptableByRFC9230Peer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ODoH target response is not decryptable by an RFC 9230 conformant peer: %v", err)
 	}
-	if !bytes.Equal(plain, rfcEnvelope(rfc031DNSResponse)) {
-		t.Fatalf("decrypted response plaintext mismatch")
+	// The envelope carries zero padding (F738); parsePlaintextEnvelope checks
+	// it is well formed and all zeros.
+	gotDNS, err := parsePlaintextEnvelope(plain)
+	if err != nil || !bytes.Equal(gotDNS, rfc031DNSResponse) {
+		t.Fatalf("decrypted response plaintext mismatch (%v)", err)
 	}
 }
 
