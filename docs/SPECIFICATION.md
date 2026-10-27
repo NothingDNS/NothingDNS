@@ -529,6 +529,17 @@ the data:
 - Journal-based (Dynamic DNS updates create journal entries)
 - Fallback to AXFR if journal insufficient
 
+### 7.2a Transfers of signed zones
+- A zone the server signs online (`dnssec.signing`) is transferred signed:
+  AXFR carries the DNSKEY RRset, an RRSIG per authoritative RRset (delegation
+  NS and glue stay unsigned) and the NSEC/NSEC3 chain, as an offline-signed
+  zone does. An IXFR that would be a diff sends the full signed zone instead
+  (RFC 1995 §4); an up-to-date IXFR is still the lone SOA.
+- The transferred signatures are valid for `dnssec.signing.signature_validity`
+  (default 30 days) and a secondary only transfers again when the serial
+  changes: change the zone, or bump the serial with `PUT /zones/{zone}/soa`
+  (`dnsctl zone soa`), well before they expire.
+
 ### 7.3 NOTIFY (RFC 1996)
 - Primary notifies secondaries on every SOA serial change of a transferable
   zone (API/Raft/gossip edits, Dynamic DNS, SIGHUP zone reload), and once

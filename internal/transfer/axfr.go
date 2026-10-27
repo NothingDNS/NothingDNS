@@ -252,6 +252,20 @@ func (s *AXFRServer) HandleAXFR(req *protocol.Message, clientIP net.IP) ([]*prot
 	return records, tsigKey, nil
 }
 
+// ZoneRecords returns the full AXFR record stream (SOA, data, SOA) of
+// zoneName with no access check: for a caller that has already authorized
+// the transfer, such as an IXFR that must send the full zone instead of a
+// diff.
+func (s *AXFRServer) ZoneRecords(zoneName string) ([]*protocol.ResourceRecord, error) {
+	s.zonesMu.RLock()
+	z, ok := s.zones[strings.ToLower(zoneName)]
+	s.zonesMu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("zone %s not found", zoneName)
+	}
+	return s.generateAXFRRecords(z)
+}
+
 // generateAXFRRecords generates the AXFR response records for a zone
 // Per RFC 5936: SOA + all records (sorted) + SOA
 func (s *AXFRServer) generateAXFRRecords(z *zone.Zone) ([]*protocol.ResourceRecord, error) {

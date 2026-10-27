@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/nothingdns/nothingdns/internal/dnssec"
 	"io"
 	"net"
 	"strings"
@@ -73,6 +74,9 @@ func (h *integratedHandler) handleAXFR(w server.ResponseWriter, r *protocol.Mess
 		sendError(w, r, protocol.RcodeRefused)
 		return
 	}
+
+	// A zone signed online is transferred signed (F751).
+	records = h.signTransferRecords(qname, records)
 
 	// Send AXFR response as multiple messages
 	// Per RFC 5936: SOA + all zone records + SOA
@@ -173,6 +177,23 @@ func (h *integratedHandler) handleIXFR(w server.ResponseWriter, r *protocol.Mess
 		return
 	}
 
+	// A zone signed online sends its full zone, signed, instead of an
+	// unsigned diff, which would leave a secondary's signatures and NSEC
+	// chain stale (RFC 1995 §4 allows a full zone in an IXFR response). The
+	// lone-SOA "up to date" answer is sent as is (F751).
+	if len(records) > 1 && h.zoneSignerFor(qname) != nil {
+		if records[1].Type == protocol.TypeSOA { // an incremental diff
+			full, ferr := h.transfer.AXFRServer.ZoneRecords(qname)
+			if ferr != nil {
+				h.logger.Warnf("[%s] IXFR for %s: %v", reqID, qname, ferr)
+				sendError(w, r, protocol.RcodeServerFailure)
+				return
+			}
+			records = full
+		}
+		records = h.signTransferRecords(qname, records)
+	}
+
 	// Send IXFR response as multiple messages
 	// Per RFC 1995: The response format varies based on whether it's incremental or full AXFR
 	// A signed request gets a TSIG-signed response stream (RFC 8945 §5.3.1, F313).
@@ -210,6 +231,48 @@ func (h *integratedHandler) handleIXFR(w server.ResponseWriter, r *protocol.Mess
 	if h.metrics != nil {
 		h.metrics.RecordResponse(protocol.RcodeSuccess)
 	}
+}
+
+// zoneSignerFor returns the online signer of the zone named origin, or nil.
+func (h *integratedHandler) zoneSignerFor(origin string) *dnssec.Signer {
+	h.zoneSignersMu.RLock()
+	defer h.zoneSignersMu.RUnlock()
+	signer := h.zoneSigners[strings.ToLower(canonicalize(origin))]
+	if signer == nil || len(signer.GetKeys()) == 0 {
+		return nil
+	}
+	return signer
+}
+
+// signTransferRecords signs an AXFR stream (SOA, data, SOA) of a zone the
+// server signs online: DNSKEY, an RRSIG per authoritative RRset and the
+// NSEC/NSEC3 chain, as an offline-signed zone carries them. Transferred
+// unsigned, a secondary served the zone without signatures, which validators
+// reject while the parent publishes a DS (F751). The signatures are valid for
+// dnssec.signing.signature_validity: a secondary only re-transfers when the
+// serial changes. On a signing error the stream goes out unsigned, as before.
+func (h *integratedHandler) signTransferRecords(origin string, records []*protocol.ResourceRecord) []*protocol.ResourceRecord {
+	if len(records) < 2 || records[0].Type != protocol.TypeSOA {
+		return records
+	}
+	signer := h.zoneSignerFor(origin)
+	if signer == nil {
+		return records
+	}
+	soa := records[0]
+	signed, err := signer.SignZone(records[:len(records)-1]) // without the closing SOA
+	if err != nil {
+		h.logger.Warnf("Zone transfer of %s goes out unsigned: %v", origin, err)
+		return records
+	}
+	out := make([]*protocol.ResourceRecord, 0, len(signed)+1)
+	out = append(out, soa)
+	for _, rr := range signed {
+		if rr.Type != protocol.TypeSOA {
+			out = append(out, rr)
+		}
+	}
+	return append(out, soa)
 }
 
 // errTransferSign marks a transfer stream that failed because a message could
