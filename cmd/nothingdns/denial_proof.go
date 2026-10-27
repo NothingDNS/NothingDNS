@@ -50,6 +50,7 @@ func (h *integratedHandler) addDenialProof(resp *protocol.Message, z *zone.Zone,
 	signer, ok := h.zoneSigners[z.Origin]
 	h.zoneSignersMu.RUnlock()
 	if !ok || signer == nil {
+		h.addStoredDenialProof(resp, z, qname, kind) // F753
 		return
 	}
 	zsks := signer.GetActiveZSKs()

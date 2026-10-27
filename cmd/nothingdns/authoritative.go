@@ -165,6 +165,12 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 			resp = h.buildSignedResponse(r, records, signer, true)
 		} else {
 			resp = h.buildResponse(r, records)
+			if wantsDNSSEC && qtype != protocol.TypeANY { // ANY already has them
+				for _, sig := range storedRRSIGs(z, qname, qtype) { // F753
+					sig.Name = q.Name
+					resp.AddAnswer(sig)
+				}
+			}
 		}
 		h.cacheAuthoritative(z, authKey, resp)
 		if h.metrics != nil {
@@ -406,7 +412,13 @@ func (h *integratedHandler) buildWildcardResponse(r *protocol.Message, z *zone.Z
 	if !signed {
 		return resp // unsigned zone (or signing failed, logged)
 	}
+	presigned := h.zoneSignerFor(z.Origin) == nil
 	for _, proof := range h.wildcardAnswerRRs(z, r.Questions[0].Name.String(), strings.TrimPrefix(wildcard, "*.")) {
+		if presigned { // serve the zone's own NSEC, which its RRSIG covers (F753)
+			if proof = storedRecord(z, proof.Name.String(), proof.Type); proof == nil {
+				continue
+			}
+		}
 		resp.Authorities = append(resp.Authorities, proof)
 		if sig := h.signZoneRRSet(z, []*protocol.ResourceRecord{proof}); sig != nil {
 			resp.Authorities = append(resp.Authorities, sig)
@@ -540,6 +552,10 @@ func (h *integratedHandler) signZoneRRSet(z *zone.Zone, rrs []*protocol.Resource
 	signer, ok := h.zoneSigners[z.Origin]
 	h.zoneSignersMu.RUnlock()
 	if !ok || signer == nil {
+		// A zone carrying its own signatures: its stored RRSIG (F753).
+		if sigs := storedRRSIGs(z, rrs[0].Name.String(), rrs[0].Type); len(sigs) > 0 {
+			return sigs[0]
+		}
 		return nil
 	}
 	zsks := signer.GetActiveZSKs()

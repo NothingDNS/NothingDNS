@@ -404,6 +404,11 @@ upstream:
 
 #### 6.1.1 Zone Signing
 - Online signing (sign at query time) or offline signing (pre-sign zone)
+- A zone carrying its own signatures (signed with `dnsctl dnssec sign-zone`,
+  or transferred signed from a primary) and no online signer is served with
+  them: an answer gets the stored RRSIG of its RRset, a negative answer the
+  SOA's RRSIG and the stored NSEC records proving it. NSEC3-signed zones get
+  their RRSIGs but no denial proofs yet.
 - RRSIG generation for all RRsets
 - NSEC chain generation (RFC 4034)
 - NSEC3 with opt-out (RFC 5155)
