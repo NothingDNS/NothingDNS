@@ -158,7 +158,6 @@ internal/
 ├── auth/                # JWT multi-user auth with RBAC
 ├── blocklist/           # Domain blocklist engine
 ├── cache/               # LRU cache with TTL, NSEC, stale serving
-├── catalog/             # Zone catalog (RFC 9432)
 ├── cluster/             # Gossip (SWIM) + Raft consensus
 │   └── raft/            # Raft consensus implementation
 ├── config/              # Custom YAML parser

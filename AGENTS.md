@@ -124,7 +124,6 @@ internal/
 ├── auth/           # JWT-based multi-user authentication with RBAC
 ├── blocklist/      # Domain blocklist engine (hosts-file + URL-based)
 ├── cache/          # LRU cache with TTL, prefetch, negative caching, stale serving
-├── catalog/        # Zone catalog for managing zone metadata (RFC 9432)
 ├── cluster/        # Gossip-based HA clustering with raft consensus
 ├── config/         # Custom YAML parser (handles most YAML, not anchors/multiline)
 ├── dashboard/      # Embedded React 19 SPA (served from internal/dashboard/static/)

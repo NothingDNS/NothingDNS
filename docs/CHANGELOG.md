@@ -31,6 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Out-of-zone records in a zone file are ignored with a warning** (as BIND does): a record such as `foo.example.org. A …` in the `example.com.` file — or one under a later `$ORIGIN` outside the zone — was served as authoritative data of the zone, sent in AXFR/IXFR and signed into its NSEC/NSEC3 chain. It is now skipped at load and logged as `zone: <file>:<line>: ignoring out-of-zone record …`; the rest of the file loads as before. `dnsctl dnssec sign-zone` leaves such records out of the signed zone with the same warning on stderr.
 - **A name in record data sent without its trailing dot changed meaning after a restart**: `target.example.org` in a CNAME/MX/SRV/NS/… added through the API or the dashboard was answered as `target.example.org.`, but written to the zone file as is, where it reads as `target.example.org.example.com.` — so after a restart, an export or a Raft snapshot the record pointed somewhere else. Such names are now stored absolute when the record is added or updated (a dotted name is fully qualified, a single label is relative to the zone, as for `nameservers`). Records added before this change keep their stored text; re-save a record whose target lacks the trailing dot (an update with the same old and new data, e.g. `dnsctl record update <zone> <name> <type> <data> <data>`, stores it qualified).
 
+### Removed
+
+- The unused `internal/catalog` package (RFC 9432 catalog zones). It was never wired into the server; `catalog.enabled: true` is still refused at config validation.
+
 ## [1.3.1] — 2026-10-26
 
 ### Fixed

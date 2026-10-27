@@ -126,7 +126,7 @@ nothingdns/
 | `memory` | Memory monitor and cache eviction under pressure |
 | `mdns` | mDNS / DNS-SD responder |
 | `util` | Logger, buffer pools, IP helpers, shared small utilities |
-| `catalog`, `load`, `e2e` | Catalog zones (RFC 9432) and a load-test tool, neither used by the server; end-to-end tests |
+| `load`, `e2e` | A load-test tool, not used by the server; end-to-end tests |
 
 ---
 
