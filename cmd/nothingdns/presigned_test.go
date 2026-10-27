@@ -16,20 +16,15 @@ import (
 	"github.com/nothingdns/nothingdns/internal/zone"
 )
 
-type presignedTestResolver struct{ answers []*protocol.ResourceRecord }
+// presignedTestResolver answers the validator's fetches (DNSKEY, the DS
+// lookups that rule out zone cuts) from the server under test.
+type presignedTestResolver struct {
+	t *testing.T
+	h *integratedHandler
+}
 
 func (r *presignedTestResolver) Query(_ context.Context, name string, qtype uint16) (*protocol.Message, error) {
-	resp := &protocol.Message{Header: protocol.Header{Flags: protocol.NewResponseFlags(protocol.RcodeSuccess)}}
-	resp.Header.Flags.AA = true
-	if q, err := protocol.NewQuery(1, name, qtype); err == nil {
-		resp.Questions = q.Questions
-	}
-	if qtype == protocol.TypeDNSKEY && strings.EqualFold(canonicalize(name), "pre.test.") {
-		for _, rr := range r.answers {
-			resp.Answers = append(resp.Answers, rr.Copy())
-		}
-	}
-	return resp, nil
+	return dnssecRegAsk(r.t, r.h, name, qtype).Copy(), nil
 }
 
 func TestPresignedZoneAnswersValidate(t *testing.T) {
@@ -50,12 +45,8 @@ func TestPresignedZoneAnswersValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	var b strings.Builder
-	var dnskeys []*protocol.ResourceRecord
 	for _, rr := range signed {
 		fmt.Fprintf(&b, "%s %d IN %s %s\n", rr.Name.String(), rr.TTL, typeToString(rr.Type), rr.Data.String())
-		if rr.Name.String() == "pre.test." && (rr.Type == protocol.TypeDNSKEY || (rr.Type == protocol.TypeRRSIG && rr.Data.(*protocol.RDataRRSIG).TypeCovered == protocol.TypeDNSKEY)) {
-			dnskeys = append(dnskeys, rr)
-		}
 	}
 	z, err := zone.ParseFile("pre.test.zone", strings.NewReader(b.String()))
 	if err != nil {
@@ -70,7 +61,7 @@ func TestPresignedZoneAnswersValidate(t *testing.T) {
 	store.AddAnchor(&dnssec.TrustAnchor{Zone: "pre.test.", KeyTag: ksk.KeyTag, Algorithm: ksk.DNSKEY.Algorithm, PublicKey: ksk.DNSKEY.PublicKey})
 	cfg := dnssec.DefaultValidatorConfig()
 	cfg.IgnoreTime = true
-	v := dnssec.NewValidator(cfg, store, &presignedTestResolver{answers: dnskeys})
+	v := dnssec.NewValidator(cfg, store, &presignedTestResolver{t: t, h: h})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -82,28 +73,13 @@ func TestPresignedZoneAnswersValidate(t *testing.T) {
 		{"pre.test.", protocol.TypeDNSKEY},
 		{"nx.pre.test.", protocol.TypeA},
 		{"www.pre.test.", protocol.TypeAAAA},
+		{"foo.wild.pre.test.", protocol.TypeTXT},
 	} {
 		m := dnssecRegAsk(t, h, tc.name, tc.qt)
 		res, verr := v.ValidateResponse(ctx, m, tc.name)
 		if res != dnssec.ValidationSecure {
 			t.Fatalf("%s %s: validated %v (%v); rcode %d answers %d authority %d", tc.name, typeToString(tc.qt), res, verr, m.Header.Flags.RCODE, len(m.Answers), len(m.Authorities))
 		}
-	}
-	// Wildcard answer (BIND delv validates it fully; the in-repo validator
-	// rejects wildcard answers, F754): the stored RRSIG with the wildcard's
-	// label count, owned by QNAME, and the stored NSEC proving no closer match.
-	wm := dnssecRegAsk(t, h, "foo.wild.pre.test.", protocol.TypeTXT)
-	var wsig *protocol.RDataRRSIG
-	for _, rr := range wm.Answers {
-		if s, ok := rr.Data.(*protocol.RDataRRSIG); ok {
-			wsig = s
-			if rr.Name.String() != "foo.wild.pre.test." {
-				t.Fatalf("wildcard RRSIG owner %s", rr.Name)
-			}
-		}
-	}
-	if wsig == nil || wsig.Labels != 3 || dnssecRegCount(wm.Authorities, protocol.TypeNSEC) != 1 || dnssecRegCount(wm.Authorities, protocol.TypeRRSIG) != 1 {
-		t.Fatalf("wildcard answer: sig %+v, authority %d", wsig, len(wm.Authorities))
 	}
 	// DO=0: no DNSSEC records.
 	w := newCaptureWriter("192.0.2.100", "udp")
