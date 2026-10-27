@@ -23,6 +23,10 @@ func (s *Server) handleSPA(spaHandler http.Handler) http.HandlerFunc {
 
 // handleDashboardStats returns stats formatted for the web dashboard.
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	// Read-only: every other method used to answer 200 (F760).
+	if s.requireMethod(w, r, http.MethodGet, http.MethodHead) {
+		return
+	}
 	resp := &StatusResponse{
 		Status:    "running",
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
