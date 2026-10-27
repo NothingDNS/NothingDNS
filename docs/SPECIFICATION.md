@@ -371,6 +371,13 @@ upstream:
 - Cache NODATA (empty answer) responses
 - Negative TTL from the SOA (RFC 2308), capped by `cache.negative_ttl` (default 60s)
 
+#### 5.2.2a Resolution Failure Cache (RFC 9520)
+- An upstream or resolver that does not answer, an unusable answer, a
+  SERVFAIL/REFUSED-class answer, or a DNSSEC validation failure is remembered
+  per (name, type, class, CD bit) for 5 s; meanwhile no query for it goes out
+  and clients get stale data (when serve-stale has it) or SERVFAIL with EDE 13
+  (Cached Error). At most 10,000 entries; the duration is not configurable.
+
 #### 5.2.3 Prefetching
 - Settings: `cache.prefetch` (off by default) and `cache.prefetch_threshold`
   (seconds before expiry, default 60). The cache has the hook that fires a
@@ -1563,6 +1570,7 @@ What the code implements. Where an RFC is only partly covered, the line says so.
 - RFC 6672 — DNAME
 - RFC 7816 — QNAME Minimization
 - RFC 8767 — Serve-Stale
+- RFC 9520 — Negative caching of resolution failures (§5.2.2a)
 - RFC 6147 — DNS64
 - Response rate limiting follows the BIND-style RRL design (not an RFC; §9.5)
 - RFC 6762, RFC 6763 — mDNS and DNS-SD responder

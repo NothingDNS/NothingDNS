@@ -575,12 +575,18 @@ func resolverStage(h *integratedHandler) Stage {
 		}
 
 		h.logger.Debugf("Resolving %s iteratively", q.qname)
+		// RFC 9520: no outgoing query while a failure is cached (F750).
+		if h.answerCachedFailure(q) {
+			return true, nil
+		}
+		failKey := failureKey(q)
 		resp, err := func() (*protocol.Message, error) {
 			resolveCtx, cancel := context.WithTimeout(ctx, iterativeResolveTimeout(h.config))
 			defer cancel()
 			return h.resolver.Resolve(resolveCtx, q.qname, q.qtype)
 		}()
 		if err != nil {
+			h.failures.add(failKey)
 			h.logger.Warnf("Iterative resolution failed for %s: %v", q.qname, err)
 			// RFC 8767: Try serve-stale when resolution fails
 			if h.serveStaleOnFailedRefresh(q, "resolver failed") {
@@ -593,6 +599,7 @@ func resolverStage(h *integratedHandler) Stage {
 			return true, nil
 		}
 		if resp == nil {
+			h.failures.add(failKey)
 			h.logger.Warnf("Iterative resolution returned nil response for %s", q.qname)
 			if h.metrics != nil {
 				h.metrics.RecordResponse(protocol.RcodeServerFailure)
@@ -605,8 +612,11 @@ func resolverStage(h *integratedHandler) Stage {
 
 		// The iterative resolver reports an unreachable or lame authority
 		// as a SERVFAIL response, not as an error (RFC 8767 §4).
-		if failedRefresh(resp) && h.serveStaleOnFailedRefresh(q, "resolver returned "+rcodeToString(resp.Header.Flags.RCODE)) {
-			return true, nil
+		if failedRefresh(resp) {
+			h.failures.add(failKey)
+			if h.serveStaleOnFailedRefresh(q, "resolver returned "+rcodeToString(resp.Header.Flags.RCODE)) {
+				return true, nil
+			}
 		}
 
 		resp.Header.ID = q.msg.Header.ID
@@ -621,6 +631,7 @@ func resolverStage(h *integratedHandler) Stage {
 		// the validator for every query the resolver handles.
 		handled, dnssecValidated, dnssecBogus := h.validateDNSSECResponse(ctx, q.currentWriter, q.msg, q.qname, resp)
 		if handled {
+			h.failures.add(failKey) // validation failure (RFC 9520 §3.4)
 			return true, nil
 		}
 
@@ -735,6 +746,11 @@ func upstreamStage(h *integratedHandler) Stage {
 		if h.upstream == nil && h.loadBalancer == nil {
 			return false, nil // fall through to noUpstreamStage
 		}
+		// RFC 9520: no outgoing query while a failure is cached (F750).
+		if h.answerCachedFailure(q) {
+			return true, nil
+		}
+		failKey := failureKey(q)
 
 		h.logger.Debugf("Forwarding query for %s to upstream", q.qname)
 		if h.metrics != nil && h.config != nil {
@@ -762,6 +778,7 @@ func upstreamStage(h *integratedHandler) Stage {
 		}
 		if err != nil {
 			q.msg.Header.ID = origID
+			h.failures.add(failKey)
 			h.logger.Warnf("Upstream query failed for %s: %v", q.qname, err)
 			if h.serveStaleOnFailedRefresh(q, "upstream failed") {
 				return true, nil
@@ -774,6 +791,7 @@ func upstreamStage(h *integratedHandler) Stage {
 		}
 		if resp == nil {
 			q.msg.Header.ID = origID
+			h.failures.add(failKey)
 			h.logger.Warnf("Upstream returned nil response for %s", q.qname)
 			if h.metrics != nil {
 				h.metrics.RecordResponse(protocol.RcodeServerFailure)
@@ -786,6 +804,7 @@ func upstreamStage(h *integratedHandler) Stage {
 
 		if resp.Header.ID != q.msg.Header.ID {
 			q.msg.Header.ID = origID
+			h.failures.add(failKey)
 			h.logger.Warnf("Upstream response ID mismatch for %s: got %d, want %d", q.qname, resp.Header.ID, q.msg.Header.ID)
 			if h.metrics != nil {
 				h.metrics.RecordResponse(protocol.RcodeServerFailure)
@@ -801,6 +820,7 @@ func upstreamStage(h *integratedHandler) Stage {
 		// question is rejected before it can be cached.
 		if !upstreamResponseMatchesQuestion(resp, q.q) {
 			q.msg.Header.ID = origID
+			h.failures.add(failKey)
 			h.logger.Warnf("Upstream response question mismatch for %s", q.qname)
 			if h.metrics != nil {
 				h.metrics.RecordResponse(protocol.RcodeServerFailure)
@@ -813,8 +833,11 @@ func upstreamStage(h *integratedHandler) Stage {
 		// An upstream that is up but cannot resolve answers SERVFAIL (or
 		// REFUSED): a failed refresh, so stale data is served just as when
 		// the upstream does not answer at all (RFC 8767 §4).
-		if failedRefresh(resp) && h.serveStaleOnFailedRefresh(q, "upstream returned "+rcodeToString(resp.Header.Flags.RCODE)) {
-			return true, nil
+		if failedRefresh(resp) {
+			h.failures.add(failKey)
+			if h.serveStaleOnFailedRefresh(q, "upstream returned "+rcodeToString(resp.Header.Flags.RCODE)) {
+				return true, nil
+			}
 		}
 
 		// AD is this server's own claim (RFC 4035 §3.2.3): with a validator
@@ -827,6 +850,7 @@ func upstreamStage(h *integratedHandler) Stage {
 
 		handled, dnssecValidated, dnssecBogus := h.validateDNSSECResponse(ctx, q.currentWriter, q.msg, q.qname, resp)
 		if handled {
+			h.failures.add(failKey) // validation failure (RFC 9520 §3.4)
 			return true, nil
 		}
 

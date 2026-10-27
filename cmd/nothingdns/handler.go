@@ -109,6 +109,8 @@ type integratedHandler struct {
 	ddnsConsumer   *transfer.DynamicDNSHandler
 	// ddnsRaftMu serializes DDNS updates replicated through Raft (F452).
 	ddnsRaftMu sync.Mutex
+	// failures caches resolution failures (RFC 9520, F750).
+	failures failureCache
 }
 
 // ServeDNS implements the server.Handler interface.
