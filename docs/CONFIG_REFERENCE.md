@@ -223,7 +223,7 @@ yeniden başlatma gerekir.
 | `signing.keys` | []object | — | hayır | KSK/ZSK key tanımları (`private_key`, `type`, `algorithm`) |
 | `signing.nsec3.iterations` | int | `0` | evet | NSEC3 iteration sayısı; en fazla 150 (daha büyük değerler doğrulamada reddedilir, RFC 9276), önerilen 0 |
 | `signing.nsec3.salt` | string | "" | evet | NSEC3 salt (hex) |
-| `signing.nsec3.opt_out` | bool | `false` | evet | NSEC3 opt-out: imzasız (DS'siz) delegasyonlar zincirden çıkarılır |
+| `signing.nsec3.opt_out` | bool | `false` | evet | NSEC3 opt-out: imzasız (DS'siz) delegasyonlar zincirden çıkarılır. RFC 9276 küçük zone'lar için önermez: doğrulayıcılar opt-out aralığındaki wildcard cevaplarını güvensiz (insecure) sayar |
 
 `signing.nsec3` bloğu yazıldığında sunucunun **çevrim içi** (sorgu anında)
 imzalanan negatif yanıtları NSEC yerine NSEC3 (RFC 5155) taşır ve apex'te

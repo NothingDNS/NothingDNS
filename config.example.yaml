@@ -304,7 +304,11 @@ dnssec:
     nsec3:
       iterations: 0              # RFC 9276: 0 recommended; values above 150 are rejected
       salt: ""
-      opt_out: true              # Leave unsigned (no-DS) delegations out of the chain
+      # Opt-out leaves unsigned (no-DS) delegations out of the chain. RFC 9276
+      # does not recommend it for small zones: an opt-out span can hide an
+      # unsigned delegation, so validators treat wildcard answers under it as
+      # insecure. Use it only for large zones of mostly unsigned delegations.
+      opt_out: false
 
 # =============================================================================
 # SECURITY SETTINGS
