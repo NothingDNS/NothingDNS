@@ -11,6 +11,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -435,7 +436,8 @@ func cmdDNSSECSignZone(args []string) error {
 // the server's own parser (zone.ParseFile), so $ORIGIN, $TTL, $INCLUDE,
 // $GENERATE, multi-line records, omitted TTL/class and inherited owners all
 // work as they do when the server loads the zone. A line the parser cannot
-// read is an error naming the line, never a silently shorter zone. origin is
+// read is an error naming the line, never a silently shorter zone; an
+// out-of-zone record is left out with a warning on stderr. origin is
 // the zone origin for files with no $ORIGIN of their own.
 func parseZoneRecords(data, origin string) ([]*protocol.ResourceRecord, error) {
 	// A file without $ORIGIN takes the zone name as its origin: put the
@@ -449,6 +451,11 @@ func parseZoneRecords(data, origin string) ([]*protocol.ResourceRecord, error) {
 	z, err := zone.ParseFile("zone file", strings.NewReader(data))
 	if err != nil {
 		return nil, shiftZoneErrorLine(err, shift)
+	}
+	// Out-of-zone records are left out, as the server does when it loads the
+	// file; say so (F732).
+	for _, w := range z.Warnings {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", shiftZoneErrorLine(errors.New(w), shift))
 	}
 
 	// Hand the records over in file order (the parser keys them by owner, in
