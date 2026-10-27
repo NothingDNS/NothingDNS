@@ -380,9 +380,11 @@ upstream:
 
 #### 5.2.3 Prefetching
 - Settings: `cache.prefetch` (off by default) and `cache.prefetch_threshold`
-  (seconds before expiry, default 60). The cache has the hook that fires a
-  refresh when an entry crosses the threshold, but the committed server never
-  installs the refresh callback, so these settings currently have no effect.
+  (seconds before expiry, default 60). A cache hit inside the window fires one
+  background refresh for the entry (at most 16 in flight), through the
+  resolver or the upstreams like the original query, with the same DNSSEC
+  validation and blocklist CNAME inspection; the fresh answer replaces the
+  entry (`cmd/nothingdns/prefetch.go`).
 
 ### 5.3 Security
 
