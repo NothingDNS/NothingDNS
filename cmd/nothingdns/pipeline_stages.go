@@ -296,11 +296,10 @@ func nsecCacheStage(h *integratedHandler) Stage {
 // they are cached and to cache and stale hits, since the blocklist may have
 // gained the target since; local zones are not inspected.
 func (h *integratedHandler) blockCNAMETarget(q *query, resp *protocol.Message) bool {
-	bl := h.security.Blocklist
-	if bl == nil || resp == nil || q.q == nil || q.q.Name == nil {
+	if q.q == nil || q.q.Name == nil {
 		return false
 	}
-	target, blocked := bl.BlockedCNAMETarget(extractCNAMETargets(resp, q.q.Name.String()))
+	target, blocked := h.blockedCNAMETarget(q.q.Name.String(), resp)
 	if !blocked {
 		return false
 	}
@@ -311,6 +310,16 @@ func (h *integratedHandler) blockCNAMETarget(q *query, resp *protocol.Message) b
 	}
 	sendErrorWithEDE(q.currentWriter, q.msg, protocol.RcodeNameError, protocol.EDEFiltered, "blocked by blocklist (CNAME target)")
 	return true
+}
+
+// blockedCNAMETarget returns the blocked name resp's CNAME chain from qname
+// leads to, when blocklist CNAME inspection is on.
+func (h *integratedHandler) blockedCNAMETarget(qname string, resp *protocol.Message) (string, bool) {
+	bl := h.security.Blocklist
+	if bl == nil || resp == nil {
+		return "", false
+	}
+	return bl.BlockedCNAMETarget(extractCNAMETargets(resp, qname))
 }
 
 // blocklistStage checks if the query domain is blocklisted.

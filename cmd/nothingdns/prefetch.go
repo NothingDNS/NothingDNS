@@ -146,6 +146,11 @@ func (h *integratedHandler) prefetch(key string, qtype uint16) {
 	if handled, _ := h.applyRPZResponsePolicyWithError(prefetchDiscardWriter{}, query, question, resp, name); handled {
 		return
 	}
+	// A client miss is blocked, not cached, when the chain reaches a blocked
+	// name; refreshing it would keep resolving the blocked name (F728).
+	if _, blocked := h.blockedCNAMETarget(question.Name.String(), resp); blocked {
+		return
+	}
 
 	ttl := answerCacheTTL(resp)
 	if ttl == 0 {

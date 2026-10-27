@@ -217,6 +217,16 @@ func (h *integratedHandler) tryDNS64Synthesis(ctx context.Context, w server.Resp
 	if handled, err := h.applyRPZResponsePolicyWithError(w, r, q, aResp, qname); handled || err != nil {
 		return handled
 	}
+	// The A answer's chain may differ from the AAAA answer's, which the
+	// caller already checked (F729).
+	if target, blocked := h.blockedCNAMETarget(qname, aResp); blocked {
+		h.logger.Debugf("Blocked query for %s (DNS64 A answer, CNAME target %s)", qname, target)
+		if h.metrics != nil {
+			h.metrics.RecordBlocklistBlock()
+		}
+		sendErrorWithEDE(w, r, protocol.RcodeNameError, protocol.EDEFiltered, "blocked by blocklist (CNAME target)")
+		return true
+	}
 
 	// Only synthesize if the A response has answers.
 	if aResp.Header.Flags.RCODE != protocol.RcodeSuccess || len(aResp.Answers) == 0 {
