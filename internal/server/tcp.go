@@ -271,7 +271,7 @@ func (s *TCPServer) handleConnection(conn net.Conn) {
 
 	for {
 		// Set read timeout
-		if err := conn.SetReadDeadline(time.Now().Add(TCPReadTimeout)); err != nil {
+		if err := conn.SetReadDeadline(time.Now().Add(s.readTimeout(conn))); err != nil {
 			atomic.AddUint64(&s.errors, 1)
 			return
 		}
@@ -376,6 +376,17 @@ func (s *TCPServer) handleMessage(conn net.Conn, data []byte, writeMu *sync.Mute
 	s.handler.ServeDNS(rw, msg)
 }
 
+// readTimeout is how long to wait for the next message on conn: TCPReadTimeout,
+// or longer once conn hosts a DSO session (F743).
+func (s *TCPServer) readTimeout(conn net.Conn) time.Duration {
+	if s.dsoHandler != nil {
+		if d := s.dsoHandler.ReadTimeout(conn); d > TCPReadTimeout {
+			return d
+		}
+	}
+	return TCPReadTimeout
+}
+
 // SetDSOHandler installs the DSO (RFC 8490) handler for this server.
 // Must be called before Serve.
 func (s *TCPServer) SetDSOHandler(h DSOConnHandler) {
@@ -408,6 +419,11 @@ func (s *TCPServer) handleDSO(conn net.Conn, msg *protocol.Message, writeMu *syn
 		atomic.AddUint64(&s.errors, 1)
 		conn.Close()
 		return
+	}
+	// The read loop set its deadline for the next message before this
+	// message created the session; extend it now (F743).
+	if d := s.readTimeout(conn); d > TCPReadTimeout {
+		_ = conn.SetReadDeadline(time.Now().Add(d))
 	}
 	// RFC 8490 §5.4: unidirectional messages (ID 0) MUST NOT be answered.
 	if resp != nil && msg.Header.ID != 0 {

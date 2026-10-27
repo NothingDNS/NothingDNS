@@ -412,7 +412,7 @@ func (s *TLSServer) handleConnection(conn net.Conn) {
 	// Handle DNS messages over the TLS connection
 	for {
 		// Set read timeout
-		if err := tlsConn.SetReadDeadline(time.Now().Add(TLSReadTimeout)); err != nil {
+		if err := tlsConn.SetReadDeadline(time.Now().Add(s.readTimeout(tlsConn))); err != nil {
 			atomic.AddUint64(&s.errors, 1)
 			return
 		}
@@ -517,6 +517,17 @@ func (s *TLSServer) processMessage(conn *tls.Conn, data []byte) {
 	s.handler.ServeDNS(rw, msg)
 }
 
+// readTimeout is how long to wait for the next message on conn: TLSReadTimeout,
+// or longer once conn hosts a DSO session (F743).
+func (s *TLSServer) readTimeout(conn net.Conn) time.Duration {
+	if s.dsoHandler != nil {
+		if d := s.dsoHandler.ReadTimeout(conn); d > TLSReadTimeout {
+			return d
+		}
+	}
+	return TLSReadTimeout
+}
+
 // SetDSOHandler installs the DSO (RFC 8490) handler for this server.
 // Must be called before Serve.
 func (s *TLSServer) SetDSOHandler(h DSOConnHandler) {
@@ -547,6 +558,11 @@ func (s *TLSServer) handleDSO(conn *tls.Conn, msg *protocol.Message) {
 		atomic.AddUint64(&s.errors, 1)
 		conn.Close()
 		return
+	}
+	// The read loop set its deadline for the next message before this
+	// message created the session; extend it now (F743).
+	if d := s.readTimeout(conn); d > TLSReadTimeout {
+		_ = conn.SetReadDeadline(time.Now().Add(d))
 	}
 	// RFC 8490 §5.4: unidirectional messages (ID 0) MUST NOT be answered.
 	if resp != nil && msg.Header.ID != 0 {

@@ -741,7 +741,7 @@ func TestManager_CleanupExpiredSessions_AllExpired(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		s := &Session{
 			ID:            uint64(i + 1),
-			LastActivity:  time.Now().Add(-200 * time.Millisecond),
+			LastActivity:  time.Now().Add(-10 * time.Second), // past the 5 s abort minimum (F743)
 			KeepaliveTime: 50 * time.Millisecond,
 			stopCh:        make(chan struct{}),
 			doneCh:        make(chan struct{}),
@@ -1731,7 +1731,7 @@ func TestManager_CleanupLoop_Triggers(t *testing.T) {
 	// Add an expired session directly
 	s := &Session{
 		ID:            1,
-		LastActivity:  time.Now().Add(-200 * time.Millisecond),
+		LastActivity:  time.Now().Add(-10 * time.Second), // past the 5 s abort minimum (F743)
 		KeepaliveTime: 10 * time.Millisecond,
 		stopCh:        make(chan struct{}),
 		doneCh:        make(chan struct{}),

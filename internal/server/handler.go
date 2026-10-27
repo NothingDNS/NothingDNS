@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
 	"github.com/nothingdns/nothingdns/internal/util"
@@ -137,6 +138,11 @@ type DSOConnHandler interface {
 	// DSO Keepalive resets only the keepalive timer, never the inactivity
 	// timer. A no-op if conn has no session.
 	Touch(conn net.Conn)
+	// ReadTimeout is how long the transport waits for the next message on
+	// conn once it hosts a DSO session, or 0 without one. RFC 8490 §5: the
+	// session's own timers replace DNS-over-TCP idle handling, so the
+	// transport must not cut the connection sooner (F743).
+	ReadTimeout(conn net.Conn) time.Duration
 }
 
 // dsoErrorResponse builds a minimal DSO response (opcode 6, zero section

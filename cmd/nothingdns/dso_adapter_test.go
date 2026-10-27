@@ -212,3 +212,23 @@ func mustUnpackDSO(t *testing.T, raw []byte) *protocol.Message {
 	}
 	return msg
 }
+
+// A connection hosting a DSO session is read with the session's abort time,
+// not the transport's idle timeout (RFC 8490 §5; F743).
+func TestDSOAdapterReadTimeout(t *testing.T) {
+	logger := util.NewLogger(util.ERROR, util.TextFormat, nil)
+	m := dso.NewManager(dso.Config{Enabled: true, AllowPlainTCP: true, MaxSessions: 10, InactivityTimeout: 40 * time.Second}, logger)
+	a := newDSOConnAdapter(m, logger)
+	c1, c2 := net.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+	if got := a.ReadTimeout(c1); got != 0 {
+		t.Fatalf("ReadTimeout without a session = %v, want 0", got)
+	}
+	if _, err := a.HandleDSO(c1, &protocol.Message{Header: protocol.Header{ID: 1, Flags: protocol.Flags{Opcode: protocol.OpcodeDSO}}}); err != nil {
+		t.Logf("HandleDSO: %v (session creation is what matters)", err)
+	}
+	if got := a.ReadTimeout(c1); got != 80*time.Second {
+		t.Fatalf("ReadTimeout with a session = %v, want 80s", got)
+	}
+}

@@ -550,6 +550,15 @@ func (m *Manager) cleanupLoop() {
 	}
 }
 
+// AbortAfter is how long a session may stay inactive before the server
+// forcibly aborts it: five seconds or twice the inactivity timeout, whichever
+// is greater (RFC 8490 §6.4.1). The client is asked to close at the
+// inactivity timeout itself; aborting then would cut a client that is merely
+// on time (F743).
+func (m *Manager) AbortAfter() time.Duration {
+	return max(5*time.Second, 2*m.inactivityTimeout)
+}
+
 // cleanupExpiredSessions removes expired sessions.
 func (m *Manager) cleanupExpiredSessions() {
 	m.sessionsMu.Lock()
@@ -564,7 +573,7 @@ func (m *Manager) cleanupExpiredSessions() {
 		// multi-word time.Time could be read torn. Lock order stays
 		// m.sessionsMu -> s.mu, which this loop already used via
 		// session.Close() below.
-		if session.IsExpired(m.inactivityTimeout) {
+		if session.IsExpired(m.AbortAfter()) {
 			session.Close()
 			delete(m.sessions, id)
 			if m.logger != nil {

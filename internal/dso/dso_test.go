@@ -445,7 +445,7 @@ func TestManager_cleanupExpiredSessions(t *testing.T) {
 	// Create expired session
 	s1 := &Session{
 		ID:            1,
-		LastActivity:  time.Now().Add(-200 * time.Millisecond),
+		LastActivity:  time.Now().Add(-10 * time.Second), // past the 5 s abort minimum (F743)
 		KeepaliveTime: 50 * time.Millisecond,
 		stopCh:        make(chan struct{}),
 		doneCh:        make(chan struct{}),

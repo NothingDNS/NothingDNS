@@ -571,7 +571,8 @@ logging:
 # =============================================================================
 # dso:
 #   enabled: true
-#   session_timeout: 30s        # inactivity before a session is closed
+#   session_timeout: 30s        # inactivity timeout sent to clients; an idle session
+#                               # is aborted after twice this (at least 5s)
 #   max_sessions: 1000
 #   heartbeat_interval: 15s
 

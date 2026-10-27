@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/nothingdns/nothingdns/internal/dso"
 	"github.com/nothingdns/nothingdns/internal/protocol"
@@ -76,6 +77,19 @@ func (a *dsoConnAdapter) Touch(conn net.Conn) {
 	if ok {
 		sess.UpdateActivity()
 	}
+}
+
+// ReadTimeout implements server.DSOConnHandler: a connection with a session
+// is aborted by the session's inactivity rule, not the transport's idle
+// timeout.
+func (a *dsoConnAdapter) ReadTimeout(conn net.Conn) time.Duration {
+	a.mu.Lock()
+	_, ok := a.sessions[conn]
+	a.mu.Unlock()
+	if !ok {
+		return 0
+	}
+	return a.manager.AbortAfter()
 }
 
 // ConnClosed implements server.DSOConnHandler.
