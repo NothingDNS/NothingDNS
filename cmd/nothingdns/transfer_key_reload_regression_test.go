@@ -140,6 +140,18 @@ func keyReloadSOASerial(addr, name string) (uint32, error) {
 	return 0, fmt.Errorf("no SOA (rcode %d)", m.Header.Flags.RCODE)
 }
 
+// keyReloadWaitFileChanged waits until path no longer holds was.
+func keyReloadWaitFileChanged(path, was string, d time.Duration) bool {
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if b, err := os.ReadFile(path); err == nil && string(b) != was {
+			return true
+		}
+		time.Sleep(20 * time.Millisecond) // polling for a state, not ordering
+	}
+	return false
+}
+
 func keyReloadWaitSOA(addr, name string, want uint32, d time.Duration) bool {
 	deadline := time.Now().Add(d)
 	for time.Now().Before(deadline) {
@@ -174,6 +186,12 @@ func TestF583_ReloadAppliesTSIGKeys(t *testing.T) {
 	}
 	if got := keyReloadUpdate(t, addr, rotOld, "pre2.example.com."); got != "REFUSED" {
 		t.Fatalf("setup: rotated-key (no grant) UPDATE before reload = %s, want REFUSED", got)
+	}
+	// The accepted UPDATE is answered before its side effects run; one of
+	// them writes the zone back to zoneFile. Let it land before the file is
+	// edited below, or it overwrites the edit and the reload sees no change.
+	if !keyReloadWaitFileChanged(zoneFile, fmt.Sprintf(notifyE2EZone, 1), 5*time.Second) {
+		t.Fatal("setup: the UPDATE was never written back to the zone file")
 	}
 
 	// Remove removed-key; rotate rotated-key and grant it example.com.;
