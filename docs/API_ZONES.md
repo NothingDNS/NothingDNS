@@ -370,7 +370,13 @@ RFC 2181 §5/§10.1).
 | `SRV` | `10 5 5269 xmpp.example.com.` |
 | `CAA` | `0 issue "letsencrypt.org"` |
 
-Use absolute names with a trailing dot inside RDATA.
+**Names inside RDATA** (CNAME/NS/PTR/DNAME targets, MX/SRV/NAPTR/KX targets
+and the other name fields) are stored absolute, like `nameservers` on zone
+create: a trailing dot is kept, a dotted name is fully qualified
+(`target.example.org` → `target.example.org.`), and a single label or `@` is
+relative to the zone (`mx` → `mx.example.com.`). Records list with the stored
+form. `old_data` on update and `data` on delete match either the stored form
+or the text the record was added with.
 
 ### Response
 

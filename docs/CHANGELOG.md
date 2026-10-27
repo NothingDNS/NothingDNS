@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The SDKs gain `GetSOA`/`get_soa`/`getSOA` and `UpdateSOA`/`update_soa`/`updateSOA`, and the SOA timers on zone create (Go, Python, TypeScript, Java, C#).
   - In a Raft cluster the edit is replicated. Upgrade every node first: an older node keeps its SOA (and creates new zones with the default timers) until its next snapshot.
 
+### Fixed
+
+- **A name in record data sent without its trailing dot changed meaning after a restart**: `target.example.org` in a CNAME/MX/SRV/NS/… added through the API or the dashboard was answered as `target.example.org.`, but written to the zone file as is, where it reads as `target.example.org.example.com.` — so after a restart, an export or a Raft snapshot the record pointed somewhere else. Such names are now stored absolute when the record is added or updated (a dotted name is fully qualified, a single label is relative to the zone, as for `nameservers`). Records added before this change keep their stored text; re-save a record whose target lacks the trailing dot.
+
 ## [1.3.1] — 2026-10-26
 
 ### Fixed

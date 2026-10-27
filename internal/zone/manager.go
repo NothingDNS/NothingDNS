@@ -1150,3 +1150,72 @@ func (m *Manager) ZoneFile(zoneName string) string {
 	defer m.mu.RUnlock()
 	return m.files[normalizeZoneName(zoneName)]
 }
+
+// QualifyRDataNames returns data with every domain-name field made absolute
+// the way the API treats names (absoluteDomainName: a trailing dot is kept,
+// dotted names are fully qualified, single labels and "@" are relative to
+// origin). Stored RDATA is read two ways: protocol.ParseRDataText, which
+// serves it, has no origin and reads "target.example.org" as absolute, while
+// the zone file, an export and a Raft snapshot are read with $ORIGIN, which
+// makes it "target.example.org.<origin>". An API record stored without its
+// trailing dot therefore changed meaning after a restart; stored absolute, it
+// reads the same both ways. Only the name fields change; the rest of the
+// text, quoted strings included, is kept as is.
+func QualifyRDataNames(rtype, data, origin string) string {
+	origin = normalizeZoneName(origin)
+	rtype = strings.ToUpper(strings.TrimSpace(rtype))
+	spans := rdataFieldSpans(data)
+	fields := make([]string, len(spans))
+	for i, sp := range spans {
+		fields[i] = data[sp[0]:sp[1]]
+	}
+	var b strings.Builder
+	last := 0
+	for _, idx := range rdataNameIndices(rtype, fields) {
+		f := fields[idx]
+		if strings.HasSuffix(f, ".") || strings.ContainsAny(f, "\"\\") {
+			continue
+		}
+		b.WriteString(data[last:spans[idx][0]])
+		b.WriteString(absoluteDomainName(f, origin))
+		last = spans[idx][1]
+	}
+	if last == 0 {
+		return data
+	}
+	b.WriteString(data[last:])
+	return b.String()
+}
+
+// rdataFieldSpans returns the byte ranges of the whitespace-separated fields
+// of data; a quoted string (with backslash escapes) is one field.
+func rdataFieldSpans(data string) [][2]int {
+	var spans [][2]int
+	for i := 0; i < len(data); {
+		if data[i] == ' ' || data[i] == '\t' {
+			i++
+			continue
+		}
+		start := i
+		inQuotes := false
+		for ; i < len(data); i++ {
+			c := data[i]
+			if c == '\\' {
+				i++
+				continue
+			}
+			if c == '"' {
+				inQuotes = !inQuotes
+				continue
+			}
+			if !inQuotes && (c == ' ' || c == '\t') {
+				break
+			}
+		}
+		if i > len(data) {
+			i = len(data)
+		}
+		spans = append(spans, [2]int{start, i})
+	}
+	return spans
+}

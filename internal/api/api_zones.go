@@ -363,6 +363,7 @@ func (s *Server) handleAddRecord(w http.ResponseWriter, r *http.Request, zoneNam
 	// F267: store the canonical type spelling and refuse a record the zone
 	// file parser cannot read back.
 	req.Type = strings.ToUpper(strings.TrimSpace(req.Type))
+	req.Data = zone.QualifyRDataNames(req.Type, req.Data, zoneName)
 	if err := validateRecordRoundTrip(req.Type, req.Data); err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -443,6 +444,8 @@ func (s *Server) handleUpdateRecord(w http.ResponseWriter, r *http.Request, zone
 		return
 	}
 	req.Type = strings.ToUpper(strings.TrimSpace(req.Type))
+	req.Data = zone.QualifyRDataNames(req.Type, req.Data, zoneName)
+	req.OldData = s.storedRData(zoneName, req.Name, req.Type, req.OldData)
 	if err := validateRecordRoundTrip(req.Type, req.Data); err != nil { // F267
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -512,6 +515,29 @@ func (s *Server) currentRecordTTL(zoneName, name, rtype, oldData string) (uint32
 	return 0, false
 }
 
+// storedRData returns the stored RDATA of the name/rtype record that data
+// names: data itself when it matches, otherwise the record matching data with
+// its names qualified (QualifyRDataNames), so a client can address a record
+// by the text it added it with. Without a match data is returned unchanged.
+func (s *Server) storedRData(zoneName, name, rtype, data string) string {
+	if s.zoneManager == nil {
+		return data
+	}
+	records, err := s.zoneManager.GetRecords(zoneName, name)
+	if err != nil {
+		return data
+	}
+	qualified := zone.QualifyRDataNames(rtype, data, zoneName)
+	for _, candidate := range []string{data, qualified} {
+		for _, rec := range records {
+			if strings.EqualFold(rec.Type, rtype) && zone.RDataEqual(rtype, rec.RData, candidate) {
+				return rec.RData
+			}
+		}
+	}
+	return data
+}
+
 // handleDeleteRecord deletes a record from a zone.
 func (s *Server) handleDeleteRecord(w http.ResponseWriter, r *http.Request, zoneName string) {
 	if s.requireOperator(w, r) {
@@ -550,6 +576,7 @@ func (s *Server) handleDeleteRecord(w http.ResponseWriter, r *http.Request, zone
 		return
 	}
 	if strings.TrimSpace(req.Data) != "" {
+		req.Data = s.storedRData(zoneName, req.Name, req.Type, req.Data)
 		matched := false
 		for _, rec := range existing {
 			if strings.EqualFold(rec.Type, req.Type) && zone.RDataEqual(req.Type, rec.RData, req.Data) {

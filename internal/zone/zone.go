@@ -1183,43 +1183,50 @@ var rdataNameFieldIndices = map[string][]int{
 // The rewrite is index-based on the field list parseRecordOwned already built,
 // so it cannot re-split the RDATA and shift the positions it is rewriting.
 func (p *parser) absolutizeRDataNames(rtype string, rdataFields []string) {
-	indices, ok := rdataNameFieldIndices[rtype]
-	if !ok {
-		switch rtype {
-		case "NAPTR":
-			// order pref flags service regexp replacement — the replacement
-			// is last, but its index cannot be trusted blindly: parseFields
-			// collapses a quoted regexp that contains a space into several
-			// fields, which would shift the index and make this rewrite
-			// corrupt the regexp instead of the name. Only rewrite the
-			// documented shape.
-			if len(rdataFields) != 6 {
-				return
-			}
-			indices = []int{5}
-		case "IPSECKEY":
-			// RFC 4025 §2.2: the gateway field (index 3) is a domain name
-			// only for gateway type 3; types 0/1/2 are ".", IPv4 or IPv6.
-			if len(rdataFields) < 4 || rdataFields[1] != "3" {
-				return
-			}
-			indices = []int{3}
-		case "HIP":
-			// RFC 8005 §6: everything after the HIT and public key is a
-			// rendezvous-server domain name, a variable-length list.
-			for i := 3; i < len(rdataFields); i++ {
-				rdataFields[i] = makeAbsolute(rdataFields[i], p.zone.Origin)
-			}
-			return
-		default:
-			return
-		}
+	for _, idx := range rdataNameIndices(rtype, rdataFields) {
+		rdataFields[idx] = makeAbsolute(rdataFields[idx], p.zone.Origin)
 	}
-	for _, idx := range indices {
-		if idx >= 0 && idx < len(rdataFields) {
-			rdataFields[idx] = makeAbsolute(rdataFields[idx], p.zone.Origin)
+}
+
+// rdataNameIndices returns the positions of the domain-name fields in a
+// record's RDATA field list.
+func rdataNameIndices(rtype string, rdataFields []string) []int {
+	if indices, ok := rdataNameFieldIndices[rtype]; ok {
+		var in []int
+		for _, idx := range indices {
+			if idx >= 0 && idx < len(rdataFields) {
+				in = append(in, idx)
+			}
 		}
+		return in
 	}
+	switch rtype {
+	case "NAPTR":
+		// order pref flags service regexp replacement — the replacement
+		// is last, but its index cannot be trusted blindly: parseFields
+		// collapses a quoted regexp that contains a space into several
+		// fields, which would shift the index and make this rewrite
+		// corrupt the regexp instead of the name. Only rewrite the
+		// documented shape.
+		if len(rdataFields) == 6 {
+			return []int{5}
+		}
+	case "IPSECKEY":
+		// RFC 4025 §2.2: the gateway field (index 3) is a domain name
+		// only for gateway type 3; types 0/1/2 are ".", IPv4 or IPv6.
+		if len(rdataFields) >= 4 && rdataFields[1] == "3" {
+			return []int{3}
+		}
+	case "HIP":
+		// RFC 8005 §6: everything after the HIT and public key is a
+		// rendezvous-server domain name, a variable-length list.
+		var in []int
+		for i := 3; i < len(rdataFields); i++ {
+			in = append(in, i)
+		}
+		return in
+	}
+	return nil
 }
 
 // handleSpecialRecord handles SOA and NS records specially.
