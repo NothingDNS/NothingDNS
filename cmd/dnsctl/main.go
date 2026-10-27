@@ -25,7 +25,7 @@ type Command struct {
 }
 
 var commands = []Command{
-	{Name: "zone", Description: "Manage DNS zones (list, add, remove, reload, export)", Run: cmdZone},
+	{Name: "zone", Description: "Manage DNS zones (list, add, remove, reload, export, soa)", Run: cmdZone},
 	{Name: "record", Description: "Manage DNS records (list, add, remove, update)", Run: cmdRecord},
 	{Name: "cache", Description: "Cache operations (flush, stats)", Run: cmdCache},
 	{Name: "cluster", Description: "Cluster management (status, peers, join, leave)", Run: cmdCluster},
@@ -177,7 +177,10 @@ Subcommands:
   add <zone>        Add a new zone
   remove <zone>     Remove a zone
   reload <zone>     Reload zone from file
-  export <zone>     Export zone to BIND format`,
+  export <zone>     Export zone to BIND format
+  soa <zone> [field=value ...]
+                    Show the SOA, or change fields (mname, rname, ttl,
+                    refresh, retry, expire, minimum); the serial is bumped`,
 
 		"record": `Usage: dnsctl record <subcommand> [options]
 

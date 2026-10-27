@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 )
 
 func cmdZone(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("zone subcommand required (list, add, remove, reload, export)")
+		return fmt.Errorf("zone subcommand required (list, add, remove, reload, export, soa)")
 	}
 
 	switch args[0] {
@@ -111,8 +112,66 @@ func cmdZone(args []string) error {
 			fmt.Println()
 		}
 
+	case "soa":
+		if len(args) < 2 {
+			return fmt.Errorf("zone name required: dnsctl zone soa <zone> [field=value ...]")
+		}
+		return zoneSOA(args[1], args[2:])
+
 	default:
-		return fmt.Errorf("unknown zone subcommand: %s (supported: list, add, remove, reload, export)", args[0])
+		return fmt.Errorf("unknown zone subcommand: %s (supported: list, add, remove, reload, export, soa)", args[0])
+	}
+	return nil
+}
+
+// soaNumberFields are the SOA fields set as numbers (seconds).
+var soaNumberFields = map[string]bool{"ttl": true, "refresh": true, "retry": true, "expire": true, "minimum": true}
+
+// zoneSOA shows the zone's SOA or, given field=value arguments, changes those
+// fields (GET/PUT /api/v1/zones/{zone}/soa). The server bumps the serial.
+func zoneSOA(zoneName string, sets []string) error {
+	path := "/api/v1/zones/" + url.PathEscape(zoneName) + "/soa"
+	var (
+		result map[string]interface{}
+		err    error
+	)
+	if len(sets) == 0 {
+		result, err = apiGet(path)
+	} else {
+		body := make(map[string]interface{}, len(sets))
+		for _, set := range sets {
+			field, value, ok := strings.Cut(set, "=")
+			field = strings.ToLower(field)
+			switch {
+			case !ok || value == "":
+				return fmt.Errorf("invalid SOA setting %q: want field=value", set)
+			case field == "mname" || field == "rname":
+				body[field] = value
+			case soaNumberFields[field]:
+				n, perr := strconv.ParseUint(value, 10, 32)
+				if perr != nil {
+					return fmt.Errorf("invalid %s %q: want seconds", field, value)
+				}
+				body[field] = n
+			case field == "serial":
+				return fmt.Errorf("the SOA serial is managed by the server and bumped on every change")
+			default:
+				return fmt.Errorf("unknown SOA field %q (mname, rname, ttl, refresh, retry, expire, minimum)", field)
+			}
+		}
+		b, _ := json.Marshal(body)
+		result, err = apiPut(path, string(b))
+	}
+	if err != nil {
+		return err
+	}
+	for _, f := range []string{"mname", "rname", "ttl", "serial", "refresh", "retry", "expire", "minimum"} {
+		switch v := result[f].(type) {
+		case string:
+			fmt.Printf("%-8s %s\n", f, v)
+		case float64:
+			fmt.Printf("%-8s %d\n", f, uint64(v))
+		}
 	}
 	return nil
 }

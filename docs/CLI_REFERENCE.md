@@ -109,6 +109,23 @@ dnsctl zone export example.com
 dnsctl zone export example.com > example.com.zone
 ```
 
+### zone soa
+
+Show a zone's SOA, or change some of its fields. Fields not given keep their
+value; the server bumps the serial, so secondaries are notified.
+
+```bash
+dnsctl zone soa <zone-name> [field=value ...]
+```
+
+Fields: `mname`, `rname` (`user@domain` or DNS form), `ttl`, `refresh`,
+`retry`, `expire`, `minimum` (seconds). The serial cannot be set.
+
+```bash
+dnsctl zone soa example.com
+dnsctl zone soa example.com refresh=7200 minimum=300 rname=dns@example.com
+```
+
 ---
 
 ## record — Record Management

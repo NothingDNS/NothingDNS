@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `POST /api/v1/zones` takes optional `refresh`, `retry`, `expire` and `minimum`.
   - The zone editor has an **Edit SOA** action.
   - The SDKs gain `GetSOA`/`get_soa`/`getSOA` and `UpdateSOA`/`update_soa`/`updateSOA`, and the SOA timers on zone create (Go, Python, TypeScript, Java, C#).
+  - `dnsctl zone soa <zone> [field=value ...]` shows the SOA or changes the given fields.
   - In a Raft cluster the edit is replicated. Upgrade every node first: an older node keeps its SOA (and creates new zones with the default timers) until its next snapshot.
 - **Blocklist CNAME inspection** (`blocklist.cname_inspection`, on by default): an upstream or resolver answer whose CNAME chain leads to a listed name is blocked like the name itself (NXDOMAIN, EDE Filtered), so a tracker served under a first-party name (CNAME cloaking) is caught. Cached and stale answers, cache prefetch refreshes and the A answer behind a DNS64 synthesis are checked too, so a target listed later also blocks chains already in the cache and is not kept fresh by prefetch. Answers from local zones are not inspected. Set `cname_inspection: false` for the previous behaviour; the setting is applied on reload.
 
