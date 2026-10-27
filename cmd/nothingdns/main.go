@@ -149,6 +149,24 @@ func applyConfiguredZoneFiles(handler *integratedHandler, zoneManager *zone.Mana
 	// not accumulate stale origins (and so the next reload's staleOrigins is
 	// accurate). KV/API-created zones are never in zoneFiles, so they are
 	// preserved.
+	// F726: a zone whose last write-back to its file failed holds API
+	// changes the file lacks (the database copy has them too). Reloading the
+	// older file would drop them from service, and the next mutation would
+	// overwrite the database copy, losing them for good: keep the zone and
+	// retry the write.
+	var kept []loadedZoneFile
+	for i, item := range loaded {
+		if item.zone.SOA == nil {
+			continue
+		}
+		if cur := zoneManager.FileBehind(item.zone.Origin, item.zone.SOA.Serial); cur != nil {
+			logger.Warnf("Zone %s: %s is older than the zone (its last write failed); keeping the changes made through the API and writing them to the file",
+				cur.Origin, item.file)
+			loaded[i].zone = cur
+			kept = append(kept, loaded[i])
+		}
+	}
+
 	zoneManager.RemoveZones(staleOrigins...)
 	handler.zonesMu.Lock()
 	// A zone whose file did not change keeps its cached answers: the new
@@ -165,6 +183,11 @@ func applyConfiguredZoneFiles(handler *integratedHandler, zoneManager *zone.Mana
 	// Load: add the new zone set.
 	for _, item := range loaded {
 		zoneManager.LoadZone(item.zone, item.file)
+	}
+	for _, item := range kept {
+		if err := zoneManager.PersistZone(item.zone.Origin); err != nil {
+			logger.Warnf("Zone %s: writing it to %s failed again: %v", item.zone.Origin, item.file, err)
+		}
 	}
 
 	for _, item := range loaded {

@@ -83,12 +83,20 @@ func SerialIncrement(s uint32) uint32 {
 
 // Manager manages DNS zones.
 type Manager struct {
-	mu           sync.RWMutex
-	zones        map[string]*Zone
-	files        map[string]string // zone name -> file path
-	zoneDir      string            // directory for zone file storage
-	logger       Logger            // optional logger for errors
-	onemdEnabled bool              // enable ZONEMD computation (RFC 8976)
+	mu    sync.RWMutex
+	zones map[string]*Zone
+	files map[string]string // zone name -> file path
+	// fileBehind holds the zones whose last write to their file failed, so
+	// the file lacks changes the zone has (F726). Kept across RemoveZones,
+	// which a config reload calls before it decides which version to load.
+	fileBehind map[string]bool
+	// fileWriteMu serialises zone file writes, snapshot through rename: two
+	// mutations writing back concurrently could otherwise rename an older
+	// snapshot over a newer one and leave the file without a change (F727).
+	fileWriteMu  sync.Mutex
+	zoneDir      string // directory for zone file storage
+	logger       Logger // optional logger for errors
+	onemdEnabled bool   // enable ZONEMD computation (RFC 8976)
 
 	// deterministicSerials makes the manager's own mutations bump the SOA
 	// serial by plain RFC 1982 increment instead of the date-style
@@ -120,8 +128,9 @@ type Logger interface {
 // NewManager creates a new zone manager.
 func NewManager() *Manager {
 	return &Manager{
-		zones: make(map[string]*Zone),
-		files: make(map[string]string),
+		zones:      make(map[string]*Zone),
+		files:      make(map[string]string),
+		fileBehind: make(map[string]bool),
 	}
 }
 
@@ -400,6 +409,7 @@ func (m *Manager) Remove(name string) {
 
 	delete(m.zones, name)
 	delete(m.files, name)
+	delete(m.fileBehind, name)
 }
 
 // Count returns the number of loaded zones.
@@ -597,6 +607,7 @@ func (m *Manager) DeleteZone(name string) error {
 
 	delete(m.zones, name)
 	delete(m.files, name)
+	delete(m.fileBehind, name)
 	m.mu.Unlock()
 
 	m.notifyMutation(name, true)
@@ -1029,9 +1040,14 @@ func syncSOARecord(z *Zone) {
 // catalog/IXFR paths, so this fronts every write that ever lands
 // in `zoneDir`.
 func (m *Manager) writeZoneFile(z *Zone, path string) (err error) {
+	m.fileWriteMu.Lock()
+	defer m.fileWriteMu.Unlock()
 	content, err := WriteZone(z)
 	if err != nil {
 		return err
+	}
+	if zoneFileSnapshotHook != nil {
+		zoneFileSnapshotHook(path)
 	}
 
 	// Keep an existing zone file's permissions (an operator's 0640 file must
@@ -1124,7 +1140,9 @@ func (m *Manager) PersistZone(zoneName string) error {
 		m.mu.Unlock()
 	}
 
-	return m.writeZoneFile(z, path)
+	err := m.writeZoneFile(z, path)
+	m.setFileBehind(zoneName, err != nil)
+	return err
 }
 
 // writeBackZoneFile writes a mutated zone to the file it was loaded from, so
@@ -1141,9 +1159,48 @@ func (m *Manager) writeBackZoneFile(zoneName string, z *Zone) {
 	if path == "" {
 		return
 	}
-	if err := m.writeZoneFile(z, path); err != nil {
+	err := m.writeZoneFile(z, path)
+	m.setFileBehind(zoneName, err != nil)
+	if err != nil {
 		m.warnf("zone: failed to persist zone %s to %s: %v", zoneName, path, err)
 	}
+}
+
+// zoneFileSnapshotHook, when set by a test, runs after writeZoneFile has
+// taken its snapshot of the zone and before the file is replaced.
+var zoneFileSnapshotHook func(path string)
+
+func (m *Manager) setFileBehind(zoneName string, behind bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if behind {
+		m.fileBehind[zoneName] = true
+	} else {
+		delete(m.fileBehind, zoneName)
+	}
+}
+
+// FileBehind returns zoneName's current zone when the last write of it to
+// its file failed and the zone's SOA serial is newer than fileSerial: the
+// file lacks changes made through the API, which a config reload must keep
+// instead of reloading the older file (F726). Otherwise it returns nil, and
+// the file wins (an operator who edits the file bumps its serial).
+func (m *Manager) FileBehind(zoneName string, fileSerial uint32) *Zone {
+	zoneName = normalizeZoneName(zoneName)
+	m.mu.RLock()
+	behind := m.fileBehind[zoneName]
+	z := m.zones[zoneName]
+	m.mu.RUnlock()
+	if !behind || z == nil {
+		return nil
+	}
+	z.RLock()
+	newer := z.SOA != nil && SerialIsNewer(z.SOA.Serial, fileSerial)
+	z.RUnlock()
+	if !newer {
+		return nil
+	}
+	return z
 }
 
 // ZoneFile returns the file zoneName was loaded from or is written to, or ""
