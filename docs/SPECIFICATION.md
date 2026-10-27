@@ -407,8 +407,8 @@ upstream:
 - A zone carrying its own signatures (signed with `dnsctl dnssec sign-zone`,
   or transferred signed from a primary) and no online signer is served with
   them: an answer gets the stored RRSIG of its RRset, a negative answer the
-  SOA's RRSIG and the stored NSEC records proving it. NSEC3-signed zones get
-  their RRSIGs but no denial proofs yet.
+  SOA's RRSIG and the stored NSEC or NSEC3 records proving it (NSEC3
+  parameters from the zone's NSEC3PARAM).
 - RRSIG generation for all RRsets
 - NSEC chain generation (RFC 4034)
 - NSEC3 with opt-out (RFC 5155)

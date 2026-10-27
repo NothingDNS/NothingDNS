@@ -118,6 +118,13 @@ func buildDenialChain(z *zone.Zone, apexExtra []uint16, extraNodes map[string][]
 		}
 	}
 	z.RUnlock()
+	// A zone signed with NSEC3 holds its NSEC3 records at hashed owners;
+	// they are proofs, not names of the zone (F757).
+	for owner, types := range owners {
+		if onlyNSEC3Types(types) {
+			delete(owners, owner)
+		}
+	}
 	for owner, types := range extraNodes {
 		if isSubdomain(owner, origin) {
 			owners[owner] = append(owners[owner], types...)
@@ -568,6 +575,9 @@ func (h *integratedHandler) denialRRs(z *zone.Zone, qname string, kind denialKin
 // the next closer name). F512.
 func (h *integratedHandler) wildcardAnswerRRs(z *zone.Zone, qname, ce string) []*protocol.ResourceRecord {
 	c := h.denialChainFor(z)
+	if h.zoneSignerFor(z.Origin) == nil && zonePresigned(z) {
+		c = h.presignedDenialChain(z) // the zone's own chain (F757)
+	}
 	nc := nextCloser(qname, canonicalize(ce))
 	ttl := z.GetDefaultTTL()
 	if c.nsec3 != nil {

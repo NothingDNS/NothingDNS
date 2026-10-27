@@ -12,6 +12,8 @@
 package main
 
 import (
+	"encoding/hex"
+	"strconv"
 	"strings"
 
 	"github.com/nothingdns/nothingdns/internal/protocol"
@@ -72,10 +74,18 @@ func (h *integratedHandler) addStoredDenialProof(resp *protocol.Message, z *zone
 		return
 	}
 	resp.Authorities = append(resp.Authorities, storedRRSIGs(z, z.Origin, protocol.TypeSOA)...)
-	if len(z.Lookup(z.Origin, "NSEC3PARAM")) > 0 {
-		return // NSEC3: no stored proofs served yet
+	c := h.presignedDenialChain(z)
+	if c.nsec3 != nil { // the stored NSEC3 at each proving member's hash (F757)
+		for _, member := range c.nsec3Denial(qname, kind) {
+			owner := strings.ToLower(nsec3Base32.EncodeToString(c.hashes[member])) + "." + c.origin
+			if nsec3 := storedRecord(z, owner, protocol.TypeNSEC3); nsec3 != nil {
+				resp.Authorities = append(resp.Authorities, nsec3)
+				resp.Authorities = append(resp.Authorities, storedRRSIGs(z, owner, protocol.TypeNSEC3)...)
+			}
+		}
+		return
 	}
-	for _, data := range h.presignedDenialChain(z).nsecDenial(qname, kind) {
+	for _, data := range c.nsecDenial(qname, kind) {
 		nsec := storedRecord(z, data.Owner, protocol.TypeNSEC)
 		if nsec == nil {
 			continue
@@ -89,7 +99,11 @@ func (h *integratedHandler) addStoredDenialProof(resp *protocol.Message, z *zone
 // used only to pick which stored NSEC records prove a denial. It is cached
 // like the online chains, under its own key.
 func (h *integratedHandler) presignedDenialChain(z *zone.Zone) *denialChain {
+	params := storedNSEC3Params(z)
 	key := "presigned|" + z.Origin
+	if params != nil {
+		key += "|nsec3|" + strconv.Itoa(int(params.iterations)) + "/" + hex.EncodeToString(params.salt) + "/" + strconv.FormatBool(params.optOut)
+	}
 	id, gen := z.CacheTag()
 	h.denialChainsMu.Lock()
 	for _, e := range h.denialChains[key] {
@@ -99,7 +113,7 @@ func (h *integratedHandler) presignedDenialChain(z *zone.Zone) *denialChain {
 		}
 	}
 	h.denialChainsMu.Unlock()
-	c := buildDenialChain(z, nil, nil, nil, &h.nsec3Memo)
+	c := buildDenialChain(z, nil, nil, params, &h.nsec3Memo)
 	h.denialChainsMu.Lock()
 	if h.denialChains == nil || len(h.denialChains) > maxCachedDenialChains {
 		h.denialChains = make(map[string][]denialChainEntry)
@@ -117,4 +131,55 @@ func (h *integratedHandler) presignedDenialChain(z *zone.Zone) *denialChain {
 	h.denialChains[key] = append(kept, denialChainEntry{id: id, gen: gen, chain: c})
 	h.denialChainsMu.Unlock()
 	return c
+}
+
+// onlyNSEC3Types reports whether types are those of a hashed NSEC3 owner.
+func onlyNSEC3Types(types []uint16) bool {
+	for _, t := range types {
+		if t != protocol.TypeNSEC3 && t != protocol.TypeRRSIG {
+			return false
+		}
+	}
+	return len(types) > 0
+}
+
+// storedNSEC3Params reads the chain parameters of a zone signed with NSEC3:
+// algorithm/iterations/salt from its NSEC3PARAM — or, for a zone signed before
+// SignZone published one (F758), from a stored NSEC3 — and Opt-Out from the
+// flags of a stored NSEC3. It returns nil for a zone without NSEC3 records.
+func storedNSEC3Params(z *zone.Zone) *nsec3Params {
+	var param, any []string // algorithm flags iterations salt ...
+	if recs := z.Lookup(z.Origin, "NSEC3PARAM"); len(recs) > 0 {
+		param = strings.Fields(recs[0].RData)
+	}
+	z.RLock()
+search:
+	for _, recs := range z.Records {
+		for _, r := range recs {
+			if r.Type == "NSEC3" {
+				any = strings.Fields(r.RData)
+				break search
+			}
+		}
+	}
+	z.RUnlock()
+	f := param
+	if f == nil {
+		f = any
+	}
+	if len(f) < 4 {
+		return nil
+	}
+	iter, err := strconv.ParseUint(f[2], 10, 16)
+	if err != nil {
+		return nil
+	}
+	p := &nsec3Params{iterations: uint16(iter)}
+	if f[3] != "-" {
+		if p.salt, err = hex.DecodeString(f[3]); err != nil {
+			return nil
+		}
+	}
+	p.optOut = len(any) > 1 && any[1] != "0"
+	return p
 }
