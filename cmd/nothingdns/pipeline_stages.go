@@ -754,10 +754,7 @@ func upstreamStage(h *integratedHandler) Stage {
 		// validator rejects it as a stripped-signature downgrade. The copy
 		// keeps the client's own message (and its OPT, or lack of one)
 		// untouched for the downstream reply.
-		outMsg := q.msg
-		if h.validator != nil {
-			outMsg = withDOBit(q.msg)
-		}
+		outMsg := forwardedQuery(q.msg, h.validator != nil)
 		if h.loadBalancer != nil {
 			resp, err = h.loadBalancer.Query(outMsg)
 		} else {
@@ -956,6 +953,33 @@ func withDOBit(msg *protocol.Message) *protocol.Message {
 	fwd.AddAdditional(newOPT) // also refreshes fwd.Header.ARCount
 
 	return &fwd
+}
+
+// forwardedEDNSBufferSize is the UDP payload size this server advertises to
+// upstreams: the DNS Flag Day 2020 value, which avoids IP fragmentation.
+const forwardedEDNSBufferSize = 1232
+
+// forwardedQuery is the query sent upstream for a client's query: its header
+// and question, and this server's own OPT. OPT is hop-by-hop (RFC 6891
+// §6.1.1): the client's options — its Client Subnet (never forwarded, see
+// SPECIFICATION §9.4), its cookie for this server, Padding — and any other
+// additional record (TSIG) stay here (F749). The OPT keeps the client's DO
+// bit, or sets it when forceDO (a validator needs RRSIGs); a client without
+// EDNS is forwarded without it unless forceDO.
+func forwardedQuery(msg *protocol.Message, forceDO bool) *protocol.Message {
+	fwd := &protocol.Message{Header: msg.Header, Questions: msg.Questions}
+	fwd.Header.ARCount = 0
+	do := forceDO
+	opt := msg.GetOPT()
+	if opt != nil {
+		if h := protocol.ParseEDNS0Header(opt); h != nil && h.DO {
+			do = true
+		}
+	}
+	if opt != nil || do {
+		fwd.SetEDNS0(forwardedEDNSBufferSize, do)
+	}
+	return fwd
 }
 
 func sanitizePipelineResponse(resp *protocol.Message) {
