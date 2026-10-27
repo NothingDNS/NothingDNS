@@ -56,3 +56,30 @@ func TestSecondOriginManagerRegistersApex(t *testing.T) {
 		t.Fatalf("zone not registered as example.com.: %v", keys(m.List()))
 	}
 }
+
+// F731: the apex was taken from the first $ORIGIN even when the SOA came
+// before it, so a file written with absolute names that used $ORIGIN for a
+// later section loaded as that section's zone (and, with out-of-zone data
+// dropped, lost its own apex records).
+func TestSOABeforeFirstOriginNamesTheApex(t *testing.T) {
+	const soa = "example.com. 3600 IN SOA ns1.example.com. h.example.com. 1 3600 600 86400 300\nexample.com. 3600 IN NS ns1.example.com.\n"
+	z, err := ParseFile("x.zone", strings.NewReader(soa+"$ORIGIN sub.example.com.\n@ 3600 IN NS ns1.sub\nns1 A 192.0.2.9\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if z.Origin != "example.com." || len(z.Warnings) != 0 || len(z.Records["ns1.sub.example.com."]) != 1 {
+		t.Fatalf("origin %s, warnings %v", z.Origin, z.Warnings)
+	}
+	if err := z.Validate(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Without any $ORIGIN (dig AXFR output) the SOA owner is the apex too.
+	z, err = ParseFile("x.zone", strings.NewReader(soa+"www.example.com. 300 IN A 192.0.2.2\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if z.Origin != "example.com." || z.Validate() != nil {
+		t.Fatalf("no $ORIGIN: origin %s, %v", z.Origin, z.Validate())
+	}
+}

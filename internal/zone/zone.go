@@ -1281,6 +1281,11 @@ func (p *parser) handleSpecialRecord(name string, record Record) error {
 		if err := p.parseSOA(name, record); err != nil {
 			return fmt.Errorf("parsing SOA: %w", err)
 		}
+		// F731: an SOA before the first $ORIGIN names the apex; a later
+		// $ORIGIN only starts a section of the zone.
+		if p.apex == "" && p.includeDepth == 0 {
+			p.apex = strings.ToLower(canonicalize(name))
+		}
 	case "NS":
 		ns := NSRecord{
 			Name:    name,
