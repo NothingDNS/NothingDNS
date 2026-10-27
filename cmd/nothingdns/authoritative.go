@@ -86,7 +86,12 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 						RData: geoRData,
 					},
 				}
-				resp := h.buildResponse(r, geoRecords)
+				// A signed zone signs its GeoDNS answer too: an unsigned
+				// RRset in a signed zone is Bogus to a validator (F741).
+				h.zoneSignersMu.RLock()
+				signer := h.zoneSigners[z.Origin]
+				h.zoneSignersMu.RUnlock()
+				resp := h.buildSignedResponse(r, geoRecords, signer, wantsDNSSEC)
 				if h.metrics != nil {
 					h.metrics.RecordResponse(protocol.RcodeSuccess)
 				}
