@@ -275,6 +275,7 @@ func NewPipeline(h *integratedHandler) *Pipeline {
 	p.AppendStage(splitHorizonStage(h))
 	p.AppendStage(authoritativeStage(h))
 	p.AppendStage(cnameStage(h))
+	p.AppendStage(specialUseStage(h))
 	p.AppendStage(cacheStage(h))
 	p.AppendStage(nsecCacheStage(h))
 	p.AppendStage(authoritativeOnlyStage(h))

@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Special-use names were forwarded upstream**: `localhost.`, `invalid.`, `test.` and `.onion` queries went to the upstream servers or the root — a privacy leak for `.onion` names, and a wait on an answer that is fixed. They are now answered locally, as RFC 6761 and RFC 7686 ask: `localhost.` and names below it resolve to `127.0.0.1`/`::1`, the others are NXDOMAIN, and the loopback reverse names give `localhost.`. A zone you configure for one of these names is still served.
 - **`dnsctl blocklist sources` always failed** with `invalid JSON response: cannot unmarshal array`: the endpoint answers a list, and dnsctl expected an object. It now lists each source with its type, domain count and state.
 - **ANY answers from a signed zone were unsigned**: an ANY query (over TCP, with DO=1) for a name holding several types got all of them without a single RRSIG — the server tried to sign them as one RRset, which fails — so validating clients rejected the answer. Each RRset of an ANY answer (exact or wildcard) is now signed on its own.
 - **Signed zones served in two split-horizon views rebuilt their NSEC chain on every negative answer**: the views' zones share an origin and so one cached chain, and each negative answer for the other view replaced it — a walk of the whole zone per NXDOMAIN/NODATA (about 28 ms each for a 20,000-name zone, a 200-fold slowdown). Each view's zone now keeps its own cached chain.

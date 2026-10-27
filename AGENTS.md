@@ -68,6 +68,7 @@ with `_ =` / `_, _ =`.
 8. **any / transfer** — ANY handling, AXFR/IXFR/NOTIFY/UPDATE
 9. **blocklist / rpzQname** — filtering before the cache
 10. **doBit / splitHorizon / authoritative / cname** — local zones and in-zone CNAME chasing, before the caches so cached upstream data (an NXDOMAIN or aggressive NSEC proof for a parent name) never shadows a local zone
+10a. **specialUse** — `localhost.` (loopback), `invalid.`, `test.`, `onion.` and the loopback PTR names answered locally, never forwarded (RFC 6761, RFC 7686; `special_use.go`); a configured zone for one of them is served by step 10 first
 11. **cache / nsecCache** — cache lookups (skipped for clients without recursion)
 12. **authoritativeOnly** — REFUSED outside zones when `resolution.authoritative_only`
 13. **recursionRefused** — REFUSED (EDE 18) outside zones for clients without recursion

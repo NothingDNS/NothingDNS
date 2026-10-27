@@ -207,6 +207,14 @@ DNS label compression (RFC 1035 §4.1.4) using pointer offsets (0xC0 prefix). Bo
   padded query (RFC 8467 block padding with a random offset); never on plain
   UDP/TCP or cleartext HTTP
 
+#### 3.1.6 Special-Use Names (RFC 6761, RFC 7686)
+- `localhost.` and names below it: A `127.0.0.1`, AAAA `::1`, other types NODATA
+- `invalid.`, `test.`, `onion.`: NXDOMAIN below the apex, NODATA at it
+- `1.0.0.127.in-addr.arpa.` and the `ip6.arpa` name of `::1`: PTR `localhost.`
+- Answered locally (AA, TTL 10800, SOA `localhost. nobody.invalid.` in negative
+  answers) and never forwarded upstream or to the root; a configured zone for
+  one of these names is served instead
+
 ### 3.2 Transport Protocols
 
 #### 3.2.1 UDP (RFC 1035)
@@ -1521,6 +1529,10 @@ What the code implements. Where an RFC is only partly covered, the line says so.
 - RFC 9230 — Oblivious DoH, with RFC 9180 HPKE; target answers padded to
   RFC 8467 468-byte blocks
 - RFC 8490 — DNS Stateful Operations
+
+### Special-use names
+- RFC 6761 — Special-use domain names (`localhost.`, `invalid.`, `test.`), §3.1.6
+- RFC 7686 — `.onion`, §3.1.6
 
 ### EDNS
 - RFC 6891 — EDNS(0)
