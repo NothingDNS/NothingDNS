@@ -254,6 +254,9 @@ func (m *Manager) Load(name, path string) error {
 	if err != nil {
 		return err
 	}
+	for _, w := range z.Warnings {
+		m.warnf("zone: %s", w)
+	}
 
 	if err := z.Validate(); err != nil {
 		return fmt.Errorf("zone validation: %w", err)

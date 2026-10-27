@@ -23,10 +23,15 @@ func TestSecondOriginKeepsZoneOrigin(t *testing.T) {
 	if z.Origin != "example.com." {
 		t.Fatalf("zone origin = %q, want example.com.", z.Origin)
 	}
-	for _, name := range []string{"www.sub.example.com.", "sub.example.com.", "h.deep.sub.example.com.", "x.other.org."} {
+	for _, name := range []string{"www.sub.example.com.", "sub.example.com.", "h.deep.sub.example.com."} {
 		if len(z.Records[name]) != 1 {
 			t.Errorf("record %s missing (names: %v)", name, keys(z.Records))
 		}
+	}
+	// x is resolved against other.org., which is outside the zone: it is
+	// ignored with a warning (F696).
+	if _, ok := z.Records["x.other.org."]; ok || len(z.Warnings) != 1 || !strings.Contains(z.Warnings[0], "x.other.org.") {
+		t.Errorf("out-of-zone x.other.org.: kept=%v warnings=%q", ok, z.Warnings)
 	}
 }
 

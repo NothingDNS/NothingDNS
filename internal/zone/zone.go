@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -62,6 +63,11 @@ type Zone struct {
 	// ZONEMD is the zone message digest for integrity verification (RFC 8976).
 	// Computed on zone load if ZONEMD is enabled in config.
 	ZONEMD *ZONEMD
+
+	// Warnings lists what the zone-file parser skipped, one line each
+	// (currently out-of-zone records). Loaders log them; they are not zone
+	// content.
+	Warnings []string
 
 	// entNames is the set of empty non-terminals: names that exist in this
 	// zone as DNS nodes because they have descendants, but own no records of
@@ -498,6 +504,9 @@ func (p *parser) parse() (*Zone, error) {
 	if p.apex != "" && p.includeDepth == 0 {
 		p.zone.Origin = p.apex
 	}
+	if p.includeDepth == 0 {
+		p.dropOutOfZone()
+	}
 	if p.includeDepth == 0 && len(p.pendingTTL) > 0 && p.zone.SOA != nil {
 		min := p.zone.SOA.Minimum
 		for _, pt := range p.pendingTTL {
@@ -513,6 +522,38 @@ func (p *parser) parse() (*Zone, error) {
 		}
 	}
 	return p.zone, nil
+}
+
+// dropOutOfZone removes records whose owner is not the zone apex or a name
+// below it, and notes each one in Warnings. Such data ("foo.example.org. A"
+// in the example.com. file) is not the zone's: it was served as
+// authoritative, shipped by AXFR/IXFR and signed into the denial chain. Like
+// BIND, the parser ignores it with a warning instead of refusing the file
+// (RFC 5936 §3.5; a transfer with it is already rejected, F696).
+func (p *parser) dropOutOfZone() {
+	origin := p.zone.Origin
+	if origin == "" || origin == "." {
+		return
+	}
+	var names []string
+	for name := range p.zone.Records {
+		if !nameInZone(name, origin) {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		for _, rec := range p.zone.Records[name] {
+			p.zone.Warnings = append(p.zone.Warnings, fmt.Sprintf("%s:%d: ignoring out-of-zone record %s %s (zone %s)",
+				p.filename, rec.Line, name, rec.Type, origin))
+		}
+		delete(p.zone.Records, name)
+	}
+	// pendingTTL indexes Records by owner; entries of dropped owners now
+	// miss their slice and are skipped by the bounds check that applies them.
 }
 
 // handleControl handles control entries like $ORIGIN, $TTL, $INCLUDE.
