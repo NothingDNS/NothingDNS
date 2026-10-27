@@ -53,8 +53,9 @@ func DefaultConfig() *Config {
 			IgnoreTime:  false,
 		},
 		Blocklist: BlocklistConfig{
-			Enabled: false,
-			Files:   []string{},
+			Enabled:         false,
+			Files:           []string{},
+			CNAMEInspection: true,
 		},
 		RPZ: RPZConfig{
 			Enabled: false,

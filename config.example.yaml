@@ -374,6 +374,10 @@ blocklist:
   # file sources at runtime through the API (POST /api/v1/blocklists).
   # base_dir: /etc/nothingdns/blocklists
 
+  # Also block an answer whose CNAME chain leads to a listed name
+  # (CNAME cloaking). Local zones are not inspected.
+  cname_inspection: true
+
 # =============================================================================
 # RESPONSE POLICY ZONES (RPZ)
 # =============================================================================

@@ -664,3 +664,23 @@ tracker.example.net
 		t.Error("unrelated domain reported blocked")
 	}
 }
+
+func TestBlockedCNAMETarget(t *testing.T) {
+	bl := New(Config{Enabled: true, CNAMEInspection: true})
+	bl.AddDomain("tracker.example.net")
+	if got, ok := bl.BlockedCNAMETarget([]string{"cdn.example.com.", "x.tracker.example.net."}); !ok || got != "x.tracker.example.net." {
+		t.Fatalf("BlockedCNAMETarget = %q, %v", got, ok)
+	}
+	if _, ok := bl.BlockedCNAMETarget([]string{"cdn.example.com."}); ok {
+		t.Fatal("unlisted target blocked")
+	}
+	off := New(Config{Enabled: true})
+	off.AddDomain("tracker.example.net")
+	if _, ok := off.BlockedCNAMETarget([]string{"tracker.example.net."}); ok {
+		t.Fatal("inspection off still blocks")
+	}
+	bl.SetEnabled(false)
+	if _, ok := bl.BlockedCNAMETarget([]string{"tracker.example.net."}); ok {
+		t.Fatal("disabled blocklist still blocks")
+	}
+}

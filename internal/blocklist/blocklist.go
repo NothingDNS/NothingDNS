@@ -43,6 +43,9 @@ type Blocklist struct {
 	manualEntries   map[string]Entry            // manually added domains (no source)
 	// baseDir confines file sources to prevent arbitrary file reads (VULN-067)
 	baseDir string
+	// cnameInspection is Config.CNAMEInspection; fixed for the blocklist's
+	// lifetime (a config reload builds a new Blocklist).
+	cnameInspection bool
 }
 
 // Config holds blocklist configuration.
@@ -53,6 +56,9 @@ type Config struct {
 	// BaseDir confines file sources to this directory to prevent
 	// arbitrary file reads (VULN-067). Paths outside BaseDir are rejected.
 	BaseDir string
+	// CNAMEInspection also blocks an answer whose CNAME chain leads to a
+	// blocked name (BlockedCNAMETarget).
+	CNAMEInspection bool
 }
 
 // maxBlocklistRedirects caps the number of HTTP redirects followed when fetching
@@ -101,6 +107,7 @@ func New(cfg Config) *Blocklist {
 		files:           cfg.Files,
 		urls:            cfg.URLs,
 		baseDir:         cfg.BaseDir,
+		cnameInspection: cfg.CNAMEInspection,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 			// SECURITY: Re-validate every redirect hop. Without this, Go's default
@@ -524,6 +531,23 @@ func (bl *Blocklist) IsBlocked(domain string) bool {
 
 	// Check manually added domains (including parent-domain matches)
 	return isDomainBlockedIn(bl.manualEntries, domain)
+}
+
+// BlockedCNAMETarget returns the first of targets (the CNAME targets an
+// answer leads to) that is blocked, when CNAME inspection is on. A tracker
+// served under a first-party name ("metrics.example.com CNAME
+// example.tracker.net", CNAME cloaking) is otherwise reached through a name
+// the list does not hold.
+func (bl *Blocklist) BlockedCNAMETarget(targets []string) (string, bool) {
+	if !bl.cnameInspection {
+		return "", false
+	}
+	for _, t := range targets {
+		if bl.IsBlocked(t) {
+			return t, true
+		}
+	}
+	return "", false
 }
 
 func isDomainBlockedIn(entries map[string]Entry, domain string) bool {

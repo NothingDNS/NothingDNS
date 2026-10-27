@@ -605,6 +605,11 @@ the data:
   loopback or link-local (redirects are checked the same way); response bodies
   and entry counts are capped
 - A listed name blocks itself and its subdomains
+- CNAME inspection (`blocklist.cname_inspection`, default on): a recursive or
+  forwarded answer whose CNAME chain leads to a listed name is blocked the same
+  way (CNAME cloaking). It is checked before the answer is cached and again on
+  cache and stale hits, so a target listed later blocks cached chains too.
+  Answers from local zones are not inspected
 - A blocked query is answered NXDOMAIN with the Extended DNS Error "Filtered";
   there are no other block responses (no `0.0.0.0` or custom-IP answers, no regex
   or wildcard syntax; subdomain matching covers the wildcard case)

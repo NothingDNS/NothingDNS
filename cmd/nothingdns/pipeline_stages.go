@@ -256,7 +256,13 @@ func cacheStage(h *integratedHandler) Stage {
 			// client and race across concurrent hits (a client could even receive
 			// another client's transaction ID). AgeAdjustedMessage also decrements
 			// each RR TTL by the entry's cache age (RFC 1035 §4.1.3 / RFC 2181).
-			reply(q.currentWriter, q.msg, entry.AgeAdjustedMessage(time.Now()))
+			resp := entry.AgeAdjustedMessage(time.Now())
+			// The blocklist may have gained a CNAME target since the
+			// answer was cached.
+			if h.blockCNAMETarget(q, resp) {
+				return true, nil
+			}
+			reply(q.currentWriter, q.msg, resp)
 			return true, nil
 		}
 
@@ -282,6 +288,29 @@ func nsecCacheStage(h *integratedHandler) Stage {
 		}
 		return false, nil
 	}
+}
+
+// blockCNAMETarget answers q as blocked (NXDOMAIN, EDE Filtered, like
+// blocklistStage) when resp's CNAME chain leads to a blocked name and
+// blocklist.cname_inspection is on. It is applied to recursive answers before
+// they are cached and to cache and stale hits, since the blocklist may have
+// gained the target since; local zones are not inspected.
+func (h *integratedHandler) blockCNAMETarget(q *query, resp *protocol.Message) bool {
+	bl := h.security.Blocklist
+	if bl == nil || resp == nil || q.q == nil || q.q.Name == nil {
+		return false
+	}
+	target, blocked := bl.BlockedCNAMETarget(extractCNAMETargets(resp, q.q.Name.String()))
+	if !blocked {
+		return false
+	}
+	h.logger.Debugf("Blocked query for %s (CNAME target %s)", q.qname, target)
+	q.blocked = true
+	if h.metrics != nil {
+		h.metrics.RecordBlocklistBlock()
+	}
+	sendErrorWithEDE(q.currentWriter, q.msg, protocol.RcodeNameError, protocol.EDEFiltered, "blocked by blocklist (CNAME target)")
+	return true
 }
 
 // blocklistStage checks if the query domain is blocklisted.
@@ -543,13 +572,7 @@ func resolverStage(h *integratedHandler) Stage {
 		if err != nil {
 			h.logger.Warnf("Iterative resolution failed for %s: %v", q.qname, err)
 			// RFC 8767: Try serve-stale when resolution fails
-			if stale := h.cache.GetStale(q.cacheKey); stale != nil && stale.Message != nil {
-				h.logger.Debugf("Serving stale cache entry for %s (resolver failed)", q.qname)
-				if h.metrics != nil {
-					h.metrics.RecordResponse(protocol.RcodeSuccess)
-				}
-				// GetStale returns a private copy, safe for reply to mutate.
-				reply(q.currentWriter, q.msg, stale.Message)
+			if h.serveStaleOnFailedRefresh(q, "resolver failed") {
 				return true, nil
 			}
 			if h.metrics != nil {
@@ -593,6 +616,9 @@ func resolverStage(h *integratedHandler) Stage {
 		handled, err = h.applyRPZResponsePolicyWithError(w, q.msg, q.q, resp, q.qname)
 		if handled || err != nil {
 			return handled, err
+		}
+		if h.blockCNAMETarget(q, resp) {
+			return true, nil
 		}
 
 		if h.tryDNS64Synthesis(ctx, w, q.msg, q.q, resp) {
@@ -642,6 +668,9 @@ func (h *integratedHandler) serveStaleOnFailedRefresh(q *query, why string) bool
 	stale := h.cache.GetStale(q.cacheKey)
 	if stale == nil || stale.Message == nil {
 		return false
+	}
+	if h.blockCNAMETarget(q, stale.Message) {
+		return true
 	}
 	h.logger.Debugf("Serving stale cache entry for %s (%s)", q.qname, why)
 	if h.metrics != nil {
@@ -726,13 +755,7 @@ func upstreamStage(h *integratedHandler) Stage {
 		if err != nil {
 			q.msg.Header.ID = origID
 			h.logger.Warnf("Upstream query failed for %s: %v", q.qname, err)
-			if stale := h.cache.GetStale(q.cacheKey); stale != nil && stale.Message != nil {
-				h.logger.Debugf("Serving stale cache entry for %s (upstream failed)", q.qname)
-				if h.metrics != nil {
-					h.metrics.RecordResponse(protocol.RcodeSuccess)
-				}
-				// GetStale returns a private copy, safe for reply to mutate.
-				reply(q.currentWriter, q.msg, stale.Message)
+			if h.serveStaleOnFailedRefresh(q, "upstream failed") {
 				return true, nil
 			}
 			if h.metrics != nil {
@@ -802,6 +825,9 @@ func upstreamStage(h *integratedHandler) Stage {
 		handled, err = h.applyRPZResponsePolicyWithError(w, q.msg, q.q, resp, q.qname)
 		if handled || err != nil {
 			return handled, err
+		}
+		if h.blockCNAMETarget(q, resp) {
+			return true, nil
 		}
 
 		if h.tryDNS64Synthesis(ctx, w, q.msg, q.q, resp) {

@@ -13,6 +13,9 @@ type BlocklistConfig struct {
 	// BaseDir confines blocklist file sources to this directory. It is also
 	// required for adding file sources at runtime through the API.
 	BaseDir string `yaml:"base_dir"`
+	// CNAMEInspection also blocks a recursive answer whose CNAME chain
+	// leads to a blocked name (CNAME cloaking). Default true.
+	CNAMEInspection bool `yaml:"cname_inspection"`
 }
 
 // RPZConfig holds Response Policy Zone configuration.
@@ -61,6 +64,7 @@ func unmarshalBlocklist(node *Node, cfg *BlocklistConfig) error {
 	cfg.Files = getStringSlice(node, "files", cfg.Files)
 	cfg.URLs = getStringSlice(node, "urls", cfg.URLs)
 	cfg.BaseDir = node.GetString("base_dir")
+	cfg.CNAMEInspection = getBool(node, "cname_inspection", cfg.CNAMEInspection)
 
 	return nil
 }

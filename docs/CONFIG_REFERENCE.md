@@ -304,6 +304,7 @@ Ayrıntı: [SPECIFICATION §10.4](SPECIFICATION.md#104-rolling-upgrades-mixed-ve
 | `files` | []string | `[]` | evet | Yerel hosts-format blocklist dosyaları |
 | `urls` | []string | `[]` | evet | Otomatik indirilen blocklist URL'leri |
 | `base_dir` | string | `""` | evet | Dosya kaynaklarını bu dizinle sınırlar (symlink'ler çözülerek). API üzerinden çalışma anında dosya eklemek için zorunludur |
+| `cname_inspection` | bool | `true` | evet | Upstream/resolver cevabının CNAME zinciri listedeki bir ada gidiyorsa cevabı da bloklar (CNAME cloaking; NXDOMAIN + EDE Filtered). Cache ve stale cevaplarında da uygulanır; yerel zone'lar denetlenmez |
 
 ## `zones`
 

@@ -1038,6 +1038,20 @@ blocklist:
 	if len(cfg.Blocklist.URLs) != 1 {
 		t.Errorf("expected 1 URL, got %d", len(cfg.Blocklist.URLs))
 	}
+	if !cfg.Blocklist.CNAMEInspection {
+		t.Error("expected cname_inspection to default to true")
+	}
+
+	cfg, err = UnmarshalYAML("blocklist:\n  enabled: true\n  cname_inspection: false\n")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Blocklist.CNAMEInspection {
+		t.Error("expected cname_inspection: false to be read")
+	}
+	if _, err := UnmarshalYAML("blocklist:\n  cname_inspection: maybe\n"); err == nil {
+		t.Error("expected an invalid cname_inspection boolean to be rejected")
+	}
 }
 
 func TestUnmarshalYAMLSlaveZones(t *testing.T) {

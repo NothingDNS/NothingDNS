@@ -49,6 +49,8 @@ func NewSecurityManager(cfg *config.Config, logger *util.Logger) (*SecurityManag
 		Files:   cfg.Blocklist.Files,
 		URLs:    cfg.Blocklist.URLs,
 		BaseDir: cfg.Blocklist.BaseDir,
+		// CNAME cloaking: also block answers that lead to a listed name.
+		CNAMEInspection: cfg.Blocklist.CNAMEInspection,
 	})
 	if err := mgr.result.Blocklist.Load(); err != nil {
 		return nil, fmt.Errorf("loading blocklist: %w", err)
