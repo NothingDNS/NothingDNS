@@ -635,69 +635,9 @@ func TestCmdBlocklist_Status(t *testing.T) {
 	}
 }
 
-func TestCmdBlocklist_Sources(t *testing.T) {
-	setupMockServer(t, func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"sources": []interface{}{
-				map[string]interface{}{"id": "list1", "enabled": true},
-			},
-		})
-	})
-	output := captureOutput(func() {
-		if err := cmdBlocklist([]string{"sources"}); err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	})
-	if !strings.Contains(output, "list1") {
-		t.Errorf("output missing source: %q", output)
-	}
-}
-
-func TestCmdBlocklist_SourcesAltField(t *testing.T) {
-	setupMockServer(t, func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"blocklists": []interface{}{
-				map[string]interface{}{"source": "list2", "enabled": false},
-			},
-		})
-	})
-	output := captureOutput(func() {
-		if err := cmdBlocklist([]string{"sources"}); err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	})
-	if !strings.Contains(output, "list2") {
-		t.Errorf("output missing source: %q", output)
-	}
-}
-
-func TestCmdBlocklist_SourcesEmpty(t *testing.T) {
-	setupMockServer(t, func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]interface{}{"sources": []interface{}{}})
-	})
-	output := captureOutput(func() {
-		if err := cmdBlocklist([]string{"sources"}); err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	})
-	if !strings.Contains(output, "No blocklist sources configured") {
-		t.Errorf("output missing message: %q", output)
-	}
-}
-
-func TestCmdBlocklist_SourcesNoInfo(t *testing.T) {
-	setupMockServer(t, func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]interface{}{})
-	})
-	output := captureOutput(func() {
-		if err := cmdBlocklist([]string{"sources"}); err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	})
-	if !strings.Contains(output, "No sources information available") {
-		t.Errorf("output missing message: %q", output)
-	}
-}
+// The sources endpoint answers a JSON array; the tests that mocked object
+// shapes ({"sources": …}, {"blocklists": …}) the server never sends were
+// replaced by TestBlocklistSourcesDecodesArray (F746).
 
 func TestCmdBlocklist_Unknown(t *testing.T) {
 	err := cmdBlocklist([]string{"unknown"})
