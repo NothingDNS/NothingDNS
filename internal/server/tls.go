@@ -510,6 +510,7 @@ func (s *TLSServer) processMessage(conn *tls.Conn, data []byte) {
 		conn:    conn,
 		client:  client,
 		maxSize: TLSMaxMessageSize,
+		query:   msg,
 	}
 
 	// Call handler
@@ -561,6 +562,9 @@ type tlsResponseWriter struct {
 	client  *ClientInfo
 	maxSize int
 	written bool
+	// query is the request being answered; a padded query gets a padded
+	// response (RFC 7830 §4).
+	query *protocol.Message
 }
 
 func (w *tlsResponseWriter) ClientInfo() *ClientInfo {
@@ -584,6 +588,12 @@ func (w *tlsResponseWriter) Write(msg *protocol.Message) (int, error) {
 	frame, n, err := packFramedDNSPayload(msg, buf, w.maxSize, "TLS")
 	if err != nil {
 		return 0, err
+	}
+	if protocol.PadResponseTo(w.query, msg, n, w.maxSize) {
+		frame, n, err = packFramedDNSPayload(msg, buf, w.maxSize, "TLS")
+		if err != nil {
+			return 0, err
+		}
 	}
 
 	// Write length prefix

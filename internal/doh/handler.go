@@ -1,7 +1,6 @@
 package doh
 
 import (
-	"crypto/rand"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -369,32 +368,12 @@ func (rw *dohResponseWriter) Write(msg *protocol.Message) (int, error) {
 	// RFC 7830 §4: pad the response if and only if the query was padded.
 	// The Padding option lives inside the OPT record, so the message is
 	// re-packed after the option is added.
-	if rw.padding && queryHasPaddingOption(rw.query) {
-		// padResponseMessage requires an OPT record. The DNS pipeline filters
-		// (ACL, RRL, recursion) may produce REFUSED/NXDOMAIN responses that
-		// carry no OPT record. Inject an empty one so filtered responses are
-		// padded — without this, an observer can distinguish a filtered
-		// response from a successful one by its size, leaking the fact
-		// that a query was filtered.
-		hasOPT := false
-		for _, rr := range msg.Additionals {
-			if rr != nil && rr.Type == protocol.TypeOPT {
-				hasOPT = true
-				break
-			}
-		}
-		if !hasOPT {
-			// SetEDNS0 gives the OPT its root owner name; a bare record with a
-			// nil Name failed to pack and turned the answer into HTTP 500 (F648).
-			msg.SetEDNS0(4096, false)
-		}
-		if padResponseMessage(msg, n) {
-			buf = make([]byte, msg.WireLength())
-			n, err = msg.Pack(buf)
-			if err != nil {
-				http.Error(rw.w, "Failed to encode response", http.StatusInternalServerError)
-				return 0, err
-			}
+	if rw.padding && protocol.PadResponseTo(rw.query, msg, n, 65535) {
+		buf = make([]byte, msg.WireLength())
+		n, err = msg.Pack(buf)
+		if err != nil {
+			http.Error(rw.w, "Failed to encode response", http.StatusInternalServerError)
+			return 0, err
 		}
 	}
 
@@ -496,68 +475,18 @@ func parsePort(port string) int {
 }
 
 // EDNS0OptionPadding is the RFC 7830 Padding option code (12).
-const EDNS0OptionPadding = 12
+const EDNS0OptionPadding = protocol.OptionCodePadding
 
-// paddingBlockSize is the RFC 8467 §4.1 recommended block size for
-// server response padding (468 bytes).
-const paddingBlockSize = 468
+// paddingBlockSize is the RFC 8467 §4.1 response padding block size.
+const paddingBlockSize = protocol.PaddingBlockSize
 
 // queryHasPaddingOption reports whether the client's query carried an
-// RFC 7830 Padding option. Per RFC 7830 §4 a server MUST pad a response
-// if and only if the corresponding query was padded.
+// RFC 7830 Padding option.
 func queryHasPaddingOption(query *protocol.Message) bool {
-	if query == nil {
-		return false
-	}
-	for _, rr := range query.Additionals {
-		if rr == nil || rr.Type != protocol.TypeOPT {
-			continue
-		}
-		if opt, ok := rr.Data.(*protocol.RDataOPT); ok && opt.GetOption(EDNS0OptionPadding) != nil {
-			return true
-		}
-	}
-	return false
+	return protocol.HasPaddingOption(query)
 }
 
-// padResponseMessage appends a zero-filled RFC 7830 Padding option to the
-// response's OPT record, sizing the packed response up to a multiple of
-// paddingBlockSize (RFC 8467 §4.1). The previous implementation appended
-// random bytes AFTER the packed wire message — trailing garbage that
-// breaks RFC 1035 framing rather than valid padding. Returns false when
-// the response carries no OPT record to hold the option (nothing padded).
+// padResponseMessage pads the response (see protocol.PadResponse).
 func padResponseMessage(msg *protocol.Message, packedLen int) bool {
-	var opt *protocol.RDataOPT
-	for _, rr := range msg.Additionals {
-		if rr == nil || rr.Type != protocol.TypeOPT {
-			continue
-		}
-		if o, ok := rr.Data.(*protocol.RDataOPT); ok {
-			opt = o
-			break
-		}
-	}
-	if opt == nil {
-		return false
-	}
-	// The option itself costs 4 header bytes; the zero-filled data brings
-	// the total up to the next block boundary.
-	withOptionHeader := packedLen + 4
-	blockFill := (paddingBlockSize - withOptionHeader%paddingBlockSize) % paddingBlockSize
-	// RFC 8467 §4.1 recommends block-aligned padding but allows randomization
-	// within the block boundary to prevent traffic analysis. A fixed padding
-	// length makes the underlying response size predictable: given the block
-	// boundary, the response size uniquely determines the unpadded payload size.
-	// Adding a uniform random offset in [0, paddingBlockSize) makes the final
-	// response size unpredictable to a network observer who knows only the
-	// block boundary.
-	var extra int
-	var randBuf [2]byte
-	if _, err := rand.Read(randBuf[:]); err == nil {
-		extra = int(randBuf[0])<<8 | int(randBuf[1])
-		extra %= paddingBlockSize
-	}
-	padLen := blockFill + extra
-	opt.AddOption(EDNS0OptionPadding, make([]byte, padLen))
-	return true
+	return protocol.PadResponse(msg, packedLen, 65535)
 }

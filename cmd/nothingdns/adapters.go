@@ -171,7 +171,7 @@ func (a *doqHandlerAdapter) ServeDoQ(stream *quic.Stream, queryData []byte) {
 		return
 	}
 
-	rw := &doqResponseWriter{stream: stream, remoteAddr: stream.RemoteAddr()}
+	rw := &doqResponseWriter{stream: stream, remoteAddr: stream.RemoteAddr(), query: msg}
 	a.handler.ServeDNS(rw, msg)
 }
 
@@ -179,6 +179,9 @@ func (a *doqHandlerAdapter) ServeDoQ(stream *quic.Stream, queryData []byte) {
 type doqResponseWriter struct {
 	stream     doqStreamWriter
 	remoteAddr net.Addr
+	// query is the request being answered; a padded query gets a padded
+	// response (RFC 7830 §4, RFC 9250 §5.4).
+	query *protocol.Message
 }
 
 type doqStreamWriter interface {
@@ -201,6 +204,12 @@ func (w *doqResponseWriter) Write(msg *protocol.Message) (int, error) {
 	n, err := msg.Pack(buf[2:])
 	if err != nil {
 		return 0, err
+	}
+	if protocol.PadResponseTo(w.query, msg, n, 65535) {
+		buf = make([]byte, msg.WireLength()+2)
+		if n, err = msg.Pack(buf[2:]); err != nil {
+			return 0, err
+		}
 	}
 	if n > 65535 {
 		return 0, fmt.Errorf("doq: response %d bytes exceeds 65535 after truncation", n)
