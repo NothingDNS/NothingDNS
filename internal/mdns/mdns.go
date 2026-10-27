@@ -3,12 +3,12 @@
 package mdns
 
 import (
-	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -306,6 +306,45 @@ func (r *Responder) RegisterHostname(hostname string, ip net.IP) error {
 	return nil
 }
 
+// RegisterConfiguredHostname registers Config.HostName (".local" is added
+// when missing) with the IPv4 address this host uses to reach the mDNS group,
+// and returns that address. It does nothing when no hostname is configured.
+func (r *Responder) RegisterConfiguredHostname() (net.IP, error) {
+	if r.config.HostName == "" {
+		return nil, nil
+	}
+	ip, err := outboundIPv4(net.JoinHostPort(r.config.MulticastIP, strconv.Itoa(r.config.Port)))
+	if err != nil {
+		return nil, fmt.Errorf("finding the address to announce for %s: %w", r.config.HostName, err)
+	}
+	hostname := r.config.HostName
+	if !strings.HasSuffix(hostname, ".") {
+		hostname += "."
+	}
+	if !strings.HasSuffix(strings.ToLower(hostname), ".local.") {
+		hostname = strings.TrimSuffix(hostname, ".") + ".local."
+	}
+	if err := r.RegisterHostname(hostname, ip); err != nil {
+		return nil, err
+	}
+	return ip, nil
+}
+
+// outboundIPv4 returns the local IPv4 address the routing table picks for
+// dst. A UDP "dial" sends nothing; it only binds the socket.
+func outboundIPv4(dst string) (net.IP, error) {
+	c, err := net.Dial("udp4", dst)
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close()
+	addr, ok := c.LocalAddr().(*net.UDPAddr)
+	if !ok || addr.IP.To4() == nil {
+		return nil, fmt.Errorf("no IPv4 address towards %s", dst)
+	}
+	return addr.IP.To4(), nil
+}
+
 // BrowseServices initiates a service discovery browse for a service type.
 func (r *Responder) BrowseServices(serviceType string) ([]*Service, error) {
 	if !r.config.Browser {
@@ -427,16 +466,25 @@ func (r *Responder) handleQuery(data []byte, src *net.UDPAddr) {
 		return
 	}
 
-	// Collect the question names once, lower-cased and stripped of any
+	// Collect the questions once, names lower-cased and stripped of any
 	// trailing dot, so the inner loops do not repeat the work.
-	qNames := make([]string, 0, len(msg.Questions))
+	type mdnsQuestion struct {
+		name  string
+		qtype uint16
+	}
+	qs := make([]mdnsQuestion, 0, len(msg.Questions))
+	unicast := true
 	for _, q := range msg.Questions {
 		if q == nil || q.Name == nil {
 			continue
 		}
-		qNames = append(qNames, strings.ToLower(strings.TrimSuffix(q.Name.String(), ".")))
+		qs = append(qs, mdnsQuestion{strings.ToLower(strings.TrimSuffix(q.Name.String(), ".")), q.QType})
+		// RFC 6762 §5.4: the top bit of the class asks for a unicast reply.
+		if q.QClass&0x8000 == 0 {
+			unicast = false
+		}
 	}
-	if len(qNames) == 0 {
+	if len(qs) == 0 {
 		return
 	}
 
@@ -447,14 +495,27 @@ func (r *Responder) handleQuery(data []byte, src *net.UDPAddr) {
 	if src != nil && src.Port != r.config.Port {
 		lq = &legacyQuery{id: msg.Header.ID, questions: msg.Questions}
 	}
+	// RFC 6762 §6: an mDNS query is answered on the multicast group, so every
+	// host's cache learns the answer, unless it asked for a unicast reply;
+	// legacy queries are answered by unicast.
+	dst := src
+	if lq == nil && !unicast {
+		dst = &net.UDPAddr{IP: net.ParseIP(r.config.MulticastIP), Port: r.config.Port}
+	}
 
 	// Hostname queries: exact match on (lower-case, no trailing dot).
 	r.hostnamesMu.RLock()
 	for hostname, ip := range r.hostnames {
 		host := strings.ToLower(strings.TrimSuffix(hostname, "."))
-		for _, qn := range qNames {
-			if qn == host {
-				r.sendHostnameResponse(hostname, ip, src, lq)
+		// The address type that answers: A for IPv4, AAAA for IPv6. An
+		// AAAA question for an IPv4-only host gets no A record.
+		have := uint16(protocol.TypeAAAA)
+		if ip.To4() != nil {
+			have = protocol.TypeA
+		}
+		for _, q := range qs {
+			if q.name == host && (q.qtype == have || q.qtype == protocol.TypeANY) {
+				r.sendHostnameResponse(hostname, ip, dst, lq)
 				break
 			}
 		}
@@ -471,9 +532,9 @@ func (r *Responder) handleQuery(data []byte, src *net.UDPAddr) {
 	for _, svc := range r.services {
 		stype := strings.ToLower(strings.TrimSuffix(svc.ServiceTypeName(), "."))
 		full := strings.ToLower(strings.TrimSuffix(svc.FullServiceName(), "."))
-		for _, qn := range qNames {
-			if qn == stype || qn == full {
-				r.sendServiceResponse(svc, src, lq)
+		for _, q := range qs {
+			if q.name == stype || q.name == full {
+				r.sendServiceResponse(svc, dst, lq)
 				break
 			}
 		}
@@ -502,6 +563,9 @@ func (r *Responder) handleResponse(data []byte, src *net.UDPAddr) {
 // matches and could be spoofed by an off-link attacker who knew the
 // hostname/service string. Keep no shim — call sites have been updated.
 
+// legacyUnicastTTL caps the TTL of legacy unicast answers (RFC 6762 §6.7).
+const legacyUnicastTTL = 10
+
 // legacyQuery carries what a legacy unicast reply must echo (RFC 6762 §6.7).
 // nil means an ordinary mDNS response or announcement.
 type legacyQuery struct {
@@ -514,6 +578,11 @@ type legacyQuery struct {
 func (r *Responder) sendReply(msg *protocol.Message, dst *net.UDPAddr, lq *legacyQuery) {
 	if lq != nil {
 		msg.Header.ID = lq.id
+		// RFC 6762 §6.7: legacy unicast answers carry TTL <= 10 s, so a
+		// one-shot resolver does not cache link-local data for long.
+		for _, rr := range msg.Answers {
+			rr.TTL = min(rr.TTL, legacyUnicastTTL)
+		}
 		for _, q := range lq.questions {
 			if q != nil && q.Name != nil {
 				msg.Questions = append(msg.Questions, q)
@@ -551,7 +620,7 @@ func (r *Responder) sendPTRRecord(svc *Service, dst *net.UDPAddr, lq *legacyQuer
 		return
 	}
 	msg := protocol.NewMessage(protocol.Header{
-		ID:      r.generateTransactionID(),
+		ID:      0, // RFC 6762 §18.1: zero in multicast messages
 		Flags:   protocol.NewResponseFlags(protocol.RcodeSuccess),
 		QDCount: 0,
 		ANCount: 1,
@@ -575,7 +644,7 @@ func servicePTRRecord(svc *Service, ttl uint32) (*protocol.ResourceRecord, error
 func (r *Responder) sendARecord(name string, ip net.IP, dst *net.UDPAddr, lq *legacyQuery) {
 	// Build DNS response message
 	msg := protocol.NewMessage(protocol.Header{
-		ID:      r.generateTransactionID(),
+		ID:      0, // RFC 6762 §18.1: zero in multicast messages
 		Flags:   protocol.NewResponseFlags(protocol.RcodeSuccess),
 		QDCount: 0,
 		ANCount: 1,
@@ -607,7 +676,7 @@ func (r *Responder) sendARecord(name string, ip net.IP, dst *net.UDPAddr, lq *le
 func (r *Responder) sendAAAARecord(name string, ip net.IP, dst *net.UDPAddr, lq *legacyQuery) {
 	// Build DNS response message
 	msg := protocol.NewMessage(protocol.Header{
-		ID:      r.generateTransactionID(),
+		ID:      0, // RFC 6762 §18.1: zero in multicast messages
 		Flags:   protocol.NewResponseFlags(protocol.RcodeSuccess),
 		QDCount: 0,
 		ANCount: 1,
@@ -633,7 +702,7 @@ func (r *Responder) sendAAAARecord(name string, ip net.IP, dst *net.UDPAddr, lq 
 func (r *Responder) sendSRVRecord(svc *Service, dst *net.UDPAddr, lq *legacyQuery) {
 	// Build DNS response message
 	msg := protocol.NewMessage(protocol.Header{
-		ID:      r.generateTransactionID(),
+		ID:      0, // RFC 6762 §18.1: zero in multicast messages
 		Flags:   protocol.NewResponseFlags(protocol.RcodeSuccess),
 		QDCount: 0,
 		ANCount: 1,
@@ -667,7 +736,7 @@ func (r *Responder) sendSRVRecord(svc *Service, dst *net.UDPAddr, lq *legacyQuer
 func (r *Responder) sendTXTRecord(svc *Service, dst *net.UDPAddr, lq *legacyQuery) {
 	// Build DNS response message
 	msg := protocol.NewMessage(protocol.Header{
-		ID:      r.generateTransactionID(),
+		ID:      0, // RFC 6762 §18.1: zero in multicast messages
 		Flags:   protocol.NewResponseFlags(protocol.RcodeSuccess),
 		QDCount: 0,
 		ANCount: 1,
@@ -707,7 +776,7 @@ func (r *Responder) sendQuery(name string, qtype uint16) {
 	}
 
 	msg := protocol.NewMessage(protocol.Header{
-		ID:      r.generateTransactionID(),
+		ID:      0, // RFC 6762 §18.1: zero in multicast messages
 		Flags:   protocol.NewQueryFlags(),
 		QDCount: 1,
 	})
@@ -726,7 +795,7 @@ func (r *Responder) sendQuery(name string, qtype uint16) {
 func (r *Responder) sendGoodbye(fullName string, svc *Service) {
 	// Build DNS response message with TTL=0 to indicate removal
 	msg := protocol.NewMessage(protocol.Header{
-		ID:      r.generateTransactionID(),
+		ID:      0, // RFC 6762 §18.1: zero in multicast messages
 		Flags:   protocol.NewResponseFlags(protocol.RcodeSuccess),
 		QDCount: 0,
 		ANCount: 2, // SRV and TXT
@@ -803,17 +872,6 @@ func writeUDPPacket(conn udpPacketWriter, data []byte, dst *net.UDPAddr) (int, e
 		return n, io.ErrShortWrite
 	}
 	return n, nil
-}
-
-// generateTransactionID generates a random transaction ID for mDNS messages.
-// RFC 6762 recommends using random IDs to avoid collisions.
-func (r *Responder) generateTransactionID() uint16 {
-	var b [2]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		// Fallback to time-based if crypto/rand fails
-		return uint16(time.Now().UnixNano() >> 16)
-	}
-	return binary.BigEndian.Uint16(b[:])
 }
 
 // announceService sends service announcement (unsolicited response).

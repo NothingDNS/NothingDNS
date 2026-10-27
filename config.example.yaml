@@ -557,12 +557,14 @@ logging:
 # =============================================================================
 # MULTICAST DNS (mDNS)
 # =============================================================================
+# Answers A queries for `hostname` on the local link with the IPv4 address
+# this host uses to reach the mDNS group (IPv4 only).
 # mdns:
 #   enabled: true
-#   multicast_ip: 224.0.0.251   # 224.0.0.251 (IPv4) / ff02::fb (IPv6)
+#   multicast_ip: 224.0.0.251   # IPv4 group; IPv6 (ff02::fb) is not supported
 #   port: 5353
-#   hostname: nothingdns.local
-#   browser: false              # answer service-discovery browse queries
+#   hostname: nothingdns.local  # ".local" is added when missing
+#   browser: false              # reserved: browse results are not used yet
 
 # =============================================================================
 # DNS STATEFUL OPERATIONS (RFC 8490)

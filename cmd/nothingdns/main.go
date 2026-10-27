@@ -638,6 +638,13 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 		} else {
 			logger.Infof("mDNS responder started on %s:%d", mdnsConfig.MulticastIP, mdnsConfig.Port)
 		}
+		// mdns.hostname is what the responder answers for; nothing else
+		// registers a name, so without this it never answered (F739).
+		if ip, err := mdnsResponder.RegisterConfiguredHostname(); err != nil {
+			logger.Warnf("mDNS: not announcing %s: %v", cfg.MDNS.HostName, err)
+		} else if ip != nil {
+			logger.Infof("mDNS: answering for %s with %s", cfg.MDNS.HostName, ip)
+		}
 	}
 
 	// Initialize DSO manager
