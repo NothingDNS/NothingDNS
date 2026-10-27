@@ -394,12 +394,18 @@ func (h *integratedHandler) buildWildcardResponse(r *protocol.Message, z *zone.Z
 		cp.Name = wcName
 		rrs = append(rrs, &cp)
 	}
-	rrsig := h.signZoneRRSet(z, rrs)
-	if rrsig == nil {
+	owner := resp.Answers[0].Name
+	signed := false
+	for _, rrset := range rrsetsByType(rrs) { // one RRSIG per RRset (F745)
+		if rrsig := h.signZoneRRSet(z, rrset); rrsig != nil {
+			rrsig.Name = owner
+			resp.AddAnswer(rrsig)
+			signed = true
+		}
+	}
+	if !signed {
 		return resp // unsigned zone (or signing failed, logged)
 	}
-	rrsig.Name = resp.Answers[0].Name
-	resp.AddAnswer(rrsig)
 	for _, proof := range h.wildcardAnswerRRs(z, r.Questions[0].Name.String(), strings.TrimPrefix(wildcard, "*.")) {
 		resp.Authorities = append(resp.Authorities, proof)
 		if sig := h.signZoneRRSet(z, []*protocol.ResourceRecord{proof}); sig != nil {

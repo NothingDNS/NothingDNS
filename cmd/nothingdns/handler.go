@@ -697,24 +697,44 @@ func (h *integratedHandler) buildSignedResponse(query *protocol.Message, records
 		zsks := signer.GetActiveZSKs()
 		if len(zsks) > 0 {
 			zsk := zsks[0] // Use first Active ZSK
-			rrsig, err := signer.SignRRSet(
-				rrs,
-				zsk,
-				dnssecSignatureUnixTime(inception),
-				dnssecSignatureUnixTime(expiration),
-			)
-			if err == nil && rrsig != nil {
-				resp.AddAnswer(rrsig)
-				h.logger.Debugf("Added RRSIG for %s", query.Questions[0].Name.String())
-			} else if err != nil {
-				// Answer still goes out, but unsigned — validating resolvers
-				// will treat it as Bogus, so make the cause visible.
-				h.logger.Warnf("Failed to sign RRset for %s: %v", query.Questions[0].Name.String(), err)
+			// An ANY answer holds several RRsets; each gets its own RRSIG
+			// (RFC 4035 §3.1.1). Signing them as one failed (F745).
+			for _, rrset := range rrsetsByType(rrs) {
+				rrsig, err := signer.SignRRSet(
+					rrset,
+					zsk,
+					dnssecSignatureUnixTime(inception),
+					dnssecSignatureUnixTime(expiration),
+				)
+				if err == nil && rrsig != nil {
+					resp.AddAnswer(rrsig)
+					h.logger.Debugf("Added RRSIG for %s", query.Questions[0].Name.String())
+				} else if err != nil {
+					// Answer still goes out, but unsigned — validating resolvers
+					// will treat it as Bogus, so make the cause visible.
+					h.logger.Warnf("Failed to sign RRset for %s: %v", query.Questions[0].Name.String(), err)
+				}
 			}
 		}
 	}
 
 	return resp
+}
+
+// rrsetsByType splits rrs into RRsets by type, in first-seen order.
+func rrsetsByType(rrs []*protocol.ResourceRecord) [][]*protocol.ResourceRecord {
+	var sets [][]*protocol.ResourceRecord
+	index := make(map[uint16]int)
+	for _, rr := range rrs {
+		i, ok := index[rr.Type]
+		if !ok {
+			i = len(sets)
+			index[rr.Type] = i
+			sets = append(sets, nil)
+		}
+		sets[i] = append(sets[i], rr)
+	}
+	return sets
 }
 
 func dnssecSignatureUnixTime(t time.Time) uint32 {
