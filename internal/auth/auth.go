@@ -580,19 +580,14 @@ func ValidateUsername(username string) error {
 // MaxNewUsernameBytes is the longest username CreateUser accepts.
 const MaxNewUsernameBytes = 128
 
-// validateNewUsername is ValidateUsername plus the limits for a user being
-// created: a length cap, and no "/" since the API addresses a user by path
-// (PUT/DELETE /auth/users/{username}), which could never reach such a name.
-// Users already stored are not re-checked against these (F761).
+// validateNewUsername is ValidateUsername plus a length cap for a user being
+// created. Users already stored are not re-checked against it (F761).
 func validateNewUsername(username string) error {
 	if err := ValidateUsername(username); err != nil {
 		return err
 	}
 	if len(username) > MaxNewUsernameBytes {
 		return fmt.Errorf("username must be at most %d bytes", MaxNewUsernameBytes)
-	}
-	if strings.Contains(username, "/") {
-		return fmt.Errorf("username must not contain '/'")
 	}
 	return nil
 }
