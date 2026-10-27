@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`dnsctl blocklist sources` always failed** with `invalid JSON response: cannot unmarshal array`: the endpoint answers a list, and dnsctl expected an object. It now lists each source with its type, domain count and state.
 - **ANY answers from a signed zone were unsigned**: an ANY query (over TCP, with DO=1) for a name holding several types got all of them without a single RRSIG — the server tried to sign them as one RRset, which fails — so validating clients rejected the answer. Each RRset of an ANY answer (exact or wildcard) is now signed on its own.
 - **Signed zones served in two split-horizon views rebuilt their NSEC chain on every negative answer**: the views' zones share an origin and so one cached chain, and each negative answer for the other view replaced it — a walk of the whole zone per NXDOMAIN/NODATA (about 28 ms each for a 20,000-name zone, a 200-fold slowdown). Each view's zone now keeps its own cached chain.
 - **DSO sessions were cut before their inactivity timeout ran out**: a DNS Stateful Operations session is aborted only after five seconds or twice its inactivity timeout, whichever is greater (RFC 8490 §6.4.1), but the server closed it at one timeout, and the transport's fixed 30 s idle limit still applied to a connection with a session — so with `dso.session_timeout` above 15 s, an idle client was disconnected before it was due to close. A session's connection now follows the session's timers.

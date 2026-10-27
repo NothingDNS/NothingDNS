@@ -43,31 +43,27 @@ func cmdBlocklist(args []string) error {
 		}
 
 	case "sources":
-		result, err := apiGet("/api/v1/blocklists/sources")
+		// The endpoint answers a JSON array of sources, not an object;
+		// decoding it as one failed on every call (F746).
+		body, err := apiGetRaw("/api/v1/blocklists/sources")
 		if err != nil {
 			return err
 		}
-		sources, ok := result["sources"].([]interface{})
-		if !ok {
-			sources, ok = result["blocklists"].([]interface{})
+		var sources []struct {
+			ID      string `json:"id"`
+			Type    string `json:"type"`
+			Enabled bool   `json:"enabled"`
+			Domains int    `json:"domains"`
 		}
-		if !ok {
-			fmt.Println("No sources information available")
-			return nil
+		if err := json.Unmarshal(body, &sources); err != nil {
+			return fmt.Errorf("invalid JSON response: %w", err)
 		}
 		if len(sources) == 0 {
 			fmt.Println("No blocklist sources configured")
 			return nil
 		}
-		for _, s := range sources {
-			if sm, ok := s.(map[string]interface{}); ok {
-				id, _ := sm["id"].(string)
-				if id == "" {
-					id, _ = sm["source"].(string)
-				}
-				enabled, _ := sm["enabled"].(bool)
-				fmt.Printf("  %s (enabled=%v)\n", id, enabled)
-			}
+		for _, src := range sources {
+			fmt.Printf("  %s (%s, %d domains, enabled=%v)\n", src.ID, src.Type, src.Domains, src.Enabled)
 		}
 
 	case "reload":
