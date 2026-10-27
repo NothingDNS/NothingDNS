@@ -15,8 +15,6 @@
 package main
 
 import (
-	"time"
-
 	"github.com/nothingdns/nothingdns/internal/protocol"
 	"github.com/nothingdns/nothingdns/internal/zone"
 )
@@ -59,8 +57,7 @@ func (h *integratedHandler) addDenialProof(resp *protocol.Message, z *zone.Zone,
 	}
 	zsk := zsks[0]
 
-	inception := time.Now().UTC()
-	expiration := inception.Add(30 * 24 * time.Hour)
+	inception, expiration := onlineSignatureWindow()
 	sign := func(rrs []*protocol.ResourceRecord) {
 		if len(rrs) == 0 {
 			return

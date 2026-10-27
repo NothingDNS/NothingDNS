@@ -153,7 +153,10 @@ func NewZoneManager(cfg *config.Config, logger *util.Logger) (*ZoneManager, erro
 	// Initialize zone signers if DNSSEC signing is enabled. After the persistent
 	// database sync, so zones that only it holds (API-created before a restart)
 	// are signed like file-backed ones instead of silently served unsigned (F721).
-	if cfg.DNSSEC.Enabled && cfg.DNSSEC.Signing.Enabled {
+	// Signing is the authoritative side and does not depend on dnssec.enabled
+	// (validation): an authoritative-only server turning validation off was
+	// served unsigned with a config that validated (F755).
+	if cfg.DNSSEC.Signing.Enabled {
 		for origin, z := range mgr.result.Zones {
 			signer, err := loadZoneSigner(z, cfg.DNSSEC.Signing)
 			if err != nil {

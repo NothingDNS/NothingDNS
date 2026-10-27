@@ -692,8 +692,7 @@ func (h *integratedHandler) buildSignedResponse(query *protocol.Message, records
 	// keys regardless of state, which during a rollover would emit RRSIGs
 	// that fail chain-of-trust at the validator → response Bogus.
 	if len(rrs) > 0 {
-		inception := time.Now().UTC()
-		expiration := inception.Add(24 * time.Hour * 30) // 30 days
+		inception, expiration := onlineSignatureWindow()
 
 		// Find an Active ZSK for signing.
 		zsks := signer.GetActiveZSKs()
@@ -737,6 +736,23 @@ func rrsetsByType(rrs []*protocol.ResourceRecord) [][]*protocol.ResourceRecord {
 		sets[i] = append(sets[i], rr)
 	}
 	return sets
+}
+
+// onlineSignatureInceptionOffset backdates the inception of signatures made at
+// query time, like Signer.SignZone's default InceptionOffset: an inception of
+// "now" is in the future for a validator whose clock is even a second behind,
+// which rejects the RRSIG ("validity period has not begun"; RFC 6781
+// §4.4.2.2) (F756).
+const onlineSignatureInceptionOffset = time.Hour
+
+// onlineSignatureValidity is how long a signature made at query time lasts.
+const onlineSignatureValidity = 30 * 24 * time.Hour
+
+// onlineSignatureWindow is the inception and expiration of a signature made
+// now at query time.
+func onlineSignatureWindow() (inception, expiration time.Time) {
+	now := time.Now().UTC()
+	return now.Add(-onlineSignatureInceptionOffset), now.Add(onlineSignatureValidity)
 }
 
 func dnssecSignatureUnixTime(t time.Time) uint32 {
@@ -1312,7 +1328,7 @@ func (h *integratedHandler) RebuildZoneTree() {
 // it are undisturbed; a signer that cannot be built is logged and skipped.
 func (h *integratedHandler) ensureZoneSigners() {
 	cfg := h.config
-	if cfg == nil || h.zoneManager == nil || !cfg.DNSSEC.Enabled || !cfg.DNSSEC.Signing.Enabled {
+	if cfg == nil || h.zoneManager == nil || !cfg.DNSSEC.Signing.Enabled { // signing does not need validation (F755)
 		return
 	}
 	zones := h.zoneManager.List()

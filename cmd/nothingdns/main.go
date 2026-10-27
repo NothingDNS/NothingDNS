@@ -1567,7 +1567,7 @@ func validateRuntimeAssets(cfg *config.Config) error {
 		}
 		loadedZones = append(loadedZones, z)
 	}
-	if cfg.DNSSEC.Enabled && cfg.DNSSEC.Signing.Enabled {
+	if cfg.DNSSEC.Signing.Enabled { // independent of validation (F755)
 		for _, z := range loadedZones {
 			if _, err := loadZoneSigner(z, cfg.DNSSEC.Signing); err != nil {
 				return fmt.Errorf("validating DNSSEC signer for %s: %w", z.Origin, err)

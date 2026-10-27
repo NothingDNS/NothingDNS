@@ -218,7 +218,7 @@ yeniden başlatma gerekir.
 | `trust_anchor` | string | "" | evet | Trust anchor dosyası (boş = built-in) |
 | `ignore_time` | bool | `false` | evet | İmza geçerlilik zamanını ignore et (test için) |
 | `require_dnssec` | bool | `false` | evet | DNSSEC zorunlu — imzasız cevaplar SERVFAIL |
-| `signing.enabled` | bool | `false` | hayır (zone imzalayıcıları başlangıçta kurulur; SIGHUP ile eklenen yeni bir zone yeniden başlatmaya kadar imzasız sunulur) | Yetkili zone'ları imzala |
+| `signing.enabled` | bool | `false` | hayır (zone imzalayıcıları başlangıçta kurulur; SIGHUP ile eklenen yeni bir zone yeniden başlatmaya kadar imzasız sunulur) | Yetkili zone'ları imzala; `dnssec.enabled` (doğrulama) kapalıyken de çalışır |
 | `signing.signature_validity` | duration | `720h` | hayır | İmza geçerlilik süresi |
 | `signing.keys` | []object | — | hayır | KSK/ZSK key tanımları (`private_key`, `type`, `algorithm`) |
 | `signing.nsec3.iterations` | int | `0` | evet | NSEC3 iteration sayısı; en fazla 150 (daha büyük değerler doğrulamada reddedilir, RFC 9276), önerilen 0 |

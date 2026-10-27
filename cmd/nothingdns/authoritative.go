@@ -562,8 +562,7 @@ func (h *integratedHandler) signZoneRRSet(z *zone.Zone, rrs []*protocol.Resource
 	if len(zsks) == 0 {
 		return nil
 	}
-	inception := time.Now().UTC()
-	expiration := inception.Add(30 * 24 * time.Hour)
+	inception, expiration := onlineSignatureWindow()
 	rrsig, err := signer.SignRRSet(rrs, zsks[0],
 		dnssecSignatureUnixTime(inception), dnssecSignatureUnixTime(expiration))
 	if err != nil {
@@ -1044,8 +1043,7 @@ func (h *integratedHandler) serveZoneDNSKEY(w server.ResponseWriter, r *protocol
 
 	if wantsDNSSEC {
 		if ksks := signer.GetActiveKSKs(); len(ksks) > 0 {
-			inception := time.Now().UTC()
-			expiration := inception.Add(30 * 24 * time.Hour)
+			inception, expiration := onlineSignatureWindow()
 			rrsig, sigErr := signer.SignRRSet(dnskeys, ksks[0],
 				dnssecSignatureUnixTime(inception), dnssecSignatureUnixTime(expiration))
 			if sigErr == nil && rrsig != nil {
