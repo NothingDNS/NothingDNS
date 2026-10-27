@@ -114,7 +114,9 @@ func aclStage(h *integratedHandler) Stage {
 					h.handleACLRedirect(q.currentWriter, q.msg, q.q, redirect)
 				} else {
 					h.logger.Infof("ACL denied: %s %s from %s", q.qname, typeToString(q.qtype), clientIP)
-					sendError(q.currentWriter, q.msg, protocol.RcodeRefused)
+					// EDE 18 tells the client why (RFC 8914 §4.19), as the
+					// recursion refusal does (F748).
+					sendErrorWithEDE(q.currentWriter, q.msg, protocol.RcodeRefused, protocol.EDEProhibited, "")
 				}
 				return true, nil
 			}
@@ -187,7 +189,7 @@ func rateLimitStage(h *integratedHandler) Stage {
 				if h.metrics != nil {
 					h.metrics.RecordRateLimited()
 				}
-				sendError(q.currentWriter, q.msg, protocol.RcodeRefused)
+				sendErrorWithEDE(q.currentWriter, q.msg, protocol.RcodeRefused, protocol.EDEOtherError, "rate limited") // as RRL (F748)
 				return true, nil
 			}
 		}
