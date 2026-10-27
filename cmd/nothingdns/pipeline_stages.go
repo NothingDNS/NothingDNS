@@ -1042,6 +1042,15 @@ func cookieStage(h *integratedHandler) Stage {
 			return false, nil
 		}
 		cookieData, valid := h.processCookies(q.msg, clientIP)
+		// An invalid server cookie is handled as a request with only a client
+		// cookie (RFC 7873 §5.2.4). Over TCP, TLS, HTTPS and QUIC the
+		// connection authenticates the client, so the request is answered
+		// with a fresh cookie instead of BADCOOKIE (§5.2.3), which a client
+		// that keeps the old cookie would retry endlessly — e.g. every
+		// TCP client once after a restart replaced the secret (F736).
+		if !valid && cookieData != nil && w.ClientInfo().Protocol != "udp" {
+			valid = true
+		}
 		if !valid {
 			// No cookie data means the option was malformed (F641).
 			rcode := uint8(protocol.RcodeBadCookie)

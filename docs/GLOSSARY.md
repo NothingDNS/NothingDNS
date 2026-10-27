@@ -47,7 +47,7 @@ Full zone transfer protocol for copying entire zone databases between nameserver
 ## B
 
 ### BADCOOKIE
-A DNS response code indicating invalid or missing DNS cookie. Client should retry with the cookie from the response.
+A DNS response code indicating an invalid DNS server cookie. Client should retry with the cookie from the response. NothingDNS sends it over UDP only; over TCP, DoT, DoH and DoQ the connection authenticates the client, so the query is answered with a fresh cookie (RFC 7873 §5.2.3).
 
 **RFC**: RFC 7873
 
