@@ -2321,7 +2321,7 @@ func TestGossipProtocol_BroadcastCacheInvalidation_NoAliveNodes_VerifyNil(t *tes
 
 	cfg := DefaultGossipConfig()
 	cfg.BindAddr = "127.0.0.1"
-	cfg.BindPort = 48007
+	cfg.BindPort = 0 // any free port: a fixed one may be taken on the host
 
 	gp, _ := NewGossipProtocol(cfg, nl, true)
 	if err := gp.Start(); err != nil {
