@@ -97,3 +97,29 @@ func TestRecordsAPI_RDataNamesQualified(t *testing.T) {
 		}
 	}
 }
+
+// F730: a record the API stored before its names were qualified ("10
+// mail.example.org") differs from the qualified new data in text only. The
+// duplicate check took it for another RR of the set, so a TTL-only edit, or
+// re-saving it with the trailing dot, was refused with 409.
+func TestRecordsAPI_UpdateUnqualifiedRecord(t *testing.T) {
+	for _, data := range []string{"10 mail.example.org", "10 mail.example.org."} {
+		f := newZoneRecordAPIFixture(t)
+		if err := f.s.zoneManager.AddRecord("example.com.", zone.Record{Name: "legacy", Type: "MX", TTL: 300, Class: "IN", RData: "10 mail.example.org"}); err != nil {
+			t.Fatal(err)
+		}
+		f.expect("update to "+data, f.do(http.MethodPut, map[string]any{
+			"name": "legacy", "type": "MX", "old_data": "10 mail.example.org", "data": data, "ttl": 60}), http.StatusOK)
+		recs := f.records("legacy")
+		if len(recs) != 1 || recs[0].RData != "10 mail.example.org." || recs[0].TTL != 60 {
+			t.Fatalf("update to %q: records %+v", data, recs)
+		}
+	}
+
+	// The record being replaced is excluded, other RRs of the set are not.
+	f := newZoneRecordAPIFixture(t)
+	f.expect("add", f.do(http.MethodPost, map[string]any{"name": "m", "type": "MX", "data": "10 a.example.org", "ttl": 300}), http.StatusCreated)
+	f.expect("add", f.do(http.MethodPost, map[string]any{"name": "m", "type": "MX", "data": "20 b.example.org", "ttl": 300}), http.StatusCreated)
+	f.expect("update to a sibling", f.do(http.MethodPut, map[string]any{
+		"name": "m", "type": "MX", "old_data": "10 a.example.org", "data": "20 b.example.org"}), http.StatusConflict)
+}

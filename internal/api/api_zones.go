@@ -457,8 +457,10 @@ func (s *Server) handleUpdateRecord(w http.ResponseWriter, r *http.Request, zone
 		return
 	}
 	// F270: changing the data to that of another record in the RRset would
-	// leave a duplicate RR.
-	if req.Data != req.OldData && s.recordExists(zoneName, req.Name, req.Type, req.Data) {
+	// leave a duplicate RR. The record being replaced is no duplicate: a
+	// record stored before its names were qualified differs from the new
+	// data in text only (F730).
+	if !zone.RDataEqual(req.Type, req.Data, req.OldData) && s.recordExists(zoneName, req.Name, req.Type, req.Data) {
 		s.writeError(w, http.StatusConflict, fmt.Sprintf("record already exists: %s %s %s", req.Name, req.Type, req.Data))
 		return
 	}
