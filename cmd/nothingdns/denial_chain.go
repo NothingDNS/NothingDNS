@@ -455,9 +455,27 @@ func (h *integratedHandler) denialChainFor(z *zone.Zone) *denialChain {
 	key := z.Origin + "|" + fmt.Sprint(apexExtra)
 	// F742: GeoDNS names are nodes of the zone; a reload replaces the
 	// engine and a rule change bumps its version.
-	var geoNodes map[string][]uint16
-	if geo := h.security.GeoEngine; geo != nil {
+	geo := h.security.GeoEngine
+	if geo != nil {
 		key += fmt.Sprintf("|geo%p/%d", geo, geo.Version())
+	}
+	if params != nil {
+		key += "|" + strconv.Itoa(int(params.iterations)) + "/" + hex.EncodeToString(params.salt) + "/" + strconv.FormatBool(params.optOut)
+	}
+	// F744: zones of the same origin in different split-horizon views
+	// share the key, so each keeps its own entry under it (by zone id);
+	// sharing one entry rebuilt the chain on every alternating query.
+	id, gen := z.CacheTag()
+	h.denialChainsMu.Lock()
+	for _, e := range h.denialChains[key] {
+		if e.id == id && e.gen == gen {
+			h.denialChainsMu.Unlock()
+			return e.chain
+		}
+	}
+	h.denialChainsMu.Unlock()
+	var geoNodes map[string][]uint16
+	if geo != nil {
 		for owner, types := range geo.Owners() {
 			for _, t := range types {
 				if qt := stringToType(t); qt != 0 {
@@ -469,29 +487,33 @@ func (h *integratedHandler) denialChainFor(z *zone.Zone) *denialChain {
 			}
 		}
 	}
-	if params != nil {
-		key += "|" + strconv.Itoa(int(params.iterations)) + "/" + hex.EncodeToString(params.salt) + "/" + strconv.FormatBool(params.optOut)
-	}
-	id, gen := z.CacheTag()
-	h.denialChainsMu.Lock()
-	if e, ok := h.denialChains[key]; ok && e.id == id && e.gen == gen {
-		h.denialChainsMu.Unlock()
-		return e.chain
-	}
-	h.denialChainsMu.Unlock()
 	c := buildDenialChain(z, apexExtra, geoNodes, params, &h.nsec3Memo)
 	h.denialChainsMu.Lock()
 	if h.denialChains == nil || len(h.denialChains) > maxCachedDenialChains {
-		h.denialChains = make(map[string]denialChainEntry)
+		h.denialChains = make(map[string][]denialChainEntry)
 	}
-	h.denialChains[key] = denialChainEntry{id: id, gen: gen, chain: c}
+	entries := h.denialChains[key]
+	kept := entries[:0]
+	for _, e := range entries {
+		if e.id != id { // a zone's older generation is replaced
+			kept = append(kept, e)
+		}
+	}
+	if len(kept) >= maxDenialChainsPerKey {
+		kept = kept[1:] // drop the oldest: a zone a reload replaced
+	}
+	h.denialChains[key] = append(kept, denialChainEntry{id: id, gen: gen, chain: c})
 	h.denialChainsMu.Unlock()
 	return c
 }
 
-// maxCachedDenialChains bounds the per-handler chain cache (one entry per
-// zone and denial configuration); stale entries are replaced on use.
+// maxCachedDenialChains bounds the per-handler chain cache (one key per
+// origin and denial configuration); stale entries are replaced on use.
 const maxCachedDenialChains = 1024
+
+// maxDenialChainsPerKey bounds the zones (views, or zones a reload replaced)
+// that keep a chain under one key.
+const maxDenialChainsPerKey = 8
 
 type denialChainEntry struct {
 	id, gen uint64

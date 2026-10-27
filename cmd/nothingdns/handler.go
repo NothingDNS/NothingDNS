@@ -67,8 +67,8 @@ type integratedHandler struct {
 	// zoneSignersChanged publishes a replaced signer map to its other readers
 	// (the API server); the map is never mutated in place (F722).
 	zoneSignersChanged func(map[string]*dnssec.Signer)
-	nsec3Memo          nsec3HashMemo               // F488: NSEC3 owner hashes for online denial
-	denialChains       map[string]denialChainEntry // F706: per-zone denial chain snapshots
+	nsec3Memo          nsec3HashMemo                 // F488: NSEC3 owner hashes for online denial
+	denialChains       map[string][]denialChainEntry // F706/F744: per-zone denial chain snapshots
 	denialChainsMu     sync.Mutex
 	zoneTree           *zone.RadixTree // Radix tree for O(log n) zone matching
 	cluster            *cluster.Cluster
