@@ -203,8 +203,9 @@ DNS label compression (RFC 1035 §4.1.4) using pointer offsets (0xC0 prefix). Bo
 - EDNS Client Subnet option (RFC 7871): parsed into the client info only, never
   acted on (§9.4)
 - DNSSEC OK (DO) bit
-- Padding option (RFC 7830) on DoH, DoT and DoQ responses to a padded query
-  (RFC 8467 block padding with a random offset); never on plain UDP/TCP
+- Padding option (RFC 7830) on DoT, DoQ, and HTTPS DoH/DoWS responses to a
+  padded query (RFC 8467 block padding with a random offset); never on plain
+  UDP/TCP or cleartext HTTP
 
 ### 3.2 Transport Protocols
 
@@ -1522,7 +1523,7 @@ What the code implements. Where an RFC is only partly covered, the line says so.
 
 ### EDNS
 - RFC 6891 — EDNS(0)
-- RFC 7830 — EDNS Padding (DoH, DoT and DoQ responses)
+- RFC 7830 — EDNS Padding (DoT, DoQ, DoH and DoWS responses over TLS)
 - RFC 7873 — DNS Cookies
 - RFC 8914 — Extended DNS Errors
 - RFC 7871 — EDNS Client Subnet: the option is parsed only; not implemented (§9.4)

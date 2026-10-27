@@ -41,7 +41,8 @@ func NewHandler(dnsHandler server.Handler) *Handler {
 	}
 }
 
-// NewHandlerWithPadding creates a new DoH handler with RFC 7830 padding enabled.
+// NewHandlerWithPadding creates a new DoH handler that applies RFC 7830
+// padding also to requests not received over TLS (NewHandler pads over TLS).
 func NewHandlerWithPadding(dnsHandler server.Handler) *Handler {
 	return &Handler{
 		dnsHandler: &server.ServeDNSWithRecovery{Handler: dnsHandler},
@@ -109,7 +110,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create DoH response writer and handle the query
-	rw := newDoHResponseWriter(w, r, query, h.padding)
+	// RFC 7830: answers to padded queries are padded over TLS (§4), never in
+	// cleartext (§6). NewHandlerWithPadding pads regardless (F737).
+	rw := newDoHResponseWriter(w, r, query, h.padding || r.TLS != nil)
 	h.dnsHandler.ServeDNS(rw, query)
 	if !rw.written {
 		http.Error(w, "no DNS response generated", http.StatusInternalServerError)

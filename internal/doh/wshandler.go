@@ -156,6 +156,14 @@ func (rw *wsResponseWriter) Write(msg *protocol.Message) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("dows: failed to pack response: %w", err)
 	}
+	// RFC 7830: a padded query gets a padded answer over TLS (§4), never in
+	// cleartext (§6) (F737).
+	if rw.httpReq.TLS != nil && protocol.PadResponseTo(rw.query, msg, n, MaxDNSMessageSize) {
+		buf = make([]byte, msg.WireLength())
+		if n, err = msg.Pack(buf); err != nil {
+			return 0, fmt.Errorf("dows: failed to pack response: %w", err)
+		}
+	}
 
 	// Set write deadline to prevent blocking indefinitely on slow clients
 	if err := rw.conn.SetWriteDeadline(time.Now().Add(wsReadTimeout)); err != nil {
