@@ -15,7 +15,7 @@ public final class Soa {
     private String mname;
     private String rname;
     private int ttl;
-    private int serial;
+    private long serial;
     private int refresh;
     private int retry;
     private int expire;
@@ -37,7 +37,7 @@ public final class Soa {
         s.mname = Json.str(o, "mname");
         s.rname = Json.str(o, "rname");
         s.ttl = Json.integer(o, "ttl");
-        s.serial = Json.integer(o, "serial");
+        s.serial = Json.longInteger(o, "serial");
         s.refresh = Json.integer(o, "refresh");
         s.retry = Json.integer(o, "retry");
         s.expire = Json.integer(o, "expire");
@@ -69,7 +69,7 @@ public final class Soa {
     /**
      * @return the zone serial
      */
-    public int getSerial() {
+    public long getSerial() {
         return serial;
     }
 

@@ -158,7 +158,7 @@ func TestUpdateSOASendsOnlySetFields(t *testing.T) {
 	rname, minimum := "dns@example.com", 60
 	soa, err = c.Zones.UpdateSOA(ctx, "example.com", SOAUpdate{RName: &rname, Minimum: &minimum})
 	wantNoError(t, err)
-	wantEqual(t, "serial bumped", soa.Serial, 8)
+	wantEqual(t, "serial bumped", soa.Serial, int64(8))
 	wantEqual(t, "rname", soa.RName, "dns.example.com.")
 	wantEqual(t, "minimum", soa.Minimum, 60)
 	rec := m.last()

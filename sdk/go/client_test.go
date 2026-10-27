@@ -128,7 +128,7 @@ func TestZoneListDecodesZones(t *testing.T) {
 		t.Fatalf("zones: got %d entries, want 1", len(zones.Zones))
 	}
 	wantEqual(t, "zone name", zones.Zones[0].Name, "example.com")
-	wantEqual(t, "zone serial", zones.Zones[0].Serial, 7)
+	wantEqual(t, "zone serial", zones.Zones[0].Serial, int64(7))
 }
 
 func TestRecordCRUDMethodsPathsAndBodies(t *testing.T) {

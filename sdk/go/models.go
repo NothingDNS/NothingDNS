@@ -160,7 +160,7 @@ type SOA struct {
 	// TTL is the TTL the SOA record is served with, in seconds.
 	TTL int `json:"ttl"`
 	// Serial is the zone serial number.
-	Serial int `json:"serial"`
+	Serial int64 `json:"serial"`
 	// Refresh is the secondary refresh interval, in seconds.
 	Refresh int `json:"refresh"`
 	// Retry is the secondary retry interval, in seconds.
@@ -176,7 +176,7 @@ type Zone struct {
 	// Name is the zone name.
 	Name string `json:"name"`
 	// Serial is the zone serial number.
-	Serial int `json:"serial"`
+	Serial int64 `json:"serial"`
 	// Records is the number of records in the zone.
 	Records int `json:"records"`
 }
@@ -197,7 +197,7 @@ type ZoneDetail struct {
 	// Name is the zone name.
 	Name string `json:"name"`
 	// Serial is the zone serial number.
-	Serial int `json:"serial"`
+	Serial int64 `json:"serial"`
 	// Records is the number of records in the zone.
 	Records int `json:"records"`
 	// SOA is the zone's start-of-authority record.
@@ -238,7 +238,7 @@ type SlaveZone struct {
 	// Masters is the master server address list.
 	Masters string `json:"masters"`
 	// Serial is the last transferred serial.
-	Serial int `json:"serial"`
+	Serial int64 `json:"serial"`
 	// LastTransfer is when the last transfer happened, RFC 3339.
 	LastTransfer string `json:"last_transfer,omitempty"`
 	// Status is "pending" or "synced".

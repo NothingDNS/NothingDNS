@@ -13,7 +13,7 @@ import com.google.gson.JsonObject;
 public final class Zone {
 
     private String name;
-    private int serial;
+    private long serial;
     private int records;
 
     private Zone() {
@@ -30,7 +30,7 @@ public final class Zone {
         JsonObject o = Json.obj(element);
         Zone z = new Zone();
         z.name = Json.str(o, "name");
-        z.serial = Json.integer(o, "serial");
+        z.serial = Json.longInteger(o, "serial");
         z.records = Json.integer(o, "records");
         return z;
     }
@@ -45,7 +45,7 @@ public final class Zone {
     /**
      * @return the zone's SOA serial
      */
-    public int getSerial() {
+    public long getSerial() {
         return serial;
     }
 

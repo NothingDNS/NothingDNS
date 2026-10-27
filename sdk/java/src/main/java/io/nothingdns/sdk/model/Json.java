@@ -96,6 +96,29 @@ public final class Json {
     }
 
     /**
+     * Read a long field (such as a zone serial, an unsigned 32-bit value),
+     * tolerating a JSON number or numeric string.
+     *
+     * @param object the source object, may be {@code null}
+     * @param key    the field name
+     * @return the long value, or {@code 0} when absent or not numeric
+     */
+    public static long longInteger(JsonObject object, String key) {
+        if (object == null) {
+            return 0;
+        }
+        JsonElement value = object.get(key);
+        if (value == null || !value.isJsonPrimitive()) {
+            return 0;
+        }
+        try {
+            return value.getAsLong();
+        } catch (RuntimeException e) {
+            return 0;
+        }
+    }
+
+    /**
      * Read a double field, tolerating a JSON number or numeric string.
      *
      * @param object the source object, may be {@code null}

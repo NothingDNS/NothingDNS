@@ -14,7 +14,7 @@ import java.util.List;
 public final class ZoneDetail {
 
     private String name;
-    private int serial;
+    private long serial;
     private int records;
     private Soa soa;
     private List<String> nameservers;
@@ -34,7 +34,7 @@ public final class ZoneDetail {
         JsonObject o = Json.obj(element);
         ZoneDetail z = new ZoneDetail();
         z.name = Json.str(o, "name");
-        z.serial = Json.integer(o, "serial");
+        z.serial = Json.longInteger(o, "serial");
         z.records = Json.integer(o, "records");
         z.soa = Soa.from(o.get("soa"), gson);
         z.nameservers = Json.stringList(o, "nameservers");
@@ -51,7 +51,7 @@ public final class ZoneDetail {
     /**
      * @return the zone's SOA serial
      */
-    public int getSerial() {
+    public long getSerial() {
         return serial;
     }
 

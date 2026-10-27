@@ -17,7 +17,7 @@ public final class SlaveZone {
 
     private String zone;
     private String masters;
-    private int serial;
+    private long serial;
     @SerializedName("last_transfer")
     private String lastTransfer;
     private String status;
@@ -38,7 +38,7 @@ public final class SlaveZone {
         SlaveZone s = new SlaveZone();
         s.zone = Json.str(o, "zone");
         s.masters = Json.str(o, "masters");
-        s.serial = Json.integer(o, "serial");
+        s.serial = Json.longInteger(o, "serial");
         s.lastTransfer = Json.str(o, "last_transfer");
         s.status = Json.str(o, "status");
         s.records = Json.integer(o, "records");
@@ -74,7 +74,7 @@ public final class SlaveZone {
     /**
      * @return the last transferred serial
      */
-    public int getSerial() {
+    public long getSerial() {
         return serial;
     }
 
