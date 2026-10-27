@@ -225,7 +225,7 @@ func (s *Synthesizer) ExtractIPv4(ipv6 net.IP) net.IP {
 // It returns true when all of the following hold:
 //   - DNS64 is enabled
 //   - The question asks for AAAA records
-//   - The response contains no AAAA answers (or is NXDOMAIN / NOERROR without AAAA)
+//   - The response contains no AAAA answers and is not NXDOMAIN
 func (s *Synthesizer) ShouldSynthesize(question *protocol.Question, response *protocol.Message) bool {
 	if s == nil {
 		return false
@@ -262,8 +262,11 @@ func (s *Synthesizer) ShouldSynthesize(question *protocol.Question, response *pr
 	// exists but has no AAAA). An NXDOMAIN means the name has NO records of any
 	// type, so there is nothing to synthesize from and turning it into a
 	// NOERROR + synthetic AAAA would contradict the authoritative answer
-	// (RFC 6147 §5.1.7). Return NXDOMAIN as-is.
-	return response.Header.Flags.RCODE == protocol.RcodeSuccess
+	// (RFC 6147 §5.1.7). Return NXDOMAIN as-is. Any other RCODE (SERVFAIL,
+	// REFUSED, … from servers that mishandle AAAA) "is treated as though the
+	// RCODE were 0 and the answer section were empty" (§5.1.2); if the A
+	// query fails too, the original answer is returned (F740).
+	return response.Header.Flags.RCODE != protocol.RcodeNameError
 }
 
 // SynthesizeResponse creates a synthetic AAAA response from an A record response.
