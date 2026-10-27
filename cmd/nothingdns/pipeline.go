@@ -250,6 +250,7 @@ func NewPipeline(h *integratedHandler) *Pipeline {
 	p.AppendStage(validationStage(h))
 	p.AppendStage(metricsStage(h))
 	p.AppendStage(aclStage(h))
+	p.AppendStage(tsigQueryStage(h))
 	p.AppendStage(recursionPolicyStage(h))
 	p.AppendStage(rpzClientStage(h))
 	p.AppendStage(rateLimitStage(h))
