@@ -411,6 +411,16 @@ func (s *Signer) SignZone(records []*protocol.ResourceRecord) ([]*protocol.Resou
 		signedRecords = append(signedRecords, rrsig)
 	}
 
+	// RFC 5155 §7.3: an NSEC3-signed zone publishes its chain parameters in
+	// an NSEC3PARAM RR at the apex (flags 0, §4.1.2), from which an
+	// authoritative server serving the signed zone computes its proofs. It is
+	// signed and listed in the apex NSEC3 bitmap like any apex RRset (F758).
+	if s.config.NSEC3Enabled {
+		if param := s.nsec3ParamRR(otherRRs); param != nil {
+			otherRRs = append(otherRRs, param)
+		}
+	}
+
 	// Group other records by RRSet (name + type)
 	groups := groupRecordsByRRSet(otherRRs)
 
@@ -761,6 +771,38 @@ func (s *Signer) createSignedData(rrSet []*protocol.ResourceRecord, rrsig *proto
 	}
 
 	return data, nil
+}
+
+// nsec3ParamRR returns the apex NSEC3PARAM for the zone's NSEC3 settings, or
+// nil when records already hold one. Its TTL is the SOA's (3600 without one).
+func (s *Signer) nsec3ParamRR(records []*protocol.ResourceRecord) *protocol.ResourceRecord {
+	apex, err := protocol.ParseName(s.zone)
+	if err != nil {
+		return nil
+	}
+	ttl := uint32(3600)
+	for _, rr := range records {
+		if !strings.EqualFold(rr.Name.String(), apex.String()) {
+			continue
+		}
+		switch rr.Type {
+		case protocol.TypeNSEC3PARAM:
+			return nil
+		case protocol.TypeSOA:
+			ttl = rr.TTL
+		}
+	}
+	return &protocol.ResourceRecord{
+		Name:  apex,
+		Type:  protocol.TypeNSEC3PARAM,
+		Class: protocol.ClassIN,
+		TTL:   ttl,
+		Data: &protocol.RDataNSEC3PARAM{
+			HashAlgorithm: s.config.NSEC3Algorithm,
+			Iterations:    s.config.NSEC3Iterations,
+			Salt:          s.config.NSEC3Salt,
+		},
+	}
 }
 
 // generateNSEC creates NSEC records for the zone.
