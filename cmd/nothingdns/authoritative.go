@@ -112,6 +112,13 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 	// so the answer is cached under the zone's CacheTag. Delegation and
 	// GeoDNS run first on every query: GeoDNS answers depend on the client.
 	authKey := h.authoritativeCacheKey(z, qname, qtype, wantsDNSSEC)
+	// A name GeoDNS answers for (or a parent of one) exists whatever the
+	// zone file holds, and the rules can change on a reload that leaves
+	// the zone, and so its cache tag, untouched (F742).
+	geoName := h.geoNameAtOrBelow(qname)
+	if geoName {
+		authKey = ""
+	}
 	if authKey != "" && h.serveAuthoritativeFromCache(authKey, w, r, q) {
 		if cacheHit != nil {
 			*cacheHit = true
@@ -186,7 +193,9 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 	// that's NODATA (handled below), not a wildcard case.
 	// NodeExists, not NameExists: an empty non-terminal is an existing node,
 	// so it is NODATA rather than a wildcard candidate or an NXDOMAIN.
-	if !z.NodeExists(qname) {
+	// A GeoDNS name is an existing node too: answering NXDOMAIN for its
+	// other types would deny the name the rule answers for (RFC 8020).
+	if !z.NodeExists(qname) && !geoName {
 		wcRecords, wildcard, wcFound := z.LookupWildcard(qname, typeToString(qtype))
 		if wcFound {
 			if len(wcRecords) > 0 {
@@ -244,6 +253,12 @@ func (h *integratedHandler) handleAuthoritative(z *zone.Zone, w server.ResponseW
 	}
 	reply(w, r, resp)
 	return true
+}
+
+// geoNameAtOrBelow reports whether a GeoDNS rule answers for qname or a name
+// below it (F742).
+func (h *integratedHandler) geoNameAtOrBelow(qname string) bool {
+	return h.security.GeoEngine != nil && h.security.GeoEngine.HasNameAtOrBelow(qname)
 }
 
 // answerWildcardCNAME synthesizes the CNAME owned by the wildcard that covers

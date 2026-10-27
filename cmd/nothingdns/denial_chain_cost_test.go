@@ -56,7 +56,7 @@ func TestDenialChainNeighboursMatchScan(t *testing.T) {
 			z.Records[name] = []zone.Record{{Name: name, Type: "A", TTL: 60, Class: "IN", RData: "192.0.2.1"}}
 		}
 		for _, params := range []*nsec3Params{nil, {iterations: 2, salt: []byte{1, 2}}} {
-			c := buildDenialChain(z, nil, params, &nsec3HashMemo{})
+			c := buildDenialChain(z, nil, nil, params, &nsec3HashMemo{})
 			for i := 0; i < 60; i++ {
 				q := labels[r.Intn(len(labels))] + fmt.Sprintf("%d.", r.Intn(5)) + labels[r.Intn(len(labels))] + ".example.com."
 				if params == nil {

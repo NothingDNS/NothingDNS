@@ -90,7 +90,9 @@ func (c *denialChain) order() {
 
 // buildDenialChain snapshots z's authoritative nodes. params selects NSEC3
 // (nil = NSEC).
-func buildDenialChain(z *zone.Zone, apexExtra []uint16, params *nsec3Params, memo *nsec3HashMemo) *denialChain {
+// extraNodes adds owners (with their types) that exist outside the zone's
+// records, such as GeoDNS names (F742).
+func buildDenialChain(z *zone.Zone, apexExtra []uint16, extraNodes map[string][]uint16, params *nsec3Params, memo *nsec3HashMemo) *denialChain {
 	origin := canonicalize(z.Origin)
 	c := &denialChain{
 		origin:    origin,
@@ -116,6 +118,11 @@ func buildDenialChain(z *zone.Zone, apexExtra []uint16, params *nsec3Params, mem
 		}
 	}
 	z.RUnlock()
+	for owner, types := range extraNodes {
+		if isSubdomain(owner, origin) {
+			owners[owner] = append(owners[owner], types...)
+		}
+	}
 
 	for owner, types := range owners {
 		hasNS, hasDS := false, false
@@ -446,6 +453,22 @@ func (h *integratedHandler) denialChainFor(z *zone.Zone) *denialChain {
 	// read before the build: a zone edited meanwhile stores the older tag and
 	// is rebuilt by the next query.
 	key := z.Origin + "|" + fmt.Sprint(apexExtra)
+	// F742: GeoDNS names are nodes of the zone; a reload replaces the
+	// engine and a rule change bumps its version.
+	var geoNodes map[string][]uint16
+	if geo := h.security.GeoEngine; geo != nil {
+		key += fmt.Sprintf("|geo%p/%d", geo, geo.Version())
+		for owner, types := range geo.Owners() {
+			for _, t := range types {
+				if qt := stringToType(t); qt != 0 {
+					if geoNodes == nil {
+						geoNodes = make(map[string][]uint16)
+					}
+					geoNodes[canonicalize(owner)] = append(geoNodes[canonicalize(owner)], qt)
+				}
+			}
+		}
+	}
 	if params != nil {
 		key += "|" + strconv.Itoa(int(params.iterations)) + "/" + hex.EncodeToString(params.salt) + "/" + strconv.FormatBool(params.optOut)
 	}
@@ -456,7 +479,7 @@ func (h *integratedHandler) denialChainFor(z *zone.Zone) *denialChain {
 		return e.chain
 	}
 	h.denialChainsMu.Unlock()
-	c := buildDenialChain(z, apexExtra, params, &h.nsec3Memo)
+	c := buildDenialChain(z, apexExtra, geoNodes, params, &h.nsec3Memo)
 	h.denialChainsMu.Lock()
 	if h.denialChains == nil || len(h.denialChains) > maxCachedDenialChains {
 		h.denialChains = make(map[string]denialChainEntry)

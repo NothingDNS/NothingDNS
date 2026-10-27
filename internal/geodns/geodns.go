@@ -49,6 +49,8 @@ type Engine struct {
 
 	// Geo rules keyed by domain:type
 	rules map[string]*GeoRecord
+	// version counts rule changes (see Version).
+	version uint64
 
 	// MMDB data + parsed metadata cache.
 	mmdbData       []byte
@@ -404,6 +406,7 @@ func (e *Engine) SetRule(domain, rtype string, rec *GeoRecord) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.rules[ruleKey(domain, rtype)] = rec
+	e.version++
 }
 
 // RemoveRule removes a geo rule.
@@ -411,6 +414,55 @@ func (e *Engine) RemoveRule(domain, rtype string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	delete(e.rules, ruleKey(domain, rtype))
+	e.version++
+}
+
+// Version changes whenever a rule is set or removed, so data derived from
+// the rules (a zone's denial chain) can tell when to rebuild.
+func (e *Engine) Version() uint64 {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.version
+}
+
+// Owners returns every name a rule answers for (lower case, without the
+// trailing dot) with the record types of its rules. A disabled engine
+// answers nothing and returns none.
+func (e *Engine) Owners() map[string][]string {
+	if !e.enabled {
+		return nil
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	out := make(map[string][]string)
+	for key := range e.rules {
+		if i := strings.LastIndexByte(key, ':'); i >= 0 {
+			out[key[:i]] = append(out[key[:i]], key[i+1:])
+		}
+	}
+	return out
+}
+
+// HasNameAtOrBelow reports whether a rule answers for name or for a name
+// below it. Either way name exists in the DNS, as a node with the rule's
+// data or as an empty non-terminal above one.
+func (e *Engine) HasNameAtOrBelow(name string) bool {
+	if !e.enabled {
+		return false
+	}
+	name = strings.TrimSuffix(strings.ToLower(name), ".")
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	for key := range e.rules {
+		owner := key
+		if i := strings.LastIndexByte(key, ':'); i >= 0 {
+			owner = key[:i]
+		}
+		if owner == name || name == "" || strings.HasSuffix(owner, "."+name) {
+			return true
+		}
+	}
+	return false
 }
 
 // Stats returns GeoDNS engine statistics.
