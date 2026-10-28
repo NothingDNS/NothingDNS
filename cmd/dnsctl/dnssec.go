@@ -130,6 +130,24 @@ func cmdDNSSECKeys(_ []string) error {
 	return nil
 }
 
+// writeKeyFiles stores key as K<zone>+<alg>+<tag>.private/.key in dir
+// (created if missing) and returns the two paths.
+func writeKeyFiles(dir, zone string, key *dnssec.SigningKey) (privatePath, publicPath string, err error) {
+	if err := os.MkdirAll(dir, 0750); err != nil {
+		return "", "", fmt.Errorf("failed to create output directory: %w", err)
+	}
+	base := fmt.Sprintf("K%s+%03d+%05d", zone, key.PrivateKey.Algorithm, key.KeyTag)
+	privatePath = filepath.Join(dir, base+".private")
+	if err := writePrivateKey(privatePath, key); err != nil {
+		return "", "", fmt.Errorf("failed to write private key: %w", err)
+	}
+	publicPath = filepath.Join(dir, base+".key")
+	if err := writePublicKey(publicPath, zone, key); err != nil {
+		return "", "", fmt.Errorf("failed to write public key: %w", err)
+	}
+	return privatePath, publicPath, nil
+}
+
 func cmdDNSSECGenerateKey(args []string) error {
 	fs := newDNSSECFlagSet("generate-key")
 	algorithm := fs.Int("algorithm", 13, "DNSSEC algorithm (8=RSASHA256, 10=RSASHA512, 13=ECDSAP256SHA256, 14=ECDSAP384SHA384, 15=ED25519)")
@@ -177,22 +195,11 @@ func cmdDNSSECGenerateKey(args []string) error {
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
 
-	// Generate key file names
+	privateKeyPath, publicKeyPath, err := writeKeyFiles(*outputDir, *zone, signingKey)
+	if err != nil {
+		return err
+	}
 	keyTag := signingKey.KeyTag
-	algStr := fmt.Sprintf("%03d", alg)
-	baseName := fmt.Sprintf("K%s+%s+%05d", *zone, algStr, keyTag)
-
-	// Write private key file
-	privateKeyPath := filepath.Join(*outputDir, baseName+".private")
-	if err := writePrivateKey(privateKeyPath, signingKey); err != nil {
-		return fmt.Errorf("failed to write private key: %w", err)
-	}
-
-	// Write public key file (DNSKEY format)
-	publicKeyPath := filepath.Join(*outputDir, baseName+".key")
-	if err := writePublicKey(publicKeyPath, *zone, signingKey); err != nil {
-		return fmt.Errorf("failed to write public key: %w", err)
-	}
 
 	fmt.Printf("Generated %s key for %s:\n", *keyType, *zone)
 	fmt.Printf("  Algorithm: %d (%s)\n", alg, algorithmName(alg))
@@ -369,17 +376,23 @@ func cmdDNSSECSignZone(args []string) error {
 		fmt.Printf("  No key files found; generating KSK + ZSK with algorithm %d (%s)\n",
 			*algorithm, algorithmName(uint8(*algorithm)))
 
-		ksk, err := signer.GenerateKeyPair(uint8(*algorithm), true)
-		if err != nil {
-			return fmt.Errorf("generating KSK: %w", err)
+		// The keys are written to the key directory: the signed zone is only
+		// useful with its private keys at hand, to re-sign it before the
+		// signatures expire without changing the DS the parent holds (F764).
+		for _, isKSK := range []bool{true, false} {
+			key, err := generateKeyPair(uint8(*algorithm), isKSK, *keySize)
+			if err != nil {
+				return fmt.Errorf("generating key: %w", err)
+			}
+			if err := signer.AddKey(key); err != nil {
+				return fmt.Errorf("adding generated key: %w", err)
+			}
+			privPath, _, err := writeKeyFiles(*keyDir, *zone, key)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("  Generated %s: tag=%d (saved %s)\n", keyType(key), key.KeyTag, privPath)
 		}
-		fmt.Printf("  Generated KSK: tag=%d\n", ksk.KeyTag)
-
-		zsk, err := signer.GenerateKeyPair(uint8(*algorithm), false)
-		if err != nil {
-			return fmt.Errorf("generating ZSK: %w", err)
-		}
-		fmt.Printf("  Generated ZSK: tag=%d\n", zsk.KeyTag)
 	}
 
 	keys := signer.GetKeys()

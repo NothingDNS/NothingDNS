@@ -233,10 +233,13 @@ Examples:
 		"dnssec": `Usage: dnsctl dnssec <subcommand> [options]
 
 Subcommands:
+  status              Show DNSSEC status of the server
+  keys                List the server's DNSSEC keys
   generate-key        Generate a new DNSSEC key pair
   ds-from-dnskey      Create DS record from DNSKEY
-  sign-zone           Sign a zone file
+  sign-zone           Sign a zone file (keeps generated keys in --keydir)
   verify-anchor       Verify trust anchor file
+  validate-zone       Validate the signatures of a signed zone file
 
 Examples:
   dnsctl dnssec generate-key --algorithm 13 --type KSK --zone example.com
