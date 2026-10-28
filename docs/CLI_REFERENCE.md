@@ -534,8 +534,9 @@ cannot be read, a class other than IN, or RDATA that does not parse stops the
 run with `line N: ...` and no output is written.
 
 The keys found in `--keydir` are used. When there are none, a KSK and a ZSK are
-generated for this run only: they are not saved, so generate and keep the keys
-first (`generate-key`) if the zone will be re-signed or a DS published.
+generated and written to `--keydir`, so the next run signs with the same keys
+and a published DS keeps matching. Back those files up; the private keys are
+needed to re-sign the zone.
 
 ```bash
 dnsctl dnssec sign-zone --zone example.com --input example.com.zone
