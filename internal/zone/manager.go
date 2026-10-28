@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -920,10 +921,22 @@ func (m *Manager) GetRecords(zoneName, name string) ([]Record, error) {
 		return cloneRecords(z.Records[name]), nil
 	}
 
-	// Return all records
+	// Return all records, apex first, then by owner name. Map order would
+	// make a listing the API cuts at its cap show different records each time
+	// (F763); records of one owner keep their stored order.
+	owners := make([]string, 0, len(z.Records))
+	for owner := range z.Records {
+		owners = append(owners, owner)
+	}
+	sort.Slice(owners, func(i, j int) bool {
+		if (owners[i] == z.Origin) != (owners[j] == z.Origin) {
+			return owners[i] == z.Origin
+		}
+		return owners[i] < owners[j]
+	})
 	var all []Record
-	for _, records := range z.Records {
-		all = append(all, records...)
+	for _, owner := range owners {
+		all = append(all, z.Records[owner]...)
 	}
 	return all, nil
 }
