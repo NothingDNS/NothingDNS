@@ -12,6 +12,9 @@ import (
 )
 
 func (s *Server) handleODoHConfig(w http.ResponseWriter, r *http.Request) {
+	if s.requireMethod(w, r, http.MethodGet, http.MethodHead) {
+		return
+	}
 	odohTarget := s.currentODoHTarget()
 	if odohTarget == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "ODoH target not available")

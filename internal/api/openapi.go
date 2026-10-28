@@ -7161,6 +7161,9 @@ const OpenAPISpec = `{
 // applied by corsMiddleware — a hardcoded `Access-Control-Allow-Origin: *`
 // here would bypass the configurable allowlist (VULN-034).
 func (s *Server) handleOpenAPISpec(w http.ResponseWriter, r *http.Request) {
+	if s.requireMethod(w, r, http.MethodGet, http.MethodHead) {
+		return
+	}
 	writeRawResponse(w, "application/json", []byte(OpenAPISpec))
 }
 
@@ -7170,11 +7173,17 @@ func (s *Server) handleOpenAPISpec(w http.ResponseWriter, r *http.Request) {
 // (script-src 'self') blocks third-party scripts, and loading them into the
 // authenticated dashboard origin would be a supply-chain risk (VULN-012).
 func (s *Server) handleSwaggerUI(w http.ResponseWriter, r *http.Request) {
+	if s.requireMethod(w, r, http.MethodGet, http.MethodHead) {
+		return
+	}
 	writeRawResponse(w, "text/html; charset=utf-8", []byte(apiExplorerHTML))
 }
 
 // handleAPIExplorerScript serves the explorer's script.
 func (s *Server) handleAPIExplorerScript(w http.ResponseWriter, r *http.Request) {
+	if s.requireMethod(w, r, http.MethodGet, http.MethodHead) {
+		return
+	}
 	writeRawResponse(w, "text/javascript; charset=utf-8", []byte(apiExplorerJS))
 }
 
