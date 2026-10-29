@@ -368,7 +368,7 @@ func (h *DynamicDNSHandler) handleUpdate(req *protocol.Message, clientIP net.IP,
 	// TOCTOU race. ApplyUpdate now also re-checks prerequisites under
 	// the same z.Lock() that gates the mutating operations, so two
 	// concurrent UPDATEs with mutually-exclusive prereqs can't both
-	// pass. Prereq failures return ErrPrereqFailed → NXRRSET RCODE;
+	// pass. Prereq failures return ErrPrereqFailed → the prerequisite's RCODE;
 	// any other error → ServFail.
 	h.lifeMu.RLock()
 	defer h.lifeMu.RUnlock()
@@ -469,6 +469,13 @@ func updateRRsWellFormed(prereqs, updates []*protocol.ResourceRecord) bool {
 // updateErrorRcode maps an apply/commit error to the UPDATE RCODE.
 func updateErrorRcode(err error) uint8 {
 	switch {
+	// RFC 2136 §2.4: each failed prerequisite has its own RCODE (F766).
+	case errors.Is(err, errPrereqNameMissing):
+		return protocol.RcodeNameError
+	case errors.Is(err, errPrereqNameExists):
+		return protocol.RcodeYXDomain
+	case errors.Is(err, errPrereqRRsetExists):
+		return protocol.RcodeYXRRSet
 	case errors.Is(err, ErrPrereqFailed):
 		return protocol.RcodeNXRRSet
 	case errors.Is(err, ErrNotZone):
@@ -730,6 +737,15 @@ func IsUpdateResponse(msg *protocol.Message) bool {
 // other errors.
 var ErrPrereqFailed = errors.New("ddns: prerequisite failed")
 
+// The failures an ErrPrereqFailed refines: a name that must be in use is not
+// (NXDOMAIN), a name that must be unused is in use (YXDOMAIN), an RRset that
+// must not exist does (YXRRSET). Any other failed prerequisite is NXRRSET.
+var (
+	errPrereqNameMissing = errors.New("name not in use")
+	errPrereqNameExists  = errors.New("name in use")
+	errPrereqRRsetExists = errors.New("RRset exists")
+)
+
 // ErrNotZone is returned when an UPDATE prerequisite or operation owner is
 // outside the target zone. RFC 2136 requires the handler to answer NOTZONE.
 var ErrNotZone = errors.New("ddns: name outside zone")
@@ -908,15 +924,15 @@ func checkPrerequisiteOnZone(z *zone.Zone, precond UpdatePrerequisite) error {
 		}
 	case PrecondNotExists:
 		if zoneTypeExists(z, precond.Name, precond.Type) {
-			return fmt.Errorf("prerequisite failed: RRset exists")
+			return fmt.Errorf("prerequisite failed: %w", errPrereqRRsetExists)
 		}
 	case PrecondNameInUse:
 		if !zoneNameExists(z, precond.Name) {
-			return fmt.Errorf("prerequisite failed: name not in use")
+			return fmt.Errorf("prerequisite failed: %w", errPrereqNameMissing)
 		}
 	case PrecondNameNotInUse:
 		if zoneNameExists(z, precond.Name) {
-			return fmt.Errorf("prerequisite failed: name in use")
+			return fmt.Errorf("prerequisite failed: %w", errPrereqNameExists)
 		}
 	case PrecondExistsValue:
 		if precond.RData != "" {

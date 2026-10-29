@@ -923,8 +923,8 @@ func TestHandleUpdate_PrerequisiteFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if resp.Header.Flags.RCODE != protocol.RcodeNXRRSet {
-		t.Errorf("expected RcodeNXRRSet for prerequisite failure, got %d", resp.Header.Flags.RCODE)
+	if resp.Header.Flags.RCODE != protocol.RcodeNameError {
+		t.Errorf("expected NXDOMAIN for a failed name-in-use prerequisite (RFC 2136 §2.4.4), got %d", resp.Header.Flags.RCODE)
 	}
 }
 
