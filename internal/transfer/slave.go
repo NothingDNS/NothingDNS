@@ -119,6 +119,8 @@ type SlaveZone struct {
 	timerGen  uint64
 	expireAt  time.Time
 	now       func() time.Time
+	// expiryLogged: the expiry of the current EXPIRE window was reported.
+	expiryLogged bool
 	// persisted/persistedSerial: the zone file written under persistDir holds
 	// persistedSerial (F725).
 	persisted       bool
@@ -467,6 +469,7 @@ func (sm *SlaveManager) runZoneTransfer(zoneName string, slaveZone *SlaveZone) {
 			slaveZone.releaseTransfer()
 			return
 		}
+		sm.logTransferOutcome(zoneName, slaveZone, err)
 		if err == nil {
 			sm.persistSlaveZone(zoneName, slaveZone)
 		}
@@ -483,6 +486,33 @@ func (sm *SlaveManager) runZoneTransfer(zoneName string, slaveZone *SlaveZone) {
 }
 
 var errSlaveZoneRemoved = errors.New("slave zone removed")
+
+// logTransferOutcome reports how a transfer run ended. Nothing was logged
+// before, so a slave whose master was unreachable silently stopped refreshing
+// and, at EXPIRE, silently stopped answering (F767). The expiry is reported
+// once per EXPIRE window, by the first failed attempt after it elapsed.
+func (sm *SlaveManager) logTransferOutcome(zoneName string, sz *SlaveZone, err error) {
+	if err == nil {
+		sz.mu.Lock()
+		sz.expiryLogged = false
+		sz.mu.Unlock()
+		util.Infof("slave: zone %s transferred (serial %d)", zoneName, sz.GetLastSerial())
+		return
+	}
+	if errors.Is(err, errSlaveZoneRemoved) {
+		return
+	}
+	util.Warnf("slave: transfer of %s failed: %v", zoneName, err)
+	if sz.Expired() {
+		sz.mu.Lock()
+		first := !sz.expiryLogged
+		sz.expiryLogged = true
+		sz.mu.Unlock()
+		if first {
+			util.Errorf("slave: zone %s has expired (SOA EXPIRE, no successful refresh) and is no longer served until a transfer succeeds", zoneName)
+		}
+	}
+}
 
 // transferOnce fetches and applies the zone, trying each configured master in
 // order until one succeeds (F203). It returns the last master's error.
