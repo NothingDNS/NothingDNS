@@ -983,7 +983,7 @@ func TestPrintDigResponseHandlesMalformedSections(t *testing.T) {
 	}
 
 	output := captureOutput(func() {
-		printDigResponse("example.com.", "A", "127.0.0.1", "127.0.0.1:53", false, resp)
+		printDigResponse("example.com.", "A", "127.0.0.1", "127.0.0.1:53", false, resp, 0)
 	})
 	if !strings.Contains(output, "<nil>") {
 		t.Fatalf("output missing nil placeholder: %q", output)

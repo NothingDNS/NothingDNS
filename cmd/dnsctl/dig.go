@@ -208,6 +208,7 @@ func cmdDig(args []string) error {
 	}
 
 	// Send via UDP
+	started := time.Now()
 	addr := digServerAddr(server)
 	conn, err := net.Dial("udp", addr)
 	if err != nil {
@@ -257,11 +258,11 @@ func cmdDig(args []string) error {
 	}
 
 	defer resp.Release()
-	printDigResponse(qname, qtypeStr, server, addr, wantDNSSEC, resp)
+	printDigResponse(qname, qtypeStr, server, addr, wantDNSSEC, resp, time.Since(started))
 	return nil
 }
 
-func printDigResponse(qname, qtypeStr, server, addr string, wantDNSSEC bool, resp *protocol.Message) {
+func printDigResponse(qname, qtypeStr, server, addr string, wantDNSSEC bool, resp *protocol.Message, elapsed time.Duration) {
 	fmt.Printf("; Query: %s %s @%s\n", qname, qtypeStr, server)
 	if wantDNSSEC {
 		fmt.Println("; +dnssec")
@@ -328,7 +329,7 @@ func printDigResponse(qname, qtypeStr, server, addr string, wantDNSSEC bool, res
 		fmt.Println()
 	}
 
-	fmt.Printf(";; Query time: ~0ms\n")
+	fmt.Printf(";; Query time: %d msec\n", elapsed.Milliseconds())
 	// `addr` is the host:port we actually dialed (server, plus :53 if
 	// the user didn't include one). Splitting it back out keeps the
 	// dig-style "SERVER: host#port" output honest when a non-53 port
