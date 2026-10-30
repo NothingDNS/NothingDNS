@@ -364,7 +364,7 @@ RFC 2181 §5/§10.1).
 | `AAAA` | `2001:db8::1` |
 | `CNAME` | `www.example.com.` |
 | `MX` | `10 mail.example.com.` |
-| `TXT` | `v=spf1 include:_spf.example.com -all` (no surrounding quotes; the zone-file writer adds and escapes them) |
+| `TXT` | `v=spf1 include:_spf.example.com -all` (no surrounding quotes; the zone-file writer adds and escapes them). Text that contains a double quote is read as BIND presentation form — `"a b" "c d"` is two character-strings, and `k="v"` is the two strings `k=` and `v`; send a value with literal quotes as `"k=\"v\""` |
 | `NS` | `ns1.example.com.` |
 | `PTR` | `host.example.com.` |
 | `SRV` | `10 5 5269 xmpp.example.com.` |

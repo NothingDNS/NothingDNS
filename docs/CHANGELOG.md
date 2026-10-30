@@ -85,6 +85,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Records API docs**: `docs/API_ZONES.md` now says how a TXT `data` containing a double quote is read (BIND presentation form: `k="v"` becomes the strings `k=` and `v`) and how to send literal quotes.
+
 - **UDP listeners default to auto**: `server.udp_listeners` unset (or 0) now
   opens 4 `SO_REUSEPORT` sockets per UDP address on Linux hosts with at least 4
   CPUs (1 elsewhere); `udp_listeners: 1` keeps a single socket. About +50% local
