@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.1] — 2026-11-01
+
 ### Fixed
 
 - **A cluster node upgraded to 1.4.0 could not start** (`restore raft snapshot at index N: parse zone …: invalid A RDATA "…"`): 1.4.0 refuses zone files with records the server cannot serve, and applied the same check to the zone data it replicates itself. Earlier releases kept such records (for example an `A` record whose data is a hostname) in zones they loaded and exported them in Raft snapshots, so a node restoring such a snapshot at start exited. Zone data from a Raft snapshot, a gossip zone push or a persisted slave zone file is now read leniently again: a record that cannot be served is skipped with a warning naming the zone and the record (it was never answered), and a name holding a CNAME next to other data is kept with a warning. Zone files listed in the configuration are still checked strictly; run `nothingdns -validate-config` before upgrading, because a zone file with such a record stops the server at start.

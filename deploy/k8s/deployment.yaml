@@ -5,7 +5,7 @@ metadata:
   namespace: default
   labels:
     app: nothingdns
-    version: "1.4.0"
+    version: "1.4.1"
 spec:
   replicas: 3
   selector:
@@ -15,7 +15,7 @@ spec:
     metadata:
       labels:
         app: nothingdns
-        version: "1.4.0"
+        version: "1.4.1"
     spec:
       # Never leak a cluster token into the container filesystem. Using the
       # namespace's default SA — create a dedicated SA if RBAC is layered on.
@@ -29,7 +29,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: nothingdns
-        image: ghcr.io/nothingdns/nothingdns:1.4.0
+        image: ghcr.io/nothingdns/nothingdns:1.4.1
         imagePullPolicy: IfNotPresent
         ports:
         - name: dns-udp
