@@ -110,10 +110,15 @@ func (sm *SlaveManager) loadPersistedZone(zoneName string, sz *SlaveZone) {
 		return
 	}
 	defer f.Close()
-	z, err := zone.ParseFile(path, f)
+	// The file holds what this server received by transfer, so a record the
+	// zone-file parser would refuse is skipped rather than discarding the zone.
+	z, err := zone.ParseStored(path, f)
 	if err != nil || z == nil || z.SOA == nil || !strings.EqualFold(z.Origin, zoneName) {
 		util.Warnf("slave: ignoring unusable persisted zone file %s", path)
 		return
+	}
+	for _, w := range z.Warnings {
+		util.Warnf("slave: persisted zone %s: %s", zoneName, w)
 	}
 	timers, ok := zoneSOATimers(z)
 	if !ok {

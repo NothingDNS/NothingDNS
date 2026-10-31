@@ -1199,6 +1199,17 @@ func (c *Cluster) snapshotZones() ([]byte, error) {
 	return json.Marshal(out)
 }
 
+// logStoredZoneWarnings logs what ParseStored skipped in replicated zone
+// data and a ValidateStored warning, so the operator can fix the zone.
+func (c *Cluster) logStoredZoneWarnings(source string, z *zone.Zone, warning string) {
+	for _, w := range z.Warnings {
+		c.logger.Warnf("zone %s from %s: %s", z.Origin, source, w)
+	}
+	if warning != "" {
+		c.logger.Warnf("zone %s from %s: %s", z.Origin, source, warning)
+	}
+}
+
 // restoreZones installs a snapshot produced by snapshotZones into the local
 // zone store. A Raft snapshot carries the COMPLETE state machine, so this
 // REPLACES the local zone set rather than merging into it: a zone absent from
@@ -1227,19 +1238,24 @@ func (c *Cluster) restoreZones(data []byte) error {
 	// of half-replaced.
 	parsed := make(map[string]*zone.Zone, len(in))
 	for name, txt := range in {
-		z, err := zone.ParseFile(name, strings.NewReader(txt))
+		// ParseStored, not ParseFile: the payload is replicated state, and a
+		// record an earlier release accepted but cannot be served must not
+		// keep this node from installing the snapshot (and so from starting).
+		// It is skipped with a warning; it was never answered anyway.
+		z, err := zone.ParseStored(name, strings.NewReader(txt))
 		if err != nil {
 			return fmt.Errorf("parse zone %s: %w", name, err)
 		}
-		// Round 026: a snapshot payload must meet the same bar as a zone
-		// file at load. An originless payload parses with Origin "." and
-		// would install as the root zone — this node would then answer
+		// Round 026: an originless payload parses with Origin "." and would
+		// install as the root zone — this node would then answer
 		// authoritatively for every name. Aborting here, like a parse
 		// error, keeps the parse-before-mutate contract: the existing
 		// state stays untouched.
-		if err := z.Validate(); err != nil {
+		warning, err := z.ValidateStored()
+		if err != nil {
 			return fmt.Errorf("parse zone %s: %w", name, err)
 		}
+		c.logStoredZoneWarnings("raft snapshot", z, warning)
 		parsed[normalizeClusterZoneName(name)] = z
 	}
 
@@ -1384,7 +1400,7 @@ func (c *Cluster) handleZoneUpdate(payload ZoneUpdatePayload) {
 	case "full", "reload":
 		// Full zone transfer — parse and reload zone data
 		if payload.RawZone != nil {
-			z, err := zone.ParseFile(payload.ZoneName, bytes.NewReader(payload.RawZone))
+			z, err := zone.ParseStored(payload.ZoneName, bytes.NewReader(payload.RawZone))
 			if err != nil {
 				c.logger.Warnf("Failed to parse zone %s from gossip: %v", payload.ZoneName, err)
 				return
@@ -1392,10 +1408,12 @@ func (c *Cluster) handleZoneUpdate(payload ZoneUpdatePayload) {
 			// Round 026: same integrity bar as the snapshot install — an
 			// originless gossip payload would install as the root zone and
 			// claim every name. Drop the payload like a parse failure.
-			if err := z.Validate(); err != nil {
+			warning, err := z.ValidateStored()
+			if err != nil {
 				c.logger.Warnf("Ignoring invalid zone %s from gossip: %v", payload.ZoneName, err)
 				return
 			}
+			c.logStoredZoneWarnings("gossip", z, warning)
 			// LoadZone does not fire the mutation hook; notify so query
 			// routing and KV persistence adopt the new zone object (F450,
 			// same shape as F342).

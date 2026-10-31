@@ -321,6 +321,26 @@ func ParseFile(filename string, r io.Reader) (*Zone, error) {
 	return p.parse()
 }
 
+// ParseStored parses zone text this server stored or replicated itself (a
+// Raft snapshot, a gossip zone push, a persisted slave zone) rather than a
+// file an operator wrote. Records that ParseFile refuses because they cannot
+// be served (bad RDATA such as `A host.example.`, a bad owner name, a second
+// SOA) are skipped and noted in Warnings instead of failing the whole zone:
+// earlier releases accepted and stored them, and refusing them here kept a
+// node from restoring its own state at start.
+func ParseStored(filename string, r io.Reader) (*Zone, error) {
+	p := &parser{
+		filename: filename,
+		scanner:  bufio.NewScanner(r),
+		zone: &Zone{
+			Origin:  ".",
+			Records: make(map[string][]Record),
+		},
+		lenient: true,
+	}
+	return p.parse()
+}
+
 // parser handles the parsing of zone files.
 type parser struct {
 	filename       string
@@ -338,6 +358,13 @@ type parser struct {
 	lastTTL        uint32 // TTL of the last record that stated one (no-$TTL files)
 	haveLastTTL    bool
 	pendingTTL     []pendingTTL // records that got no TTL from anywhere yet
+	lenient        bool         // skip unservable records with a warning (ParseStored)
+}
+
+// skipRecord notes a record ParseStored drops instead of failing the zone.
+func (p *parser) skipRecord(record Record, reason string) {
+	p.zone.Warnings = append(p.zone.Warnings, fmt.Sprintf("%s:%d: skipping %s %s record: %s",
+		p.filename, record.Line, record.Name, record.Type, reason))
 }
 
 // pendingTTL names a record stored with no TTL available (no $TTL, no earlier
@@ -1117,6 +1144,10 @@ func (p *parser) parseRecordOwned(line string, ownerInherited bool) error {
 	// Reject it here, at its line, as BIND does (`A 999.1.1.1`, an MX without a
 	// preference, an empty A) instead of loading a zone that quietly lacks it.
 	if protocol.ParseRDataText(record.Type, record.RData) == nil {
+		if p.lenient {
+			p.skipRecord(record, fmt.Sprintf("invalid RDATA %q", record.RData))
+			return nil
+		}
 		return fmt.Errorf("invalid %s RDATA %q", record.Type, record.RData)
 	}
 
@@ -1131,7 +1162,15 @@ func (p *parser) parseRecordOwned(line string, ownerInherited bool) error {
 	// unreachable.
 	record.Name = absName
 	if _, err := protocol.ParseName(absName); err != nil {
+		if p.lenient {
+			p.skipRecord(record, fmt.Sprintf("invalid owner name: %v", err))
+			return nil
+		}
 		return fmt.Errorf("invalid owner name %q: %w", record.Name, err)
+	}
+	if p.lenient && record.Type == "SOA" && p.zone.SOA != nil {
+		p.skipRecord(record, "multiple SOA records")
+		return nil
 	}
 
 	// Store the record
@@ -1963,6 +2002,29 @@ func (z *Zone) FindGlue(nsName string) []Record {
 
 // Validate checks the zone for required records and consistency.
 func (z *Zone) Validate() error {
+	if err := z.ValidateStructure(); err != nil {
+		return err
+	}
+	return z.checkCNAMEExclusive()
+}
+
+// ValidateStored checks a zone parsed with ParseStored. A missing origin,
+// SOA or apex NS is still an error, but a name holding a CNAME next to other
+// data, which earlier releases accepted and stored, is returned as a warning
+// so the node keeps the zone instead of failing to restore its state.
+func (z *Zone) ValidateStored() (warning string, err error) {
+	if err := z.ValidateStructure(); err != nil {
+		return "", err
+	}
+	if err := z.checkCNAMEExclusive(); err != nil {
+		return err.Error(), nil
+	}
+	return "", nil
+}
+
+// ValidateStructure checks that the zone has an origin, an SOA and an apex
+// NS set.
+func (z *Zone) ValidateStructure() error {
 	if z.Origin == "" || z.Origin == "." {
 		return fmt.Errorf("zone %q: has no origin", z.Origin)
 	}
@@ -1996,7 +2058,11 @@ func (z *Zone) Validate() error {
 	if !hasApexNS {
 		return fmt.Errorf("zone %q: missing NS records", z.Origin)
 	}
+	return nil
+}
 
+// checkCNAMEExclusive refuses a name that holds a CNAME and other data.
+func (z *Zone) checkCNAMEExclusive() error {
 	// A name with a CNAME holds no other data (RFC 1034 §3.6.2, RFC 2181
 	// §10.1) apart from the DNSSEC records that sign it; BIND refuses to load
 	// such a zone ("CNAME and other data"). The records API enforces the same.
