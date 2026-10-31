@@ -1732,6 +1732,7 @@ func TestCmdDNSSECSignZone_WithExistingKeys(t *testing.T) {
 
 func TestCmdDNSSECSignZone_DefaultOutput(t *testing.T) {
 	tmpDir := t.TempDir()
+	t.Chdir(tmpDir) // sign-zone saves generated keys in the working directory
 	zoneContent := `@ 300 IN SOA ns1.example.com. admin.example.com. 2024010101 3600 900 604800 86400
 @ 300 IN A 192.0.2.1
 `
@@ -1756,6 +1757,7 @@ func TestCmdDNSSECSignZone_DefaultOutput(t *testing.T) {
 
 func TestCmdDNSSECSignZone_NSEC3(t *testing.T) {
 	tmpDir := t.TempDir()
+	t.Chdir(tmpDir) // sign-zone saves generated keys in the working directory
 	zoneContent := `@ 300 IN SOA ns1.example.com. admin.example.com. 2024010101 3600 900 604800 86400
 @ 300 IN A 192.0.2.1
 `
@@ -1791,6 +1793,7 @@ func TestCmdDNSSECSignZoneRejectsInvalidNSEC3Iterations(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tmpDir := t.TempDir()
+			t.Chdir(tmpDir) // sign-zone saves generated keys in the working directory
 			zoneFile := filepath.Join(tmpDir, "example.com.zone")
 			if err := os.WriteFile(zoneFile, []byte("@ 300 IN A 192.0.2.1\n"), 0644); err != nil {
 				t.Fatalf("failed to write zone file: %v", err)
@@ -1816,6 +1819,7 @@ func TestCmdDNSSECSignZoneRejectsInvalidNSEC3Iterations(t *testing.T) {
 
 func TestCmdDNSSECSignZone_InvalidSalt(t *testing.T) {
 	tmpDir := t.TempDir()
+	t.Chdir(tmpDir) // sign-zone saves generated keys in the working directory
 	zoneContent := `@ 300 IN SOA ns1.example.com. admin.example.com. 2024010101 3600 900 604800 86400
 @ 300 IN A 192.0.2.1
 `
@@ -1843,6 +1847,7 @@ func TestCmdDNSSECSignZone_InvalidSalt(t *testing.T) {
 
 func TestCmdDNSSECSignZone_InvalidValidity(t *testing.T) {
 	tmpDir := t.TempDir()
+	t.Chdir(tmpDir) // sign-zone saves generated keys in the working directory
 	zoneContent := `@ 300 IN A 192.0.2.1
 `
 	zoneFile := filepath.Join(tmpDir, "example.com.zone")
@@ -2040,6 +2045,7 @@ func TestCmdDig_ResponseFlags(t *testing.T) {
 
 func TestCmdDNSSECSignZone_EmptyZoneFile(t *testing.T) {
 	tmpDir := t.TempDir()
+	t.Chdir(tmpDir) // sign-zone saves generated keys in the working directory
 	zoneFile := filepath.Join(tmpDir, "empty.zone")
 	if err := os.WriteFile(zoneFile, []byte(""), 0644); err != nil {
 		t.Fatalf("failed to write zone file: %v", err)
@@ -2056,6 +2062,7 @@ func TestCmdDNSSECSignZone_EmptyZoneFile(t *testing.T) {
 
 func TestCmdDNSSECSignZone_MalformedZone(t *testing.T) {
 	tmpDir := t.TempDir()
+	t.Chdir(tmpDir) // sign-zone saves generated keys in the working directory
 	zoneFile := filepath.Join(tmpDir, "bad.zone")
 	if err := os.WriteFile(zoneFile, []byte("not a valid zone line\n"), 0644); err != nil {
 		t.Fatalf("failed to write zone file: %v", err)

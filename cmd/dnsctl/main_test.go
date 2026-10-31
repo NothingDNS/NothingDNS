@@ -871,6 +871,7 @@ func TestCmdDNSSECSignZone_AlgorithmValidation(t *testing.T) {
 			// Create a temp zone file so the "zone and input are required" check
 			// passes but subsequent validation catches our test conditions.
 			tmpDir := t.TempDir()
+			t.Chdir(tmpDir) // sign-zone saves generated keys in the working directory
 			zoneFile := filepath.Join(tmpDir, "test.zone")
 			if err := os.WriteFile(zoneFile, []byte("@ 300 IN A 192.0.2.1\n"), 0644); err != nil {
 				t.Fatalf("failed to create temp zone file: %v", err)
@@ -959,6 +960,7 @@ func TestCmdDNSSECSignZone_KeysizeValidationForRSA(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tmpDir := t.TempDir()
+			t.Chdir(tmpDir) // sign-zone saves generated keys in the working directory
 			zoneFile := filepath.Join(tmpDir, "test.zone")
 			if err := os.WriteFile(zoneFile, []byte("@ 300 IN A 192.0.2.1\n"), 0644); err != nil {
 				t.Fatalf("failed to create temp zone file: %v", err)
@@ -1931,6 +1933,7 @@ www	300	IN	CNAME	example.com.
 
 func TestSignZoneIntegration(t *testing.T) {
 	tmpDir := t.TempDir()
+	t.Chdir(tmpDir) // sign-zone saves generated keys in the working directory
 
 	// Create a zone file
 	zoneContent := `; Test zone

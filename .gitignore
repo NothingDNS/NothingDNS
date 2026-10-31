@@ -160,3 +160,7 @@ web/.tsbuild/
 !/.wrongstack/
 /.wrongstack/*
 !/.wrongstack/project.json
+
+# DNSSEC key files written by dnsctl sign-zone / generate-key
+K*.+[0-9][0-9][0-9]+[0-9][0-9][0-9][0-9][0-9].key
+K*.+[0-9][0-9][0-9]+[0-9][0-9][0-9][0-9][0-9].private
