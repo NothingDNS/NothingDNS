@@ -1112,6 +1112,14 @@ func (p *parser) parseRecordOwned(line string, ownerInherited bool) error {
 		implicit = true
 	}
 
+	// The stored text is what protocol.ParseRDataText reads back to build the
+	// served record, and a record it cannot parse is silently never answered.
+	// Reject it here, at its line, as BIND does (`A 999.1.1.1`, an MX without a
+	// preference, an empty A) instead of loading a zone that quietly lacks it.
+	if protocol.ParseRDataText(record.Type, record.RData) == nil {
+		return fmt.Errorf("invalid %s RDATA %q", record.Type, record.RData)
+	}
+
 	// Make name absolute and lowercase
 	absName := strings.ToLower(makeAbsolute(record.Name, p.zone.Origin))
 
@@ -1122,6 +1130,9 @@ func (p *parser) parseRecordOwned(line string, ownerInherited bool) error {
 	// NS target and was dropped from the referral, leaving the child zone
 	// unreachable.
 	record.Name = absName
+	if _, err := protocol.ParseName(absName); err != nil {
+		return fmt.Errorf("invalid owner name %q: %w", record.Name, err)
+	}
 
 	// Store the record
 	p.zone.Records[absName] = append(p.zone.Records[absName], record)
@@ -1277,6 +1288,9 @@ func (p *parser) handleSpecialRecord(name string, record Record) error {
 		// F701: the zone has one SOA, at its apex (BIND: "SOA not at top of zone").
 		if p.apex != "" && !strings.EqualFold(canonicalize(name), canonicalize(p.apex)) {
 			return fmt.Errorf("SOA record for %s is not at the zone apex %s", name, p.apex)
+		}
+		if p.zone.SOA != nil {
+			return fmt.Errorf("multiple SOA records for %s", name)
 		}
 		if err := p.parseSOA(name, record); err != nil {
 			return fmt.Errorf("parsing SOA: %w", err)
@@ -1981,6 +1995,26 @@ func (z *Zone) Validate() error {
 	}
 	if !hasApexNS {
 		return fmt.Errorf("zone %q: missing NS records", z.Origin)
+	}
+
+	// A name with a CNAME holds no other data (RFC 1034 §3.6.2, RFC 2181
+	// §10.1) apart from the DNSSEC records that sign it; BIND refuses to load
+	// such a zone ("CNAME and other data"). The records API enforces the same.
+	for name, recs := range z.Records {
+		hasCNAME := false
+		other := ""
+		for _, rec := range recs {
+			switch strings.ToUpper(rec.Type) {
+			case "CNAME":
+				hasCNAME = true
+			case "RRSIG", "NSEC":
+			default:
+				other = rec.Type
+			}
+		}
+		if hasCNAME && other != "" {
+			return fmt.Errorf("zone %q: %s has a CNAME and other data (%s)", z.Origin, name, other)
+		}
 	}
 
 	return nil

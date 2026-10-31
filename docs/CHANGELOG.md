@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A zone file with a record the server cannot serve loaded without it**: `x A 999.1.1.1`, an `MX` without a preference or an empty `A` loaded with no error and the record was silently never answered, a second `SOA` was served as an extra SOA in every `SOA` answer, an owner label over 63 octets (or a name over 253) was accepted, and a name could hold a `CNAME` next to other data. Each is now a load error at its line (`invalid A RDATA "999.1.1.1"`, `multiple SOA records`, `invalid owner name`, `has a CNAME and other data`), as in BIND; a reload with such a file is refused and the running zone stays as it was. `dnsctl dnssec sign-zone` and `-validate-config` report it too.
 - **New usernames had no length limit**: a name of any length was accepted and stored. Creating a user now refuses names over 128 bytes. Users already stored keep working.
 - **`/api/v1/status` accepted every HTTP method**: a POST, PUT, DELETE or PATCH answered 200 like a GET, while every other read-only endpoint answers 405. It now serves GET and HEAD only.
 - **`/api/openapi.json`, `/api/docs`, `/api/docs/app.js` and `/.well-known/odoh-config` accepted every HTTP method**: like `/api/v1/status` before, a POST, PUT, DELETE or PATCH answered 200. They serve GET and HEAD only now. The `/health`, `/livez` and `/readyz` probes still accept any method on purpose.
