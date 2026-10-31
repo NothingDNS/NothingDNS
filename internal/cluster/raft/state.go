@@ -34,6 +34,11 @@ func (n *Node) advanceTermLocked(t Term) error {
 	n.currentTerm = t
 	n.state = StateFollower
 	n.votedFor = ""
+	// The leader of the old term is not the leader of the new one; keep
+	// reporting it and a deposed leader goes on naming itself (callers that
+	// learn the new leader set it right after).
+	n.leaderID = ""
+	n.leaderDNSAddr, n.leaderDNSFrom = "", ""
 	return nil
 }
 
@@ -583,9 +588,9 @@ func (n *Node) LeaderDNSAddr() (leader NodeID, addr string) {
 	return n.leaderID, n.leaderDNSAddr
 }
 
-// LeaderID returns the most-recently-seen leader node ID, or "" if no
-// leader has been observed since startup (e.g. fresh follower waiting
-// for the first heartbeat). Followers learn the leader via
+// LeaderID returns the leader of the current term, or "" if none has been
+// heard from yet (a fresh follower waiting for the first heartbeat, or any
+// node right after the term advanced). Followers learn the leader via
 // AppendEntries; leaders return their own ID.
 func (n *Node) LeaderID() NodeID {
 	n.mu.Lock()

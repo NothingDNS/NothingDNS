@@ -31,10 +31,7 @@ type ClusterIntegration struct {
 	nodeID NodeID
 	peers  []NodeID
 
-	// Leadership tracking
-	mu          sync.RWMutex
-	isLeader    bool
-	currentTerm Term
+	mu sync.RWMutex
 
 	// Applied index tracking
 	appliedIndex    Index
@@ -280,10 +277,6 @@ func (ci *ClusterIntegration) Start() error {
 	// Start commit applier
 	ci.wg.Add(1)
 	go ci.applyLoop()
-
-	// Start leadership tracker
-	ci.wg.Add(1)
-	go ci.leadershipLoop()
 
 	// Start periodic snapshotter (leader-only work happens inside the loop)
 	ci.wg.Add(1)
@@ -552,28 +545,15 @@ func (ci *ClusterIntegration) runApplyHook(e entry) {
 	hook(cmd)
 }
 
-// leadershipLoop tracks leadership changes.
-func (ci *ClusterIntegration) leadershipLoop() {
-	defer ci.wg.Done()
-
-	for {
-		select {
-		case <-ci.stopCh:
-			return
-		case state := <-ci.node.LeadershipCh():
-			ci.mu.Lock()
-			ci.isLeader = (state.State == StateLeader)
-			ci.currentTerm = state.Term
-			ci.mu.Unlock()
-		}
-	}
-}
-
-// IsLeader returns true if this node is the current leader.
+// IsLeader returns true if this node is the current leader. It reads the
+// Raft node's own state: several step-down paths (a newer term seen in a
+// response, vote request or AppendEntries) change that state without a
+// leadership notification, so a cached flag kept reporting a deposed leader
+// as leader alongside the real one.
 func (ci *ClusterIntegration) IsLeader() bool {
-	ci.mu.RLock()
-	defer ci.mu.RUnlock()
-	return ci.isLeader
+	ci.node.mu.Lock()
+	defer ci.node.mu.Unlock()
+	return ci.node.state == StateLeader
 }
 
 // ProposeZoneChange proposes a zone change for consensus.
@@ -700,11 +680,7 @@ func (ci *ClusterIntegration) SetApplyHook(fn func(ZoneCommand)) {
 // leader, returns its own ID; otherwise returns the leader ID learned
 // via AppendEntries, or "" if no leader has been observed yet.
 func (ci *ClusterIntegration) GetLeaderID() NodeID {
-	ci.mu.RLock()
-	isLdr := ci.isLeader
-	ci.mu.RUnlock()
-
-	if isLdr {
+	if ci.IsLeader() {
 		return ci.nodeID
 	}
 	return ci.node.LeaderID()
@@ -773,14 +749,6 @@ func (ci *ClusterIntegration) RemoveNode(nodeID NodeID) error {
 // state and commitIndex — those three values are then a coherent
 // view of the same instant.
 func (ci *ClusterIntegration) Stats() ClusterStats {
-	ci.mu.RLock()
-	isLeader := ci.isLeader
-	ci.mu.RUnlock()
-
-	// Read the term from the node itself, not ci.currentTerm: the latter is
-	// only updated on a leadership transition, so a follower that simply
-	// follows a new leader (no transition of its own) would otherwise report
-	// a stale term (e.g. 0) in the dashboard.
 	ci.node.mu.Lock()
 	state := ci.node.state
 	term := ci.node.currentTerm
@@ -794,7 +762,7 @@ func (ci *ClusterIntegration) Stats() ClusterStats {
 		Term:         int64(term),
 		CommitIndex:  int64(commitIdx),
 		AppliedIndex: int64(applied),
-		IsLeader:     isLeader,
+		IsLeader:     state == StateLeader,
 	}
 }
 
