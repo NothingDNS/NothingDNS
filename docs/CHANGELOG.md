@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-11-01
+
 ### Added
 
 - **Edit a zone's SOA from the dashboard and the API** ([#19](https://github.com/NothingDNS/NothingDNS/issues/19)): before, changing the admin e-mail or a timer meant editing the zone file over SSH.
