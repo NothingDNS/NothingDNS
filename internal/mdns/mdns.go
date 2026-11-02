@@ -971,7 +971,7 @@ func (c *Cache) Add(svc *Service) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.entries[svc.FullServiceName()] = &cacheEntry{
+	c.entries[strings.ToLower(svc.FullServiceName())] = &cacheEntry{
 		service:   cloneService(svc),
 		expiresAt: time.Now().Add(time.Duration(svc.TTL) * time.Second),
 	}
@@ -986,7 +986,7 @@ func (c *Cache) getAt(fullName string, now time.Time) *Service {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	entry, ok := c.entries[fullName]
+	entry, ok := c.entries[strings.ToLower(fullName)]
 	if !ok || mdnsCacheExpiredAt(now, entry.expiresAt) {
 		return nil
 	}
@@ -1004,7 +1004,7 @@ func (c *Cache) getServicesAt(serviceType string, now time.Time) []*Service {
 
 	var result []*Service
 	for _, entry := range c.entries {
-		if entry.service.ServiceType == serviceType && !mdnsCacheExpiredAt(now, entry.expiresAt) {
+		if strings.EqualFold(entry.service.ServiceType, serviceType) && !mdnsCacheExpiredAt(now, entry.expiresAt) {
 			result = append(result, cloneService(entry.service))
 		}
 	}

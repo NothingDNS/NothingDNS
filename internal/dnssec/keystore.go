@@ -360,12 +360,18 @@ func unmarshalPrivateKey(algorithm uint8, data []byte) (*PrivateKey, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parse ECDSA P256 key: %w", err)
 		}
+		if _, err := checkECDSACurve(key, algorithm); err != nil {
+			return nil, err
+		}
 		return &PrivateKey{Algorithm: algorithm, Key: key}, nil
 
 	case protocol.AlgorithmECDSAP384SHA384:
 		key, err := x509.ParseECPrivateKey(data)
 		if err != nil {
 			return nil, fmt.Errorf("parse ECDSA P384 key: %w", err)
+		}
+		if _, err := checkECDSACurve(key, algorithm); err != nil {
+			return nil, err
 		}
 		return &PrivateKey{Algorithm: algorithm, Key: key}, nil
 

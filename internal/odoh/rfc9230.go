@@ -172,6 +172,9 @@ func parseODoHMessage(b []byte) (*odohMessage, error) {
 	if len(r) < int(encLen) {
 		return nil, errors.New("odoh: message truncated (encrypted)")
 	}
+	if len(r) != int(encLen) {
+		return nil, errors.New("odoh: trailing bytes after encrypted message")
+	}
 	m.encryptedMessage = make([]byte, encLen)
 	copy(m.encryptedMessage, r[:encLen])
 	return m, nil

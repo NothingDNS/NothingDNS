@@ -164,11 +164,16 @@ func syncJournalDir(dir string) (err error) {
 	return nil
 }
 
+const maxJournalPayload = 16 << 20
+
 // writeEntry writes a single journal entry in TLV+HMAC format.
 func (s *KVJournalStore) writeEntry(w io.Writer, entry *IXFRJournalEntry) error {
 	payload, err := json.Marshal(entry)
 	if err != nil {
 		return err
+	}
+	if len(payload) > maxJournalPayload {
+		return fmt.Errorf("journal payload too large: %d (max %d)", len(payload), maxJournalPayload)
 	}
 
 	// Frame: magic(1) + version(2) + payloadLen(4) + payload(n) + hmac(32)
@@ -325,7 +330,6 @@ func readEntryHMAC(f *os.File, entry *IXFRJournalEntry, key []byte) error {
 	// length we will allocate. 16 MiB is well above any plausible journal
 	// entry but well below the 4 GiB ceiling of uint32, so a malformed
 	// header cannot drive an out-of-memory allocation here.
-	const maxJournalPayload = 16 << 20
 	if payloadLen > maxJournalPayload {
 		return fmt.Errorf("journal payload too large: %d (max %d)", payloadLen, maxJournalPayload)
 	}

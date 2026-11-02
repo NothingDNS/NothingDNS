@@ -416,8 +416,8 @@ func (rw *dohResponseWriter) MaxSize() int {
 }
 
 // cacheControlFor returns an explicit HTTP freshness lifetime for a DNS
-// response (RFC 8484 §5.1): the smallest Answer TTL, or for an answer-less
-// response the smallest SOA TTL/MINIMUM in the Authority section (RFC 2308
+// response (RFC 8484 §5.1): the smallest Answer TTL, also bounded by any
+// SOA TTL/MINIMUM in the Authority section for negative answers (RFC 2308
 // §5), otherwise 0. Without it a shared HTTP cache may apply heuristic
 // freshness and serve DNS data past its TTL (F293).
 func cacheControlFor(msg *protocol.Message) string {
@@ -434,15 +434,13 @@ func cacheControlFor(msg *protocol.Message) string {
 				lower(rr.TTL)
 			}
 		}
-		if !found {
-			for _, rr := range msg.Authorities {
-				if rr == nil || rr.Type != protocol.TypeSOA {
-					continue
-				}
-				lower(rr.TTL)
-				if soa, ok := rr.Data.(*protocol.RDataSOA); ok {
-					lower(soa.Minimum)
-				}
+		for _, rr := range msg.Authorities {
+			if rr == nil || rr.Type != protocol.TypeSOA {
+				continue
+			}
+			lower(rr.TTL)
+			if soa, ok := rr.Data.(*protocol.RDataSOA); ok {
+				lower(soa.Minimum)
 			}
 		}
 	}

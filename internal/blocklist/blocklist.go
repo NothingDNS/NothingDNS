@@ -623,7 +623,10 @@ func (bl *Blocklist) AddFile(path string) error {
 	if err := bl.loadFile(path); err != nil {
 		if registered {
 			bl.sourceEntries[path] = prev
+		} else {
+			delete(bl.sourceEntries, path)
 		}
+		bl.rebuildEntriesLocked()
 		return err
 	}
 	if registered {

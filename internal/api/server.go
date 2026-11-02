@@ -6,7 +6,9 @@ import (
 	"crypto/subtle"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -1721,7 +1723,13 @@ func (s *Server) requireMethod(w http.ResponseWriter, r *http.Request, methods .
 //	var req FooRequest
 //	if !s.decode(w, r, &req) { return }
 func (s *Server) decode(w http.ResponseWriter, r *http.Request, dst any) bool {
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(dst); err != nil {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	if err := decoder.Decode(dst); err != nil {
+		s.writeError(w, http.StatusBadRequest, "Invalid request body")
+		return false
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		s.writeError(w, http.StatusBadRequest, "Invalid request body")
 		return false
 	}

@@ -78,6 +78,9 @@ func PadResponseTo(query, resp *Message, packedLen, maxLen int) bool {
 		return false
 	}
 	if resp.GetOPT() == nil {
+		if packedLen+11+4 > maxLen {
+			return false
+		}
 		// SetEDNS0 gives the OPT its root owner name; a bare record with a
 		// nil Name failed to pack (F648). The record adds 11 bytes.
 		resp.SetEDNS0(4096, false)

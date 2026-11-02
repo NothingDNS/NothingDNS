@@ -1,6 +1,7 @@
 package dnssec
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -134,7 +135,7 @@ func rawPrivateKey(raw []byte, algorithm uint8) (any, error) {
 		case ed25519.SeedSize:
 			return ed25519.NewKeyFromSeed(raw), nil
 		case ed25519.PrivateKeySize:
-			return ed25519.PrivateKey(append([]byte(nil), raw...)), nil
+			return validatedEd25519PrivateKey(raw)
 		default:
 			return nil, fmt.Errorf("Ed25519 private key is %d bytes, want %d or %d",
 				len(raw), ed25519.SeedSize, ed25519.PrivateKeySize)
@@ -296,7 +297,15 @@ func parseEd25519DER(der []byte) (ed25519.PrivateKey, error) {
 		return edKey, nil
 	}
 	if len(der) == ed25519.PrivateKeySize {
-		return ed25519.PrivateKey(append([]byte(nil), der...)), nil
+		return validatedEd25519PrivateKey(der)
 	}
 	return nil, fmt.Errorf("parsing Ed25519 private key: %w", err)
+}
+
+func validatedEd25519PrivateKey(raw []byte) (ed25519.PrivateKey, error) {
+	key := ed25519.NewKeyFromSeed(raw[:ed25519.SeedSize])
+	if !bytes.Equal(key, raw) {
+		return nil, fmt.Errorf("Ed25519 private key public component does not match its seed")
+	}
+	return key, nil
 }

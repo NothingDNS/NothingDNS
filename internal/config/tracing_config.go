@@ -36,6 +36,9 @@ func unmarshalTracing(node *Node, cfg *TracingConfig) error {
 	}
 	cfg.Endpoint = node.GetString("endpoint")
 
+	if sr := node.Get("sample_rate"); sr != nil && sr.Type != NodeScalar {
+		return fmt.Errorf("tracing.sample_rate must be a scalar number in [0, 1]")
+	}
 	if sr := node.GetString("sample_rate"); sr != "" {
 		v, err := strconv.ParseFloat(sr, 64)
 		if err != nil || math.IsNaN(v) || v < 0 || v > 1 {

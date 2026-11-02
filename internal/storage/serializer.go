@@ -203,6 +203,9 @@ type BatchEncoder struct {
 
 // NewBatchEncoder creates a new batch encoder with preallocated buffer
 func NewBatchEncoder(initialSize int) *BatchEncoder {
+	if initialSize < 0 {
+		initialSize = 0
+	}
 	return &BatchEncoder{
 		buf: make([]byte, 0, initialSize),
 	}

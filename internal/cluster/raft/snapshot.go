@@ -316,6 +316,11 @@ func (s *Snapshotter) writeSnapshot(w io.Writer, snap *Snapshot) error {
 // writePlainSnapshot is the unencrypted writer body — called directly
 // when aeadKey is nil and via writeSnapshot's encrypt wrapper.
 func (s *Snapshotter) writePlainSnapshot(w io.Writer, snap *Snapshot) error {
+	for _, peerID := range snap.Membership {
+		if len(peerID) > maxNodeIDBytes {
+			return fmt.Errorf("snapshot peerLen %d exceeds max %d", len(peerID), maxNodeIDBytes)
+		}
+	}
 	// Format: Index(8) + Term(8) + LastIndex(8) + LastTerm(8) + DataLen(8) + Data + MembershipLen(4) + Membership
 	buf := make([]byte, 8)
 

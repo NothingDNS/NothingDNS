@@ -1146,6 +1146,7 @@ func (c *KVCursor) Last() ([]byte, []byte) {
 // Next moves to the next key
 func (c *KVCursor) Next() ([]byte, []byte) {
 	if c.pos >= len(c.keys)-1 {
+		c.pos = len(c.keys)
 		return nil, nil
 	}
 	c.pos++
@@ -1155,6 +1156,7 @@ func (c *KVCursor) Next() ([]byte, []byte) {
 // Prev moves to the previous key
 func (c *KVCursor) Prev() ([]byte, []byte) {
 	if c.pos <= 0 {
+		c.pos = -1
 		return nil, nil
 	}
 	c.pos--

@@ -451,7 +451,7 @@ func (p *parser) parse() (*Zone, error) {
 					}
 					stripped = append(stripped, ch)
 				}
-				combined = strings.Join(strings.Fields(string(stripped)), " ")
+				combined = string(stripped)
 				if err := p.parseRecordOwned(combined, p.recordIndented); err != nil {
 					return nil, fmt.Errorf("%s:%d: %w", p.filename, p.lineStart, err)
 				}

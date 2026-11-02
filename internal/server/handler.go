@@ -189,6 +189,9 @@ func sendSERVFAIL(w ResponseWriter, req *protocol.Message) {
 		},
 		Questions: req.Questions,
 	}
+	resp.Header.Flags.Opcode = req.Header.Flags.Opcode
+	resp.Header.Flags.RD = req.Header.Flags.RD
+	resp.Header.Flags.CD = req.Header.Flags.CD
 	if _, err := w.Write(resp); err != nil {
 		util.Warnf("failed to write SERVFAIL response: %v", err)
 	}

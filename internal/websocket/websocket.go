@@ -121,18 +121,7 @@ func Handshake(w http.ResponseWriter, r *http.Request, allowedOrigins ...string)
 		return nil, err
 	}
 
-	// Drain any buffered data from the bufio reader.
-	// Only read what's already buffered — don't block on the network.
-	if brw.Reader.Buffered() > 0 {
-		n := brw.Reader.Buffered()
-		drain := make([]byte, n)
-		if _, err := io.ReadFull(brw.Reader, drain); err != nil {
-			// Best effort — don't fail the handshake
-			_ = err
-		}
-	}
-
-	return &Conn{conn: conn}, nil
+	return &Conn{conn: conn, reader: brw.Reader}, nil
 }
 
 func isSameOrigin(origin string, r *http.Request) bool {
@@ -157,6 +146,7 @@ func isOriginAllowed(origin string, allowedOrigins []string) bool {
 // Conn represents a WebSocket connection.
 type Conn struct {
 	conn       io.ReadWriteCloser
+	reader     io.Reader  // preserves bytes buffered by net/http during the handshake
 	mu         sync.Mutex // protects fragmented state during reads
 	fragmented bool       // true if we're reading a fragmented message
 	fragType   int        // message type (1=text, 2=binary) for fragmented message
@@ -517,9 +507,13 @@ func validateServerMessageType(messageType int, payload []byte) error {
 
 // readFrame reads a single WebSocket frame.
 func (c *Conn) readFrame() (fin bool, opcode byte, payload []byte, err error) {
+	reader := c.reader
+	if reader == nil {
+		reader = c.conn
+	}
 	// Read first 2 bytes
 	header := make([]byte, 2)
-	if _, err = io.ReadFull(c.conn, header); err != nil {
+	if _, err = io.ReadFull(reader, header); err != nil {
 		return false, 0, nil, err
 	}
 
@@ -538,7 +532,7 @@ func (c *Conn) readFrame() (fin bool, opcode byte, payload []byte, err error) {
 	switch payloadLen {
 	case 126:
 		ext := make([]byte, 2)
-		if _, err = io.ReadFull(c.conn, ext); err != nil {
+		if _, err = io.ReadFull(reader, ext); err != nil {
 			return false, 0, nil, err
 		}
 		payloadLen = int(binary.BigEndian.Uint16(ext))
@@ -547,7 +541,7 @@ func (c *Conn) readFrame() (fin bool, opcode byte, payload []byte, err error) {
 		}
 	case 127:
 		ext := make([]byte, 8)
-		if _, err = io.ReadFull(c.conn, ext); err != nil {
+		if _, err = io.ReadFull(reader, ext); err != nil {
 			return false, 0, nil, err
 		}
 		raw := binary.BigEndian.Uint64(ext)
@@ -586,11 +580,11 @@ func (c *Conn) readFrame() (fin bool, opcode byte, payload []byte, err error) {
 	payload = make([]byte, payloadLen)
 
 	mask := make([]byte, 4)
-	if _, err = io.ReadFull(c.conn, mask); err != nil {
+	if _, err = io.ReadFull(reader, mask); err != nil {
 		return false, 0, nil, err
 	}
 	if payloadLen > 0 {
-		if _, err = io.ReadFull(c.conn, payload); err != nil {
+		if _, err = io.ReadFull(reader, payload); err != nil {
 			return false, 0, nil, err
 		}
 		for i := range payload {

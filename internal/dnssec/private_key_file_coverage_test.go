@@ -92,15 +92,21 @@ func TestParseEd25519PrivateKey(t *testing.T) {
 		}
 	})
 
-	t.Run("raw seed", func(t *testing.T) {
-		seed := make([]byte, ed25519.PrivateKeySize)
-		rand.Read(seed)
-		key, err := parseEd25519DER(seed)
+	t.Run("raw private key", func(t *testing.T) {
+		key, err := parseEd25519DER(edKey)
 		if err != nil {
 			t.Fatalf("parseEd25519: %v", err)
 		}
 		if len(key) != ed25519.PrivateKeySize {
 			t.Fatalf("key size=%d want=%d", len(key), ed25519.PrivateKeySize)
+		}
+	})
+
+	t.Run("inconsistent public component", func(t *testing.T) {
+		key := append(ed25519.PrivateKey(nil), edKey...)
+		key[len(key)-1] ^= 1
+		if _, err := parseEd25519DER(key); err == nil {
+			t.Fatal("expected rejection of a public component inconsistent with the seed")
 		}
 	})
 
