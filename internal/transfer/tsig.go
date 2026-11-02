@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"net"
 	"strings"
@@ -587,7 +588,7 @@ func verifyWithKey(msg *protocol.Message, key *TSIGKey, previousMAC []byte) erro
 	_, err := verifyTSIGDigest(msg, key, func(tsigs *TSIGRecord) ([]byte, error) {
 		// F83: the MAC covers the received Error / Other Data TSIG variables
 		// (RFC 8945 §4.3.3), so they cannot be altered without detection.
-		return buildSignedDataWithError(msg, key.Name, previousMAC, key.Algorithm, tsigs.TimeSigned, tsigs.Fudge, tsigs.OriginalID, tsigs.Error, tsigs.OtherData)
+		return buildSignedDataWithError(msg, key.Name, previousMAC, key.Algorithm, tsigs.TimeSigned, tsigs.Fudge, tsigs.OriginalID, tsigs.Error, tsigs.OtherData, true)
 	})
 	return err
 }
@@ -716,12 +717,17 @@ func calculateMAC(key, data []byte, algorithm string) ([]byte, error) {
 // both signer and verifier must lowercase it identically for the MAC to match
 // across implementations (BIND/Knot/NSD).
 func buildSignedData(msg *protocol.Message, keyName string, previousMAC []byte, algorithm string, timeSigned time.Time, fudge uint16, originalID uint16) ([]byte, error) {
-	return buildSignedDataWithError(msg, keyName, previousMAC, algorithm, timeSigned, fudge, originalID, TSIGErrNoError, nil)
+	return buildSignedDataWithError(msg, keyName, previousMAC, algorithm, timeSigned, fudge, originalID, TSIGErrNoError, nil, false)
 }
 
 // buildSignedDataWithError is buildSignedData with the TSIG Error and Other
 // Data variables included in the digest as RFC 8945 §4.3.3 requires (F83).
-func buildSignedDataWithError(msg *protocol.Message, keyName string, previousMAC []byte, algorithm string, timeSigned time.Time, fudge uint16, originalID uint16, tsigError uint16, otherData []byte) ([]byte, error) {
+//
+// received selects the digested message bytes: true (verification) uses the
+// wire bytes the message was unpacked from when it kept them
+// (Message.TSIGSignedWire), because a peer's packing — name compression in
+// RDATA — need not match ours; false (signing) packs msg itself.
+func buildSignedDataWithError(msg *protocol.Message, keyName string, previousMAC []byte, algorithm string, timeSigned time.Time, fudge uint16, originalID uint16, tsigError uint16, otherData []byte, received bool) ([]byte, error) {
 	if len(otherData) > maxTSIGWireFieldLen {
 		return nil, fmt.Errorf("TSIG other data too large: %d bytes", len(otherData))
 	}
@@ -737,16 +743,22 @@ func buildSignedDataWithError(msg *protocol.Message, keyName string, previousMAC
 
 	// Message bytes with the TSIG RR removed and ARCOUNT adjusted to match
 	// the now-shorter Additionals slice (handled by cloneMessageWithoutTSIG).
-	msgCopy := cloneMessageWithoutTSIG(msg)
-	// RFC 8945 §4.3.1: the digested message carries the TSIG Original ID in
-	// place of the (possibly rewritten) header ID (F83).
-	msgCopy.Header.ID = originalID
-	msgBytes := make([]byte, 65535)
-	n, err := msgCopy.Pack(msgBytes)
-	if err != nil {
-		return nil, fmt.Errorf("packing message: %w", err)
+	if received && len(msg.TSIGSignedWire) >= protocol.HeaderLen {
+		wire := append([]byte(nil), msg.TSIGSignedWire...)
+		binary.BigEndian.PutUint16(wire[0:2], originalID)
+		buf.Write(wire)
+	} else {
+		msgCopy := cloneMessageWithoutTSIG(msg)
+		// RFC 8945 §4.3.1: the digested message carries the TSIG Original ID in
+		// place of the (possibly rewritten) header ID (F83).
+		msgCopy.Header.ID = originalID
+		msgBytes := make([]byte, 65535)
+		n, err := msgCopy.Pack(msgBytes)
+		if err != nil {
+			return nil, fmt.Errorf("packing message: %w", err)
+		}
+		buf.Write(msgBytes[:n])
 	}
-	buf.Write(msgBytes[:n])
 
 	// TSIG RR variables: KEY_NAME (canonical wire form, no compression).
 	keyNameParsed, err := protocol.ParseName(keyName)
@@ -812,7 +824,15 @@ func buildSignedDataWithError(msg *protocol.Message, keyName string, previousMAC
 
 // packTSIGDigestMessage packs msg as it is digested by a multi-message TSIG
 // chain: TSIG RR removed, ARCOUNT adjusted, header ID replaced by originalID.
-func packTSIGDigestMessage(msg *protocol.Message, originalID uint16) ([]byte, error) {
+//
+// received (verification) digests the wire bytes the message was unpacked from
+// when it kept them (Message.TSIGSignedWire) instead of packing it again.
+func packTSIGDigestMessage(msg *protocol.Message, originalID uint16, received bool) ([]byte, error) {
+	if received && len(msg.TSIGSignedWire) >= protocol.HeaderLen {
+		wire := append([]byte(nil), msg.TSIGSignedWire...)
+		binary.BigEndian.PutUint16(wire[0:2], originalID)
+		return wire, nil
+	}
 	msgCopy := cloneMessageWithoutTSIG(msg)
 	msgCopy.Header.ID = originalID
 	msgBytes := make([]byte, 65535)
@@ -830,11 +850,11 @@ func packTSIGDigestMessage(msg *protocol.Message, originalID uint16) ([]byte, er
 //	DNS messages: every unsigned message since then (unsignedMsgs, already
 //	    packed) followed by this message without its TSIG RR
 //	TSIG timers: Time Signed (uint48) + Fudge (uint16)
-func buildTimersOnlySignedData(msg *protocol.Message, priorMAC, unsignedMsgs []byte, timeSigned time.Time, fudge uint16, originalID uint16) ([]byte, error) {
+func buildTimersOnlySignedData(msg *protocol.Message, priorMAC, unsignedMsgs []byte, timeSigned time.Time, fudge uint16, originalID uint16, received bool) ([]byte, error) {
 	if len(priorMAC) > maxTSIGWireFieldLen {
 		return nil, fmt.Errorf("TSIG prior MAC too large: %d bytes", len(priorMAC))
 	}
-	msgBytes, err := packTSIGDigestMessage(msg, originalID)
+	msgBytes, err := packTSIGDigestMessage(msg, originalID, received)
 	if err != nil {
 		return nil, err
 	}
@@ -903,7 +923,7 @@ func (s *TSIGStreamSigner) Sign(msg *protocol.Message) (*protocol.ResourceRecord
 	if !s.signed {
 		signedData, err = buildSignedData(msg, s.key.Name, s.priorMAC, s.key.Algorithm, timeSigned, s.fudge, msg.Header.ID)
 	} else {
-		signedData, err = buildTimersOnlySignedData(msg, s.priorMAC, s.pending, timeSigned, s.fudge, msg.Header.ID)
+		signedData, err = buildTimersOnlySignedData(msg, s.priorMAC, s.pending, timeSigned, s.fudge, msg.Header.ID, false)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("building signed data: %w", err)
@@ -943,7 +963,7 @@ func (s *TSIGStreamSigner) Skip(msg *protocol.Message) error {
 	if s == nil || !s.signed {
 		return fmt.Errorf("the first message of a TSIG stream must be signed")
 	}
-	b, err := packTSIGDigestMessage(msg, msg.Header.ID)
+	b, err := packTSIGDigestMessage(msg, msg.Header.ID, false)
 	if err != nil {
 		return err
 	}
@@ -979,7 +999,7 @@ func (v *tsigStreamVerifier) verify(msg *protocol.Message) error {
 		if v.unsigned > maxUnsignedTSIGMessages {
 			return fmt.Errorf("response has more than %d consecutive unsigned messages", maxUnsignedTSIGMessages)
 		}
-		b, err := packTSIGDigestMessage(msg, msg.Header.ID)
+		b, err := packTSIGDigestMessage(msg, msg.Header.ID, true)
 		if err != nil {
 			return err
 		}
@@ -989,9 +1009,9 @@ func (v *tsigStreamVerifier) verify(msg *protocol.Message) error {
 	first := !v.signed
 	tsigs, err := verifyTSIGDigest(msg, v.key, func(ts *TSIGRecord) ([]byte, error) {
 		if first {
-			return buildSignedDataWithError(msg, v.key.Name, v.priorMAC, v.key.Algorithm, ts.TimeSigned, ts.Fudge, ts.OriginalID, ts.Error, ts.OtherData)
+			return buildSignedDataWithError(msg, v.key.Name, v.priorMAC, v.key.Algorithm, ts.TimeSigned, ts.Fudge, ts.OriginalID, ts.Error, ts.OtherData, true)
 		}
-		return buildTimersOnlySignedData(msg, v.priorMAC, v.pending, ts.TimeSigned, ts.Fudge, ts.OriginalID)
+		return buildTimersOnlySignedData(msg, v.priorMAC, v.pending, ts.TimeSigned, ts.Fudge, ts.OriginalID, true)
 	})
 	if err != nil {
 		return err

@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"encoding/binary"
 	"fmt"
 	"sync"
 )
@@ -32,6 +33,16 @@ type Message struct {
 	// RawBody is the byte slice of the DSO TLV stream (header excluded).
 	// Populated by UnpackMessage when Header.Flags.Opcode == OpcodeDSO.
 	RawBody []byte
+
+	// TSIGSignedWire is the message exactly as received, for TSIG
+	// verification (RFC 8945 §5.3: the MAC covers the bytes on the wire, not a
+	// re-encoding of them — a peer that compresses names in RDATA, as BIND does
+	// for CNAME/MX/NS/PTR targets, packs differently from Pack). UnpackMessage
+	// fills it when the message ends in a TSIG record: the wire bytes up to
+	// that record with ARCOUNT decremented. A caller that verifies an unsigned
+	// message of a multi-message exchange sets it to the whole received packet.
+	// Nil for hand-built messages.
+	TSIGSignedWire []byte
 
 	// poolState tracks pool ownership. Only a Message handed out by
 	// messagePool (UnpackMessage / AcquireMessage) is msgPoolLive and may be
@@ -256,6 +267,7 @@ func (m *Message) reset() {
 	m.Authorities = m.Authorities[:0]
 	m.Additionals = m.Additionals[:0]
 	m.RawBody = nil
+	m.TSIGSignedWire = nil
 }
 
 // Release returns the Message to the internal pool so its struct and
@@ -322,6 +334,7 @@ func (m *Message) Release() {
 	// window between Put and Get can be arbitrarily long under
 	// light load.
 	m.RawBody = nil
+	m.TSIGSignedWire = nil
 	m.poolState = msgInPool
 	messagePool.Put(m)
 }
@@ -491,6 +504,7 @@ func UnpackMessage(buf []byte) (*Message, error) {
 	msg := messagePool.Get().(*Message)
 	msg.poolState = msgPoolLive
 	msg.RawBody = nil
+	msg.TSIGSignedWire = nil
 	// Enforce the zero-length section invariant at Get. Release() truncates
 	// before Put, but pooled messages have been observed carrying leftover
 	// Questions across pool cycles (a user mutating a message after
@@ -595,6 +609,7 @@ func UnpackMessage(buf []byte) (*Message, error) {
 			msg.Release()
 			return nil, ErrBufferTooSmall
 		}
+		start := offset
 		rr, n, err := UnpackResourceRecord(buf, offset)
 		if err != nil {
 			msg.Release()
@@ -602,6 +617,11 @@ func UnpackMessage(buf []byte) (*Message, error) {
 		}
 		msg.Additionals = append(msg.Additionals, rr)
 		offset += n
+		if rr.Type == TypeTSIG && i == int(msg.Header.ARCount)-1 {
+			wire := append([]byte(nil), buf[:start]...)
+			binary.BigEndian.PutUint16(wire[10:12], msg.Header.ARCount-1)
+			msg.TSIGSignedWire = wire
+		}
 	}
 
 	// RFC 6891 §6.1.3: the OPT record's TTL carries the EDNS EXTENDED-RCODE

@@ -740,6 +740,10 @@ func (c *AXFRClient) receiveAXFRResponseForRequest(conn net.Conn, expectedTXID u
 		// Verify the TSIG chain (F314): signed messages against the request
 		// MAC / previous MAC, unsigned ones digested into the next signature.
 		if key != nil {
+			if !hasTSIG(msg) {
+				// An unsigned message of the chain is digested as received.
+				msg.TSIGSignedWire = msgBuf
+			}
 			if err := tsigChain.verify(msg); err != nil {
 				return nil, fmt.Errorf("TSIG verification failed: %w", err)
 			}

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A TSIG-signed UPDATE adding a CNAME, MX, NS or PTR into its own zone was refused with NOTAUTH**: `nsupdate -y … add c.example.com. CNAME www.example.com.` failed, because the MAC was checked against a re-encoding of the received message, and BIND (and others) compress the names inside the RDATA of those types while this server did not. TSIG now verifies the bytes as received (RFC 8945 §5.3) — UPDATE, NOTIFY, signed queries, and the responses of a signed AXFR/IXFR from another primary (including its unsigned intermediate messages). Records whose RDATA holds no name (A, TXT, SRV) were never affected, so the failure looked random.
+
 ## [1.4.1] — 2026-11-01
 
 ### Fixed

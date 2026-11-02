@@ -834,6 +834,10 @@ func (c *IXFRClient) receiveIXFRResponseForRequest(conn net.Conn, expectedTXID u
 			}
 			// F314: signed messages are verified against the request MAC /
 			// previous MAC; unsigned ones are digested into the next one.
+			if !hasTSIG(msg) {
+				// An unsigned message of the chain is digested as received.
+				msg.TSIGSignedWire = msgBuf
+			}
 			if err := tsigChain.verify(msg); err != nil {
 				return nil, fmt.Errorf("TSIG verification failed: %w", err)
 			}

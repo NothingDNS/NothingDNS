@@ -215,7 +215,7 @@ func TestTSIG_SingleMessageDigestUnchanged(t *testing.T) {
 	if got := hex.EncodeToString(m); got != "386a0416ee931bc6e5821a729041840e98a6e9bd6b5754c3f964a5d5b869943a" {
 		t.Fatalf("single-message MAC changed: %s", got)
 	}
-	d, err = buildSignedDataWithError(msg, key.Name, []byte{1, 2, 3, 4}, key.Algorithm, ts, 300, 0x1234, TSIGErrBadTime, []byte{0, 0, 0x69, 0x55, 0x9b, 0x00})
+	d, err = buildSignedDataWithError(msg, key.Name, []byte{1, 2, 3, 4}, key.Algorithm, ts, 300, 0x1234, TSIGErrBadTime, []byte{0, 0, 0x69, 0x55, 0x9b, 0x00}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
