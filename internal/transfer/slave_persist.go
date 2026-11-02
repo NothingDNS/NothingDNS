@@ -120,6 +120,12 @@ func (sm *SlaveManager) loadPersistedZone(zoneName string, sz *SlaveZone) {
 	for _, w := range z.Warnings {
 		util.Warnf("slave: persisted zone %s: %s", zoneName, w)
 	}
+	if warning, verr := z.ValidateStored(); verr != nil {
+		util.Warnf("slave: ignoring unusable persisted zone file %s: %v", path, verr)
+		return
+	} else if warning != "" {
+		util.Warnf("slave: persisted zone %s: %s", zoneName, warning)
+	}
 	timers, ok := zoneSOATimers(z)
 	if !ok {
 		return
