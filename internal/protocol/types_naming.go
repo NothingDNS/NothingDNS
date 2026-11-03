@@ -237,6 +237,9 @@ func (r *RDataAFSDB) Pack(buf []byte, offset int) (int, error) {
 	if r == nil {
 		return 0, fmt.Errorf("nil AFSDB record")
 	}
+	if offset < 0 || offset > len(buf) {
+		return 0, ErrBufferTooSmall
+	}
 
 	startOffset := offset
 	if offset+2 > len(buf) {
@@ -258,6 +261,9 @@ func (r *RDataAFSDB) Pack(buf []byte, offset int) (int, error) {
 func (r *RDataAFSDB) Unpack(buf []byte, offset int, rdlength uint16) (int, error) {
 	if r == nil {
 		return 0, fmt.Errorf("nil AFSDB record")
+	}
+	if offset < 0 || offset > len(buf) || int(rdlength) > len(buf)-offset {
+		return 0, ErrBufferTooSmall
 	}
 
 	startOffset := offset
@@ -334,6 +340,9 @@ func (r *RDataKX) Pack(buf []byte, offset int) (int, error) {
 	if r == nil {
 		return 0, fmt.Errorf("nil KX record")
 	}
+	if offset < 0 || offset > len(buf) {
+		return 0, ErrBufferTooSmall
+	}
 
 	startOffset := offset
 	if offset+2 > len(buf) {
@@ -355,6 +364,9 @@ func (r *RDataKX) Pack(buf []byte, offset int) (int, error) {
 func (r *RDataKX) Unpack(buf []byte, offset int, rdlength uint16) (int, error) {
 	if r == nil {
 		return 0, fmt.Errorf("nil KX record")
+	}
+	if offset < 0 || offset > len(buf) || int(rdlength) > len(buf)-offset {
+		return 0, ErrBufferTooSmall
 	}
 
 	startOffset := offset
@@ -530,6 +542,9 @@ func (r *RDataNAPTR) Pack(buf []byte, offset int) (int, error) {
 	if r == nil {
 		return 0, fmt.Errorf("nil NAPTR record")
 	}
+	if offset < 0 || offset > len(buf) {
+		return 0, ErrBufferTooSmall
+	}
 
 	startOffset := offset
 
@@ -600,6 +615,9 @@ func (r *RDataNAPTR) Pack(buf []byte, offset int) (int, error) {
 func (r *RDataNAPTR) Unpack(buf []byte, offset int, rdlength uint16) (int, error) {
 	if r == nil {
 		return 0, fmt.Errorf("nil NAPTR record")
+	}
+	if offset < 0 || offset > len(buf) || int(rdlength) > len(buf)-offset {
+		return 0, ErrBufferTooSmall
 	}
 
 	startOffset := offset

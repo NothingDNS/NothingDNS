@@ -25,6 +25,9 @@ func (r *RDataMX) Pack(buf []byte, offset int) (int, error) {
 	if r == nil {
 		return 0, fmt.Errorf("nil MX record")
 	}
+	if offset < 0 || offset > len(buf) {
+		return 0, ErrBufferTooSmall
+	}
 	startOffset := offset
 
 	// Preference (2 bytes)
@@ -135,6 +138,9 @@ func (r *RDataTXT) Type() uint16 { return TypeTXT }
 func (r *RDataTXT) Pack(buf []byte, offset int) (int, error) {
 	if r == nil {
 		return 0, fmt.Errorf("nil TXT record")
+	}
+	if offset < 0 || offset > len(buf) {
+		return 0, ErrBufferTooSmall
 	}
 	startOffset := offset
 
