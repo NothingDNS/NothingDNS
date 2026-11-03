@@ -583,9 +583,10 @@ func TestDoHWithRealHTTPServer(t *testing.T) {
 	query, _ := protocol.NewQuery(0xabcd, "test.example.com.", protocol.TypeA)
 	buf := make([]byte, 512)
 	n, _ := query.Pack(buf)
+	queryWire := append([]byte(nil), buf[:n]...)
 
 	resp, err := http.Post(fmt.Sprintf("http://%s/dns-query", ln.Addr().String()),
-		"application/dns-message", bytes.NewReader(buf[:n]))
+		"application/dns-message", bytes.NewReader(queryWire))
 	if err != nil {
 		t.Fatalf("POST failed: %v", err)
 	}
@@ -606,7 +607,9 @@ func TestDoHWithRealHTTPServer(t *testing.T) {
 		t.Errorf("ID mismatch: got %x, want %x", dnsResp.Header.ID, query.Header.ID)
 	}
 
-	encoded := base64.RawURLEncoding.EncodeToString(buf[:n])
+	// n now holds the response length, which need not equal the packed query
+	// length. Reuse the exact query wire image saved before reading the response.
+	encoded := base64.RawURLEncoding.EncodeToString(queryWire)
 	resp, err = http.Get(fmt.Sprintf("http://%s/dns-query?dns=%s", ln.Addr().String(), encoded))
 	if err != nil {
 		t.Fatalf("GET failed: %v", err)
