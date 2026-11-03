@@ -699,6 +699,9 @@ func (m *Message) Copy() *Message {
 	if len(m.RawBody) > 0 {
 		msg.RawBody = append([]byte(nil), m.RawBody...)
 	}
+	if len(m.TSIGSignedWire) > 0 {
+		msg.TSIGSignedWire = append([]byte(nil), m.TSIGSignedWire...)
+	}
 
 	for _, q := range m.Questions {
 		if q != nil {
