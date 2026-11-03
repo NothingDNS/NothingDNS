@@ -672,6 +672,9 @@ func (c *Config) validateMetrics() []string {
 	if !strings.HasPrefix(c.Metrics.Path, "/") {
 		errors = append(errors, fmt.Sprintf("metrics: path '%s' must start with /", c.Metrics.Path))
 	}
+	if c.Metrics.Path == "/health" {
+		errors = append(errors, "metrics: path '/health' conflicts with the health endpoint")
+	}
 	// Mirrors the runtime check in metrics.Start, so -validate-config catches
 	// a config the server would refuse to start with.
 	if isPublicListenAddress(c.Metrics.Bind) && strings.TrimSpace(c.Metrics.AuthToken) == "" {

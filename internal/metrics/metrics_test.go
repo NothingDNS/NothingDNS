@@ -179,6 +179,18 @@ func TestMetricsCollectorStartReturnsBindError(t *testing.T) {
 	}
 }
 
+func TestMetricsCollectorRejectsHealthPathCollision(t *testing.T) {
+	m := New(Config{
+		Enabled:   true,
+		Bind:      "127.0.0.1:0",
+		Path:      "/health",
+		AuthToken: "test-token",
+	})
+	if err := m.Start(); err == nil {
+		t.Fatal("Start succeeded with metrics path colliding with /health")
+	}
+}
+
 func TestRecordMetrics(t *testing.T) {
 	cfg := Config{
 		Enabled:   true,

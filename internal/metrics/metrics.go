@@ -161,6 +161,12 @@ func (m *MetricsCollector) Start() error {
 	if !m.config.Enabled {
 		return nil
 	}
+	if !strings.HasPrefix(m.config.Path, "/") {
+		return fmt.Errorf("metrics path %q must start with /", m.config.Path)
+	}
+	if m.config.Path == "/health" {
+		return fmt.Errorf("metrics path %q conflicts with the health endpoint", m.config.Path)
+	}
 
 	// SECURITY: Refuse to serve metrics unauthenticated on a reachable
 	// address. Without auth_token the endpoint may only bind to loopback,

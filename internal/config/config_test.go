@@ -3220,6 +3220,18 @@ func TestValidateMetricsEnabledEmptyPath(t *testing.T) {
 	}
 }
 
+func TestValidateMetricsHealthPathConflict(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Metrics.Enabled = true
+	cfg.Metrics.Path = "/health"
+	for _, validationErr := range cfg.Validate() {
+		if strings.Contains(validationErr, "conflicts with the health endpoint") {
+			return
+		}
+	}
+	t.Fatal("expected metrics /health path conflict validation error")
+}
+
 // TestValidateCacheNegativeTTL tests negative cache TTL validation
 func TestValidateCacheNegativeTTL(t *testing.T) {
 	cfg := DefaultConfig()
