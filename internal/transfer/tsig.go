@@ -208,6 +208,9 @@ func (ks *KeyStore) ValidateKeySource(keyName string, clientIP net.IP) error {
 // where both keys are valid during the transition.
 // After grace period, call ClearPreviousKey() to remove the old key.
 func (ks *KeyStore) RotateKey(newKey *TSIGKey) {
+	if newKey == nil {
+		return
+	}
 	ks.mu.Lock()
 	defer ks.mu.Unlock()
 
@@ -255,6 +258,9 @@ func (ks *KeyStore) ClearPreviousKey() {
 
 // ReplaceKey atomically replaces a key by name
 func (ks *KeyStore) ReplaceKey(name string, newKey *TSIGKey) {
+	if newKey == nil {
+		return
+	}
 	ks.mu.Lock()
 	defer ks.mu.Unlock()
 	ks.keys[CanonicalTSIGKeyName(name)] = newKey
