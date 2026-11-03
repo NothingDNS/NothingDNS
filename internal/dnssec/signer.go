@@ -348,7 +348,16 @@ func (s *Signer) SignZone(records []*protocol.ResourceRecord) ([]*protocol.Resou
 	var dnskeyRRs []*protocol.ResourceRecord
 	var otherRRs []*protocol.ResourceRecord
 
-	for _, rr := range records {
+	for i, rr := range records {
+		if rr == nil {
+			return nil, fmt.Errorf("record %d is nil", i)
+		}
+		if rr.Name == nil {
+			return nil, fmt.Errorf("record %d has nil owner name", i)
+		}
+		if rr.Data == nil {
+			return nil, fmt.Errorf("record %d has nil RDATA", i)
+		}
 		if rr.Type == protocol.TypeDNSKEY {
 			dnskeyRRs = append(dnskeyRRs, rr)
 		} else {

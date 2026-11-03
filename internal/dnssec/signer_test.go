@@ -215,6 +215,30 @@ func TestSignerSignZoneNoKeys(t *testing.T) {
 	}
 }
 
+func TestSignerSignZoneRejectsMalformedRecords(t *testing.T) {
+	s := NewSigner("example.com.", DefaultSignerConfig())
+	if _, err := s.GenerateKeyPair(protocol.AlgorithmED25519, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GenerateKeyPair(protocol.AlgorithmED25519, false); err != nil {
+		t.Fatal(err)
+	}
+	name, err := protocol.ParseName("www.example.com.")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, records := range [][]*protocol.ResourceRecord{
+		{nil},
+		{{Type: protocol.TypeA, Class: protocol.ClassIN, TTL: 60, Data: &protocol.RDataA{}}},
+		{{Name: name, Type: protocol.TypeA, Class: protocol.ClassIN, TTL: 60}},
+	} {
+		if _, err := s.SignZone(records); err == nil {
+			t.Fatalf("SignZone(%#v) succeeded, want error", records)
+		}
+	}
+}
+
 func TestSignerSignZoneNoKSK(t *testing.T) {
 	s := NewSigner("example.com.", DefaultSignerConfig())
 
