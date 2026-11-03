@@ -235,38 +235,13 @@ func (r *RDataNSEC3) Unpack(buf []byte, offset int, rdlength uint16) (int, error
 	copy(r.NextHashed, buf[offset:offset+hashLen])
 	offset += hashLen
 
-	// Type Bit Map (windowed format)
-	r.TypeBitMap = nil
-
-	for offset < endOffset {
-		if offset+2 > endOffset {
-			return 0, ErrBufferTooSmall
-		}
-
-		// Window number
-		windowNum := buf[offset]
-		offset++
-
-		// Bitmap length
-		bitmapLen := int(buf[offset])
-		offset++
-
-		if offset+bitmapLen > endOffset {
-			return 0, ErrBufferTooSmall
-		}
-
-		// Parse bitmap
-		for i := 0; i < bitmapLen; i++ {
-			b := buf[offset+i]
-			for j := 0; j < 8; j++ {
-				if b&(1<<(7-j)) != 0 {
-					typeNum := uint16(windowNum)<<8 | uint16(i*8+j)
-					r.TypeBitMap = append(r.TypeBitMap, typeNum)
-				}
-			}
-		}
-		offset += bitmapLen
+	// Type Bit Map (same canonical windowed format as NSEC).
+	types, nextOffset, err := unpackTypeBitmaps(buf, offset, endOffset)
+	if err != nil {
+		return 0, err
 	}
+	r.TypeBitMap = types
+	offset = nextOffset
 
 	return offset - startOffset, nil
 }

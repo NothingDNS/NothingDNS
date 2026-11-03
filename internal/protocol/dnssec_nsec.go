@@ -123,11 +123,22 @@ func (r *RDataNSEC) Unpack(buf []byte, offset int, rdlength uint16) (int, error)
 	offset += n
 
 	// Type Bit Map (windowed format)
-	r.TypeBitMap = nil
+	types, nextOffset, err := unpackTypeBitmaps(buf, offset, endOffset)
+	if err != nil {
+		return 0, err
+	}
+	r.TypeBitMap = types
+	offset = nextOffset
 
+	return offset - startOffset, nil
+}
+
+func unpackTypeBitmaps(buf []byte, offset, endOffset int) ([]uint16, int, error) {
+	var types []uint16
+	previousWindow := -1
 	for offset < endOffset {
 		if offset+2 > endOffset {
-			return 0, ErrBufferTooSmall
+			return nil, 0, ErrBufferTooSmall
 		}
 
 		// Window number
@@ -138,8 +149,21 @@ func (r *RDataNSEC) Unpack(buf []byte, offset int, rdlength uint16) (int, error)
 		bitmapLen := int(buf[offset])
 		offset++
 
+		// RFC 4034 §4.1.2 requires windows in strictly increasing order,
+		// lengths from 1 through 32, and no trailing zero octet. Enforcing the
+		// canonical encoding prevents one type set from having multiple wire
+		// representations inside signed data.
+		if int(windowNum) <= previousWindow {
+			return nil, 0, fmt.Errorf("invalid type bitmap window order")
+		}
+		if bitmapLen < 1 || bitmapLen > 32 {
+			return nil, 0, fmt.Errorf("invalid type bitmap length %d", bitmapLen)
+		}
 		if offset+bitmapLen > endOffset {
-			return 0, ErrBufferTooSmall
+			return nil, 0, ErrBufferTooSmall
+		}
+		if buf[offset+bitmapLen-1] == 0 {
+			return nil, 0, fmt.Errorf("type bitmap has trailing zero octet")
 		}
 
 		// Parse bitmap
@@ -149,14 +173,14 @@ func (r *RDataNSEC) Unpack(buf []byte, offset int, rdlength uint16) (int, error)
 				if b&(1<<(7-j)) != 0 {
 					// Type number = (windowNum << 8) | (i*8 + j)
 					typeNum := uint16(windowNum)<<8 | uint16(i*8+j)
-					r.TypeBitMap = append(r.TypeBitMap, typeNum)
+					types = append(types, typeNum)
 				}
 			}
 		}
 		offset += bitmapLen
+		previousWindow = int(windowNum)
 	}
-
-	return offset - startOffset, nil
+	return types, offset, nil
 }
 
 // String returns the NSEC record in presentation format.
