@@ -791,8 +791,8 @@ func (s *XoTServer) generateIXFRRecords(z *zone.Zone, clientSerial uint32) ([]*p
 	}
 
 	// Check if incremental transfer is needed using RFC 1982 serial arithmetic.
-	if z.SOA.Serial != 0 && clientSerial != 0 && !serialIsNewer(z.SOA.Serial, clientSerial) {
-		// Client has current or newer serial - send SOA only (no changes)
+	if clientSerial != 0 && z.SOA.Serial == clientSerial {
+		// Client has the current serial - send SOA only (no changes).
 		return []*protocol.ResourceRecord{
 			{
 				Name:  origin,
@@ -810,6 +810,12 @@ func (s *XoTServer) generateIXFRRecords(z *zone.Zone, clientSerial uint32) ([]*p
 				},
 			},
 		}, nil
+	}
+	if clientSerial != 0 && serialIsNewer(clientSerial, z.SOA.Serial) {
+		// The server is behind the client and cannot build a forward delta.
+		// Return a consistent snapshot instead of falsely signaling that the
+		// client is current with a lone SOA.
+		return s.generateAXFRRecordsLocked(z)
 	}
 
 	// Try incremental transfer from journal

@@ -4561,7 +4561,7 @@ func TestXoTServer_generateIXFRRecords_SameSerial_CovExtra(t *testing.T) {
 	}
 }
 
-func TestXoTServer_generateIXFRRecords_ClientSerialNewerUsesSingleSOA(t *testing.T) {
+func TestXoTServer_generateIXFRRecords_ClientSerialNewerUsesAXFR(t *testing.T) {
 	z := zone.NewZone("example.com.")
 	z.SOA = &zone.SOARecord{
 		MName: "ns1.example.com.", RName: "admin.example.com.",
@@ -4573,11 +4573,11 @@ func TestXoTServer_generateIXFRRecords_ClientSerialNewerUsesSingleSOA(t *testing
 	if err != nil {
 		t.Fatalf("generateIXFRRecords() error: %v", err)
 	}
-	if len(records) != 1 {
-		t.Fatalf("expected 1 record (SOA only), got %d", len(records))
+	if len(records) != 2 {
+		t.Fatalf("expected 2 records (opening and closing SOA), got %d", len(records))
 	}
-	if records[0].Type != protocol.TypeSOA {
-		t.Fatalf("record type = %d, want SOA", records[0].Type)
+	if records[0].Type != protocol.TypeSOA || records[1].Type != protocol.TypeSOA {
+		t.Fatalf("record types = %d/%d, want SOA/SOA", records[0].Type, records[1].Type)
 	}
 }
 
