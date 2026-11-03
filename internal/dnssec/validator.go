@@ -2393,16 +2393,14 @@ func (v *Validator) fetchDNSKEY(ctx context.Context, zone string) ([]*protocol.R
 		return nil, err
 	}
 	// Query hands back a pooled *protocol.Message; release it once the
-	// keys are extracted. Release also zeroes and pools the extracted
-	// records themselves — fetchDNSKEY currently has no callers, and any
-	// future caller must copy the result before reuse (see
-	// fetchdnskey_pool_leak_test.go, which mandates this fix shape).
+	// keys are extracted. The returned records must be copies: Release also
+	// clears the records owned by the message.
 	defer msg.Release()
 
 	var keys []*protocol.ResourceRecord
 	for _, rr := range msg.Answers {
-		if rr.Type == protocol.TypeDNSKEY {
-			keys = append(keys, rr)
+		if rr != nil && rr.Type == protocol.TypeDNSKEY {
+			keys = append(keys, rr.Copy())
 		}
 	}
 

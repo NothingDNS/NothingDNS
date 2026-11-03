@@ -591,6 +591,66 @@ func TestWALRecovery_AppendAfterTornTail(t *testing.T) {
 	}
 }
 
+func TestWALRecovery_AppendAfterChecksumCorruption_F820(t *testing.T) {
+	dir := t.TempDir()
+	opts := DefaultWALOptions()
+
+	w, err := OpenWAL(dir, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Append(EntryTypePut, []byte("corrupt-me")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("segment lookup: entries=%d err=%v", len(entries), err)
+	}
+	path := filepath.Join(dir, entries[0].Name())
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data[WALHeaderSize] ^= 0xff
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	w, err = OpenWAL(dir, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Append(EntryTypePut, []byte("post-recovery")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	w, err = OpenWAL(dir, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	got, err := w.ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || string(got[0].Data) != "post-recovery" {
+		t.Fatalf("replayed entries = %+v, want only post-recovery entry", got)
+	}
+}
+
 func TestWALCorruptedEntry(t *testing.T) {
 	wal := &WAL{}
 

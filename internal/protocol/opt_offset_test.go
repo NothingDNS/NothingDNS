@@ -19,3 +19,17 @@ func TestRDataOPTRejectsInvalidOffsets(t *testing.T) {
 		t.Fatalf("Unpack overflowing RDLENGTH = (%d, %v), want (0, error)", n, err)
 	}
 }
+
+func TestRDataOPTPackEnforcesOptionLimit_F817(t *testing.T) {
+	opt := &RDataOPT{Options: make([]EDNS0Option, MaxEDNS0Options)}
+	buf := make([]byte, opt.Len())
+	if _, err := opt.Pack(buf, 0); err != nil {
+		t.Fatalf("Pack at option limit: %v", err)
+	}
+
+	opt.Options = append(opt.Options, EDNS0Option{})
+	buf = make([]byte, opt.Len())
+	if _, err := opt.Pack(buf, 0); err == nil {
+		t.Fatal("Pack above option limit succeeded")
+	}
+}

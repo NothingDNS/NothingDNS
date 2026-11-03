@@ -836,9 +836,15 @@ func (p *Parser) parseFlowMapping() (*Node, error) {
 			return nil, err
 		}
 
-		// Optional comma
+		// A comma is required between flow-mapping pairs. Without this check,
+		// malformed input such as "{a: 1 b: 2}" was accepted as if a comma
+		// were present, hiding configuration typos.
 		if p.current.Type == TokenComma {
 			p.advance()
+		} else if p.current.Type == TokenEOF {
+			return nil, fmt.Errorf("unterminated flow mapping")
+		} else if p.current.Type != TokenRBrace {
+			return nil, fmt.Errorf("expected ',' or '}' in flow mapping but got %s", p.current.Type)
 		}
 	}
 
@@ -894,9 +900,14 @@ func (p *Parser) parseFlowSequence() (*Node, error) {
 
 		node.Children = append(node.Children, value)
 
-		// Optional comma
+		// A comma is required between flow-sequence items. Without it, adjacent
+		// collection tokens such as "[a {b: c}]" were silently accepted.
 		if p.current.Type == TokenComma {
 			p.advance()
+		} else if p.current.Type == TokenEOF {
+			return nil, fmt.Errorf("unterminated flow sequence")
+		} else if p.current.Type != TokenRBracket {
+			return nil, fmt.Errorf("expected ',' or ']' in flow sequence but got %s", p.current.Type)
 		}
 	}
 

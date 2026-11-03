@@ -646,6 +646,9 @@ func DecodeString(s string) ([]byte, error) {
 
 // GenerateSalt generates a random salt for NSEC3.
 func GenerateSalt(length int) ([]byte, error) {
+	if length < 0 {
+		return nil, fmt.Errorf("salt length must be non-negative: %d", length)
+	}
 	salt := make([]byte, length)
 	_, err := io.ReadFull(rand.Reader, salt)
 	if err != nil {

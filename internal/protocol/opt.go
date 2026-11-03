@@ -50,6 +50,9 @@ func (r *RDataOPT) Pack(buf []byte, offset int) (int, error) {
 	if offset < 0 || offset > len(buf) {
 		return 0, ErrBufferTooSmall
 	}
+	if len(r.Options) > MaxEDNS0Options {
+		return 0, fmt.Errorf("too many EDNS0 options (max %d)", MaxEDNS0Options)
+	}
 
 	startOffset := offset
 

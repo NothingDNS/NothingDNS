@@ -415,6 +415,9 @@ func PackUint16(bits ...int) uint16 {
 // UnpackUint16 unpacks flags from a 16-bit value.
 // Returns true if the bit at position pos is set.
 func UnpackUint16(v uint16, pos int) bool {
+	if pos < 0 || pos >= 16 {
+		return false
+	}
 	return v&(1<<pos) != 0
 }
 

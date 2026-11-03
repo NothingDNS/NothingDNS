@@ -365,22 +365,42 @@ func (s *Signer) SignZone(records []*protocol.ResourceRecord) ([]*protocol.Resou
 		}
 	}
 
-	// Generate DNSKEY records from our keys if not present
-	if len(dnskeyRRs) == 0 {
-		for _, key := range keys {
-			name, err := protocol.ParseName(s.zone)
-			if err != nil {
-				return nil, fmt.Errorf("parsing zone name %q: %w", s.zone, err)
-			}
-			dnskeyRR := &protocol.ResourceRecord{
-				Name:  name,
-				Type:  protocol.TypeDNSKEY,
-				Class: protocol.ClassIN,
-				TTL:   86400,
-				Data:  key.DNSKEY,
-			}
-			dnskeyRRs = append(dnskeyRRs, dnskeyRR)
+	// Publish every configured key even when the input already contains a
+	// DNSKEY. A single pre-existing (for example, retiring) DNSKEY used to
+	// suppress the whole generated set, while the configured KSK still signed
+	// the resulting RRset. Its signature then referred to a key that resolvers
+	// could not fetch, making the signed zone Bogus.
+	dnskeyTTL := uint32(86400)
+	if len(dnskeyRRs) > 0 {
+		dnskeyTTL = dnskeyRRs[0].TTL
+	}
+	for _, key := range keys {
+		if key == nil || key.DNSKEY == nil {
+			return nil, fmt.Errorf("configured signing key has no DNSKEY")
 		}
+		found := false
+		for _, rr := range dnskeyRRs {
+			dnskey, ok := rr.Data.(*protocol.RDataDNSKEY)
+			if ok && dnskey.Flags == key.DNSKEY.Flags && dnskey.Protocol == key.DNSKEY.Protocol &&
+				dnskey.Algorithm == key.DNSKEY.Algorithm && bytes.Equal(dnskey.PublicKey, key.DNSKEY.PublicKey) {
+				found = true
+				break
+			}
+		}
+		if found {
+			continue
+		}
+		name, err := protocol.ParseName(s.zone)
+		if err != nil {
+			return nil, fmt.Errorf("parsing zone name %q: %w", s.zone, err)
+		}
+		dnskeyRRs = append(dnskeyRRs, &protocol.ResourceRecord{
+			Name:  name,
+			Type:  protocol.TypeDNSKEY,
+			Class: protocol.ClassIN,
+			TTL:   dnskeyTTL,
+			Data:  key.DNSKEY.Copy(),
+		})
 	}
 
 	// Calculate signature validity

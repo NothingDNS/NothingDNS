@@ -342,6 +342,17 @@ func (s *KVStore) readTLV(r io.Reader) error {
 		}
 	}
 
+	// The authenticated frame must occupy the complete input. Accepting a
+	// valid payload+HMAC prefix followed by arbitrary bytes means those bytes
+	// are outside the integrity boundary and creates two interpretations of
+	// the same on-disk file.
+	var trailing [1]byte
+	if n, err := io.ReadFull(r, trailing[:]); err == nil || n != 0 {
+		return fmt.Errorf("kvstore: trailing data after authenticated TLV frame")
+	} else if !errors.Is(err, io.EOF) {
+		return fmt.Errorf("kvstore: check trailing TLV data: %w", err)
+	}
+
 	// Decode JSON payload.
 	if err := json.Unmarshal(payload, &s.root); err != nil {
 		return fmt.Errorf("json decode: %w", err)

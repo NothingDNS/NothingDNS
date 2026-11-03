@@ -624,6 +624,16 @@ func UnpackMessage(buf []byte) (*Message, error) {
 		}
 	}
 
+	// Every byte in an ordinary DNS message must belong to one of the
+	// sections declared by the header. Ignoring a suffix creates an ambiguous
+	// message boundary and is especially unsafe for TSIG, whose MAC input is
+	// the exact received wire message with only the final TSIG RR removed.
+	// DSO messages returned earlier because their entire suffix is RawBody.
+	if offset != len(buf) {
+		msg.Release()
+		return nil, fmt.Errorf("trailing data after DNS sections: %d bytes", len(buf)-offset)
+	}
+
 	// RFC 6891 §6.1.3: the OPT record's TTL carries the EDNS EXTENDED-RCODE
 	// in its upper 8 bits. The header only holds the low nibble, so the full
 	// response code is (EXTENDED-RCODE << 4) | nibble. Combine here so

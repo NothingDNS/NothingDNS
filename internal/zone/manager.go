@@ -878,25 +878,46 @@ func (m *Manager) UpdateRecord(zoneName string, name, rtype, oldData string, new
 		return fmt.Errorf("no records found for %s", name)
 	}
 
-	found := false
+	matchIndex := -1
 	for i, r := range records {
 		// RDataEqual, not a case-insensitive text match: TXT and other data are
 		// case-sensitive, so records differing only in case are different RRs.
 		if strings.ToUpper(r.Type) == rtype && RDataEqual(rtype, r.RData, oldData) {
-			records[i] = newRecord
-			found = true
+			matchIndex = i
 			break
 		}
 	}
 
-	if !found {
+	if matchIndex < 0 {
 		z.Unlock()
 		return fmt.Errorf("record not found: %s %s %s", name, rtype, oldData)
 	}
-	// The updated TTL applies to the whole RRset (see setRRsetTTL), unless the
-	// record moved to another owner name.
 	if newRecord.Name == name {
+		records[matchIndex] = newRecord
+		// The updated TTL applies to the whole RRset (see setRRsetTTL).
 		setRRsetTTL(records, rtype, newRecord.TTL)
+		z.Records[name] = records
+	} else {
+		// A changed owner is a move between the zone's owner-index buckets, not
+		// merely a change to Record.Name. Leaving it under the old map key made
+		// the live zone answer the old name and return NODATA for the new one;
+		// after a write/reload the same record suddenly moved, so live and
+		// persisted state disagreed.
+		for _, existing := range z.Records[newRecord.Name] {
+			if strings.EqualFold(existing.Type, newRecord.Type) && RDataEqual(newRecord.Type, existing.RData, newRecord.RData) {
+				z.Unlock()
+				return fmt.Errorf("%w: %s %s %s", ErrRecordExists, newRecord.Name, newRecord.Type, newRecord.RData)
+			}
+		}
+		remaining := append(records[:matchIndex], records[matchIndex+1:]...)
+		if len(remaining) == 0 {
+			delete(z.Records, name)
+		} else {
+			z.Records[name] = remaining
+		}
+		target := z.Records[newRecord.Name]
+		setRRsetTTL(target, newRecord.Type, newRecord.TTL)
+		z.Records[newRecord.Name] = append(target, newRecord)
 	}
 
 	m.bumpSerial(z)

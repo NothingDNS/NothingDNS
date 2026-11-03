@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/binary"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -510,6 +511,16 @@ func TestPutUnpackUint16(t *testing.T) {
 	}
 	if !UnpackUint16(result, 13) {
 		t.Error("UnpackUint16 bit 13 should be set")
+	}
+}
+
+func TestUnpackUint16RejectsInvalidPositions_F816(t *testing.T) {
+	for _, pos := range []int{-2, -1, 16, 17} {
+		t.Run(fmt.Sprintf("pos_%d", pos), func(t *testing.T) {
+			if UnpackUint16(0xffff, pos) {
+				t.Fatalf("UnpackUint16(0xffff, %d) = true; want false", pos)
+			}
+		})
 	}
 }
 

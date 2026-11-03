@@ -173,13 +173,12 @@ func OpenWAL(dir string, opts WALOptions) (*WAL, error) {
 }
 
 // findValidEnd scans a WAL segment file and returns the byte offset
-// just past the last entry whose header parses and whose body length
-// is fully present in the file. A torn trailing entry — short header,
-// truncated body, or any kind of corruption — gets dropped via the
-// returned offset, which OpenWAL then truncates to. The scan uses
-// the same length-prefix logic as readSegment but stops at first
-// problem rather than per-entry CRC validation (that's still done at
-// ReadAll time; here we just need a safe append point).
+// just past the last entry whose header parses, whose body is fully present,
+// and whose CRC is valid. A torn trailing entry — short header, truncated
+// body, or checksum corruption — gets dropped via the returned offset, which
+// OpenWAL then truncates to. CRC validation here is essential: otherwise a
+// later Append lands after a full-length corrupt entry and ReadAll stops at
+// that entry forever, hiding the newly synced data.
 func findValidEnd(path string) (int64, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -212,6 +211,15 @@ func findValidEnd(path string) (int64, error) {
 		entryEnd := pos + int64(WALHeaderSize) + int64(length)
 		if entryEnd > total {
 			// Body is truncated — drop everything from `pos` forward.
+			return pos, nil
+		}
+
+		checksum := crc32.NewIEEE()
+		_, _ = checksum.Write(hdr[4:])
+		if _, err := io.CopyN(checksum, io.NewSectionReader(f, pos+WALHeaderSize, int64(length)), int64(length)); err != nil {
+			return 0, fmt.Errorf("checksum WAL body at %d: %w", pos, err)
+		}
+		if checksum.Sum32() != binary.BigEndian.Uint32(hdr[:4]) {
 			return pos, nil
 		}
 		pos = entryEnd

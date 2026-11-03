@@ -377,6 +377,13 @@ func TestWALReader_Next_DecodeError(t *testing.T) {
 
 	f.Write(buf)
 	f.Close()
+	// Keep the corrupt segment sealed: OpenWAL repairs only the active (last)
+	// segment before appending. WALReader must still surface corruption in an
+	// older segment rather than silently converting it to EOF.
+	activePath := filepath.Join(dir, WALFilePrefix+"00000000000000000001"+WALFileSuffix)
+	if err := os.WriteFile(activePath, nil, 0o600); err != nil {
+		t.Fatalf("create active segment: %v", err)
+	}
 
 	opts := DefaultWALOptions()
 	wal, err := OpenWAL(dir, opts)
@@ -1300,6 +1307,12 @@ func TestWALReader_Next_DecodeChecksumError(t *testing.T) {
 	copy(buf[9:], []byte("0123456789"))
 	f.Write(buf)
 	f.Close()
+	// Put an empty active segment after the corrupt sealed segment so startup
+	// recovery does not truncate the fixture before WALReader sees it.
+	activePath := filepath.Join(dir, WALFilePrefix+"00000000000000000001"+WALFileSuffix)
+	if err := os.WriteFile(activePath, nil, 0o600); err != nil {
+		t.Fatalf("create active segment: %v", err)
+	}
 
 	opts := DefaultWALOptions()
 	wal, err := OpenWAL(dir, opts)
@@ -1976,6 +1989,10 @@ func TestWALReader_Next_DecodeErrorInBuffer(t *testing.T) {
 	}
 	f.Write(buf)
 	f.Close()
+	activePath := filepath.Join(dir, WALFilePrefix+"00000000000000000001"+WALFileSuffix)
+	if err := os.WriteFile(activePath, nil, 0o600); err != nil {
+		t.Fatalf("create active segment: %v", err)
+	}
 
 	opts := DefaultWALOptions()
 	wal, err := OpenWAL(dir, opts)

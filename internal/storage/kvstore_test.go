@@ -68,6 +68,35 @@ func TestKVStore_HMACRoundTrip(t *testing.T) {
 	}
 }
 
+func TestKVStore_HMACRejectsTrailingBytes_F819(t *testing.T) {
+	path := t.TempDir()
+	key := bytes.Repeat([]byte{0x5a}, 32)
+	store, err := OpenKVStore(path, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := os.OpenFile(filepath.Join(path, DataFile), os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write([]byte{0x42}); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if reopened, err := OpenKVStore(path, key); err == nil {
+		_ = reopened.Close()
+		t.Fatal("OpenKVStore accepted trailing bytes after the HMAC frame")
+	}
+}
+
 func TestKVStore_WriteTLVCompletesPartialWrites(t *testing.T) {
 	hmacKey := make([]byte, 32)
 	aeadKey := make([]byte, 32)

@@ -716,13 +716,13 @@ func TestNameCompression(t *testing.T) {
 	}
 
 	buf := make([]byte, 512)
-	_, err := msg.Pack(buf)
+	n, err := msg.Pack(buf)
 	if err != nil {
 		t.Fatalf("Pack() error = %v", err)
 	}
 
 	// Unpack and verify
-	unpacked, err := UnpackMessage(buf)
+	unpacked, err := UnpackMessage(buf[:n])
 	if err != nil {
 		t.Fatalf("Unpack() error = %v", err)
 	}

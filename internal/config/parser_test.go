@@ -195,6 +195,21 @@ func TestParserFlowSequence(t *testing.T) {
 	}
 }
 
+func TestParserRejectsMissingFlowCollectionCommas_F815(t *testing.T) {
+	tests := []string{
+		"{a: 1 b: 2}",
+		"[a {b: c}]",
+		"{a: [1 {b: c}]}",
+	}
+	for _, input := range tests {
+		t.Run(input, func(t *testing.T) {
+			if _, err := NewParser(input).Parse(); err == nil {
+				t.Fatalf("Parse(%q) succeeded; want missing-comma error", input)
+			}
+		})
+	}
+}
+
 func TestParserMixedContent(t *testing.T) {
 	input := `name: test
 values:
