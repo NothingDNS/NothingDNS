@@ -674,6 +674,10 @@ func (lb *LoadBalancer) queryWithFailover(target *Target, msg *protocol.Message)
 		}
 		return resp, nil
 	}
+	if resp != nil {
+		resp.Release()
+		resp = nil
+	}
 
 	// If UDP fails or truncates, try TCP
 	util.Warnf("loadbalancer UDP query failed for %s: %v, trying TCP", target.Address, err)
@@ -719,6 +723,10 @@ func (lb *LoadBalancer) queryWithFailover(target *Target, msg *protocol.Message)
 	// Retry with failover target
 	resp, retryErr := lb.queryUDP(failoverTarget.Address, msg)
 	if retryErr != nil {
+		if resp != nil {
+			resp.Release()
+			resp = nil
+		}
 		util.Warnf("loadbalancer failover UDP failed for %s: %v, trying TCP", failoverTarget.Address, retryErr)
 		resp, retryErr = lb.queryTCP(failoverTarget.Address, msg)
 	}

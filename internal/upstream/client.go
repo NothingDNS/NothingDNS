@@ -268,6 +268,10 @@ func (c *Client) Query(msg *protocol.Message) (*protocol.Message, error) {
 	// Try UDP first, fallback to TCP if truncated
 	resp, err := c.queryUDP(server, msg)
 	if err != nil {
+		if resp != nil {
+			resp.Release()
+			resp = nil
+		}
 		// Try TCP as fallback
 		util.Warnf("upstream UDP query failed for %s: %v, trying TCP", server.Address, err)
 		resp, err = c.queryTCP(server, msg)
