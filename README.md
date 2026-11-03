@@ -7,17 +7,20 @@
 [![Go Version](https://img.shields.io/badge/Go-1.26.9%2B-00ADD8?style=flat&logo=go)](https://golang.org)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Go Report Card](https://goreportcard.com/badge/github.com/nothingdns/nothingdns)](https://goreportcard.com/report/github.com/nothingdns/nothingdns)
+[![Release](https://img.shields.io/github/v/release/NothingDNS/NothingDNS?style=flat)](https://github.com/NothingDNS/NothingDNS/releases)
 [![CI](https://github.com/NothingDNS/NothingDNS/actions/workflows/go.yml/badge.svg?branch=main)](https://github.com/NothingDNS/NothingDNS/actions/workflows/go.yml)
 
 NothingDNS is a self-contained DNS server written in Go. It includes authoritative DNS, recursive forwarding/resolution, DNSSEC, encrypted transports, policy filtering, clustering, a REST management API, `dnsctl`, and an embedded React dashboard.
 
 ## What is included
 
-- **DNS serving**: UDP/TCP DNS, authoritative zones, forwarding, iterative resolution, DNS64, SVCB/HTTPS, IDNA, and QNAME minimization.
+- **DNS serving**: UDP/TCP DNS, authoritative zones (with an answer cache), forwarding, iterative resolution, DNS64, SVCB/HTTPS, IDNA, QNAME minimization, and RFC 6761 special-use names.
 - **Security and policy**: DNSSEC validation/signing, DNS Cookies, DoH, DoT, DoQ, ODoH, DSO, ACLs, a recursion allow list (authoritative answers for everyone, recursion only for trusted networks), RRL, RPZ, and blocklists from hosts-style, URL, or plain domain-per-line sources.
-- **Operations**: hot reload, Prometheus metrics, structured audit logs, memory protection, systemd/Docker/Kubernetes deployment assets, and backup/health-check scripts.
-- **Management**: REST API with OpenAPI/Swagger, `dnsctl`, and an embedded React 19 dashboard with WebSocket query streaming and zone management.
-- **Persistence and HA**: built-in KV/WAL storage, AXFR/IXFR support, slave zones, split-horizon views, GeoIP responses, and gossip/Raft clustering.
+- **Operations**: hot reload (SIGHUP or `POST /api/v1/config/reload`; see the matrix in [docs/CONFIG_REFERENCE.md](docs/CONFIG_REFERENCE.md)), Prometheus metrics, structured audit logs, memory protection, systemd/Docker/Kubernetes deployment assets, and backup/health-check scripts.
+- **Management**: REST API with OpenAPI/Swagger, `dnsctl`, and an embedded React 19 dashboard with WebSocket query streaming, zone management, user and password management, and ACL editing.
+- **Zone transfer and updates**: AXFR/IXFR, NOTIFY, TSIG-signed Dynamic DNS (RFC 2136), XoT (RFC 9103), slave zones that survive restarts, and SOA editing from the dashboard and API.
+- **Persistence and HA**: built-in KV/WAL storage, split-horizon views, GeoIP responses, and gossip/Raft clustering.
+- **Client SDKs**: management API clients for Go, Python, TypeScript, Java, and C# under [`sdk/`](sdk/README.md).
 
 ## Quick start
 
@@ -30,6 +33,9 @@ go run ./cmd/nothingdns --config config.example.yaml
 
 # Build the embedded web dashboard when frontend assets change
 make build-web
+
+# Validate a configuration without starting the server
+./nothingdns --config config.example.yaml -validate-config
 
 # Run the short test suite
 go test ./... -count=1 -short
@@ -47,11 +53,8 @@ irm https://raw.githubusercontent.com/NothingDNS/NothingDNS/main/install.ps1 | i
 
 For Docker and Kubernetes examples, see [QUICK_START.md](QUICK_START.md) and [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
-> **Docker / GHCR:** The container image is published to
-> `ghcr.io/nothingdns/nothingdns:latest`. The package is currently **private** —
-> to pull it, authenticate with a GitHub PAT that has `read:packages` scope:
-> `echo "$GITHUB_TOKEN" | docker login ghcr.io -u USERNAME --password-stdin`
-> (see [docs/DEPLOYMENT_CHECKLIST.md](docs/DEPLOYMENT_CHECKLIST.md) for details).
+> **Docker / GHCR:** The container image is public and can be pulled without
+> authentication: `docker pull ghcr.io/nothingdns/nothingdns:latest`.
 
 ## Repository map
 
@@ -65,6 +68,7 @@ For Docker and Kubernetes examples, see [QUICK_START.md](QUICK_START.md) and [do
 | `deploy/` | systemd, Docker/Kubernetes, and Helm deployment assets |
 | `docs/` | Architecture, configuration, operations, API, CLI, testing, performance, and release documentation |
 | `examples/` | Example-oriented documentation |
+| `sdk/` | Management API client libraries (Go, Python, TypeScript, Java, C#) |
 | `scripts/` | Development, smoke-test, backup, and health-check helpers |
 
 Generated runtime state and local build artifacts such as `nothingdns`, `dnsctl`, `bin/`, `logs/`, `zones/`, `clusters/`, `*.db`, and `cache.json` are intentionally ignored.
@@ -97,8 +101,11 @@ make build-web    # dashboard bundle
 make test         # short Go tests
 make test-full    # full Go tests
 make lint         # go vet + gofmt check
+make staticcheck  # staticcheck
 make clean        # remove local binaries and coverage files
 ```
+
+CI does not run on push or PR: the workflows run only when triggered manually (`gh workflow run go.yml --ref main`) or on a `v*` tag push. Run `go vet`, `staticcheck`, `errcheck`, `go-errorlint` and `govulncheck` locally before pushing; see [docs/TESTING.md](docs/TESTING.md).
 
 The web package uses npm scripts:
 
