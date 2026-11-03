@@ -1245,7 +1245,10 @@ func (c *Cache) config() *Config {
 	return c.cfg.Load()
 }
 
-// OnPrefetchComplete marks a prefetch as complete and resets the prefetch flag.
+// OnPrefetchComplete replaces an entry after a successful refresh. The fresh
+// entry is eligible for prefetch again in its new TTL cycle: PrefetchDue and
+// prefetchFired belong to that cycle, so reusing the old one-shot state would
+// make a hot entry refresh only once and then expire on the next cycle.
 func (c *Cache) OnPrefetchComplete(key string, msg *protocol.Message, ttl uint32) {
 	msg = msg.Copy() // setInternal takes ownership; copy outside the shard lock
 
@@ -1253,8 +1256,9 @@ func (c *Cache) OnPrefetchComplete(key string, msg *protocol.Message, ttl uint32
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Update with new TTL but mark as prefetch to avoid infinite prefetch loop
-	c.setInternal(s, key, msg, ttl, true)
+	// The new PrefetchDue is in the future, and its fresh prefetchFired gate
+	// prevents duplicate callbacks once that threshold is reached.
+	c.setInternal(s, key, msg, ttl, false)
 }
 
 // ExtractQueryInfo extracts the query name and type from a cache key.

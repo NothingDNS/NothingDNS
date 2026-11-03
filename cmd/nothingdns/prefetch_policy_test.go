@@ -126,8 +126,11 @@ func TestPrefetchReplacesTheEntryWithTheFreshAnswer(t *testing.T) {
 		t.Fatalf("cached address = %d (present=%v), want the refreshed 99", last, ok)
 	}
 	e := r.mgr.Cache.Get(r.key)
-	if e.CanPrefetch {
-		t.Error("a prefetched entry must not be prefetchable again (infinite refresh loop)")
+	if !e.CanPrefetch {
+		t.Error("a refreshed entry must be eligible again in its new TTL cycle")
+	}
+	if e.ShouldPrefetch(time.Now()) {
+		t.Error("a refreshed entry must not immediately start another prefetch")
 	}
 }
 

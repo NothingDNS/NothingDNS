@@ -121,3 +121,37 @@ func TestTSIGSignedAnswerFitsTheClientLimit(t *testing.T) {
 		t.Fatalf("truncated answer does not verify: %v", err)
 	}
 }
+
+// Header-policy rewrites must all happen before TSIG signing. In particular,
+// a requester without DO or AD is not entitled to an AD bit; clearing it only
+// in the outer writer after signing changes the authenticated message.
+func TestTSIGSignedAnswerCoversADPolicyRewrite(t *testing.T) {
+	key := tsigQueryKey()
+	request := newTestQuery(t, "secure.example.", protocol.TypeA)
+	tsig, err := transfer.SignMessage(request, key, 300)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Additionals = append(request.Additionals, tsig)
+	requestMAC, err := transfer.TSIGRequestMAC(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	inner := newCaptureWriter("127.0.0.1", "tcp")
+	policy := newHeaderPolicyWriter(newTestHandler(), inner, request)
+	response := &protocol.Message{
+		Header:    protocol.Header{ID: request.Header.ID, Flags: protocol.NewResponseFlags(protocol.RcodeSuccess)},
+		Questions: request.Questions,
+	}
+	response.Header.Flags.AD = true // local validator's result
+	if _, err := (&tsigResponseWriter{inner: policy, key: key, requestMAC: requestMAC}).Write(response); err != nil {
+		t.Fatal(err)
+	}
+	if inner.msg.Header.Flags.AD {
+		t.Fatal("AD survived for a request with neither DO nor AD")
+	}
+	if err := transfer.VerifyMessage(inner.msg, key, requestMAC); err != nil {
+		t.Fatalf("final response does not verify after AD policy rewrite: %v", err)
+	}
+}

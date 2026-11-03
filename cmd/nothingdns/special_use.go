@@ -57,7 +57,10 @@ func specialUseAnswer(r *protocol.Message, q *protocol.Question, name string) *p
 		if q.QType == protocol.TypePTR {
 			return specialUseResponse(r, protocol.RcodeSuccess, specialUseRR(name, protocol.TypePTR, "localhost."), "")
 		}
-		return nil // other types follow the ordinary path
+		// The reverse name itself is special-use, not only its PTR RRset.
+		// Other types therefore receive local NODATA instead of leaking the
+		// loopback name to an upstream resolver.
+		return specialUseResponse(r, protocol.RcodeSuccess, nil, name)
 	}
 	var apex string
 	for _, z := range specialUseZones {

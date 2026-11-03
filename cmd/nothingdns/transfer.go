@@ -22,14 +22,14 @@ import (
 )
 
 // handleAXFR handles zone transfer (AXFR) requests.
-// AXFR must use TCP (RFC 5936 Section 4.1).
+// AXFR must use a stream transport: plain TCP (RFC 5936 §4.1) or DNS over
+// TLS, which carries zone transfers over TLS per RFC 9103.
 func (h *integratedHandler) handleAXFR(w server.ResponseWriter, r *protocol.Message, q *protocol.Question) {
 	clientInfo := w.ClientInfo()
 	reqID := util.GenerateRequestID()
 
-	// AXFR requires TCP per RFC 5936
-	if clientInfo.Protocol != "tcp" {
-		h.logger.Warnf("[%s] AXFR request over UDP from %s - refusing", reqID, clientInfo.String())
+	if !isZoneTransferStreamProtocol(clientInfo.Protocol) {
+		h.logger.Warnf("[%s] AXFR request over non-stream transport from %s - refusing", reqID, clientInfo.String())
 		sendError(w, r, protocol.RcodeRefused)
 		return
 	}
@@ -119,14 +119,13 @@ func (h *integratedHandler) handleAXFR(w server.ResponseWriter, r *protocol.Mess
 }
 
 // handleIXFR handles incremental zone transfer (IXFR) requests.
-// IXFR must use TCP (RFC 1995).
+// IXFR has the same stream-transport requirement as AXFR.
 func (h *integratedHandler) handleIXFR(w server.ResponseWriter, r *protocol.Message, q *protocol.Question) {
 	clientInfo := w.ClientInfo()
 	reqID := util.GenerateRequestID()
 
-	// IXFR requires TCP per RFC 1995
-	if clientInfo.Protocol != "tcp" {
-		h.logger.Warnf("[%s] IXFR request over UDP from %s - refusing", reqID, clientInfo.String())
+	if !isZoneTransferStreamProtocol(clientInfo.Protocol) {
+		h.logger.Warnf("[%s] IXFR request over non-stream transport from %s - refusing", reqID, clientInfo.String())
 		sendError(w, r, protocol.RcodeRefused)
 		return
 	}
@@ -231,6 +230,14 @@ func (h *integratedHandler) handleIXFR(w server.ResponseWriter, r *protocol.Mess
 	if h.metrics != nil {
 		h.metrics.RecordResponse(protocol.RcodeSuccess)
 	}
+}
+
+// isZoneTransferStreamProtocol reports whether the request transport can carry
+// the multi-message AXFR/IXFR response. The TLS server identifies DNS-over-TLS
+// clients as "dot"; rejecting everything except the literal "tcp" made the
+// RFC 9103 path fail before transfer ACL and TSIG checks ran.
+func isZoneTransferStreamProtocol(protocolName string) bool {
+	return protocolName == "tcp" || protocolName == "dot"
 }
 
 // zoneSignerFor returns the online signer of the zone named origin, or nil.
@@ -349,6 +356,9 @@ func applyResponseWriterRewrites(w server.ResponseWriter, msg *protocol.Message)
 			msg.Header.Flags.CD = cw.cd
 			if !cw.advertiseRecursion() {
 				msg.Header.Flags.RA = false
+			}
+			if !cw.reqDO && !cw.reqAD {
+				msg.Header.Flags.AD = false
 			}
 			cw.normalizeOPT(msg)
 		}

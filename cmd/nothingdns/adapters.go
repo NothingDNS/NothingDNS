@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/util"
@@ -28,7 +29,7 @@ type dnssecResolverAdapter struct {
 	// NSEC3PARAM) through the iterative resolver instead of an upstream
 	// forwarder. This is the only working fetch path in recursive-only
 	// deployments, where no upstream client exists at all.
-	iterative *resolver.Resolver
+	iterative atomic.Pointer[resolver.Resolver]
 }
 
 // SetIterative wires the iterative resolver in as the fetch path. Called from
@@ -36,14 +37,14 @@ type dnssecResolverAdapter struct {
 // the resolver, so this cannot happen at construction time).
 func (d *dnssecResolverAdapter) SetIterative(r *resolver.Resolver) {
 	if d != nil {
-		d.iterative = r
+		d.iterative.Store(r)
 	}
 }
 
 // Query implements dnssec.Resolver interface
 func (d *dnssecResolverAdapter) Query(ctx context.Context, name string, qtype uint16) (*protocol.Message, error) {
-	if d.iterative != nil {
-		return d.iterative.Resolve(ctx, name, qtype)
+	if iterative := d.iterative.Load(); iterative != nil {
+		return iterative.Resolve(ctx, name, qtype)
 	}
 	if d.upstream == nil {
 		return nil, fmt.Errorf("dnssec fetch: no upstream or iterative resolver configured")

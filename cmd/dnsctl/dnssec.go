@@ -575,6 +575,7 @@ func cmdDNSSECVerifyAnchor(args []string) error {
 	zones := store.GetAllZones()
 	fmt.Printf("Trust anchor file verified: %s\n", anchorFile)
 	fmt.Printf("  Zones: %d\n", len(zones))
+	invalid := 0
 	for _, zone := range zones {
 		anchors := store.GetAnchorsForZone(zone)
 		fmt.Printf("  %s: %d anchor(s)\n", zone, len(anchors))
@@ -582,10 +583,14 @@ func cmdDNSSECVerifyAnchor(args []string) error {
 			valid := "valid"
 			if !a.IsValid() {
 				valid = "INVALID"
+				invalid++
 			}
 			fmt.Printf("    - KeyTag: %d, Algorithm: %d (%s), %s\n",
 				a.KeyTag, a.Algorithm, algorithmName(a.Algorithm), valid)
 		}
+	}
+	if invalid > 0 {
+		return fmt.Errorf("trust anchor verification failed: %d anchor(s) are not currently valid", invalid)
 	}
 
 	return nil

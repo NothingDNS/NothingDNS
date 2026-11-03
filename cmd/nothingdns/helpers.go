@@ -267,6 +267,7 @@ func loadRootHintsFile(path string) ([]resolver.RootHint, error) {
 
 	// Map server name -> hint (accumulates IPv4/IPv6)
 	hintMap := make(map[string]*resolver.RootHint)
+	selected := make(map[string]bool)
 	var order []string
 
 	scanner := bufio.NewScanner(f)
@@ -308,16 +309,25 @@ func loadRootHintsFile(path string) ([]resolver.RootHint, error) {
 			}
 			if _, exists := hintMap[nsName]; !exists {
 				hintMap[nsName] = &resolver.RootHint{Name: nsName}
+			}
+			if !selected[nsName] {
 				order = append(order, nsName)
+				selected[nsName] = true
 			}
 		case "A":
-			if h, ok := hintMap[name]; ok {
-				h.IPv4 = append(h.IPv4, rdata)
+			h := hintMap[name]
+			if h == nil {
+				h = &resolver.RootHint{Name: name}
+				hintMap[name] = h
 			}
+			h.IPv4 = append(h.IPv4, rdata)
 		case "AAAA":
-			if h, ok := hintMap[name]; ok {
-				h.IPv6 = append(h.IPv6, rdata)
+			h := hintMap[name]
+			if h == nil {
+				h = &resolver.RootHint{Name: name}
+				hintMap[name] = h
 			}
+			h.IPv6 = append(h.IPv6, rdata)
 		}
 	}
 

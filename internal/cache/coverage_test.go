@@ -349,10 +349,10 @@ func TestSetInternal_PrefetchEnabledDurationGreaterThanThreshold(t *testing.T) {
 	}
 }
 
-// TestOnPrefetchComplete_SetsNotPrefetchable verifies that after
-// OnPrefetchComplete, the entry has CanPrefetch=false (because it was set
-// via isPrefetch=true path in setInternal).
-func TestOnPrefetchComplete_SetsNotPrefetchable(t *testing.T) {
+// TestOnPrefetchComplete_RearmsNextCycle verifies that a successful refresh
+// remains eligible for prefetch in its new TTL cycle. PrefetchDue keeps the
+// callback from firing immediately and prefetchFired gates it to once/cycle.
+func TestOnPrefetchComplete_RearmsNextCycle(t *testing.T) {
 	config := DefaultConfig()
 	config.Capacity = 128
 	config.PrefetchEnabled = true
@@ -369,15 +369,15 @@ func TestOnPrefetchComplete_SetsNotPrefetchable(t *testing.T) {
 		t.Fatal("expected initial entry to be prefetchable")
 	}
 
-	// Complete prefetch - this calls setInternal with isPrefetch=true.
+	// Complete prefetch: the replacement starts a fresh TTL cycle.
 	c.OnPrefetchComplete("prefetch-done.com:1", nil, 200)
 
 	entry = c.Get("prefetch-done.com:1")
 	if entry == nil {
 		t.Fatal("expected entry to still exist after OnPrefetchComplete")
 	}
-	if entry.CanPrefetch {
-		t.Error("expected CanPrefetch=false after OnPrefetchComplete (isPrefetch=true path)")
+	if !entry.CanPrefetch {
+		t.Error("expected CanPrefetch=true after OnPrefetchComplete so the next TTL cycle can refresh")
 	}
 }
 

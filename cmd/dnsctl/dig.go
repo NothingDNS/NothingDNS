@@ -21,6 +21,11 @@ func digQueryTCP(addr string, query []byte) (*protocol.Message, error) {
 	if len(query) > 0xffff {
 		return nil, fmt.Errorf("tcp query too large: %d bytes (max 65535)", len(query))
 	}
+	want, err := protocol.UnpackMessage(query)
+	if err != nil {
+		return nil, fmt.Errorf("unpack tcp query: %w", err)
+	}
+	defer want.Release()
 
 	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
 	if err != nil {
@@ -55,11 +60,24 @@ func digQueryTCP(addr string, query []byte) (*protocol.Message, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(query) >= 2 && m.Header.ID != binary.BigEndian.Uint16(query[:2]) {
+	if !digResponseMatchesQuery(m, want) {
 		m.Release()
-		return nil, fmt.Errorf("tcp response ID %d does not match query", m.Header.ID)
+		return nil, fmt.Errorf("tcp response does not match query")
 	}
 	return m, nil
+}
+
+// digResponseMatchesQuery validates the complete DNS transaction tuple used
+// by dnsctl: response direction, ID and the echoed question. ID alone is only
+// 16 bits and cannot distinguish a delayed or stray response for another name.
+func digResponseMatchesQuery(resp, query *protocol.Message) bool {
+	if resp == nil || query == nil || !resp.Header.Flags.QR || resp.Header.ID != query.Header.ID ||
+		len(resp.Questions) != 1 || len(query.Questions) != 1 {
+		return false
+	}
+	got, want := resp.Questions[0], query.Questions[0]
+	return got != nil && want != nil && got.Name != nil && want.Name != nil &&
+		got.QType == want.QType && got.QClass == want.QClass && got.Name.Equal(want.Name)
 }
 
 // digServerAddr returns the host:port to dial for a dig "@server" argument,
@@ -238,7 +256,7 @@ func cmdDig(args []string) error {
 		if err != nil {
 			continue
 		}
-		if m.Header.ID != queryID || !m.Header.Flags.QR {
+		if m.Header.ID != queryID || !digResponseMatchesQuery(m, msg) {
 			m.Release()
 			continue
 		}
