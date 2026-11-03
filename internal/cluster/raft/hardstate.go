@@ -73,6 +73,14 @@ func loadHardState(dataDir string) (HardState, error) {
 		}
 		hs.VotedFor = NodeID(buf)
 	}
+	var trailing [1]byte
+	n, err := f.Read(trailing[:])
+	if n != 0 {
+		return HardState{}, errors.New("hardstate has trailing data")
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
+		return HardState{}, fmt.Errorf("check hardstate EOF: %w", err)
+	}
 	return hs, nil
 }
 
