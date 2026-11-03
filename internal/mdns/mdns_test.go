@@ -295,6 +295,41 @@ func TestResponder_RegisterService(t *testing.T) {
 	}
 }
 
+func TestResponderRegisterServiceDetachesCallerState(t *testing.T) {
+	r := NewResponder(DefaultConfig(), nil)
+	r.probedHostnames["host.local."] = true
+	svc := &Service{
+		InstanceName: "Printer", ServiceType: "_http._tcp", HostName: "host.local.",
+		Port: 80, TXT: map[string]string{"path": "/original"},
+	}
+	if err := r.RegisterService(svc); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.RegisterService(nil); err == nil {
+		t.Fatal("nil service registration succeeded")
+	}
+
+	svc.Port = 8080
+	svc.TXT["path"] = "/mutated"
+	stored := r.services["Printer._http._tcp.local."]
+	if stored == nil || stored.Port != 80 || stored.TXT["path"] != "/original" {
+		t.Fatalf("caller mutation changed registered service: %#v", stored)
+	}
+}
+
+func TestResponderRegisterHostnameDetachesIP(t *testing.T) {
+	r := NewResponder(DefaultConfig(), nil)
+	r.probedHostnames["host.local."] = true
+	ip := net.IPv4(192, 0, 2, 1)
+	if err := r.RegisterHostname("host.local.", ip); err != nil {
+		t.Fatal(err)
+	}
+	ip[len(ip)-1] = 99
+	if got := r.hostnames["host.local."].String(); got != "192.0.2.1" {
+		t.Fatalf("caller mutation changed registered address: %s", got)
+	}
+}
+
 func TestResponder_UnregisterService(t *testing.T) {
 	logger := util.NewLogger(util.INFO, util.TextFormat, nil)
 	cfg := DefaultConfig()

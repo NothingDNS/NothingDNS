@@ -243,27 +243,31 @@ func (r *Responder) Stop() {
 
 // RegisterService registers a service for advertisement.
 func (r *Responder) RegisterService(svc *Service) error {
+	if svc == nil {
+		return fmt.Errorf("service is nil")
+	}
 	if svc.Domain == "" {
 		svc.Domain = "local"
 	}
 	if svc.TTL == 0 {
 		svc.TTL = ServiceTTL
 	}
+	stored := cloneService(svc)
 
 	// Probe for hostname conflicts
-	if err := r.probeHostname(svc.HostName); err != nil {
+	if err := r.probeHostname(stored.HostName); err != nil {
 		return fmt.Errorf("hostname probe failed: %w", err)
 	}
 
 	r.servicesMu.Lock()
-	r.services[svc.FullServiceName()] = svc
+	r.services[stored.FullServiceName()] = stored
 	r.servicesMu.Unlock()
 
 	// Send announcement
-	r.announceService(svc)
+	r.announceService(stored)
 
 	if r.logger != nil {
-		r.logger.Infof("mDNS: registered service %s", svc.FullServiceName())
+		r.logger.Infof("mDNS: registered service %s", stored.FullServiceName())
 	}
 
 	return nil
@@ -297,11 +301,12 @@ func (r *Responder) RegisterHostname(hostname string, ip net.IP) error {
 	}
 
 	r.hostnamesMu.Lock()
-	r.hostnames[hostname] = ip
+	storedIP := append(net.IP(nil), ip...)
+	r.hostnames[hostname] = storedIP
 	r.hostnamesMu.Unlock()
 
 	// Announce hostname
-	r.announceHostname(hostname, ip)
+	r.announceHostname(hostname, storedIP)
 
 	return nil
 }
