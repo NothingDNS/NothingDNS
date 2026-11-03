@@ -12,6 +12,8 @@
 
 NothingDNS is a self-contained DNS server written in Go. It includes authoritative DNS, recursive forwarding/resolution, DNSSEC, encrypted transports, policy filtering, clustering, a REST management API, `dnsctl`, and an embedded React dashboard.
 
+**Contents:** [What is included](#what-is-included) · [Quick start](#quick-start) · [Transports and ports](#transports-and-ports) · [How a query is answered](#how-a-query-is-answered) · [Managing the server](#managing-the-server) · [Clustering](#clustering) · [Design principles](#design-principles) · [Repository map](#repository-map) · [Documentation](#documentation) · [Development](#development)
+
 ## What is included
 
 - **DNS serving**: UDP/TCP DNS, authoritative zones (with an answer cache), forwarding, iterative resolution, DNS64, SVCB/HTTPS, IDNA, QNAME minimization, and RFC 6761 special-use names.
@@ -41,6 +43,19 @@ make build-web
 go test ./... -count=1 -short
 ```
 
+Then try it (use a port such as 5354 if you cannot bind port 53):
+
+```bash
+dig @127.0.0.1 example.com A
+dnsctl zone list                      # talks to the API on http://localhost:8080
+```
+
+On a fresh install, create the dashboard admin from the local machine (the bootstrap endpoint only accepts localhost; the password is read from stdin):
+
+```bash
+dnsctl server bootstrap --username admin
+```
+
 Install scripts are available for packaged/binary-style setups:
 
 ```bash
@@ -55,6 +70,72 @@ For Docker and Kubernetes examples, see [QUICK_START.md](QUICK_START.md) and [do
 
 > **Docker / GHCR:** The container image is public and can be pulled without
 > authentication: `docker pull ghcr.io/nothingdns/nothingdns:latest`.
+
+## Transports and ports
+
+Every listener is optional and configured in [config.example.yaml](config.example.yaml); the ports below are the defaults used there and in the container image.
+
+| Transport | Default | Config |
+|---|---|---|
+| DNS over UDP / TCP | `53` | `server.port`, `server.bind` |
+| DNS over TLS (DoT) | `853/tcp` | `server.tls` |
+| DNS over QUIC (DoQ) | `853/udp` | `server.quic` |
+| Zone transfer over TLS (XoT, RFC 9103) | `853/tcp` (deny-by-default) | `server.xot` |
+| DNS over HTTPS (DoH, RFC 8484) | `/dns-query` on the API listener | `server.http.doh_enabled` |
+| Oblivious DoH (RFC 9230) | `/odoh` on the API listener | `server.http.odoh_enabled` |
+| DNS over WebSocket (DoWS) | `/dns-ws` on the API listener | `server.http.dows_enabled` |
+| DNS Stateful Operations (DSO, RFC 8490) | keepalive sessions on TCP / DoT | `server.tls` |
+| REST API, dashboard, WebSocket stream | `8080` | `server.http` |
+| Prometheus metrics | `9153` (loopback unless configured) | `metrics` |
+| Cluster gossip / Raft RPC | `7946` | `cluster` |
+
+## How a query is answered
+
+```
+UDP │ TCP │ DoT │ DoH │ DoQ │ ODoH
+              ▼
+ ACL → recursion policy → RPZ → rate limit → cookies
+              ▼
+ ANY / AXFR / IXFR / NOTIFY / UPDATE handling
+              ▼
+ blocklist → local zones (split-horizon, CNAME chasing, special-use names)
+              ▼
+ cache → iterative resolver or upstream forwarding → DNSSEC validation
+```
+
+Local zones are consulted before the caches, so cached upstream data can never shadow a zone you serve. Clients outside the `allow_recursion` list still get authoritative answers but are refused recursion. The full stage order is documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [AGENTS.md](AGENTS.md).
+
+## Managing the server
+
+**CLI.** `dnsctl` covers zones, records, cache, cluster, blocklists, config, DNSSEC and a built-in `dig`:
+
+```bash
+dnsctl zone add example.com
+dnsctl record add example.com www A 192.0.2.10
+dnsctl cache stats
+dnsctl dig @127.0.0.1 www.example.com A
+dnsctl dnssec                         # DNSSEC key and signing operations
+```
+
+Global flags (`-server`, `-api-key`) and the `NOTHINGDNS_SERVER` / `NOTHINGDNS_API_KEY` variables are described in [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md).
+
+**REST API.** The OpenAPI document is served at `/api/openapi.json` on every node; see [docs/API_REFERENCE.md](docs/API_REFERENCE.md). The client SDKs in [`sdk/`](sdk/README.md) wrap the same operations.
+
+**Dashboard.** The React dashboard is embedded in the binary and served from the API listener: live query stream, zones and SOA editor, cache, ACL and recursion allow list, users, and cluster topology.
+
+**Hot reload.** `SIGHUP` or `POST /api/v1/config/reload` re-reads the config. Everything is prepared first, so a bad config or zone file aborts the reload and leaves the running state untouched. Check a file beforehand with `nothingdns --config FILE -validate-config`. TLS certificates are re-read on every reload. Settings that need a restart are listed in [docs/CONFIG_REFERENCE.md](docs/CONFIG_REFERENCE.md).
+
+## Clustering
+
+Nodes find each other with SWIM-style gossip (AES-256-GCM encrypted) and can replicate zone data through Raft consensus, with optional mutual TLS on the Raft RPC. In Raft mode, dynamic updates received by a follower can be forwarded to the leader. Example three-node configs live in `deploy/config-node{1,2,3}.yaml`. Mixed-version clusters have caveats; see the upgrade table in [docs/SPECIFICATION.md](docs/SPECIFICATION.md) §10.4 before a rolling upgrade.
+
+## Design principles
+
+- **Small dependency surface.** The DNS protocol, YAML parser, storage engine, clustering, DNSSEC, HPKE/ODoH and the rest are written on the Go standard library. Direct dependencies are limited to `quic-go` (DoQ), `golang.org/x/sys` and the OpenTelemetry SDK; see [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md).
+- **Static, single binary.** Built with `CGO_ENABLED=0`; the container image is built `FROM scratch`.
+- **Strict configuration.** Unknown ACL types, bad booleans, tab indentation and unservable zone records are load errors rather than silent defaults.
+- **Bounded DNSSEC work.** Validator limits are fixed constants to resist KeyTrap-style attacks (CVE-2023-50387, CVE-2023-50868).
+- **Runtime state lives beside the config.** Users, ACL changes and no-restart tunables made through the API or dashboard are persisted under `storage.data_dir` and win over the YAML; see [docs/CONFIG_REFERENCE.md](docs/CONFIG_REFERENCE.md).
 
 ## Repository map
 
