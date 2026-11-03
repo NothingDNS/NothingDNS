@@ -243,6 +243,29 @@ func TestViewZoneFiles(t *testing.T) {
 	}
 }
 
+func TestSplitHorizonDetachesConfigurationAndViews(t *testing.T) {
+	configs := []ViewConfig{{
+		Name:         "internal",
+		MatchClients: []string{"10.0.0.0/8"},
+		ZoneFiles:    []string{"original.zone"},
+	}}
+	sh, err := NewSplitHorizon(configs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	configs[0].ZoneFiles[0] = "input-mutated.zone"
+	views := sh.Views()
+	views[0].Name = "output-mutated"
+	views[0].ZoneFiles[0] = "output-mutated.zone"
+	views[0].MatchClients[0].IP[0] ^= 0xff
+
+	got := sh.SelectView(net.ParseIP("10.0.0.1"))
+	if got == nil || got.Name != "internal" || len(got.ZoneFiles) != 1 || got.ZoneFiles[0] != "original.zone" {
+		t.Fatalf("external mutation changed internal view: %#v", got)
+	}
+}
+
 func TestViews_ReturnsCopy(t *testing.T) {
 	sh, err := NewSplitHorizon([]ViewConfig{
 		{Name: "a", MatchClients: []string{"any"}},

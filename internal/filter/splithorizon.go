@@ -64,7 +64,7 @@ type ViewConfig struct {
 func newView(cfg ViewConfig) (*View, error) {
 	v := &View{
 		Name:      cfg.Name,
-		ZoneFiles: cfg.ZoneFiles,
+		ZoneFiles: append([]string(nil), cfg.ZoneFiles...),
 	}
 
 	for _, cidr := range cfg.MatchClients {
@@ -129,8 +129,31 @@ func (sh *SplitHorizon) Views() []*View {
 	defer sh.mu.RUnlock()
 
 	out := make([]*View, len(sh.views))
-	copy(out, sh.views)
+	for i, view := range sh.views {
+		out[i] = cloneView(view)
+	}
 	return out
+}
+
+func cloneView(view *View) *View {
+	if view == nil {
+		return nil
+	}
+	clone := &View{
+		Name:         view.Name,
+		ZoneFiles:    append([]string(nil), view.ZoneFiles...),
+		MatchClients: make([]*net.IPNet, len(view.MatchClients)),
+	}
+	for i, network := range view.MatchClients {
+		if network == nil {
+			continue
+		}
+		clone.MatchClients[i] = &net.IPNet{
+			IP:   append(net.IP(nil), network.IP...),
+			Mask: append(net.IPMask(nil), network.Mask...),
+		}
+	}
+	return clone
 }
 
 // ViewNames returns the names of all configured views in order.
