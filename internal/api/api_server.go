@@ -26,6 +26,10 @@ func (s *Server) handleServerConfig(w http.ResponseWriter, r *http.Request) {
 	configGetter := s.configGetter
 	s.runtimeMu.RUnlock()
 	if configGetter != nil {
+		// Runtime override PUTs mutate the live config in place under
+		// overridesMu. Copy every response field while holding that lock so
+		// this endpoint cannot race with ApplyRuntimeOverrides.
+		s.overridesMu.Lock()
 		cfg := configGetter()
 		if cfg != nil {
 			// Real values from config — the dashboard's server-config tile
@@ -36,13 +40,14 @@ func (s *Server) handleServerConfig(w http.ResponseWriter, r *http.Request) {
 				Enabled:     cfg.DNS64.Enabled,
 				Prefix:      cfg.DNS64.Prefix,
 				PrefixLen:   cfg.DNS64.PrefixLen,
-				ExcludeNets: cfg.DNS64.ExcludeNets,
+				ExcludeNets: append([]string(nil), cfg.DNS64.ExcludeNets...),
 			}
 			resp.Cookie = CookieConfigInfo{
 				Enabled:        cfg.Cookie.Enabled,
 				SecretRotation: cfg.Cookie.SecretRotation,
 			}
 		}
+		s.overridesMu.Unlock()
 	}
 
 	s.writeJSON(w, http.StatusOK, resp)
