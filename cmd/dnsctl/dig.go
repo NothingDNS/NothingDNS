@@ -251,6 +251,7 @@ func cmdDig(args []string) error {
 	// records the daemon explicitly told us to refetch. Try once.
 	if resp.Header.Flags.TC {
 		if tcpResp, tcpErr := digQueryTCP(addr, buf[:n]); tcpErr == nil {
+			resp.Release()
 			resp = tcpResp
 		} else {
 			fmt.Fprintf(os.Stderr, ";; warning: UDP response truncated and TCP retry failed: %v\n", tcpErr)

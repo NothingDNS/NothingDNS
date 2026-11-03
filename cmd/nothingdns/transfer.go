@@ -347,7 +347,7 @@ func applyResponseWriterRewrites(w server.ResponseWriter, msg *protocol.Message)
 			msg.Header.Flags.Opcode = cw.opcode
 			msg.Header.Flags.RD = cw.rd
 			msg.Header.Flags.CD = cw.cd
-			if !cw.RecursionAllowed() {
+			if !cw.advertiseRecursion() {
 				msg.Header.Flags.RA = false
 			}
 			cw.normalizeOPT(msg)

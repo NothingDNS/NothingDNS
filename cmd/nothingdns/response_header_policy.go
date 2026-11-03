@@ -39,6 +39,11 @@ type headerPolicyResponseWriter struct {
 	// advertises RA=1 tells clients to keep bringing it recursive work it
 	// refuses by design.
 	recursionAvailable bool
+	// recursionEnabled is the server policy gate (authoritative_only=false).
+	// It remains true when upstreams are temporarily or deliberately absent so
+	// allowed clients can still use cached recursive data; RA advertisement is
+	// governed separately by recursionAvailable.
+	recursionEnabled bool
 
 	// summarize makes Write build the compact answer summary the dashboard
 	// Query Log shows. Off when no dashboard is attached, so the per-response
@@ -112,6 +117,10 @@ func summarizeAnswers(msg *protocol.Message) []string {
 // RecursionAllowed reports whether the query this writer answers may use
 // recursion: the server recurses at all, and this client is permitted to.
 func (hw *headerPolicyResponseWriter) RecursionAllowed() bool {
+	return hw.recursionEnabled && !hw.recursionDenied
+}
+
+func (hw *headerPolicyResponseWriter) advertiseRecursion() bool {
 	return hw.recursionAvailable && !hw.recursionDenied
 }
 
@@ -159,7 +168,7 @@ func (hw *headerPolicyResponseWriter) Write(msg *protocol.Message) (int, error) 
 		msg.Header.Flags.Opcode = hw.opcode
 		msg.Header.Flags.RD = hw.rd
 		msg.Header.Flags.CD = hw.cd
-		if !hw.RecursionAllowed() {
+		if !hw.advertiseRecursion() {
 			msg.Header.Flags.RA = false
 		}
 		if !hw.reqDO && !hw.reqAD {
@@ -235,6 +244,7 @@ func newHeaderPolicyWriter(h *integratedHandler, w server.ResponseWriter, req *p
 		inner:              w,
 		opcode:             protocol.OpcodeQuery,
 		recursionAvailable: recursionAvailable(h),
+		recursionEnabled:   recursionEnabled(h),
 		summarize:          h != nil && h.dashboardServer != nil,
 	}
 	if req != nil {
@@ -254,5 +264,12 @@ func recursionAvailable(h *integratedHandler) bool {
 	if h == nil || h.config == nil {
 		return true
 	}
-	return !h.config.Resolution.AuthoritativeOnly
+	if h.config.Resolution.AuthoritativeOnly {
+		return false
+	}
+	return h.resolver != nil || h.upstream != nil || h.loadBalancer != nil
+}
+
+func recursionEnabled(h *integratedHandler) bool {
+	return h == nil || h.config == nil || !h.config.Resolution.AuthoritativeOnly
 }

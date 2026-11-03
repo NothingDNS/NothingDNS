@@ -381,6 +381,16 @@ cache:
 	}
 }
 
+func TestValidateCacheRejectsNegativeStaleGrace(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Cache.StaleGraceSecs = -1
+
+	got := strings.Join(cfg.Validate(), "; ")
+	if !strings.Contains(got, "stale_grace_secs cannot be negative") {
+		t.Fatalf("Validate() = %q, want stale_grace_secs error", got)
+	}
+}
+
 func TestUnmarshalYAMLRejectsInvalidCacheIntegers(t *testing.T) {
 	tests := []struct {
 		name  string

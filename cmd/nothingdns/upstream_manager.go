@@ -5,6 +5,7 @@ package main
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/config"
@@ -17,6 +18,7 @@ type UpstreamManager struct {
 	Client       *upstream.Client
 	LoadBalancer *upstream.LoadBalancer
 	logger       *util.Logger
+	stopOnce     sync.Once
 }
 
 // NewUpstreamManager creates a new upstream manager with the given configuration.
@@ -98,12 +100,14 @@ func (m *UpstreamManager) Stop() {
 	if m == nil {
 		return
 	}
-	if m.Client != nil {
-		logManagerStopError(m.logger, "upstream client", m.Client.Close())
-	}
-	if m.LoadBalancer != nil {
-		logManagerStopError(m.logger, "upstream load balancer", m.LoadBalancer.Close())
-	}
+	m.stopOnce.Do(func() {
+		if m.Client != nil {
+			logManagerStopError(m.logger, "upstream client", m.Client.Close())
+		}
+		if m.LoadBalancer != nil {
+			logManagerStopError(m.logger, "upstream load balancer", m.LoadBalancer.Close())
+		}
+	})
 }
 
 func logManagerStopError(logger *util.Logger, component string, err error) {

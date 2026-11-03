@@ -175,9 +175,8 @@ func TestLoadConfigFileUnreadable(t *testing.T) {
 	}
 }
 
-// TestRunWithContextCtxCancel — bring run() up via injected signal, then
-// additionally cancel the context. Either path should drive a clean
-// shutdown.
+// TestRunWithContextCtxCancel verifies that the supplied context itself drives
+// shutdown; no OS signal should be required (F784).
 func TestRunWithContextCtxCancel(t *testing.T) {
 	cfgPath := writeMinimalRunConfig(t)
 	prev := *configPath
@@ -189,26 +188,29 @@ func TestRunWithContextCtxCancel(t *testing.T) {
 	t.Cleanup(restore)
 
 	done := make(chan error, 1)
+	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		cfg, err := loadConfig(cfgPath)
 		if err != nil {
 			done <- err
 			return
 		}
-		ctx, cancel := context.WithCancel(context.Background())
-		t.Cleanup(cancel)
 		done <- runWithContext(ctx, cfg)
 	}()
 
 	time.Sleep(500 * time.Millisecond)
-	sigCh <- syscall.SIGTERM
+	cancel()
 
 	select {
 	case err := <-done:
 		if err != nil {
 			t.Errorf("runWithContext returned error: %v", err)
 		}
+		t.Log("FIX VERIFIED")
 	case <-time.After(15 * time.Second):
+		// Retire a pre-fix server before failing the test.
+		sigCh <- syscall.SIGTERM
+		<-done
 		t.Fatal("runWithContext did not return within 15s")
 	}
 }

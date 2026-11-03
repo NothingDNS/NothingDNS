@@ -4,12 +4,110 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/nothingdns/nothingdns/internal/config"
+	"github.com/nothingdns/nothingdns/internal/util"
 )
+
+func cachePersistenceWorkers() int {
+	buf := make([]byte, 1<<20)
+	n := runtime.Stack(buf, true)
+	return strings.Count(string(buf[:n]), "CacheManager).StartPersistence.func1")
+}
+
+func upstreamHealthWorkers() int {
+	buf := make([]byte, 1<<20)
+	n := runtime.Stack(buf, true)
+	return strings.Count(string(buf[:n]), "upstream.(*Client).healthCheckLoop")
+}
+
+func rateLimiterWorkers() int {
+	buf := make([]byte, 1<<20)
+	n := runtime.Stack(buf, true)
+	return strings.Count(string(buf[:n]), "filter.(*RateLimiter).cleanup")
+}
+
+// F783: every startup error after cache persistence begins must retire the
+// worker. Repeated invalid blocklist starts used to leave one worker each.
+func TestRunWithContext_StartupErrorStopsCachePersistence(t *testing.T) {
+	control := NewCacheManager(config.DefaultConfig(), util.NewLogger(util.ERROR, util.TextFormat, nil))
+	control.StartPersistence(time.Hour)
+	control.Stop()
+	base := cachePersistenceWorkers()
+
+	for i := 0; i < 4; i++ {
+		cfg := config.DefaultConfig()
+		cfg.ZoneDir = t.TempDir()
+		cfg.Blocklist.Enabled = true
+		cfg.Blocklist.Files = []string{t.TempDir()}
+		if err := runWithContext(context.Background(), cfg); err == nil {
+			t.Fatal("expected startup to fail for a directory blocklist source")
+		}
+	}
+	time.Sleep(100 * time.Millisecond)
+	if got := cachePersistenceWorkers(); got != base {
+		t.Fatalf("cache persistence workers after failed startups = %d, want %d", got, base)
+	}
+	t.Log("FIX VERIFIED")
+}
+
+// F785: manager construction after the upstream client starts can fail; the
+// initial client's health-check worker must still be retired.
+func TestRunWithContext_StartupErrorStopsUpstream(t *testing.T) {
+	control, err := NewUpstreamManager(config.DefaultConfig(), util.NewLogger(util.ERROR, util.TextFormat, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	control.Stop()
+	base := upstreamHealthWorkers()
+
+	for i := 0; i < 4; i++ {
+		cfg := config.DefaultConfig()
+		cfg.ZoneDir = t.TempDir()
+		cfg.Blocklist.Enabled = true
+		cfg.Blocklist.Files = []string{t.TempDir()}
+		if err := runWithContext(context.Background(), cfg); err == nil {
+			t.Fatal("expected startup to fail for a directory blocklist source")
+		}
+	}
+	time.Sleep(100 * time.Millisecond)
+	if got := upstreamHealthWorkers(); got != base {
+		t.Fatalf("upstream health workers after failed startups = %d, want %d", got, base)
+	}
+	t.Log("FIX VERIFIED")
+}
+
+// F786: a metrics startup rejection happens after the security manager has
+// started its limiter cleanup worker; the error path must stop it.
+func TestRunWithContext_StartupErrorStopsSecurity(t *testing.T) {
+	control, err := NewSecurityManager(config.DefaultConfig(), util.NewLogger(util.ERROR, util.TextFormat, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	control.Stop()
+	base := rateLimiterWorkers()
+
+	for i := 0; i < 4; i++ {
+		cfg := config.DefaultConfig()
+		cfg.ZoneDir = t.TempDir()
+		cfg.Metrics.Enabled = true
+		cfg.Metrics.Bind = "0.0.0.0:9153"
+		cfg.Metrics.AuthToken = ""
+		if err := runWithContext(context.Background(), cfg); err == nil {
+			t.Fatal("expected unauthenticated non-loopback metrics startup to fail")
+		}
+	}
+	time.Sleep(100 * time.Millisecond)
+	if got := rateLimiterWorkers(); got != base {
+		t.Fatalf("rate limiter workers after failed startups = %d, want %d", got, base)
+	}
+	t.Log("FIX VERIFIED")
+}
 
 // ============================================================================
 // runWithContext Phase 1 error-path coverage

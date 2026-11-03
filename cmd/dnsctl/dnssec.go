@@ -172,7 +172,15 @@ func cmdDNSSECGenerateKey(args []string) error {
 
 	// Normalize key type
 	*keyType = strings.ToUpper(*keyType)
-	isKSK := *keyType == "KSK"
+	var isKSK bool
+	switch *keyType {
+	case "KSK":
+		isKSK = true
+	case "ZSK":
+		isKSK = false
+	default:
+		return fmt.Errorf("invalid key type %q: must be KSK or ZSK", *keyType)
+	}
 
 	alg, err := validateGeneratedKeyAlgorithm(*algorithm)
 	if err != nil {

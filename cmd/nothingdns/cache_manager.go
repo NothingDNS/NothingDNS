@@ -225,8 +225,8 @@ func (m *CacheManager) SaveCacheToKV(kv *storage.KVStore) error {
 	}
 
 	entries := m.Cache.Save()
-	if len(entries) == 0 {
-		return nil
+	if entries == nil {
+		entries = []cache.CacheEntryJSON{}
 	}
 
 	return kv.Update(func(tx *storage.Tx) error {

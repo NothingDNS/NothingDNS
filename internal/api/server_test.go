@@ -86,6 +86,37 @@ func TestAPIServerStartReturnsBindError(t *testing.T) {
 	}
 }
 
+func TestAPIServerDoubleStartDoesNotOrphanListener(t *testing.T) {
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := probe.Addr().String()
+	if err := probe.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s := NewServer(config.HTTPConfig{Enabled: true, Bind: addr}, nil, nil, nil, nil, nil, nil)
+	if err := s.Start(); err != nil {
+		t.Fatalf("first Start: %v", err)
+	}
+	if err := s.Start(); err == nil {
+		t.Fatal("second Start unexpectedly succeeded")
+	}
+	if err := s.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if err := s.Start(); err == nil {
+		t.Fatal("restart after Stop unexpectedly succeeded")
+	}
+
+	c, err := net.DialTimeout("tcp", addr, 250*time.Millisecond)
+	if err == nil {
+		_ = c.Close()
+		t.Fatal("listener still accepts connections after Stop")
+	}
+}
+
 func TestAPIStatus(t *testing.T) {
 	cfg := config.HTTPConfig{
 		Enabled:   true,

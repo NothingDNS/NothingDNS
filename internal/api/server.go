@@ -45,6 +45,9 @@ import (
 // Server provides HTTP API for DNS server management.
 type Server struct {
 	config           config.HTTPConfig
+	lifecycleMu      sync.Mutex
+	started          bool
+	stopped          bool
 	runtimeMu        sync.RWMutex
 	httpServer       *http.Server
 	tlsCerts         atomic.Pointer[server.CertReloader] // HTTPS certificate; ReloadTLS re-reads it (F610)
@@ -730,6 +733,14 @@ func (s *Server) WithTracer(t *otel.Tracer) *Server {
 
 // Start starts the API server.
 func (s *Server) Start() error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.started {
+		return fmt.Errorf("API server already started")
+	}
+	if s.stopped {
+		return fmt.Errorf("API server cannot be restarted after Stop")
+	}
 	if !s.config.Enabled {
 		return nil
 	}
@@ -934,6 +945,7 @@ func (s *Server) Start() error {
 			}
 		}
 	}()
+	s.started = true
 
 	return nil
 }
@@ -959,6 +971,13 @@ func (s *Server) SetGoroutineBaseline() {
 
 // Stop stops the API server.
 func (s *Server) Stop() error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if !s.started {
+		return nil
+	}
+	s.stopped = true
+
 	// Signal cleanup goroutines to stop (idempotent via sync.Once)
 	s.stopOnce.Do(func() {
 		if s.stopCh != nil {
@@ -970,13 +989,18 @@ func (s *Server) Stop() error {
 	s.rateLimitWg.Wait()
 
 	if s.httpServer == nil {
+		s.started = false
 		return nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	return s.httpServer.Shutdown(ctx)
+	err := s.httpServer.Shutdown(ctx)
+	if err == nil {
+		s.started = false
+	}
+	return err
 }
 
 // rateLimitCleanupLoop periodically cleans up stale entries from rate limiters.

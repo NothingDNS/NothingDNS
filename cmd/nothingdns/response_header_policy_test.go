@@ -5,6 +5,7 @@ import (
 
 	"github.com/nothingdns/nothingdns/internal/cache"
 	"github.com/nothingdns/nothingdns/internal/protocol"
+	"github.com/nothingdns/nothingdns/internal/upstream"
 	"github.com/nothingdns/nothingdns/internal/zone"
 )
 
@@ -74,11 +75,26 @@ func TestResponseHeader_RAReflectsRecursionSupport(t *testing.T) {
 	t.Run("recursion enabled", func(t *testing.T) {
 		h := headerEchoHandler(t)
 		h.config.Resolution.AuthoritativeOnly = false
+		h.upstream = &upstream.Client{}
 
 		resp := serveOne(t, h, newTestQuery(t, "www.example.com.", protocol.TypeA))
 		if resp == nil || !resp.Header.Flags.RA {
 			t.Fatalf("RA should be set when the server recurses: %+v", resp)
 		}
+	})
+
+	t.Run("no recursion path", func(t *testing.T) {
+		h := headerEchoHandler(t)
+		h.config.Resolution.AuthoritativeOnly = false
+
+		resp := serveOne(t, h, newTestQuery(t, "elsewhere.example.org.", protocol.TypeA))
+		if resp == nil {
+			t.Fatal("no response")
+		}
+		if resp.Header.Flags.RA {
+			t.Error("RA set when no resolver, upstream, or load balancer exists")
+		}
+		t.Log("FIX VERIFIED")
 	})
 
 	t.Run("authoritative only", func(t *testing.T) {

@@ -604,6 +604,9 @@ func (c *Config) validateCache() []string {
 	if c.Cache.NegativeTTL < 0 {
 		errors = append(errors, "cache: negative_ttl cannot be negative")
 	}
+	if c.Cache.StaleGraceSecs < 0 {
+		errors = append(errors, "cache: stale_grace_secs cannot be negative")
+	}
 
 	// Validate prefetch threshold
 	if c.Cache.Prefetch && c.Cache.PrefetchThreshold < 1 {

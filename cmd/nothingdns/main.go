@@ -540,12 +540,20 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 	cacheManager.LoadCache()
 	// Start periodic cache persistence
 	cacheManager.StartPersistence(5 * time.Minute)
+	// Stop is idempotent, so keep it as a lifecycle backstop as well as in
+	// the graceful-shutdown sequence. Manager construction below can fail
+	// after the persistence worker has started; without this defer each
+	// failed startup leaves that worker running for the process lifetime.
+	defer cacheManager.Stop()
 
 	// Initialize upstream manager
 	upstreamManager, err := NewUpstreamManager(cfg, logger)
 	if err != nil {
 		return fmt.Errorf("creating upstream manager: %w", err)
 	}
+	// Backstop every later startup error; Stop is idempotent because reload
+	// and graceful shutdown may already have retired this initial manager.
+	defer upstreamManager.Stop()
 	client := upstreamManager.Client
 	loadBalancer := upstreamManager.LoadBalancer
 
@@ -565,6 +573,9 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("creating security manager: %w", err)
 	}
+	// Rate-limit components own cleanup goroutines; retire them on every
+	// later startup failure as well as during the explicit shutdown path.
+	defer securityManager.Stop()
 	bl := securityManager.Result().Blocklist
 	rpzEngine := securityManager.Result().RPZEngine
 	geoEngine := securityManager.Result().GeoEngine
@@ -1137,9 +1148,19 @@ func runWithContext(ctx context.Context, cfg *config.Config) error {
 		}
 	}
 
-	// Wait for signals
+	// Wait for signals or caller cancellation. A nil context is tolerated as
+	// an uncancellable background context for defensive use by embedders.
+	var ctxDone <-chan struct{}
+	if ctx != nil {
+		ctxDone = ctx.Done()
+	}
 	for {
-		sig := <-sigChan
+		var sig os.Signal
+		select {
+		case sig = <-sigChan:
+		case <-ctxDone:
+			sig = syscall.SIGTERM
+		}
 		switch sig {
 		case syscall.SIGINT, syscall.SIGTERM:
 			logger.Info("Shutting down gracefully...")
