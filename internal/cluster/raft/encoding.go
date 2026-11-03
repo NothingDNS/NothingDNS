@@ -560,12 +560,17 @@ func decodeSnapshotRequest(s *SnapshotRequest, data []byte) error {
 	off += 8
 	s.LastTerm = Term(binary.BigEndian.Uint64(data[off:]))
 	off += 8
-	if len(data)-off >= 16 {
+	switch trailerLen := len(data) - off; trailerLen {
+	case 0:
+		// Legacy unchunked snapshot: no trailer.
+	case 16:
 		s.Offset = binary.BigEndian.Uint64(data[off:])
 		s.Total = binary.BigEndian.Uint64(data[off+8:])
 		if s.Total == 0 {
 			return fmt.Errorf("SnapshotRequest: chunk trailer with zero total")
 		}
+	default:
+		return fmt.Errorf("SnapshotRequest: invalid chunk trailer length %d", trailerLen)
 	}
 	return nil
 }
