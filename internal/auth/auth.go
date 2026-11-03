@@ -16,6 +16,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -858,6 +859,10 @@ var dummyHash = sync.OnceValue(func() []byte {
 func (s *Store) VerifyUserPassword(username, password string) bool {
 	s.mu.RLock()
 	user, ok := s.users[username]
+	var hash []byte
+	if ok {
+		hash = append([]byte(nil), user.Hash...)
+	}
 	s.mu.RUnlock()
 
 	if !ok {
@@ -869,7 +874,7 @@ func (s *Store) VerifyUserPassword(username, password string) bool {
 		}
 		return false
 	}
-	return VerifyPassword(password, user.Hash)
+	return VerifyPassword(password, hash)
 }
 
 // UsesAutoCreatedAdmin reports whether the only way in is still the admin
@@ -1249,7 +1254,6 @@ func (s *Store) userTokenValiditySnapshot() map[string]tokenUserSnapshot {
 
 func (s *Store) prepareLoadedTokens(tokens map[string]*Token, now time.Time, users map[string]tokenUserSnapshot) (map[string]*Token, map[string]int, error) {
 	filtered := make(map[string]*Token, len(tokens))
-	activeSessions := make(map[string]int)
 	for tokenKey, t := range tokens {
 		if t == nil {
 			return nil, nil, fmt.Errorf("tokens file contains nil token for %q", tokenKey)
@@ -1286,7 +1290,36 @@ func (s *Store) prepareLoadedTokens(tokens map[string]*Token, now time.Time, use
 			continue
 		}
 		filtered[tokenKey] = t
-		activeSessions[t.Username]++
+	}
+
+	if s.maxSessionsPerUser > 0 {
+		type loadedToken struct {
+			key     string
+			created time.Time
+		}
+		byUser := make(map[string][]loadedToken)
+		for key, token := range filtered {
+			byUser[token.Username] = append(byUser[token.Username], loadedToken{key: key, created: token.CreatedAt})
+		}
+		for _, entries := range byUser {
+			if len(entries) <= s.maxSessionsPerUser {
+				continue
+			}
+			sort.Slice(entries, func(i, j int) bool {
+				if entries[i].created.Equal(entries[j].created) {
+					return entries[i].key < entries[j].key
+				}
+				return entries[i].created.After(entries[j].created)
+			})
+			for _, entry := range entries[s.maxSessionsPerUser:] {
+				delete(filtered, entry.key)
+			}
+		}
+	}
+
+	activeSessions := make(map[string]int)
+	for _, token := range filtered {
+		activeSessions[token.Username]++
 	}
 	return filtered, activeSessions, nil
 }

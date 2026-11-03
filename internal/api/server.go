@@ -292,21 +292,27 @@ func (l *loginRateLimiter) cleanupAt(now time.Time) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	// Clean up expired IP attempts
+	// Keep unlocked failures long enough for a client obeying the progressive
+	// delay to reach loginMaxAttempts. Deleting them at lastTry+loginMaxDelay
+	// resets the counter exactly when the next credential check becomes eligible.
 	for ip, attempt := range l.ipAttempts {
-		// Remove if lockout expired and no active delay
-		if deadlineReachedAt(now, attempt.lockedUntil) && deadlineReachedAt(now, attempt.lastTry.Add(loginMaxDelay)) {
+		if loginAttemptExpiredAt(now, attempt) {
 			delete(l.ipAttempts, ip)
 		}
 	}
 
-	// Clean up expired user attempts
-	for username, attempt := range l.userAttempts {
-		// Remove if lockout expired
-		if deadlineReachedAt(now, attempt.lockedUntil) {
-			delete(l.userAttempts, username)
+	for key, attempt := range l.userAttempts {
+		if loginAttemptExpiredAt(now, attempt) {
+			delete(l.userAttempts, key)
 		}
 	}
+}
+
+func loginAttemptExpiredAt(now time.Time, attempt *loginAttempt) bool {
+	if !attempt.lockedUntil.IsZero() {
+		return deadlineReachedAt(now, attempt.lockedUntil)
+	}
+	return deadlineReachedAt(now, attempt.lastTry.Add(loginLockoutPeriod))
 }
 
 func deadlineReachedAt(now, deadline time.Time) bool {

@@ -269,10 +269,11 @@ func TestRecordSuccess_NoEntry(t *testing.T) {
 func TestCleanup_RemovesStale(t *testing.T) {
 	l := newTestLimiter()
 	l.mu.Lock()
-	// Expired IP entry
+	// Expired unlocked IP entry (pending failures are retained for one
+	// lockout period so delayed attempts can still accumulate).
 	l.ipAttempts["1.2.3.4"] = &loginAttempt{
 		count:       1,
-		lastTry:     time.Now().Add(-2 * time.Minute),
+		lastTry:     time.Now().Add(-loginLockoutPeriod - time.Minute),
 		lockedUntil: time.Time{},
 	}
 	// Active IP entry (still in delay window)
@@ -339,6 +340,33 @@ func TestCleanup_RemovesEntriesAtExactDeadlines(t *testing.T) {
 	}
 	if _, exists := l.userAttempts["1.2.3.4:admin"]; exists {
 		t.Error("(IP, user) entry should be cleaned up exactly at lockout deadline")
+	}
+}
+
+func TestCleanup_PreservesPendingFailuresAtDelayBoundary(t *testing.T) {
+	l := newTestLimiter()
+	now := time.Date(2026, 11, 3, 18, 30, 0, 0, time.UTC)
+
+	l.ipAttempts["192.0.2.1"] = &loginAttempt{
+		count: 4, lastTry: now.Add(-loginMaxDelay),
+	}
+	l.userAttempts["192.0.2.1:admin"] = &loginAttempt{
+		count: 4, lastTry: now.Add(-loginMaxDelay),
+	}
+
+	l.cleanupAt(now)
+	l.recordFailedAttemptAt("192.0.2.1", "admin", now)
+
+	for name, attempt := range map[string]*loginAttempt{
+		"IP":          l.ipAttempts["192.0.2.1"],
+		"IP and user": l.userAttempts["192.0.2.1:admin"],
+	} {
+		if attempt == nil {
+			t.Fatalf("%s failure counter was removed", name)
+		}
+		if attempt.count != loginMaxAttempts || attempt.lockedUntil.IsZero() {
+			t.Errorf("%s count = %d, locked = %t; want count %d and locked", name, attempt.count, !attempt.lockedUntil.IsZero(), loginMaxAttempts)
+		}
 	}
 }
 
