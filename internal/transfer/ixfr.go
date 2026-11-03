@@ -104,8 +104,8 @@ func (s *IXFRServer) RecordChange(zoneName string, oldSerial, newSerial uint32, 
 	entry := &IXFRJournalEntry{
 		OldSerial: oldSerial,
 		Serial:    newSerial,
-		Added:     added,
-		Deleted:   deleted,
+		Added:     append([]zone.RecordChange(nil), added...),
+		Deleted:   append([]zone.RecordChange(nil), deleted...),
 		Timestamp: time.Now(),
 	}
 
