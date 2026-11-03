@@ -149,6 +149,17 @@ func TestRRL_LogSuperlative_AmplificationSuppresses(t *testing.T) {
 	}
 }
 
+func TestRRL_LogSuperlative_FirstAmplificationSuppresses(t *testing.T) {
+	r := NewRRL(RRLConfig{Enabled: true, Rate: 1, Burst: 20, Window: 60})
+	defer r.Stop()
+
+	ip := net.ParseIP("203.0.113.6")
+	r.LogSuperlative(ip, 1, 0, 50, 5000)
+	if allowed, suppressed := r.Allow(ip, 1, 0); allowed || !suppressed {
+		t.Fatalf("first amplification event: want suppression, got allowed=%v suppressed=%v", allowed, suppressed)
+	}
+}
+
 func TestRRL_SetEnabled_Toggle(t *testing.T) {
 	r := NewRRL(RRLConfig{Enabled: true, Rate: 1, Burst: 1, Window: 60})
 	defer r.Stop()

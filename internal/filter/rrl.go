@@ -221,10 +221,12 @@ func (rrl *RRL) LogSuperlative(clientIP net.IP, qtype uint16, rcode uint8, query
 		if len(rrl.buckets) >= rrl.maxBuckets {
 			rrl.evictOldest(100)
 		}
+		now := time.Now()
 		b = &rrlBucket{
-			tokens:    float64(rrl.burst) - 1,
-			lastTime:  time.Now(),
-			createdAt: time.Now(),
+			tokens:     0,
+			lastTime:   now,
+			createdAt:  now,
+			suppressed: now,
 		}
 		rrl.buckets[key] = b
 		return
