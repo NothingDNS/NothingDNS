@@ -219,6 +219,9 @@ func NewKeepaliveTLV(primaryTimeout, secondaryTimeout time.Duration) *TLV {
 
 // ParseKeepaliveTLV extracts timeout values from a Keepalive TLV.
 func ParseKeepaliveTLV(tlv *TLV) (primary, secondary time.Duration, err error) {
+	if tlv == nil {
+		return 0, 0, fmt.Errorf("nil keepalive TLV")
+	}
 	if tlv.Type != DSOTLVKeepalive {
 		return 0, 0, fmt.Errorf("not a keepalive TLV")
 	}
@@ -248,6 +251,9 @@ func NewSessionIDTLV(sessionID uint64) *TLV {
 
 // ParseSessionIDTLV extracts the session ID from a Session ID TLV.
 func ParseSessionIDTLV(tlv *TLV) (uint64, error) {
+	if tlv == nil {
+		return 0, fmt.Errorf("nil session ID TLV")
+	}
 	if tlv.Type != DSOTLVSessionID {
 		return 0, fmt.Errorf("not a session ID TLV")
 	}

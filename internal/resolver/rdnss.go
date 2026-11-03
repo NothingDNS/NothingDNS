@@ -58,6 +58,9 @@ func (r *RDNSSOption) Validate() error {
 	}
 
 	for _, server := range r.Servers {
+		if server.To16() == nil {
+			return fmt.Errorf("RDNSS: invalid server address: %v", server)
+		}
 		if server.To4() != nil {
 			return fmt.Errorf("RDNSS: server must be IPv6 address: %s", server)
 		}

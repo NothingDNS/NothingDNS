@@ -135,6 +135,9 @@ func CanonicalTSIGKeyName(name string) string {
 
 // AddKey adds a key to the store, indexed by its canonical name (F502).
 func (ks *KeyStore) AddKey(key *TSIGKey) {
+	if key == nil {
+		return
+	}
 	ks.mu.Lock()
 	ks.keys[CanonicalTSIGKeyName(key.Name)] = key
 	ks.mu.Unlock()

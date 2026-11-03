@@ -754,7 +754,7 @@ func (s *Store) deleteUserLocked(username string) error {
 // placeholder and then failing to create (or persist) the replacement would
 // leave a server with no users at all.
 func (s *Store) ReplaceAutoCreatedAdmin(username, password string) (*User, error) {
-	if err := ValidateUsername(username); err != nil {
+	if err := validateNewUsername(username); err != nil {
 		return nil, err
 	}
 	if err := ValidatePassword(password); err != nil {
