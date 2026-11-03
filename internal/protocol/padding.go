@@ -30,6 +30,9 @@ func HasPaddingOption(msg *Message) bool {
 // response carries no OPT record to hold the option or has no room for it
 // (nothing padded); otherwise the response must be packed again.
 func PadResponse(msg *Message, packedLen, maxLen int) bool {
+	if msg == nil || packedLen < 0 || maxLen < 4 || packedLen > maxLen-4 {
+		return false
+	}
 	var opt *RDataOPT
 	for _, rr := range msg.Additionals {
 		if rr == nil || rr.Type != TypeOPT {
@@ -46,9 +49,6 @@ func PadResponse(msg *Message, packedLen, maxLen int) bool {
 	// The option itself costs 4 header bytes; the zero-filled data brings
 	// the total up to the next block boundary.
 	withOptionHeader := packedLen + 4
-	if withOptionHeader > maxLen {
-		return false
-	}
 	blockFill := (PaddingBlockSize - withOptionHeader%PaddingBlockSize) % PaddingBlockSize
 	// RFC 8467 §4.1 recommends block-aligned padding but allows randomization
 	// within the block boundary to prevent traffic analysis. A fixed padding
@@ -74,11 +74,11 @@ func PadResponse(msg *Message, packedLen, maxLen int) bool {
 // size that the query was filtered. packedLen is resp's current packed size.
 // Reports whether resp changed and must be packed again.
 func PadResponseTo(query, resp *Message, packedLen, maxLen int) bool {
-	if resp == nil || !HasPaddingOption(query) {
+	if resp == nil || packedLen < 0 || maxLen < 0 || packedLen > maxLen || !HasPaddingOption(query) {
 		return false
 	}
 	if resp.GetOPT() == nil {
-		if packedLen+11+4 > maxLen {
+		if maxLen < 15 || packedLen > maxLen-15 {
 			return false
 		}
 		// SetEDNS0 gives the OPT its root owner name; a bare record with a

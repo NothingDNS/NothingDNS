@@ -44,3 +44,39 @@ func TestPadResponseToFollowsTheQuery(t *testing.T) {
 		t.Fatal("padded answer carries no Padding option")
 	}
 }
+
+func TestPaddingHelpersRejectInvalidBounds(t *testing.T) {
+	if PadResponse(nil, 0, 512) {
+		t.Fatal("PadResponse accepted nil message")
+	}
+	m := &Message{}
+	m.SetEDNS0(1232, false)
+	for _, tc := range []struct{ packed, max int }{
+		{-1, 512},
+		{0, -1},
+		{513, 512},
+		{0, 3},
+	} {
+		if PadResponse(m, tc.packed, tc.max) {
+			t.Errorf("PadResponse(%d, %d) accepted invalid bounds", tc.packed, tc.max)
+		}
+	}
+
+	query := &Message{}
+	query.SetEDNS0(1232, false)
+	query.GetOPT().Data.(*RDataOPT).AddOption(OptionCodePadding, nil)
+	for _, tc := range []struct{ packed, max int }{
+		{-1, 512},
+		{0, -1},
+		{513, 512},
+		{0, 14},
+	} {
+		resp := &Message{}
+		if PadResponseTo(query, resp, tc.packed, tc.max) {
+			t.Errorf("PadResponseTo(%d, %d) accepted invalid bounds", tc.packed, tc.max)
+		}
+		if resp.GetOPT() != nil {
+			t.Errorf("PadResponseTo(%d, %d) mutated rejected response", tc.packed, tc.max)
+		}
+	}
+}
