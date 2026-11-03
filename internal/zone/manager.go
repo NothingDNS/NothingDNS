@@ -438,6 +438,13 @@ func (m *Manager) CreateZone(origin string, defaultTTL uint32, soa *SOARecord, n
 	if len(nsRecords) == 0 {
 		return fmt.Errorf("at least one NS record is required")
 	}
+	// The created zone owns its configuration. Callers commonly reuse config
+	// structs after this method returns; retaining their pointer/slice would let
+	// those later writes mutate live authoritative state without the zone lock
+	// or a cache-generation bump.
+	soaCopy := *soa
+	soa = &soaCopy
+	nsRecords = append([]NSRecord(nil), nsRecords...)
 	// Normalize the SOA and NS names before they are rendered into RDATA. An
 	// empty RNAME left the SOA with six fields, which the persistence layer
 	// could not parse back, so the zone came back without its SOA after a
