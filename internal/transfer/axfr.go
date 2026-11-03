@@ -354,7 +354,7 @@ func zonemdRecordLocked(z *zone.Zone, origin *protocol.Name) *protocol.ResourceR
 	if z.SOA != nil {
 		serial = z.SOA.Serial
 	}
-	fresh, err := zone.ComputeZoneMD(z, zone.ZONEMDAlgorithm(z.ZONEMD.Algorithm))
+	fresh, err := zone.ComputeZoneMDLocked(z, zone.ZONEMDAlgorithm(z.ZONEMD.Algorithm))
 	if err != nil {
 		util.Warnf("axfr: failed to create ZONEMD record: %v", err)
 		return nil

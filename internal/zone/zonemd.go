@@ -50,6 +50,22 @@ func ComputeZoneMD(z *Zone, algo ZONEMDAlgorithm) (*ZONEMD, error) {
 	if z == nil {
 		return nil, &ZoneMDError{Zone: "", Msg: "nil zone"}
 	}
+	z.RLock()
+	defer z.RUnlock()
+	return computeZoneMDLocked(z, algo)
+}
+
+// ComputeZoneMDLocked computes the digest while the caller holds z's read or
+// write lock. Transfer paths use it so the digest and records come from the
+// same snapshot without recursively taking an RWMutex read lock.
+func ComputeZoneMDLocked(z *Zone, algo ZONEMDAlgorithm) (*ZONEMD, error) {
+	if z == nil {
+		return nil, &ZoneMDError{Zone: "", Msg: "nil zone"}
+	}
+	return computeZoneMDLocked(z, algo)
+}
+
+func computeZoneMDLocked(z *Zone, algo ZONEMDAlgorithm) (*ZONEMD, error) {
 	if z.Origin == "" {
 		return nil, &ZoneMDError{Zone: z.Origin, Msg: "empty origin"}
 	}
