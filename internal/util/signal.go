@@ -21,6 +21,7 @@ type SignalHandler struct {
 	ctx           context.Context
 	cancel        context.CancelFunc
 	mu            sync.RWMutex
+	shutdownOnce  sync.Once
 }
 
 // NewSignalHandler creates a new SignalHandler.
@@ -87,23 +88,25 @@ func (s *SignalHandler) listen() {
 // performShutdown executes all registered shutdown functions.
 // Functions are called in reverse order (LIFO).
 func (s *SignalHandler) performShutdown() {
-	s.mu.RLock()
-	funcs := make([]ShutdownFunc, len(s.shutdownFuncs))
-	copy(funcs, s.shutdownFuncs)
-	s.mu.RUnlock()
+	s.shutdownOnce.Do(func() {
+		s.mu.RLock()
+		funcs := make([]ShutdownFunc, len(s.shutdownFuncs))
+		copy(funcs, s.shutdownFuncs)
+		s.mu.RUnlock()
 
-	// Call shutdown functions in reverse order
-	for i := len(funcs) - 1; i >= 0; i-- {
-		fn := funcs[i]
-		if fn != nil {
-			if err := fn(); err != nil {
-				Errorf("Shutdown function error: %v", err)
+		// Call shutdown functions in reverse order
+		for i := len(funcs) - 1; i >= 0; i-- {
+			fn := funcs[i]
+			if fn != nil {
+				if err := fn(); err != nil {
+					Errorf("Shutdown function error: %v", err)
+				}
 			}
 		}
-	}
 
-	// Cancel context
-	s.cancel()
+		// Cancel context
+		s.cancel()
+	})
 }
 
 // performReload calls the reload function if set.
