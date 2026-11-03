@@ -47,3 +47,17 @@ func TestMDNSResponseRateLimiter_MapBounded(t *testing.T) {
 		t.Errorf("bucket map grew to %d, want <= 16 (bounded)", n)
 	}
 }
+
+func TestMDNSResponseRateLimiter_CapacityDoesNotResetActiveThrottle(t *testing.T) {
+	l := newMDNSResponseRateLimiter(1, 1, 2)
+	base := time.Unix(1_700_000_000, 0)
+	if !l.allow("victim", base) || l.allow("victim", base.Add(900*time.Millisecond)) {
+		t.Fatal("victim did not enter throttled state")
+	}
+	if !l.allow("attacker-1", base) || !l.allow("attacker-2", base.Add(900*time.Millisecond)) {
+		t.Fatal("new source unexpectedly denied")
+	}
+	if l.allow("victim", base.Add(900*time.Millisecond)) {
+		t.Fatal("capacity churn reset active victim throttle")
+	}
+}

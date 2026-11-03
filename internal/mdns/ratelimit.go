@@ -39,9 +39,11 @@ func (l *mdnsResponseRateLimiter) allow(ip string, now time.Time) bool {
 	b := l.buckets[ip]
 	if b == nil {
 		// Backstop against unbounded growth from spoofed sources: if the table
-		// is full, drop it wholesale (cheap, and link-local churn is low).
+		// is full, evict only the least-recently-used source. Clearing the whole
+		// map reset every active throttle, so one new spoofed address gave a
+		// previously exhausted victim a fresh burst.
 		if len(l.buckets) >= l.maxHosts {
-			l.buckets = make(map[string]*tokenBucket)
+			l.evictOldest()
 		}
 		b = &tokenBucket{tokens: l.burst, last: now}
 		l.buckets[ip] = b
@@ -61,4 +63,18 @@ func (l *mdnsResponseRateLimiter) allow(ip string, now time.Time) bool {
 	}
 	b.tokens--
 	return true
+}
+
+func (l *mdnsResponseRateLimiter) evictOldest() {
+	var oldestKey string
+	var oldestTime time.Time
+	for key, bucket := range l.buckets {
+		if oldestKey == "" || bucket.last.Before(oldestTime) {
+			oldestKey = key
+			oldestTime = bucket.last
+		}
+	}
+	if oldestKey != "" {
+		delete(l.buckets, oldestKey)
+	}
 }
