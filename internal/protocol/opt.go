@@ -47,6 +47,9 @@ func (r *RDataOPT) Pack(buf []byte, offset int) (int, error) {
 	if r == nil {
 		return 0, fmt.Errorf("nil OPT record")
 	}
+	if offset < 0 || offset > len(buf) {
+		return 0, ErrBufferTooSmall
+	}
 
 	startOffset := offset
 
@@ -89,6 +92,9 @@ func (r *RDataOPT) Pack(buf []byte, offset int) (int, error) {
 func (r *RDataOPT) Unpack(buf []byte, offset int, rdlength uint16) (int, error) {
 	if r == nil {
 		return 0, fmt.Errorf("nil OPT record")
+	}
+	if offset < 0 || offset > len(buf) || int(rdlength) > len(buf)-offset {
+		return 0, ErrBufferTooSmall
 	}
 
 	startOffset := offset
