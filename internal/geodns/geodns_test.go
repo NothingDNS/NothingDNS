@@ -17,6 +17,23 @@ func TestNewEngine(t *testing.T) {
 	}
 }
 
+func TestEngineDetachesGeoRules(t *testing.T) {
+	rec := &GeoRecord{
+		Records: map[string]string{"US": "192.0.2.1"},
+		Default: "192.0.2.2",
+		Type:    "A",
+		TTL:     60,
+	}
+	e := NewEngine(Config{Enabled: true})
+	e.SetRule("cdn.example.", "A", rec)
+
+	rec.Default = "203.0.113.9"
+	rec.Records["US"] = "203.0.113.10"
+	if got := e.Resolve("cdn.example.", "A", net.ParseIP("192.0.2.9")); got != "192.0.2.2" {
+		t.Fatalf("caller mutation changed engine rule: got %q", got)
+	}
+}
+
 func TestResolveWithoutMMDB(t *testing.T) {
 	e := NewEngine(Config{Enabled: true})
 

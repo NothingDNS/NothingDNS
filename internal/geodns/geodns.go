@@ -89,10 +89,24 @@ func NewEngine(cfg Config) *Engine {
 	}
 	if cfg.GeoRules != nil {
 		for k, v := range cfg.GeoRules {
-			e.rules[canonicalRuleKey(k)] = v
+			e.rules[canonicalRuleKey(k)] = cloneGeoRecord(v)
 		}
 	}
 	return e
+}
+
+func cloneGeoRecord(rec *GeoRecord) *GeoRecord {
+	if rec == nil {
+		return nil
+	}
+	clone := *rec
+	if rec.Records != nil {
+		clone.Records = make(map[string]string, len(rec.Records))
+		for region, value := range rec.Records {
+			clone.Records[region] = value
+		}
+	}
+	return &clone
 }
 
 // canonicalRuleKey lower-cases the domain part of a "domain:type" rule key.
@@ -353,7 +367,7 @@ func (e *Engine) Resolve(domain, rtype string, clientIP net.IP) string {
 	geoRec, ok := e.rules[key]
 	e.mu.RUnlock()
 
-	if !ok {
+	if !ok || geoRec == nil {
 		atomic.AddUint64(&e.misses, 1)
 		return ""
 	}
@@ -405,7 +419,7 @@ func (e *Engine) Resolve(domain, rtype string, clientIP net.IP) string {
 func (e *Engine) SetRule(domain, rtype string, rec *GeoRecord) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.rules[ruleKey(domain, rtype)] = rec
+	e.rules[ruleKey(domain, rtype)] = cloneGeoRecord(rec)
 	e.version++
 }
 
