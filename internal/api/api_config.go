@@ -53,8 +53,13 @@ func (s *Server) handleConfigGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Runtime override PUTs mutate the live config in place under
+	// overridesMu. Hold the same lock until the JSON snapshot is complete so
+	// this reader cannot race with ApplyRuntimeOverrides.
+	s.overridesMu.Lock()
 	cfg := configGetter()
 	if cfg == nil {
+		s.overridesMu.Unlock()
 		s.writeError(w, http.StatusServiceUnavailable, "Config not available")
 		return
 	}
@@ -62,6 +67,7 @@ func (s *Server) handleConfigGet(w http.ResponseWriter, r *http.Request) {
 	// Marshal full config to a map so we can redact sensitive fields while
 	// preserving the PascalCase keys the frontend expects (Go's default encoder).
 	cfgJSON, err := json.Marshal(cfg)
+	s.overridesMu.Unlock()
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "Failed to serialize config")
 		return
