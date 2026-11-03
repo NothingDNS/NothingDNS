@@ -619,9 +619,10 @@ func AddExtendedError(msg *Message, infoCode uint16, extraText string) {
 // CHAIN Queries Support - RFC 7901
 // ============================================================================
 
-// EDNS0Chain represents a CHAIN option (RFC 7901).
-// CHAIN allows a resolver to specify the chain of DNS servers that should
-// be consulted in sequence when following referrals.
+// EDNS0Chain represents a CHAIN option (RFC 7901). The wire payload contains
+// either no name (capability discovery) or exactly one closest trust point.
+// ChainNS is retained as a slice for API compatibility, but conformant values
+// therefore contain at most one entry.
 type EDNS0Chain struct {
 	// ChainNS contains the list of nameservers in the chain
 	ChainNS []string
@@ -639,69 +640,59 @@ func (e *EDNS0Chain) Pack() []byte {
 	if e == nil {
 		return nil
 	}
-	// Each name in the chain is stored as a sequence of labels
-	// Format: [len1][labels1][len2][labels2]...[0] (null terminator)
-	// Each name is in wire format (lowercase, no compression)
-
-	var result []byte
-
-	for i, ns := range e.ChainNS {
-		// Add NS name in wire format
-		wireName := CanonicalWireName(ns)
-		result = append(result, wireName...)
-		if i < len(e.ChainNS)-1 {
-			// Add a null separator between names
-			result = append(result, 0)
-		}
+	if len(e.ChainNS) == 0 {
+		return nil
 	}
-
-	// The CHAIN option is terminated by a null label
-	result = append(result, 0)
-
-	return result
+	if len(e.ChainNS) != 1 {
+		return nil
+	}
+	name, err := ParseName(e.ChainNS[0])
+	if err != nil {
+		return nil
+	}
+	defer name.Release()
+	return name.CanonicalWire()
 }
 
 // UnpackEDNS0Chain deserializes a CHAIN option from wire format data.
 func UnpackEDNS0Chain(data []byte) (*EDNS0Chain, error) {
 	if len(data) == 0 {
-		return nil, fmt.Errorf("truncated CHAIN option")
+		return &EDNS0Chain{ChainNS: []string{}}, nil
 	}
 
-	chain := &EDNS0Chain{
-		ChainNS: make([]string, 0),
-	}
-
+	// RFC 7901 forbids compression and requires the one FQDN to occupy the
+	// entire payload. Validate label boundaries before using the general name
+	// decoder so a pointer or a second name cannot be accepted as an alias.
 	offset := 0
-	currentName := make([]byte, 0)
-
-	for offset < len(data) {
-		length := int(data[offset])
-
-		if length == 0 {
-			// Null label - end of current name
-			if len(currentName) > 0 {
-				// Parse the wire-format name back to string
-				name := wireNameToString(currentName)
-				chain.ChainNS = append(chain.ChainNS, name)
-				currentName = currentName[:0]
-			}
-			offset++
-			// Check if this is the final terminator
-			if offset >= len(data) || (offset == len(data)-1 && data[offset] == 0) {
-				break
-			}
-			continue
-		}
-
-		// Read the label
-		if offset+1+length > len(data) {
+	for {
+		if offset >= len(data) {
 			return nil, fmt.Errorf("truncated CHAIN option")
 		}
-		currentName = append(currentName, data[offset:offset+1+length]...)
-		offset += 1 + length
+		labelLen := int(data[offset])
+		if labelLen > MaxLabelLength {
+			return nil, fmt.Errorf("invalid compressed or oversized CHAIN label")
+		}
+		offset++
+		if labelLen == 0 {
+			break
+		}
+		if offset+labelLen > len(data) {
+			return nil, fmt.Errorf("truncated CHAIN option")
+		}
+		offset += labelLen
 	}
-
-	return chain, nil
+	if offset != len(data) {
+		return nil, fmt.Errorf("trailing data in CHAIN option")
+	}
+	name, consumed, err := UnpackName(data, 0)
+	if err != nil {
+		return nil, fmt.Errorf("invalid CHAIN closest trust point: %w", err)
+	}
+	defer name.Release()
+	if consumed != len(data) {
+		return nil, fmt.Errorf("invalid CHAIN closest trust point length")
+	}
+	return &EDNS0Chain{ChainNS: []string{name.String()}}, nil
 }
 
 // wireNameToString converts wire format name back to presentation format.

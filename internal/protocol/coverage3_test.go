@@ -1264,12 +1264,12 @@ func TestEDNS0NSID(t *testing.T) {
 
 func TestEDNS0Chain(t *testing.T) {
 	// NewEDNS0Chain
-	chain := NewEDNS0Chain([]string{"ns1.example.com", "ns2.example.com"})
+	chain := NewEDNS0Chain([]string{"ns1.example.com"})
 	if chain == nil {
 		t.Fatal("NewEDNS0Chain returned nil")
 	}
-	if len(chain.ChainNS) != 2 {
-		t.Errorf("ChainNS length = %d, want 2", len(chain.ChainNS))
+	if len(chain.ChainNS) != 1 {
+		t.Errorf("ChainNS length = %d, want 1", len(chain.ChainNS))
 	}
 
 	// Pack
@@ -1283,7 +1283,7 @@ func TestEDNS0Chain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UnpackEDNS0Chain error: %v", err)
 	}
-	if len(unpacked.ChainNS) != 2 {
+	if len(unpacked.ChainNS) != 1 {
 		t.Errorf("Unpacked ChainNS = %v", unpacked.ChainNS)
 	}
 
@@ -1311,14 +1311,10 @@ func TestEDNS0Chain(t *testing.T) {
 		t.Error("nil Chain ToEDNS0Option should produce an option")
 	}
 
-	// Empty data
-	_, err = UnpackEDNS0Chain(nil)
-	if err == nil {
-		t.Error("UnpackEDNS0Chain should fail with nil data")
-	}
-	_, err = UnpackEDNS0Chain([]byte{})
-	if err == nil {
-		t.Error("UnpackEDNS0Chain should fail with empty data")
+	// Empty data is RFC 7901 capability discovery.
+	discovery, err := UnpackEDNS0Chain(nil)
+	if err != nil || len(discovery.ChainNS) != 0 {
+		t.Errorf("UnpackEDNS0Chain discovery = (%v, %v), want empty success", discovery, err)
 	}
 }
 
