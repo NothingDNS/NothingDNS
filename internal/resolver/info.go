@@ -458,6 +458,6 @@ func ResolverInfoFromCapabilities(id string, caps []string) *ResolverInfo {
 	return &ResolverInfo{
 		ID:           id,
 		Version:      "1.0",
-		Capabilities: caps,
+		Capabilities: append([]string(nil), caps...),
 	}
 }

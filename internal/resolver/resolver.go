@@ -204,12 +204,26 @@ func NewResolver(config Config, cache Cache, transport Transport) *Resolver {
 	if len(hints) == 0 {
 		hints = RootHints()
 	}
+	hints = cloneRootHints(hints)
+	config.Hints = hints
 	return &Resolver{
 		config:    config,
 		cache:     cache,
 		transport: transport,
 		hints:     hints,
 	}
+}
+
+func cloneRootHints(hints []RootHint) []RootHint {
+	out := make([]RootHint, len(hints))
+	for i, hint := range hints {
+		out[i] = RootHint{
+			Name: hint.Name,
+			IPv4: append([]string(nil), hint.IPv4...),
+			IPv6: append([]string(nil), hint.IPv6...),
+		}
+	}
+	return out
 }
 
 // delegation holds NS names and their resolved addresses for a zone.

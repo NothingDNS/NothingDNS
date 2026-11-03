@@ -145,6 +145,9 @@ func (g *AnycastGroup) AddBackend(backend *AnycastBackend) error {
 	if backend.Port == 0 {
 		backend.Port = 53
 	}
+	if backend.Port < 1 || backend.Port > 65535 {
+		return fmt.Errorf("backend port must be between 1 and 65535")
+	}
 	if backend.Weight == 0 {
 		backend.Weight = 100 // Default weight
 	}

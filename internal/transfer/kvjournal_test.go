@@ -120,7 +120,7 @@ func TestKVJournalStore_SaveEntryDoesNotFollowFixedTmpSymlink(t *testing.T) {
 	store := NewKVJournalStore(tmpDir)
 	zoneName := "example.com."
 	serial := uint32(2024010101)
-	zoneDir := filepath.Join(tmpDir, "ixfr-journals", sanitizeFilename(zoneName))
+	zoneDir := store.zoneDir(zoneName)
 	if err := os.MkdirAll(zoneDir, 0700); err != nil {
 		t.Fatalf("MkdirAll zone journal dir: %v", err)
 	}
@@ -365,7 +365,7 @@ func TestKVJournalStore_SaveEntryWithHMAC(t *testing.T) {
 	}
 
 	// Check zone dir path
-	zoneDir := filepath.Join(tmpDir, "ixfr-journals", sanitizeFilename(zoneName))
+	zoneDir := store.zoneDir(zoneName)
 	journalFile := filepath.Join(zoneDir, "2024010101.journal")
 	t.Logf("zoneDir: %s", zoneDir)
 	t.Logf("journalFile: %s", journalFile)
@@ -649,8 +649,8 @@ func TestKVJournalStore_CorruptedJournalFile(t *testing.T) {
 
 	zoneName := "example.com."
 
-	// Manually create a corrupted journal file in the correct sanitized directory
-	zoneDir := filepath.Join(tmpDir, "ixfr-journals", "example_com_")
+	// Manually create a corrupted journal file in the zone's journal directory.
+	zoneDir := store.zoneDir(zoneName)
 	os.MkdirAll(zoneDir, 0755)
 	corruptedFile := filepath.Join(zoneDir, "2024010101.journal")
 	os.WriteFile(corruptedFile, []byte("not valid json"), 0644)
@@ -687,9 +687,9 @@ func TestKVJournalStore_DeleteZoneClearsJournals(t *testing.T) {
 		t.Fatal("Setup failed")
 	}
 
-	// Verify zone directories exist (sanitizeFilename converts '.' to '_' and trailing '.' to '_')
-	zone1Dir := filepath.Join(tmpDir, "ixfr-journals", "zone1_com_")
-	zone2Dir := filepath.Join(tmpDir, "ixfr-journals", "zone2_com_")
+	// Verify the collision-resistant zone directories exist.
+	zone1Dir := store.zoneDir("zone1.com.")
+	zone2Dir := store.zoneDir("zone2.com.")
 
 	if _, err := os.Stat(zone1Dir); err != nil {
 		t.Errorf("zone1 dir should exist: %v", err)

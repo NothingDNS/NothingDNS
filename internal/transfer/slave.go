@@ -154,6 +154,10 @@ func NewSlaveZone(config SlaveZoneConfig) (*SlaveZone, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
+	// The manager retains this configuration for every future refresh. Keep
+	// its own master list so reuse or mutation of the caller's slice cannot
+	// redirect later transfers.
+	config.Masters = append([]string(nil), config.Masters...)
 
 	z := zone.NewZone(config.ZoneName)
 

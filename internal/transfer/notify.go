@@ -280,6 +280,8 @@ type NOTIFYSlaveHandler struct {
 	notifyChan      chan *NOTIFYRequest
 	serialCheck     SerialChecker
 	closeOnce       sync.Once
+	lifeMu          sync.RWMutex // gates event delivery against Close
+	closed          bool
 	notifyAllowList []net.IPNet // authorized master IPs
 	keyStore        *KeyStore   // TSIG keys for authentication (VULN-061)
 }
@@ -349,6 +351,9 @@ func (h *NOTIFYSlaveHandler) SetSerialChecker(checker SerialChecker) {
 // Close shuts down the handler, closing the notify channel.
 func (h *NOTIFYSlaveHandler) Close() {
 	h.closeOnce.Do(func() {
+		h.lifeMu.Lock()
+		defer h.lifeMu.Unlock()
+		h.closed = true
 		close(h.notifyChan)
 	})
 }
@@ -461,16 +466,22 @@ func (h *NOTIFYSlaveHandler) HandleNOTIFY(req *protocol.Message, clientIP net.IP
 
 	// Only send NOTIFY event if update is needed
 	if needsUpdate {
-		select {
-		case h.notifyChan <- &NOTIFYRequest{
-			ZoneName:      zoneName,
-			Serial:        receivedSerial,
-			ClientIP:      clientIP,
-			SerialUnknown: !haveSerial,
-		}:
-		default:
-			// Channel full, log but don't block
+		// Close and delivery share lifeMu: once Close has closed the channel,
+		// a late request may still be answered but must never send to it.
+		h.lifeMu.RLock()
+		if !h.closed {
+			select {
+			case h.notifyChan <- &NOTIFYRequest{
+				ZoneName:      zoneName,
+				Serial:        receivedSerial,
+				ClientIP:      clientIP,
+				SerialUnknown: !haveSerial,
+			}:
+			default:
+				// Channel full, log but don't block
+			}
 		}
+		h.lifeMu.RUnlock()
 	}
 
 	// Return success response

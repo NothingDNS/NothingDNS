@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -44,7 +45,10 @@ func newKVJournalStore(dataDir string, hmacKey ...[]byte) *KVJournalStore {
 	journalDir := filepath.Join(dataDir, "ixfr-journals")
 	var key []byte
 	if len(hmacKey) > 0 {
-		key = hmacKey[0]
+		// The store may outlive the configuration buffer supplied by its
+		// caller. Keep a private copy so later buffer reuse cannot silently
+		// change the key used to authenticate existing journal files.
+		key = append([]byte(nil), hmacKey[0]...)
 	}
 	return &KVJournalStore{
 		dataDir:        journalDir,
@@ -68,7 +72,12 @@ func (s *KVJournalStore) SetMaxJournalSize(size int) {
 
 // zoneDir returns the directory for a zone's journal files.
 func (s *KVJournalStore) zoneDir(zoneName string) string {
-	return filepath.Join(s.dataDir, sanitizeFilename(zoneName))
+	// Replacement-based sanitizing is not injective (for example, a.b. and
+	// a_b. both became a_b_), which let distinct zones share, trim, and load
+	// each other's journals. A full digest keeps the component bounded and
+	// gives each canonical zone name its own directory.
+	sum := sha256.Sum256([]byte(strings.ToLower(zoneName)))
+	return filepath.Join(s.dataDir, fmt.Sprintf("%x", sum[:]))
 }
 
 // SaveEntry persists a journal entry to disk using the tmp+fsync+rename

@@ -176,8 +176,11 @@ func BuildTLSConfigForProfile(profile *TLSProfileConfig, certFile, keyFile strin
 	}
 
 	if profile.TrustedCACertPool != nil {
-		config.ClientCAs = profile.TrustedCACertPool
-		config.ClientAuth = tls.RequireAndVerifyClientCert
+		// TLS profiles describe how this resolver authenticates an upstream
+		// DoT server. The supplied trust anchors therefore belong in RootCAs;
+		// ClientCAs/ClientAuth are server-side mTLS settings and do not affect
+		// verification of the remote server certificate.
+		config.RootCAs = profile.TrustedCACertPool
 	}
 
 	config.InsecureSkipVerify = profile.insecureSkipVerify

@@ -238,8 +238,22 @@ func (d *DNSSLOption) Validate() error {
 		if len(domain) == 0 {
 			return fmt.Errorf("DNSSL: domain cannot be empty")
 		}
-		if len(domain) > 255 {
-			return fmt.Errorf("DNSSL: domain too long: %d", len(domain))
+		name := strings.TrimSuffix(domain, ".")
+		if name == "" {
+			return fmt.Errorf("DNSSL: domain cannot be the root name")
+		}
+		wireLen := 1 // terminating root label
+		for _, label := range strings.Split(name, ".") {
+			if label == "" {
+				return fmt.Errorf("DNSSL: domain contains an empty label: %q", domain)
+			}
+			if len(label) > 63 {
+				return fmt.Errorf("DNSSL: domain label too long: %d bytes (max 63)", len(label))
+			}
+			wireLen += 1 + len(label)
+		}
+		if wireLen > 255 {
+			return fmt.Errorf("DNSSL: encoded domain too long: %d bytes (max 255)", wireLen)
 		}
 	}
 
@@ -268,7 +282,7 @@ func (d *DNSSLOption) ToTLV() *DNSSLTLV {
 		Type:          32, // DNSSL option type
 		Length:        uint8(lengthUnits),
 		Lifetime:      d.Lifetime,
-		SearchDomains: d.SearchDomains,
+		SearchDomains: append([]string(nil), d.SearchDomains...),
 	}
 }
 
@@ -299,7 +313,7 @@ func ParseDNSSLOption(tlv *DNSSLTLV) (*DNSSLOption, error) {
 
 	opt := &DNSSLOption{
 		Lifetime:      tlv.Lifetime,
-		SearchDomains: tlv.SearchDomains,
+		SearchDomains: append([]string(nil), tlv.SearchDomains...),
 	}
 	if err := opt.Validate(); err != nil {
 		return nil, err

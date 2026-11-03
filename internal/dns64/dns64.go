@@ -182,6 +182,21 @@ func (s *Synthesizer) ExtractIPv4(ipv6 net.IP) net.IP {
 			return nil
 		}
 	}
+	// RFC 6052 §2.2: for every prefix shorter than /96, byte 8 is the
+	// reserved "u" octet and the suffix following the embedded IPv4 bits is
+	// all zero. Prefix-only validation accepted arbitrary native IPv6
+	// addresses as synthesized addresses and extracted a misleading IPv4.
+	if pfxLen != 96 {
+		if v6[8] != 0 {
+			return nil
+		}
+		suffixStart := 9 + (pfxLen-32)/8
+		for i := suffixStart; i < net.IPv6len; i++ {
+			if v6[i] != 0 {
+				return nil
+			}
+		}
+	}
 
 	v4 := make(net.IP, 4)
 

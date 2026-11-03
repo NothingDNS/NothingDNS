@@ -1225,9 +1225,18 @@ func (c *Cache) UpdateConfig(cfg Config) {
 
 	perShard := perShardCapacity(cfg.Capacity)
 	for i := range c.shards {
-		c.shards[i].mu.Lock()
-		c.shards[i].capacity = perShard
-		c.shards[i].mu.Unlock()
+		s := &c.shards[i]
+		s.mu.Lock()
+		s.capacity = perShard
+		// A capacity reduction is a memory bound, not merely a limit for
+		// future inserts. Trim each shard immediately so a hot-reload cannot
+		// leave the cache indefinitely above its newly configured ceiling.
+		for len(s.entries) > s.capacity {
+			if !s.evictOldest() {
+				break
+			}
+		}
+		s.mu.Unlock()
 	}
 }
 

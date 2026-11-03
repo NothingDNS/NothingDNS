@@ -81,7 +81,17 @@ func (rl *RateLimiter) Allow(clientIP net.IP) bool {
 	if !ok {
 		// Check if we need to evict old buckets before creating new one
 		if len(rl.buckets) >= rl.maxBuckets {
-			rl.evictOldest(100) // evict 1% of max to make room
+			// Retain the established 100-entry eviction batch, but never
+			// delete the entire table: with a small max_buckets value that
+			// reset every client's token history under one churn event.
+			evictCount := 100
+			if evictCount >= rl.maxBuckets {
+				evictCount = rl.maxBuckets - 1
+			}
+			if evictCount < 1 {
+				evictCount = 1
+			}
+			rl.evictOldest(evictCount)
 		}
 
 		b = &bucket{

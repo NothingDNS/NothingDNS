@@ -146,7 +146,7 @@ func (rrl *RRL) Allow(clientIP net.IP, qtype uint16, rcode uint8) (allowed, supp
 	b, ok := rrl.buckets[key]
 	if !ok {
 		if len(rrl.buckets) >= rrl.maxBuckets {
-			rrl.evictOldest(100)
+			rrl.evictForCapacity()
 		}
 		b = &rrlBucket{
 			tokens:    float64(rrl.burst) - 1,
@@ -219,7 +219,7 @@ func (rrl *RRL) LogSuperlative(clientIP net.IP, qtype uint16, rcode uint8, query
 	b, ok := rrl.buckets[key]
 	if !ok {
 		if len(rrl.buckets) >= rrl.maxBuckets {
-			rrl.evictOldest(100)
+			rrl.evictForCapacity()
 		}
 		now := time.Now()
 		b = &rrlBucket{
@@ -239,6 +239,21 @@ func (rrl *RRL) LogSuperlative(clientIP net.IP, qtype uint16, rcode uint8, query
 		b.tokens = 0
 		b.suppressed = time.Now()
 	}
+}
+
+// evictForCapacity retains the established 100-entry batch while ensuring a
+// capacity eviction never erases the entire table. Erasing every bucket under
+// a small max_buckets value cleared active suppression windows under trivial
+// source churn.
+func (rrl *RRL) evictForCapacity() {
+	n := 100
+	if n >= rrl.maxBuckets {
+		n = rrl.maxBuckets - 1
+	}
+	if n < 1 {
+		n = 1
+	}
+	rrl.evictOldest(n)
 }
 
 // Stop terminates the background cleanup goroutine.

@@ -227,7 +227,10 @@ func (s *IXFRServer) HandleIXFRWithKey(req *protocol.Message, clientIP net.IP) (
 	}
 
 	// Extract client serial from Authority section (SOA record)
-	clientSerial := s.extractClientSerial(req)
+	clientSerial, haveClientSOA := s.extractClientSerialOK(req)
+	if !haveClientSOA {
+		return nil, nil, fmt.Errorf("IXFR request requires an SOA in the authority section")
+	}
 	serverSerial := z.SOA.Serial
 
 	// If client is up to date (server == client), return single SOA.
@@ -265,8 +268,15 @@ func (s *IXFRServer) HandleIXFRWithKey(req *protocol.Message, clientIP net.IP) (
 // extractClientSerial extracts the client's SOA serial from the IXFR request
 // Per RFC 1995, client includes an SOA record in the Authority section
 func (s *IXFRServer) extractClientSerial(req *protocol.Message) uint32 {
+	serial, _ := s.extractClientSerialOK(req)
+	return serial
+}
+
+// extractClientSerialOK distinguishes a valid serial zero from a malformed
+// IXFR request that omitted its required authority-section SOA.
+func (s *IXFRServer) extractClientSerialOK(req *protocol.Message) (uint32, bool) {
 	if req == nil {
-		return 0
+		return 0, false
 	}
 	for _, rr := range req.Authorities {
 		if rr == nil {
@@ -274,11 +284,11 @@ func (s *IXFRServer) extractClientSerial(req *protocol.Message) uint32 {
 		}
 		if rr.Type == protocol.TypeSOA {
 			if soaData, ok := rr.Data.(*protocol.RDataSOA); ok {
-				return soaData.Serial
+				return soaData.Serial, true
 			}
 		}
 	}
-	return 0
+	return 0, false
 }
 
 // generateSingleSOA generates a response with just the SOA record

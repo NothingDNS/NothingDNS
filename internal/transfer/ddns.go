@@ -206,9 +206,19 @@ func (h *DynamicDNSHandler) SetKeyStore(ks *KeyStore) {
 
 // AddACL adds an allowed network for a zone
 func (h *DynamicDNSHandler) AddACL(zoneName string, network *net.IPNet) {
+	if network == nil {
+		return
+	}
 	zoneName = strings.ToLower(zoneName)
+	// IPNet contains two mutable byte slices. Retain a private copy so a
+	// caller reusing its parser/configuration buffers cannot widen the live
+	// update ACL after it has been installed.
+	owned := &net.IPNet{
+		IP:   append(net.IP(nil), network.IP...),
+		Mask: append(net.IPMask(nil), network.Mask...),
+	}
 	h.aclMu.Lock()
-	h.acl[zoneName] = append(h.acl[zoneName], network)
+	h.acl[zoneName] = append(h.acl[zoneName], owned)
 	h.aclMu.Unlock()
 }
 

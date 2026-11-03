@@ -123,13 +123,17 @@ func NewEngine(cfg Config) *Engine {
 	if cfg.Policies == nil {
 		cfg.Policies = make(map[string]int)
 	}
+	policies := make(map[string]int, len(cfg.Policies))
+	for name, priority := range cfg.Policies {
+		policies[name] = priority
+	}
 	e := &Engine{
 		qnameRules:    make(map[string]*Rule),
 		nsdnameRules:  make(map[string]*Rule),
 		clientActions: make([]*Rule, 0),
 		respActions:   make([]*Rule, 0),
-		files:         cfg.Files,
-		policies:      cfg.Policies,
+		files:         append([]string(nil), cfg.Files...),
+		policies:      policies,
 		logger:        cfg.Logger,
 	}
 	e.enabled.Store(cfg.Enabled)

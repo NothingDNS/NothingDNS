@@ -257,6 +257,13 @@ func validateBlocklistURL(rawURL string) error {
 
 // isPrivateOrReservedIP returns true if the IP is in a private, reserved, or link-local range.
 func isPrivateOrReservedIP(ip net.IP) bool {
+	// The IPv4 branch below handles private/loopback/link-local ranges, but
+	// net.IP.To4 also succeeds for 0.0.0.0. Treat the unspecified address as
+	// reserved before branching: on some hosts a connection to it can reach a
+	// local listener, bypassing the blocklist fetcher's SSRF boundary.
+	if ip == nil || ip.IsUnspecified() {
+		return true
+	}
 	// RFC 1918 private addresses
 	if ip4 := ip.To4(); ip4 != nil {
 		// 10.0.0.0/8
@@ -282,7 +289,7 @@ func isPrivateOrReservedIP(ip net.IP) bool {
 		return false
 	}
 	// IPv6
-	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() {
 		return true
 	}
 	// RFC 4193 unique local (fc00::/7)
