@@ -207,7 +207,6 @@ func (s *Server) handleCreateZone(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "At least one nameserver is required")
 		return
 	}
-
 	rname, err := zone.SOAMailbox(req.AdminEmail, req.Name)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, sanitizeError(err, "Invalid admin email"))
@@ -230,14 +229,23 @@ func (s *Server) handleCreateZone(w http.ResponseWriter, r *http.Request) {
 		Minimum: 86400,
 	}
 	timers := zone.SOAUpdate{Refresh: req.Refresh, Retry: req.Retry, Expire: req.Expire, Minimum: req.Minimum}
-	if !timers.IsEmpty() {
+	create := timers
+	create.MName = &req.Nameservers[0]
+	create.RName = &rname
+	if err := create.ApplyTo(soa, req.Name); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := zone.ValidateSOA(soa); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	canonicalNS := make([]string, 0, len(req.Nameservers))
+	canonicalNS = append(canonicalNS, soa.MName)
+	for _, ns := range req.Nameservers[1:] {
 		check := *soa
-		names := zone.SOAUpdate{MName: &req.Nameservers[0], RName: &rname}
-		if err := names.ApplyTo(&check, req.Name); err != nil {
-			s.writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		if err := timers.ApplyTo(&check, req.Name); err != nil {
+		if err := (zone.SOAUpdate{MName: &ns}).ApplyTo(&check, req.Name); err != nil {
 			s.writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -245,11 +253,11 @@ func (s *Server) handleCreateZone(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		soa.Refresh, soa.Retry, soa.Expire, soa.Minimum = check.Refresh, check.Retry, check.Expire, check.Minimum
+		canonicalNS = append(canonicalNS, check.MName)
 	}
 
 	var nsRecords []zone.NSRecord
-	for _, ns := range req.Nameservers {
+	for _, ns := range canonicalNS {
 		nsRecords = append(nsRecords, zone.NSRecord{
 			TTL:     ttl,
 			NSDName: ns,
