@@ -148,6 +148,26 @@ func TestRolloverSchedulerStartStop(t *testing.T) {
 	}
 }
 
+func TestRolloverSchedulerStartIsIdempotent(t *testing.T) {
+	started := 0
+	cfg := DefaultRolloverConfig()
+	cfg.Enabled = true
+	cfg.ZSKLifetime = 0
+	cfg.KSKLifetime = 0
+	scheduler := NewRolloverScheduler(NewSigner("example.", DefaultSignerConfig()), cfg, func(msg string, _ ...interface{}) {
+		if msg == "dnssec rollover: scheduler started (zsk=%s, ksk=%s)" {
+			started++
+		}
+	})
+
+	scheduler.Start()
+	scheduler.Start()
+	if started != 1 {
+		t.Fatalf("Start logged %d scheduler loops, want 1", started)
+	}
+	scheduler.Stop()
+}
+
 func TestRolloverSchedulerDisabled(t *testing.T) {
 	signer := NewSigner("example.com.", DefaultSignerConfig())
 

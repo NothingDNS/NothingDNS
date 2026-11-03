@@ -107,9 +107,10 @@ type RolloverScheduler struct {
 	config RolloverConfig
 	logger func(string, ...interface{})
 
-	mu     sync.Mutex
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	mu      sync.Mutex
+	cancel  context.CancelFunc
+	running bool
+	wg      sync.WaitGroup
 }
 
 // NewRolloverScheduler creates a new rollover scheduler.
@@ -132,11 +133,16 @@ func (rs *RolloverScheduler) Start() {
 	}
 
 	rs.mu.Lock()
+	if rs.running {
+		rs.mu.Unlock()
+		return
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	rs.cancel = cancel
+	rs.running = true
+	rs.wg.Add(1)
 	rs.mu.Unlock()
 
-	rs.wg.Add(1)
 	go rs.run(ctx)
 	rs.logger("dnssec rollover: scheduler started (zsk=%s, ksk=%s)", rs.config.ZSKLifetime, rs.config.KSKLifetime)
 }
@@ -155,7 +161,13 @@ func (rs *RolloverScheduler) Stop() {
 
 // run is the main scheduling loop.
 func (rs *RolloverScheduler) run(ctx context.Context) {
-	defer rs.wg.Done()
+	defer func() {
+		rs.mu.Lock()
+		rs.cancel = nil
+		rs.running = false
+		rs.mu.Unlock()
+		rs.wg.Done()
+	}()
 
 	// Do initial check
 	rs.check()
