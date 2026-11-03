@@ -386,13 +386,13 @@ func (nc *NSECCache) synthesizeNXDOMAIN(qname string, qtype uint16, entry *nsecE
 
 	// Add the proving NSEC record
 	nsecRR := &protocol.ResourceRecord{
-		Name:  entry.Owner,
+		Name:  entry.Owner.Copy(),
 		Type:  protocol.TypeNSEC,
 		Class: protocol.ClassIN,
 		TTL:   ttl,
 		Data: &protocol.RDataNSEC{
-			NextDomain: entry.NextDomain,
-			TypeBitMap: entry.TypeBitMap,
+			NextDomain: entry.NextDomain.Copy(),
+			TypeBitMap: append([]uint16(nil), entry.TypeBitMap...),
 		},
 	}
 	resp.Authorities = append(resp.Authorities, nsecRR)
@@ -418,13 +418,13 @@ func (nc *NSECCache) synthesizeNODATA(qname string, qtype uint16, entry *nsecEnt
 
 	// Add the NSEC proving the type doesn't exist
 	nsecRR := &protocol.ResourceRecord{
-		Name:  entry.Owner,
+		Name:  entry.Owner.Copy(),
 		Type:  protocol.TypeNSEC,
 		Class: protocol.ClassIN,
 		TTL:   ttl,
 		Data: &protocol.RDataNSEC{
-			NextDomain: entry.NextDomain,
-			TypeBitMap: entry.TypeBitMap,
+			NextDomain: entry.NextDomain.Copy(),
+			TypeBitMap: append([]uint16(nil), entry.TypeBitMap...),
 		},
 	}
 	resp.Authorities = append(resp.Authorities, nsecRR)

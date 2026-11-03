@@ -859,6 +859,8 @@ func TestGossipProtocol_GetClusterMetrics_Aggregation(t *testing.T) {
 	cfg := DefaultGossipConfig()
 
 	gp, _ := NewGossipProtocol(cfg, nl, true)
+	nl.Add(&Node{ID: "node-a", State: NodeStateAlive})
+	nl.Add(&Node{ID: "node-b", State: NodeStateAlive})
 
 	// Pre-populate nodeMetrics
 	gp.nodeMetrics["node-a"] = ClusterMetricsPayload{

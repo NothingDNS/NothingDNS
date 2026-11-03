@@ -6,6 +6,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -532,6 +533,18 @@ func (s *Snapshotter) readPlainSnapshot(r io.Reader) (*Snapshot, error) {
 			return nil, fmt.Errorf("read peer: %w", err)
 		}
 		snap.Membership = append(snap.Membership, NodeID(peerBytes))
+	}
+
+	// A snapshot is exactly one serialized record. Accepting bytes after the
+	// declared membership list hides append/copy corruption and makes the
+	// on-disk format ambiguous. Encrypted snapshots already authenticate the
+	// complete ciphertext; apply the same strict boundary to the decoded
+	// plaintext and to legacy unencrypted snapshots.
+	var trailing [1]byte
+	if _, err := io.ReadFull(r, trailing[:]); err == nil {
+		return nil, fmt.Errorf("snapshot has trailing data")
+	} else if !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("read snapshot boundary: %w", err)
 	}
 
 	return snap, nil

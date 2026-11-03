@@ -447,6 +447,14 @@ func (gp *GossipProtocol) BroadcastClusterMetrics(metrics ClusterMetricsPayload)
 	metrics.NodeID = gp.nodeList.GetSelf().ID
 	metrics.Timestamp = time.Now()
 
+	// The aggregate is read locally and received broadcasts never loop back
+	// through handleClusterMetrics. Record our own sample before sending it;
+	// otherwise a one-node cluster always reports zero and every multi-node
+	// observer omits precisely its own traffic from the cluster total.
+	gp.nodeMetricsMu.Lock()
+	gp.nodeMetrics[metrics.NodeID] = metrics
+	gp.nodeMetricsMu.Unlock()
+
 	payloadBytes, err := encodePayload(metrics)
 	if err != nil {
 		return err
@@ -473,13 +481,31 @@ func (gp *GossipProtocol) BroadcastClusterMetrics(metrics ClusterMetricsPayload)
 
 // GetClusterMetrics returns aggregated cluster-wide metrics from all known nodes.
 func (gp *GossipProtocol) GetClusterMetrics() ClusterMetricsPayload {
-	gp.nodeMetricsMu.RLock()
-	defer gp.nodeMetricsMu.RUnlock()
+	// Snapshot membership before locking nodeMetrics (the writer path takes
+	// the locks in this order). Besides keeping departed nodes out of totals,
+	// pruning here prevents unbounded metric retention across membership churn.
+	var members map[string]struct{}
+	if gp.nodeList != nil {
+		all := gp.nodeList.GetAll()
+		members = make(map[string]struct{}, len(all))
+		for _, node := range all {
+			members[node.ID] = struct{}{}
+		}
+	}
+
+	gp.nodeMetricsMu.Lock()
+	defer gp.nodeMetricsMu.Unlock()
 
 	var total ClusterMetricsPayload
 	count, avgCount, p99Count := 0, 0, 0
 
-	for _, m := range gp.nodeMetrics {
+	for id, m := range gp.nodeMetrics {
+		if members != nil {
+			if _, current := members[id]; !current {
+				delete(gp.nodeMetrics, id)
+				continue
+			}
+		}
 		total.QueriesTotal += m.QueriesTotal
 		total.CacheHits += m.CacheHits
 		total.CacheMisses += m.CacheMisses

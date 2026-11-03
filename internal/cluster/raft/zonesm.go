@@ -200,7 +200,13 @@ func (z *ZoneStateMachine) GetRecords(zoneName string) []RecordEntry {
 
 	var records []RecordEntry
 	for _, rrs := range zone.Records {
-		records = append(records, rrs...)
+		for _, record := range rrs {
+			// RecordEntry contains a byte slice. Copy it as well as the struct so
+			// callers cannot mutate replicated ledger state after the read lock
+			// is released (or race a concurrent Snapshot/Apply).
+			record.RData = append([]byte(nil), record.RData...)
+			records = append(records, record)
+		}
 	}
 	return records
 }
@@ -229,6 +235,17 @@ func (z *ZoneStateMachine) Restore(data []byte) error {
 	var newZones map[string]*ZoneData
 	if err := json.Unmarshal(data, &newZones); err != nil {
 		return err
+	}
+	if newZones == nil {
+		return fmt.Errorf("snapshot contains a null zone map")
+	}
+	for name, zone := range newZones {
+		if zone == nil {
+			return fmt.Errorf("snapshot contains a null zone for %q", name)
+		}
+		if zone.Records == nil {
+			return fmt.Errorf("snapshot contains a null records map for %q", name)
+		}
 	}
 
 	z.mu.Lock()

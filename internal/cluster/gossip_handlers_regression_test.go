@@ -191,9 +191,10 @@ func TestGetClusterMetrics_LatencyAveragedOverReporters(t *testing.T) {
 		{"empty", nil, 0, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			gp, _, _ := newHandlersRegGossip(t, "O", nil)
+			gp, nl, _ := newHandlersRegGossip(t, "O", nil)
 			for i, m := range tc.ms {
 				m.NodeID = fmt.Sprintf("n%d", i)
+				nl.Add(&Node{ID: m.NodeID, State: NodeStateAlive})
 				gp.nodeMetrics[m.NodeID] = m
 			}
 			got := gp.GetClusterMetrics()
