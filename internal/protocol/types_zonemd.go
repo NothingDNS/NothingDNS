@@ -21,6 +21,9 @@ func (r *RDataZONEMD) Pack(buf []byte, offset int) (int, error) {
 	if r == nil {
 		return 0, fmt.Errorf("nil ZONEMD record")
 	}
+	if offset < 0 || offset > len(buf) {
+		return 0, ErrBufferTooSmall
+	}
 
 	// Match sibling DNSSEC RData types (DNSKEY/DS/RRSIG) by bounds-checking
 	// before writing — prevents silent truncation/panic if a future caller
@@ -57,6 +60,9 @@ func (r *RDataZONEMD) Pack(buf []byte, offset int) (int, error) {
 func (r *RDataZONEMD) Unpack(buf []byte, offset int, rdlength uint16) (int, error) {
 	if r == nil {
 		return 0, fmt.Errorf("nil ZONEMD record")
+	}
+	if offset < 0 || offset > len(buf) || int(rdlength) > len(buf)-offset {
+		return 0, ErrBufferTooSmall
 	}
 
 	startOffset := offset

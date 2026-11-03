@@ -70,6 +70,9 @@ func (r *RDataCAA) Unpack(buf []byte, offset int, rdlength uint16) (int, error) 
 	if r == nil {
 		return 0, fmt.Errorf("nil CAA record")
 	}
+	if offset < 0 || offset > len(buf) || int(rdlength) > len(buf)-offset {
+		return 0, ErrBufferTooSmall
+	}
 	startOffset := offset
 	endOffset := offset + int(rdlength)
 
@@ -207,6 +210,9 @@ func (r *RDataIPSECKEY) Pack(buf []byte, offset int) (int, error) {
 func (r *RDataIPSECKEY) Unpack(buf []byte, offset int, rdlength uint16) (int, error) {
 	if r == nil {
 		return 0, fmt.Errorf("nil IPSECKEY record")
+	}
+	if offset < 0 || offset > len(buf) || int(rdlength) > len(buf)-offset {
+		return 0, ErrBufferTooSmall
 	}
 	startOffset := offset
 	endOffset := offset + int(rdlength)
@@ -392,6 +398,9 @@ func (r *RDataHIP) Unpack(buf []byte, offset int, rdlength uint16) (int, error) 
 	if r == nil {
 		return 0, fmt.Errorf("nil HIP record")
 	}
+	if offset < 0 || offset > len(buf) || int(rdlength) > len(buf)-offset {
+		return 0, ErrBufferTooSmall
+	}
 	startOffset := offset
 	endOffset := offset + int(rdlength)
 	if endOffset > len(buf) {
@@ -537,6 +546,9 @@ func (r *RDataCERT) Unpack(buf []byte, offset int, rdlength uint16) (int, error)
 	if r == nil {
 		return 0, fmt.Errorf("nil CERT record")
 	}
+	if offset < 0 || offset > len(buf) || int(rdlength) > len(buf)-offset {
+		return 0, ErrBufferTooSmall
+	}
 	startOffset := offset
 	if rdlength < 5 {
 		return 0, ErrBufferTooSmall
@@ -623,6 +635,9 @@ func (r *RDataOPENPGPKEY) Unpack(buf []byte, offset int, rdlength uint16) (int, 
 	if r == nil {
 		return 0, fmt.Errorf("nil OPENPGPKEY record")
 	}
+	if offset < 0 || offset > len(buf) || int(rdlength) > len(buf)-offset {
+		return 0, ErrBufferTooSmall
+	}
 	if offset+int(rdlength) > len(buf) {
 		return 0, ErrBufferTooSmall
 	}
@@ -688,6 +703,9 @@ func (r *RDataDHCID) Pack(buf []byte, offset int) (int, error) {
 func (r *RDataDHCID) Unpack(buf []byte, offset int, rdlength uint16) (int, error) {
 	if r == nil {
 		return 0, fmt.Errorf("nil DHCID record")
+	}
+	if offset < 0 || offset > len(buf) || int(rdlength) > len(buf)-offset {
+		return 0, ErrBufferTooSmall
 	}
 	if offset+int(rdlength) > len(buf) {
 		return 0, ErrBufferTooSmall
@@ -763,6 +781,9 @@ func (r *RDataSSHFP) Pack(buf []byte, offset int) (int, error) {
 func (r *RDataSSHFP) Unpack(buf []byte, offset int, rdlength uint16) (int, error) {
 	if r == nil {
 		return 0, fmt.Errorf("nil SSHFP record")
+	}
+	if offset < 0 || offset > len(buf) || int(rdlength) > len(buf)-offset {
+		return 0, ErrBufferTooSmall
 	}
 	startOffset := offset
 	if rdlength < 2 {
@@ -856,6 +877,9 @@ func (r *RDataTLSA) Pack(buf []byte, offset int) (int, error) {
 func (r *RDataTLSA) Unpack(buf []byte, offset int, rdlength uint16) (int, error) {
 	if r == nil {
 		return 0, fmt.Errorf("nil TLSA record")
+	}
+	if offset < 0 || offset > len(buf) || int(rdlength) > len(buf)-offset {
+		return 0, ErrBufferTooSmall
 	}
 	startOffset := offset
 	if rdlength < 3 {
