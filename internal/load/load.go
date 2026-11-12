@@ -69,9 +69,15 @@ type Runner struct {
 
 // NewRunner creates a new load test runner.
 func NewRunner(cfg Config) *Runner {
+	// A non-positive workload sends nothing; a negative product would panic
+	// in make (F858).
+	capacity := 0
+	if cfg.Queries > 0 && cfg.Workers > 0 {
+		capacity = cfg.Queries * cfg.Workers
+	}
 	return &Runner{
 		cfg:       cfg,
-		latencies: make([]time.Duration, 0, cfg.Queries*cfg.Workers),
+		latencies: make([]time.Duration, 0, capacity),
 	}
 }
 
