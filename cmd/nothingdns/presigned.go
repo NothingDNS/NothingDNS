@@ -74,25 +74,33 @@ func (h *integratedHandler) addStoredDenialProof(resp *protocol.Message, z *zone
 		return
 	}
 	resp.Authorities = append(resp.Authorities, storedRRSIGs(z, z.Origin, protocol.TypeSOA)...)
+	for _, rr := range h.storedDenialRecords(z, qname, kind) {
+		resp.Authorities = append(resp.Authorities, rr)
+		resp.Authorities = append(resp.Authorities, storedRRSIGs(z, rr.Name.String(), rr.Type)...)
+	}
+}
+
+// storedDenialRecords returns the stored NSEC records, or the stored NSEC3
+// at each proving member's hash (F757), that prove the denial of qname in a
+// presigned zone, without their RRSIGs.
+func (h *integratedHandler) storedDenialRecords(z *zone.Zone, qname string, kind denialKind) []*protocol.ResourceRecord {
+	var out []*protocol.ResourceRecord
 	c := h.presignedDenialChain(z)
-	if c.nsec3 != nil { // the stored NSEC3 at each proving member's hash (F757)
+	if c.nsec3 != nil {
 		for _, member := range c.nsec3Denial(qname, kind) {
 			owner := strings.ToLower(nsec3Base32.EncodeToString(c.hashes[member])) + "." + c.origin
 			if nsec3 := storedRecord(z, owner, protocol.TypeNSEC3); nsec3 != nil {
-				resp.Authorities = append(resp.Authorities, nsec3)
-				resp.Authorities = append(resp.Authorities, storedRRSIGs(z, owner, protocol.TypeNSEC3)...)
+				out = append(out, nsec3)
 			}
 		}
-		return
+		return out
 	}
 	for _, data := range c.nsecDenial(qname, kind) {
-		nsec := storedRecord(z, data.Owner, protocol.TypeNSEC)
-		if nsec == nil {
-			continue
+		if nsec := storedRecord(z, data.Owner, protocol.TypeNSEC); nsec != nil {
+			out = append(out, nsec)
 		}
-		resp.Authorities = append(resp.Authorities, nsec)
-		resp.Authorities = append(resp.Authorities, storedRRSIGs(z, data.Owner, protocol.TypeNSEC)...)
 	}
+	return out
 }
 
 // presignedDenialChain is the zone's NSEC chain as built from its names,
@@ -102,7 +110,12 @@ func (h *integratedHandler) presignedDenialChain(z *zone.Zone) *denialChain {
 	params := storedNSEC3Params(z)
 	key := "presigned|" + z.Origin
 	if params != nil {
-		key += "|nsec3|" + strconv.Itoa(int(params.iterations)) + "/" + hex.EncodeToString(params.salt) + "/" + strconv.FormatBool(params.optOut)
+		// Membership comes from the stored chain below, not from Opt-Out:
+		// the flag may be set on some NSEC3 records only (dnssec.SignZone
+		// flags just an unsigned delegation's), so it said nothing reliable
+		// about which names the chain holds (F865).
+		params.optOut = false
+		key += "|nsec3|" + strconv.Itoa(int(params.iterations)) + "/" + hex.EncodeToString(params.salt)
 	}
 	id, gen := z.CacheTag()
 	h.denialChainsMu.Lock()
@@ -114,6 +127,15 @@ func (h *integratedHandler) presignedDenialChain(z *zone.Zone) *denialChain {
 	}
 	h.denialChainsMu.Unlock()
 	c := buildDenialChain(z, nil, nil, params, &h.nsec3Memo)
+	if c.nsec3 != nil {
+		// The chain is the zone's stored one: a name whose hash owns no
+		// stored NSEC3 (an opted-out delegation) is not a member (F865).
+		for name, hash := range c.hashes {
+			if storedRecord(z, strings.ToLower(nsec3Base32.EncodeToString(hash))+"."+c.origin, protocol.TypeNSEC3) == nil {
+				delete(c.hashes, name)
+			}
+		}
+	}
 	h.denialChainsMu.Lock()
 	if h.denialChains == nil || len(h.denialChains) > maxCachedDenialChains {
 		h.denialChains = make(map[string][]denialChainEntry)

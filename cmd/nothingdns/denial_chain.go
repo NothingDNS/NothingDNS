@@ -631,6 +631,11 @@ func (h *integratedHandler) wildcardAnswerRRs(z *zone.Zone, qname, ce string) []
 // insecureDelegationProof returns the records proving the delegation at cut
 // has no DS (RFC 4035 §3.1.4 / RFC 5155 §7.2.7).
 func (h *integratedHandler) insecureDelegationProof(z *zone.Zone, cut string) []*protocol.ResourceRecord {
+	if h.zoneSignerFor(z.Origin) == nil && zonePresigned(z) {
+		// The zone's own NSEC/NSEC3, which its stored RRSIGs cover: a chain
+		// rebuilt here is NSEC even for an NSEC3 zone and has none (F864).
+		return h.storedDenialRecords(z, cut, denialNoData)
+	}
 	return h.denialRRs(z, cut, denialNoData)
 }
 
