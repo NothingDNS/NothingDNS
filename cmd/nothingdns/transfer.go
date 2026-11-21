@@ -279,7 +279,71 @@ func (h *integratedHandler) signTransferRecords(origin string, records []*protoc
 			out = append(out, rr)
 		}
 	}
-	return append(out, soa)
+	out = append(out, soa)
+	if err := refreshSignedZONEMD(signer, out); err != nil {
+		h.logger.Warnf("Zone transfer of %s goes out unsigned: ZONEMD: %v", origin, err)
+		return records
+	}
+	return out
+}
+
+// refreshSignedZONEMD recomputes the ZONEMD of a signed transfer stream
+// (SOA, data, SOA) and re-signs it. The digest covers the zone as sent,
+// RRSIG and NSEC/NSEC3 included (RFC 8976 §3.3.1, computed after signing,
+// §3.5); the one streamed was computed over the unsigned zone, so a
+// secondary verifying ZONEMD rejected every signed transfer (F868). Each new
+// RRSIG(ZONEMD) reuses the key and validity window of the one it replaces.
+func refreshSignedZONEMD(signer *dnssec.Signer, stream []*protocol.ResourceRecord) error {
+	var zonemd *protocol.ResourceRecord
+	for _, rr := range stream {
+		if rr.Type == protocol.TypeZONEMD {
+			zonemd = rr
+			break
+		}
+	}
+	if zonemd == nil {
+		return nil
+	}
+	data, ok := zonemd.Data.(*protocol.RDataZONEMD)
+	if !ok {
+		return fmt.Errorf("unexpected RDATA %T", zonemd.Data)
+	}
+	var text strings.Builder
+	for _, rr := range stream[:len(stream)-1] { // without the closing SOA
+		fmt.Fprintf(&text, "%s %d IN %s %s\n", rr.Name.String(), rr.TTL, typeToString(rr.Type), rr.Data.String())
+	}
+	z, err := zone.ParseFile("transfer", strings.NewReader(text.String()))
+	if err != nil {
+		return err
+	}
+	md, err := zone.ComputeZoneMD(z, zone.ZONEMDAlgorithm(data.Algorithm))
+	if err != nil {
+		return err
+	}
+	fresh := *data
+	fresh.Digest = md.Hash
+	zonemd.Data = &fresh
+
+	keys := make(map[uint16]*dnssec.SigningKey)
+	for _, k := range signer.GetKeys() {
+		keys[k.KeyTag] = k
+	}
+	for i, rr := range stream {
+		sig, ok := rr.Data.(*protocol.RDataRRSIG)
+		if !ok || sig.TypeCovered != protocol.TypeZONEMD {
+			continue
+		}
+		key := keys[sig.KeyTag]
+		if key == nil {
+			return fmt.Errorf("no key %d for RRSIG(ZONEMD)", sig.KeyTag)
+		}
+		resigned, err := signer.SignRRSet([]*protocol.ResourceRecord{zonemd}, key, sig.Inception, sig.Expiration)
+		if err != nil {
+			return err
+		}
+		stream[i] = resigned
+	}
+	return nil
 }
 
 // errTransferSign marks a transfer stream that failed because a message could
