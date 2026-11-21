@@ -403,7 +403,7 @@ func (h *integratedHandler) buildWildcardResponse(r *protocol.Message, z *zone.Z
 	owner := resp.Answers[0].Name
 	signed := false
 	for _, rrset := range rrsetsByType(rrs) { // one RRSIG per RRset (F745)
-		if rrsig := h.signZoneRRSet(z, rrset); rrsig != nil {
+		for _, rrsig := range h.signZoneRRSet(z, rrset) {
 			rrsig.Name = owner
 			resp.AddAnswer(rrsig)
 			signed = true
@@ -420,9 +420,7 @@ func (h *integratedHandler) buildWildcardResponse(r *protocol.Message, z *zone.Z
 			}
 		}
 		resp.Authorities = append(resp.Authorities, proof)
-		if sig := h.signZoneRRSet(z, []*protocol.ResourceRecord{proof}); sig != nil {
-			resp.Authorities = append(resp.Authorities, sig)
-		}
+		resp.Authorities = append(resp.Authorities, h.signZoneRRSet(z, []*protocol.ResourceRecord{proof})...)
 	}
 	return resp
 }
@@ -524,16 +522,17 @@ func (h *integratedHandler) buildReferralResponse(query *protocol.Message, z *zo
 				})
 			}
 		}
-		if rrsig := h.signZoneRRSet(z, dsRRs); rrsig != nil {
+		if rrsigs := h.signZoneRRSet(z, dsRRs); len(rrsigs) > 0 {
 			resp.Authorities = append(resp.Authorities, dsRRs...)
-			resp.Authorities = append(resp.Authorities, rrsig)
+			resp.Authorities = append(resp.Authorities, rrsigs...)
 		} else if len(dsRRs) == 0 {
 			// F488/F489: the NSEC at the cut, or the NSEC3 matching it (or,
 			// with opt-out, the closest provable encloser proof), from the
 			// authoritative chain. Each record is its own RRset.
 			for _, rr := range h.insecureDelegationProof(z, delegation) {
-				if rrsig := h.signZoneRRSet(z, []*protocol.ResourceRecord{rr}); rrsig != nil {
-					resp.Authorities = append(resp.Authorities, rr, rrsig)
+				if rrsigs := h.signZoneRRSet(z, []*protocol.ResourceRecord{rr}); len(rrsigs) > 0 {
+					resp.Authorities = append(resp.Authorities, rr)
+					resp.Authorities = append(resp.Authorities, rrsigs...)
 				}
 			}
 		}
@@ -543,8 +542,10 @@ func (h *integratedHandler) buildReferralResponse(query *protocol.Message, z *zo
 }
 
 // signZoneRRSet signs rrs with z's active ZSK. It returns nil when the zone
-// has no signer or active ZSK, or signing fails.
-func (h *integratedHandler) signZoneRRSet(z *zone.Zone, rrs []*protocol.ResourceRecord) *protocol.ResourceRecord {
+// has no signer or active ZSK, or signing fails. A presigned zone returns
+// every stored RRSIG over the RRset: in an algorithm or key rollover only
+// some may verify against the published DNSKEYs (RFC 4035 §3.1.1, F866).
+func (h *integratedHandler) signZoneRRSet(z *zone.Zone, rrs []*protocol.ResourceRecord) []*protocol.ResourceRecord {
 	if z == nil || len(rrs) == 0 {
 		return nil
 	}
@@ -552,11 +553,8 @@ func (h *integratedHandler) signZoneRRSet(z *zone.Zone, rrs []*protocol.Resource
 	signer, ok := h.zoneSigners[z.Origin]
 	h.zoneSignersMu.RUnlock()
 	if !ok || signer == nil {
-		// A zone carrying its own signatures: its stored RRSIG (F753).
-		if sigs := storedRRSIGs(z, rrs[0].Name.String(), rrs[0].Type); len(sigs) > 0 {
-			return sigs[0]
-		}
-		return nil
+		// A zone carrying its own signatures: its stored RRSIGs (F753).
+		return storedRRSIGs(z, rrs[0].Name.String(), rrs[0].Type)
 	}
 	zsks := signer.GetActiveZSKs()
 	if len(zsks) == 0 {
@@ -569,7 +567,10 @@ func (h *integratedHandler) signZoneRRSet(z *zone.Zone, rrs []*protocol.Resource
 		h.logger.Warnf("Failed to sign %s RRset in %s: %v", typeToString(rrs[0].Type), z.Origin, err)
 		return nil
 	}
-	return rrsig
+	if rrsig == nil {
+		return nil
+	}
+	return []*protocol.ResourceRecord{rrsig}
 }
 
 // dsAnsweredByParent reports whether the zone at origin must pass a DS query
@@ -723,7 +724,7 @@ func (h *integratedHandler) handleDNAMERecord(z *zone.Zone, w server.ResponseWri
 	// client (RFC 6672 §5.3.1); only the synthesized CNAME goes out unsigned —
 	// a validator re-derives it from the signed DNAME.
 	if wantsDNSSEC {
-		if rrsig := h.signZoneRRSet(z, []*protocol.ResourceRecord{dnameRR}); rrsig != nil {
+		for _, rrsig := range h.signZoneRRSet(z, []*protocol.ResourceRecord{dnameRR}) {
 			resp.AddAnswer(rrsig)
 		}
 	}
@@ -1090,7 +1091,7 @@ func (h *integratedHandler) serveZoneNSEC3PARAM(w server.ResponseWriter, r *prot
 	resp.Header.Flags.AA = true
 	resp.AddAnswer(rr)
 	if wantsDNSSEC {
-		if rrsig := h.signZoneRRSet(z, []*protocol.ResourceRecord{rr}); rrsig != nil {
+		for _, rrsig := range h.signZoneRRSet(z, []*protocol.ResourceRecord{rr}) {
 			resp.AddAnswer(rrsig)
 		}
 	}

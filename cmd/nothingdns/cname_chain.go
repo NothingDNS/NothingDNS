@@ -75,9 +75,7 @@ func (h *integratedHandler) signedRRsets(dst []*protocol.ResourceRecord, z *zone
 	for _, t := range order {
 		dst = append(dst, byType[t]...)
 		if sign {
-			if rrsig := h.signZoneRRSet(z, byType[t]); rrsig != nil {
-				dst = append(dst, rrsig)
-			}
+			dst = append(dst, h.signZoneRRSet(z, byType[t])...)
 		}
 	}
 	return dst
