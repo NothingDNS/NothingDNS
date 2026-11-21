@@ -874,15 +874,18 @@ func soaFromRData(soa *protocol.RDataSOA, ttl uint32) *zone.SOARecord {
 }
 
 // removeZoneRecord deletes the first record matching rec by owner name
-// (case-insensitive), type, and exact RDATA. TTL is not part of the match, per
-// RFC 1995 deletion semantics.
+// (case-insensitive), type, and RDATA value. TTL is not part of the match, per
+// RFC 1995 deletion semantics. RDATA is compared by value (zone.RDataEqual):
+// a zone reloaded from its persisted file holds the parser's text, which can
+// differ from the wire form's for the same data (TXT with ';', HTTPS alpn
+// quoting), and a text compare then left deleted records in place (F871).
 func removeZoneRecord(z *zone.Zone, rec zone.Record) {
 	recs, ok := z.Records[rec.Name]
 	if !ok {
 		return
 	}
 	for i, r := range recs {
-		if strings.EqualFold(r.Type, rec.Type) && r.RData == rec.RData {
+		if strings.EqualFold(r.Type, rec.Type) && zone.RDataEqual(rec.Type, r.RData, rec.RData) {
 			z.Records[rec.Name] = append(recs[:i], recs[i+1:]...)
 			if len(z.Records[rec.Name]) == 0 {
 				delete(z.Records, rec.Name)
