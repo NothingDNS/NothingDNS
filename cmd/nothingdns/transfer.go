@@ -346,6 +346,16 @@ func refreshSignedZONEMD(signer *dnssec.Signer, stream []*protocol.ResourceRecor
 	return nil
 }
 
+// xotTransferSigner lets the XoT listener send zones signed online signed,
+// exactly as AXFR over TCP does (F869).
+type xotTransferSigner struct{ h *integratedHandler }
+
+func (a xotTransferSigner) SignsZone(origin string) bool { return a.h.zoneSignerFor(origin) != nil }
+
+func (a xotTransferSigner) SignTransfer(origin string, records []*protocol.ResourceRecord) []*protocol.ResourceRecord {
+	return a.h.signTransferRecords(origin, records)
+}
+
 // errTransferSign marks a transfer stream that failed because a message could
 // not be TSIG-signed; the handler then answers SERVFAIL.
 var errTransferSign = errors.New("signing transfer response")

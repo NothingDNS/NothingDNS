@@ -122,7 +122,7 @@ func startTLSReloadRig(t *testing.T) *tlsReloadRig {
 	if err := r.srvs.startDoQ(cfg, nil, logger); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.srvs.startXoT(cfg, map[string]*zone.Zone{}, &sync.RWMutex{}, &TransferManager{}, logger); err != nil {
+	if err := r.srvs.startXoT(cfg, map[string]*zone.Zone{}, &sync.RWMutex{}, &TransferManager{}, nil, logger); err != nil {
 		t.Fatal(err)
 	}
 	r.apiAddr = tlsReloadFreeAddr(t)

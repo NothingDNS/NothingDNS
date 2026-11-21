@@ -44,12 +44,40 @@ type XoTServer struct {
 	requireClientCert bool
 	logger            *util.Logger
 	journalStore      JournalStore // For IXFR incremental transfers
+	// signer signs the stream of a zone the server signs online (F869);
+	// guarded by mu.
+	signer TransferSigner
 
 	stopCh chan struct{}  // closed to signal AcceptLoop stop
 	wg     sync.WaitGroup // waits for AcceptLoop and active connections
 	// conns holds the live accepted connections (guarded by mu) so Close can
 	// tear them down instead of waiting for idle clients (F226).
 	conns map[net.Conn]struct{}
+}
+
+// TransferSigner signs the transfer stream of a zone the server signs
+// online. XoT must send such a zone signed, as AXFR over TCP does (F751):
+// unsigned, a secondary serves it without DNSKEY, RRSIG and NSEC, and
+// validators reject it while the parent publishes a DS (F869).
+type TransferSigner interface {
+	// SignsZone reports whether the zone named origin is signed online.
+	SignsZone(origin string) bool
+	// SignTransfer returns the signed form of a full-zone stream
+	// (SOA, data, SOA).
+	SignTransfer(origin string, records []*protocol.ResourceRecord) []*protocol.ResourceRecord
+}
+
+// SetTransferSigner installs the signer for online-signed zones (nil: none).
+func (s *XoTServer) SetTransferSigner(signer TransferSigner) {
+	s.mu.Lock()
+	s.signer = signer
+	s.mu.Unlock()
+}
+
+func (s *XoTServer) transferSigner() TransferSigner {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.signer
 }
 
 // TLSAUsage specifies how TLSA records should be used for XoT validation.
@@ -556,6 +584,9 @@ func (s *XoTServer) handleAXFRRequest(conn net.Conn, req *protocol.Message, clie
 		}
 		return
 	}
+	if signer := s.transferSigner(); signer != nil && signer.SignsZone(z.Origin) {
+		records = signer.SignTransfer(z.Origin, records) // F869
+	}
 
 	// Send AXFR response: SOA + all records + SOA (multiple messages allowed)
 	// RFC 5936: AXFR response is a sequence of messages, each with SOA at start/end of whole transfer
@@ -607,6 +638,20 @@ func (s *XoTServer) handleIXFRRequest(conn net.Conn, req *protocol.Message, clie
 			return
 		}
 		return
+	}
+	// A zone signed online sends its full zone, signed, instead of an
+	// unsigned diff (RFC 1995 §4 allows a full zone in an IXFR response);
+	// the lone-SOA "up to date" answer goes as is (F869, as for TCP F751).
+	if signer := s.transferSigner(); signer != nil && len(records) > 1 && signer.SignsZone(z.Origin) {
+		if records[1].Type == protocol.TypeSOA { // an incremental diff
+			if records, err = s.generateAXFRRecords(z); err != nil {
+				if err := s.sendErrorResponse(conn, req, protocol.RcodeServerFailure); err != nil {
+					return
+				}
+				return
+			}
+		}
+		records = signer.SignTransfer(z.Origin, records)
 	}
 
 	if err := s.sendAXFRResponse(conn, records, req.Header.ID); err != nil {

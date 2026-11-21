@@ -539,7 +539,9 @@ the data:
   AXFR carries the DNSKEY RRset, an RRSIG per authoritative RRset (delegation
   NS and glue stay unsigned) and the NSEC/NSEC3 chain, as an offline-signed
   zone does. An IXFR that would be a diff sends the full signed zone instead
-  (RFC 1995 §4); an up-to-date IXFR is still the lone SOA.
+  (RFC 1995 §4); an up-to-date IXFR is still the lone SOA. This holds over
+  TCP, DoT and the XoT listener (`server.xot`, RFC 9103) alike. A ZONEMD
+  record in the stream is recomputed over the signed zone (RFC 8976 §3.5).
 - The transferred signatures are valid for `dnssec.signing.signature_validity`
   (default 30 days) and a secondary only transfers again when the serial
   changes: change the zone, or bump the serial with `PUT /zones/{zone}/soa`

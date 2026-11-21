@@ -145,7 +145,7 @@ func startServers(cfg *config.Config, handler *integratedHandler, transferMgr *T
 
 	// XoT (RFC 9103)
 	if cfg.Server.XoT.Enabled {
-		if err := s.startXoT(cfg, handler.zones, &handler.zonesMu, transferMgr, logger); err != nil {
+		if err := s.startXoT(cfg, handler.zones, &handler.zonesMu, transferMgr, xotTransferSigner{h: handler}, logger); err != nil {
 			return s, err
 		}
 	}
@@ -235,8 +235,8 @@ func (s *servers) startDoQ(cfg *config.Config, handler *integratedHandler, logge
 // startXoT starts the DNS Zone Transfer over TLS server (RFC 9103). zones is
 // the handler's shared zones map and zonesMu the lock its writers hold
 // (handler.zonesMu); the XoT server must read the map under that same lock
-// (F448).
-func (s *servers) startXoT(cfg *config.Config, zones map[string]*zone.Zone, zonesMu *sync.RWMutex, transferMgr *TransferManager, logger *util.Logger) error {
+// (F448). signer signs the zones the server signs online (F869); nil: none.
+func (s *servers) startXoT(cfg *config.Config, zones map[string]*zone.Zone, zonesMu *sync.RWMutex, transferMgr *TransferManager, signer transfer.TransferSigner, logger *util.Logger) error {
 	xotAddr := cfg.Server.XoT.Bind
 	if xotAddr == "" {
 		xotAddr = fmt.Sprintf(":%d", 853)
@@ -267,6 +267,7 @@ func (s *servers) startXoT(cfg *config.Config, zones map[string]*zone.Zone, zone
 	}
 	s.xot.SetZonesMu(zonesMu)
 	s.xot.SetJournalStore(transferMgr.Result().JournalStore)
+	s.xot.SetTransferSigner(signer)
 
 	if err := s.xot.Serve(xotAddr); err != nil {
 		return fmt.Errorf("starting XoT server: %w", err)
