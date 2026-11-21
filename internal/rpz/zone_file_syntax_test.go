@@ -1,6 +1,7 @@
 package rpz
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -50,5 +51,40 @@ func TestRPZAbsoluteOwnerBelowPolicyApex(t *testing.T) {
 	}
 	if r := e.QNAMEPolicy("bad.example.com.rpz.example.com."); r != nil {
 		t.Fatalf("rule still keyed on the owner with the apex: %#v", r)
+	}
+}
+
+// F861: a line that begins with a blank belongs to the last stated owner
+// (RFC 1035 §5.1); it is not a record owned by its first token.
+func TestRPZBlankOwnerContinuesPreviousOwner(t *testing.T) {
+	e := loadRPZText(t, "ov.example.com IN A 192.0.2.9\n"+
+		"    IN A 192.0.2.10\n"+
+		"\tIN AAAA 2001:db8::10\n")
+	r := e.QNAMEPolicy("ov.example.com.")
+	if r == nil || r.Action != ActionOverride || len(r.Additional) != 2 {
+		t.Fatalf("ov.example.com: got %#v, want override RRset of 3 records", r)
+	}
+	if r := e.QNAMEPolicy("in."); r != nil {
+		t.Fatalf("indented record became a rule for %q", r.Pattern)
+	}
+}
+
+// F862: a relative owner is relative to the $ORIGIN in force, which
+// named-compilezone moves below the policy apex.
+func TestRPZRelativeOwnerUnderSubOrigin(t *testing.T) {
+	e := loadRPZText(t, "$ORIGIN rpz.example.com.\n"+
+		"@ 300 IN SOA localhost. hostmaster.localhost. 1 3600 600 86400 300\n"+
+		"$ORIGIN example.net.rpz.example.com.\n"+
+		"bad CNAME .\n"+
+		"$ORIGIN rpz-ip.rpz.example.com.\n"+
+		"32.1.2.0.192 CNAME .\n")
+	if r := e.QNAMEPolicy("bad.example.net."); r == nil || r.Action != ActionNXDOMAIN {
+		t.Fatalf("bad.example.net: got %#v, want NXDOMAIN rule", r)
+	}
+	if r := e.ResponseIPPolicy([]net.IP{net.ParseIP("192.0.2.1")}); r == nil {
+		t.Fatal("rpz-ip trigger under $ORIGIN rpz-ip.<apex> not loaded")
+	}
+	if r := e.QNAMEPolicy("bad."); r != nil {
+		t.Fatalf("relative owner kept unqualified: %#v", r)
 	}
 }

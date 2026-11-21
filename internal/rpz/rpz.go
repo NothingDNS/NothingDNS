@@ -239,11 +239,13 @@ func (e *Engine) loadFile(filename string) error {
 	// taken from its SOA owner, or from the $ORIGIN in force for an "@"
 	// owner. An absolute QNAME trigger owner below it names the trigger
 	// relative to it (F860).
-	origin, apex := "", ""
+	// lastOwner is the owner of the previous record line, as rewritten below.
+	origin, apex, lastOwner := "", "", ""
 
 	for scanner.Scan() {
 		lineNum++
-		line := strings.TrimSpace(scanner.Text())
+		raw := scanner.Text()
+		line := strings.TrimSpace(raw)
 		if line == "" || strings.HasPrefix(line, ";") || strings.HasPrefix(line, "#") {
 			continue
 		}
@@ -251,6 +253,29 @@ func (e *Engine) loadFile(filename string) error {
 		if len(fields) >= 2 && strings.EqualFold(fields[0], "$ORIGIN") {
 			origin = fields[1]
 			continue
+		}
+		if raw[0] == ' ' || raw[0] == '\t' {
+			// A line that begins with a blank is owned by the last stated
+			// owner (RFC 1035 §5.1, F861).
+			if lastOwner != "" {
+				fields = append([]string{lastOwner}, fields...)
+				line = strings.Join(fields, " ")
+			}
+		} else {
+			// A relative owner is relative to the $ORIGIN in force; below
+			// the apex, qualify it with the labels between them (F862).
+			if sub := subOrigin(origin, apex); sub != "" && !strings.HasPrefix(fields[0], "$") &&
+				!strings.HasSuffix(fields[0], ".") {
+				if fields[0] == "@" {
+					fields[0] = sub
+				} else {
+					fields[0] += "." + sub
+				}
+				line = strings.Join(fields, " ")
+			}
+			if !strings.HasPrefix(fields[0], "$") {
+				lastOwner = fields[0]
+			}
 		}
 		if apex == "" && isSOARecord(fields) {
 			owner := fields[0]
@@ -369,6 +394,17 @@ func (e *Engine) parseLine(line, policyName string) (*Rule, error) {
 		PolicyName:   policyName,
 		Priority:     priority,
 	}, nil
+}
+
+// subOrigin returns the labels of origin below apex ("example.net" for
+// origin "example.net.rpz.example.com." and apex "rpz.example.com"), or ""
+// when origin is the apex, is not below it, or the apex is unknown.
+func subOrigin(origin, apex string) string {
+	origin = strings.ToLower(strings.TrimSuffix(origin, "."))
+	if apex == "" || !strings.HasSuffix(origin, "."+apex) {
+		return ""
+	}
+	return origin[:len(origin)-len(apex)-1]
 }
 
 // isSOARecord reports whether a record line's type is SOA: the first field
