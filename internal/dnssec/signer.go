@@ -1002,12 +1002,16 @@ func (s *Signer) generateNSEC3(records []*protocol.ResourceRecord) []*protocol.R
 		nameInfos[name] = &nameInfo{original: name}
 	}
 
+	// Each name's types, collected in this one pass: scanning every record
+	// once per name was O(names x records) (F867).
+	typesByName := make(map[string][]uint16)
 	for _, rr := range records {
 		name := rr.Name.String()
 		if nameInfos[name] == nil {
 			nameInfos[name] = &nameInfo{original: name}
 		}
 		ni := nameInfos[name]
+		typesByName[name] = append(typesByName[name], rr.Type)
 
 		switch rr.Type {
 		case protocol.TypeNS:
@@ -1085,12 +1089,7 @@ func (s *Signer) generateNSEC3(records []*protocol.ResourceRecord) []*protocol.R
 		// delegation only with NS set and DS/SOA clear. An empty bitmap
 		// claimed "exists, not a zone cut", so validators treated the
 		// unsigned child as Bogus.
-		var types []uint16
-		for _, rr := range records {
-			if rr.Name.String() == hn.original {
-				types = append(types, rr.Type)
-			}
-		}
+		types := append([]uint16(nil), typesByName[hn.original]...)
 		sort.Slice(types, func(i, j int) bool { return types[i] < types[j] })
 
 		// Set flags: bit 0 = opt-out
