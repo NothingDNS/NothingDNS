@@ -235,12 +235,31 @@ func (e *Engine) loadFile(filename string) error {
 	policyName := filename
 	scanner := bufio.NewScanner(f)
 	lineNum := 0
+	// apex is the policy zone's own name (lower case, no trailing dot),
+	// taken from its SOA owner, or from the $ORIGIN in force for an "@"
+	// owner. An absolute QNAME trigger owner below it names the trigger
+	// relative to it (F860).
+	origin, apex := "", ""
 
 	for scanner.Scan() {
 		lineNum++
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, ";") || strings.HasPrefix(line, "#") {
 			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && strings.EqualFold(fields[0], "$ORIGIN") {
+			origin = fields[1]
+			continue
+		}
+		if apex == "" && isSOARecord(fields) {
+			owner := fields[0]
+			if owner == "@" {
+				owner = origin
+			}
+			if len(owner) > 1 && strings.HasSuffix(owner, ".") {
+				apex = strings.ToLower(strings.TrimSuffix(owner, "."))
+			}
 		}
 
 		rule, err := e.parseLine(line, policyName)
@@ -253,6 +272,10 @@ func (e *Engine) loadFile(filename string) error {
 		}
 		if rule == nil {
 			continue // SOA, NS, or other non-policy records
+		}
+		if rule.Trigger == TriggerQNAME && apex != "" && strings.HasSuffix(fields[0], ".") &&
+			strings.HasSuffix(rule.Pattern, "."+apex) {
+			rule.Pattern = rule.Pattern[:len(rule.Pattern)-len(apex)-1]
 		}
 		if rule.Trigger == TriggerQNAME && rule.Action == ActionOverride {
 			if existing, ok := e.qnameRules[strings.ToLower(rule.Pattern)]; ok &&
@@ -269,10 +292,11 @@ func (e *Engine) loadFile(filename string) error {
 }
 
 // parseLine parses a single RPZ zone file line.
-// Format: <rpz-name> <ttl> IN <type> <rdata>
+// Format: <rpz-name> [<ttl>] [IN] <type> <rdata> (TTL and class are
+// optional, RFC 1035 §5.1, so "name CNAME ." is a whole rule — F859).
 func (e *Engine) parseLine(line, policyName string) (*Rule, error) {
 	fields := strings.Fields(line)
-	if len(fields) < 4 {
+	if len(fields) < 3 {
 		return nil, fmt.Errorf("too few fields")
 	}
 
@@ -345,6 +369,21 @@ func (e *Engine) parseLine(line, policyName string) (*Rule, error) {
 		PolicyName:   policyName,
 		Priority:     priority,
 	}, nil
+}
+
+// isSOARecord reports whether a record line's type is SOA: the first field
+// after the owner that is neither a class nor a TTL.
+func isSOARecord(fields []string) bool {
+	for _, f := range fields[1:] {
+		if strings.EqualFold(f, "IN") || strings.EqualFold(f, "CH") {
+			continue
+		}
+		if _, ok, _ := parseTTLField(f); ok {
+			continue
+		}
+		return strings.EqualFold(f, "SOA")
+	}
+	return false
 }
 
 // parseTTLField parses a candidate TTL field. It accepts plain integers and

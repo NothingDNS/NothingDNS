@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **RPZ rules written as `name CNAME .` (no TTL, no class) were skipped**: the RPZ file reader required four fields, so a record with the optional TTL and class left out — common in hand-written and published policy zones — was logged as malformed and never blocked anything. TTL and class are optional again (RFC 1035 §5.1).
+- **RPZ files with absolute owner names never matched a QNAME**: a policy zone written in full (`bad.example.com.rpz.example.com. CNAME .`, as an AXFR dump or `named-compilezone` writes it) produced a rule for `bad.example.com.rpz.example.com` instead of `bad.example.com`. Absolute QNAME owners below the zone's SOA owner (or the `$ORIGIN` of an `@` SOA) are now read relative to it. IP and NSDNAME triggers were not affected.
 - **A slave did not say that a persisted zone file holds a CNAME next to other data**: the zone is still served, but the start-up log now carries the warning (as for replicated zone data), and a file without an SOA or apex NS set is refused with a log line instead of being served.
 - **A TSIG-signed UPDATE adding a CNAME, MX, NS or PTR into its own zone was refused with NOTAUTH**: `nsupdate -y … add c.example.com. CNAME www.example.com.` failed, because the MAC was checked against a re-encoding of the received message, and BIND (and others) compress the names inside the RDATA of those types while this server did not. TSIG now verifies the bytes as received (RFC 8945 §5.3) — UPDATE, NOTIFY, signed queries, and the responses of a signed AXFR/IXFR from another primary (including its unsigned intermediate messages). Records whose RDATA holds no name (A, TXT, SRV) were never affected, so the failure looked random.
 
