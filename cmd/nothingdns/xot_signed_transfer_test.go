@@ -74,3 +74,46 @@ func TestXoTTransfersOnlineSignedZoneSigned(t *testing.T) {
 		}
 	}
 }
+
+// TestXoTFirstMessageCopiesQuestion (F870): the first message of an XoT
+// AXFR/IXFR response copies the query's question (RFC 5936 §2.2.1), as AXFR
+// over TCP does.
+func TestXoTFirstMessageCopiesQuestion(t *testing.T) {
+	_, addr := zwXoTFixture(t)
+	for _, qt := range []uint16{protocol.TypeAXFR, protocol.TypeIXFR} {
+		c, err := tls.Dial("tcp", addr, &tls.Config{InsecureSkipVerify: true}) //nolint:gosec // loopback test server
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+		q, _ := protocol.NewQuery(12, "example.com.", qt)
+		if qt == protocol.TypeIXFR {
+			soa, _ := protocol.NewResourceRecord("example.com.", protocol.TypeSOA, protocol.ClassIN, 300,
+				&protocol.RDataSOA{MName: xfrName(t, "ns1.example.com."), RName: xfrName(t, "admin.example.com."), Serial: 1})
+			q.Authorities = append(q.Authorities, soa)
+			q.Header.NSCount = 1
+		}
+		buf := make([]byte, 1024)
+		n, _ := q.Pack(buf[2:])
+		binary.BigEndian.PutUint16(buf, uint16(n))
+		if _, err := c.Write(buf[:n+2]); err != nil {
+			t.Fatal(err)
+		}
+		var lb [2]byte
+		if _, err := io.ReadFull(c, lb[:]); err != nil {
+			t.Fatal(err)
+		}
+		body := make([]byte, binary.BigEndian.Uint16(lb[:]))
+		if _, err := io.ReadFull(c, body); err != nil {
+			t.Fatal(err)
+		}
+		_ = c.Close()
+		m, err := protocol.UnpackMessage(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(m.Questions) != 1 || m.Questions[0].Name.String() != "example.com." || m.Questions[0].QType != qt {
+			t.Fatalf("%s: first message questions %v", typeToString(qt), m.Questions)
+		}
+	}
+}

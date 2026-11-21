@@ -590,7 +590,7 @@ func (s *XoTServer) handleAXFRRequest(conn net.Conn, req *protocol.Message, clie
 
 	// Send AXFR response: SOA + all records + SOA (multiple messages allowed)
 	// RFC 5936: AXFR response is a sequence of messages, each with SOA at start/end of whole transfer
-	if err := s.sendAXFRResponse(conn, records, req.Header.ID); err != nil {
+	if err := s.sendTransferStream(conn, records, req.Header.ID, req.Questions); err != nil {
 		return
 	}
 }
@@ -654,7 +654,7 @@ func (s *XoTServer) handleIXFRRequest(conn net.Conn, req *protocol.Message, clie
 		records = signer.SignTransfer(z.Origin, records)
 	}
 
-	if err := s.sendAXFRResponse(conn, records, req.Header.ID); err != nil {
+	if err := s.sendTransferStream(conn, records, req.Header.ID, req.Questions); err != nil {
 		return
 	}
 }
@@ -1122,6 +1122,12 @@ func (s *XoTServer) sendErrorResponse(conn net.Conn, reqMsg *protocol.Message, r
 // sendAXFRResponse sends AXFR/IXFR records over the TLS connection.
 // Multiple messages may be sent, each length-prefixed.
 func (s *XoTServer) sendAXFRResponse(conn net.Conn, records []*protocol.ResourceRecord, requestID uint16) error {
+	return s.sendTransferStream(conn, records, requestID, nil)
+}
+
+// sendTransferStream is sendAXFRResponse with the query's question section,
+// which the first message must copy (RFC 5936 §2.2.1, F870).
+func (s *XoTServer) sendTransferStream(conn net.Conn, records []*protocol.ResourceRecord, requestID uint16, questions []*protocol.Question) error {
 	if len(records) == 0 {
 		return nil
 	}
@@ -1140,6 +1146,13 @@ func (s *XoTServer) sendAXFRResponse(conn net.Conn, records []*protocol.Resource
 	for i := 0; i < len(records); {
 		end := i
 		size := protocol.HeaderLen
+		var msgQuestions []*protocol.Question
+		if i == 0 {
+			msgQuestions = questions
+			for _, q := range questions {
+				size += q.WireLength()
+			}
+		}
 		for end < len(records) && end-i < maxRecordsPerMessage {
 			rrLen := records[end].WireLength()
 			if end > i && size+rrLen > maxMessageSize {
@@ -1153,9 +1166,11 @@ func (s *XoTServer) sendAXFRResponse(conn net.Conn, records []*protocol.Resource
 			Header: protocol.Header{
 				ID:      requestID, // RFC 5936 §2.2: every message in the chain carries the query's ID — compliant secondaries reject the stream otherwise
 				Flags:   protocol.Flags{QR: true, AA: true},
+				QDCount: uint16(len(msgQuestions)),
 				ANCount: uint16(end - i),
 			},
-			Answers: records[i:end],
+			Questions: msgQuestions,
+			Answers:   records[i:end],
 		}
 
 		buf := make([]byte, 2+65535)
