@@ -547,7 +547,7 @@ func (h *integratedHandler) nsec3ParamsFor() *nsec3Params {
 // denialRRs returns the denial records proving qname's absence (kind) from z.
 func (h *integratedHandler) denialRRs(z *zone.Zone, qname string, kind denialKind) []*protocol.ResourceRecord {
 	c := h.denialChainFor(z)
-	ttl := z.GetDefaultTTL()
+	ttl := denialTTL(z)
 	var out []*protocol.ResourceRecord
 	if c.nsec3 != nil {
 		if len(c.hashes) == 0 && h.logger != nil {
@@ -569,6 +569,28 @@ func (h *integratedHandler) denialRRs(z *zone.Zone, qname string, kind denialKin
 	return out
 }
 
+// denialTTL is the TTL of a served NSEC/NSEC3 record: the lesser of the SOA
+// MINIMUM and the SOA's own TTL (RFC 9077 §3, updating RFC 4034 §4 and RFC
+// 5155 §3), as the offline signer uses (dnssec.Signer.denialTTL, F248). The
+// zone's $TTL let resolvers doing aggressive NSEC caching (RFC 8198) deny
+// names for longer than the negative TTL (F863).
+func denialTTL(z *zone.Zone) uint32 {
+	z.RLock()
+	soa := z.SOA
+	var ttl, minimum uint32
+	if soa != nil {
+		ttl, minimum = soa.TTL, soa.Minimum
+	}
+	z.RUnlock()
+	if soa == nil {
+		return z.GetDefaultTTL()
+	}
+	if minimum < ttl {
+		return minimum
+	}
+	return ttl
+}
+
 // wildcardAnswerRRs returns the record proving that no closer match than the
 // wildcard at "*."+ce exists for qname, which a wildcard-expanded positive
 // answer must carry (RFC 4035 §3.1.3.3; RFC 5155 §7.2.6: the NSEC3 covering
@@ -579,7 +601,7 @@ func (h *integratedHandler) wildcardAnswerRRs(z *zone.Zone, qname, ce string) []
 		c = h.presignedDenialChain(z) // the zone's own chain (F757)
 	}
 	nc := nextCloser(qname, canonicalize(ce))
-	ttl := z.GetDefaultTTL()
+	ttl := denialTTL(z)
 	if c.nsec3 != nil {
 		// RFC 5155 §8.8 lets a validator derive the closest encloser from
 		// the RRSIG Labels field; its matching NSEC3 is included as well
