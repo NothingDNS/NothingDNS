@@ -164,7 +164,8 @@ func rpzClientStage(h *integratedHandler) Stage {
 	return func(ctx context.Context, q *query, w server.ResponseWriter) (bool, error) {
 		clientIP := w.ClientInfo().IP()
 		if h.security.RPZEngine != nil && clientIP != nil {
-			if rule := h.security.RPZEngine.ClientIPPolicy(clientIP); rule != nil {
+			if rule := h.security.RPZEngine.ClientIPPolicy(clientIP); rule != nil &&
+				!rpzQNAMEOutranks(h.security.RPZEngine, q.qname, rule) {
 				// applyRPZRule returns false for PASSTHRU (whitelist) and writes
 				// no response — the query must then CONTINUE through the pipeline.
 				// The previous unconditional `return true` turned a client-IP
@@ -719,6 +720,9 @@ func (h *integratedHandler) serveStaleOnFailedRefresh(q *query, why string) bool
 // query's pipeline key (Set deep-copies internally). Bogus data served to a
 // CD=1 client is never cached (F662).
 func (h *integratedHandler) cachePipelineResponse(q *query, resp *protocol.Message, dnssecValidated, dnssecBogus bool) {
+	if q.policyWriter != nil && q.policyWriter.rpz.uncacheable {
+		return // let through by this client's RPZ PASSTHRU only (F885)
+	}
 	if dnssecBogus {
 		return
 	}

@@ -576,7 +576,7 @@ rpz:
       priority: 1
 ```
 
-Düşük priority önce çalışır. Aksiyonlar: NXDOMAIN, NODATA, redirect, DROP.
+Düşük priority önce çalışır; `files` altındaki düz dosyalarda listede önce gelen kazanır (draft-vixie-dnsop-dns-rpz-00 §5.2). Aksiyonlar: NXDOMAIN, NODATA, redirect, DROP.
 
 ## `geodns`
 

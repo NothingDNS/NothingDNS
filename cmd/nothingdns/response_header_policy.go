@@ -28,6 +28,10 @@ import (
 type headerPolicyResponseWriter struct {
 	inner server.ResponseWriter
 
+	// rpz is the query's RPZ state: the PASSTHRU rule selected for it, which
+	// outranks rules of later stages and zones (rpz_precedence.go, F885).
+	rpz rpzQueryState
+
 	// Bits captured from the request this writer is answering.
 	opcode uint8
 	rd     bool

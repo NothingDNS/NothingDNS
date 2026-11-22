@@ -16,6 +16,7 @@ import (
 	"github.com/nothingdns/nothingdns/internal/cache"
 	"github.com/nothingdns/nothingdns/internal/dnssec"
 	"github.com/nothingdns/nothingdns/internal/protocol"
+	"github.com/nothingdns/nothingdns/internal/rpz"
 	"github.com/nothingdns/nothingdns/internal/server"
 	"github.com/nothingdns/nothingdns/internal/upstream"
 )
@@ -143,7 +144,15 @@ func (h *integratedHandler) prefetch(key string, qtype uint16) {
 		}
 	}
 
-	if handled, _ := h.applyRPZResponsePolicyWithError(prefetchDiscardWriter{}, query, question, resp, name); handled {
+	// A client query for name first meets its QNAME rule; a PASSTHRU there
+	// outranks the response rules below (F885), so the refresh is kept.
+	rpzW := &rpzPassthruWriter{ResponseWriter: prefetchDiscardWriter{}}
+	if eng := h.security.RPZEngine; eng != nil {
+		if rule := eng.QNAMEPolicy(name); rule != nil && rule.Action == rpz.ActionPassThrough {
+			rpzW.state.passthru = rule
+		}
+	}
+	if handled, _ := h.applyRPZResponsePolicyWithError(rpzW, query, question, resp, name); handled {
 		return
 	}
 	// A client miss is blocked, not cached, when the chain reaches a blocked

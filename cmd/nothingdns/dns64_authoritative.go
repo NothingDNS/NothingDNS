@@ -36,6 +36,7 @@ func (c *dns64CaptureWriter) Write(m *protocol.Message) (int, error) {
 }
 
 func (c *dns64CaptureWriter) ClientInfo() *server.ClientInfo { return c.inner.ClientInfo() }
+func (c *dns64CaptureWriter) Unwrap() server.ResponseWriter  { return c.inner }
 func (c *dns64CaptureWriter) MaxSize() int                   { return c.inner.MaxSize() }
 
 // serveAuthoritative answers q from z (handleAuthoritative), applying DNS64

@@ -685,6 +685,12 @@ exceeds 255 octets), and `$TTL` sets the TTL of records stating none. The
 `TXT "drop"`, `"passthru"` and `"tcp-only"` shorthands are this server's own.
 A CNAME to the trigger name itself is read as PASSTHRU (the deprecated §10
 encoding).
+Precedence follows §5: one rule decides a query, PASSTHRU included. Zones
+rank by `rpz.zones[].priority` (lower first), plain `rpz.files` by list
+position; within a zone client-IP, QNAME, response-IP, NSDNAME and NSIP
+triggers rank in that order, exact names before wildcards (then the most
+labels), longer IP prefixes before shorter. A client-IP PASSTHRU answer is not
+cached for other clients.
 
 ```yaml
 blocklist:

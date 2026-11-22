@@ -1004,6 +1004,9 @@ func (h *integratedHandler) applyRPZRuleWithError(w server.ResponseWriter, r *pr
 	if captured && cw.skipRPZ {
 		return false, nil
 	}
+	if rpzOverruledByPassthru(w, rule) { // F885
+		return false, nil
+	}
 	handled, err := h.applyRPZAction(w, r, q, rule)
 	if captured && handled {
 		cw.rpzHandled = true

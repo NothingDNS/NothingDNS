@@ -2,6 +2,7 @@ package rpz
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"net"
 	"os"
@@ -72,6 +73,10 @@ type Rule struct {
 	PolicyName string
 	// Priority for rule ordering (lower = higher priority).
 	Priority int
+	// Order is the position of the rule's policy zone in rpz.files: on
+	// equal Priority the earlier zone wins (F886). Zero for a zone with an
+	// explicit priority.
+	Order int
 	// Additional holds the further local-data records (ActionOverride) of
 	// the same owner in the same policy zone: local data is an RRset, so
 	// "x A …" plus "x AAAA …" or two A records all answer (F668).
@@ -109,6 +114,9 @@ type Engine struct {
 
 	// Logger.
 	logger *util.Logger
+
+	// loadOrder is the index in files of the file being loaded (Rule.Order).
+	loadOrder int
 
 	// Last reload time.
 	lastReload time.Time
@@ -187,7 +195,14 @@ func (e *Engine) Load() error {
 	e.nsipRules = newNSIPCIDRs
 	e.nsipActions = newNSIPActions
 
-	for _, file := range e.files {
+	for i, file := range e.files {
+		// A plain rpz.files entry is ranked by its position in the list
+		// (draft-vixie-dnsop-dns-rpz-00 §5.2); a zone given an explicit
+		// priority is ranked by it alone, equal priorities tying (4f3766b).
+		e.loadOrder = 0
+		if _, explicit := e.policies[file]; !explicit {
+			e.loadOrder = i
+		}
 		if err := e.loadFile(file); err != nil {
 			// Restore the previous rule set before returning the error.
 			e.qnameRules = prevQName
@@ -324,6 +339,7 @@ func (e *Engine) loadFile(filename string) error {
 		if rule == nil {
 			continue // SOA, NS, or other non-policy records
 		}
+		rule.Order = e.loadOrder
 		if rule.Trigger == TriggerQNAME && apex != "" && strings.HasSuffix(fields[0], ".") &&
 			strings.HasSuffix(rule.Pattern, "."+apex) {
 			rule.Pattern = rule.Pattern[:len(rule.Pattern)-len(apex)-1]
@@ -849,8 +865,8 @@ func (e *Engine) addRule(rule *Rule) {
 		}
 		key := strings.ToLower(rule.Pattern)
 		if existing, ok := rules[key]; ok {
-			// Keep higher priority rule
-			if rule.Priority < existing.Priority {
+			// Keep the rule of the earlier policy zone
+			if rule.Precedes(existing) {
 				rules[key] = rule
 			}
 		} else {
@@ -944,7 +960,10 @@ func (e *Engine) namePolicy(qname string, nsdname bool) *Rule {
 		qname = qname[dot+1:]
 		wildcard := "*." + qname
 
-		if rule, ok := rules[wildcard]; ok && (best == nil || rule.Priority < best.Priority) {
+		// §5.2 before §5.3: an earlier zone's wildcard beats a later
+		// zone's exact match; within a zone the exact match and then the
+		// closest wildcard, met first, win.
+		if rule, ok := rules[wildcard]; ok && (best == nil || rule.Precedes(best)) {
 			best = rule
 		}
 	}
@@ -969,16 +988,7 @@ func (e *Engine) ClientIPPolicy(clientIP net.IP) *Rule {
 	// priority, same as QNAMEPolicy). The earlier implementation
 	// returned the first slice-order match, so insertion order silently
 	// won over the operator-declared priority.
-	var best *Rule
-	for i, cidr := range e.clientIPRules {
-		if cidr.Contains(clientIP) {
-			r := e.clientActions[i]
-			if best == nil || r.Priority < best.Priority {
-				best = r
-			}
-		}
-	}
-	return best
+	return ipPolicy([]net.IP{clientIP}, e.clientIPRules, e.clientActions)
 }
 
 // ResponseIPPolicy evaluates RPZ policy based on response IP addresses.
@@ -1011,17 +1021,51 @@ func ipPolicy(ips []net.IP, cidrs []*net.IPNet, actions []*Rule) *Rule {
 	// original "any response IP matches" semantics; only the tie-break
 	// on multiple matches changes.
 	var best *Rule
+	var bestNet *net.IPNet
 	for _, ip := range ips {
 		for i, cidr := range cidrs {
-			if cidr.Contains(ip) {
-				r := actions[i]
-				if best == nil || r.Priority < best.Priority {
-					best = r
-				}
+			if cidr.Contains(ip) && (best == nil || ipRuleBetter(actions[i], cidr, best, bestNet)) {
+				best, bestNet = actions[i], cidr
 			}
 		}
 	}
 	return best
+}
+
+// ipRuleBetter reports whether rule r with trigger n is a better match than
+// best with trigger bn (draft-vixie-dnsop-dns-rpz-00 §5): the earlier policy
+// zone (§5.2), then the longest prefix (§5.6, an IPv4 prefix counting 96 more
+// bits), then the smaller address (§5.7). Only the zone was compared, so a
+// /24 block listed before a /32 PASSTHRU exception won (F887).
+func ipRuleBetter(r *Rule, n *net.IPNet, best *Rule, bn *net.IPNet) bool {
+	if r.Precedes(best) {
+		return true
+	}
+	if best.Precedes(r) {
+		return false
+	}
+	if a, b := internalPrefixLen(n), internalPrefixLen(bn); a != b {
+		return a > b
+	}
+	return bytes.Compare(n.IP.To16(), bn.IP.To16()) < 0
+}
+
+func internalPrefixLen(n *net.IPNet) int {
+	ones, bits := n.Mask.Size()
+	if bits == 32 {
+		ones += 96
+	}
+	return ones
+}
+
+// Precedes reports whether r comes from an earlier policy zone than o
+// (draft-vixie-dnsop-dns-rpz-00 §5.2): a lower Priority, then an earlier
+// position in the configured file list.
+func (r *Rule) Precedes(o *Rule) bool {
+	if r.Priority != o.Priority {
+		return r.Priority < o.Priority
+	}
+	return r.Order < o.Order
 }
 
 // Reload reloads all RPZ zone files.
