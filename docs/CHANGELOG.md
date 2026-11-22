@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+Run `nothingdns -validate-config` before upgrading: some configurations and inputs that loaded before are now rejected.
+
+- **Stricter configuration loading**: YAML flow collections need commas between items (`[a, b]`, `{a: 1, b: 2}`; `[a b]` is a load error instead of being read as one item); `metrics.path: /health` is refused because it shadows the health endpoint; a negative `cache.stale_grace_secs` and a non-scalar `tracing.sample_rate` are load errors.
+- **Malformed DNS messages are refused**: a query with bytes after its last section, more EDNS options than the protocol limit, RDATA whose lengths run past the record, or an NSEC/NSEC3 type bitmap that is not in canonical form is treated as malformed (UDP queries are dropped, as for other unparsable packets) instead of being parsed partially. An ODoH message with trailing bytes is refused the same way.
+- **API request bodies must be a single JSON value**: data after the JSON object is a 400 error.
+- **Key and anchor checks**: an Ed25519 private key file whose public half does not match its seed, and an ECDSA key on the wrong curve for its algorithm, are refused at load. `dnsctl dnssec keygen --type` accepts only `KSK` or `ZSK` (anything else used to create a ZSK), and `dnsctl dnssec` trust anchor verification exits non-zero when an anchor is not currently valid.
+- **Zone transfers over DoT**: AXFR and IXFR are accepted over DNS-over-TLS (port 853 on the DoT listener) as well as TCP, under the same transfer ACL and TSIG rules; they were refused as if sent over UDP.
+
 ### Fixed
 
 - **RPZ rules written as `name CNAME .` (no TTL, no class) were skipped**: the RPZ file reader required four fields, so a record with the optional TTL and class left out — common in hand-written and published policy zones — was logged as malformed and never blocked anything. TTL and class are optional again (RFC 1035 §5.1).
@@ -26,6 +36,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A corrupt GeoIP database could make each lookup allocate over a gigabyte**: the MMDB reader preallocated maps and arrays with the entry count from the value's header (up to about 16.8 million) before reading any entry, so a damaged record cost about 1.3 GB and several seconds on every query that reached it. A container claiming more entries than the bytes left is now rejected, and memory follows the entries actually read.
 - **A slave did not say that a persisted zone file holds a CNAME next to other data**: the zone is still served, but the start-up log now carries the warning (as for replicated zone data), and a file without an SOA or apex NS set is refused with a log line instead of being served.
 - **A TSIG-signed UPDATE adding a CNAME, MX, NS or PTR into its own zone was refused with NOTAUTH**: `nsupdate -y … add c.example.com. CNAME www.example.com.` failed, because the MAC was checked against a re-encoding of the received message, and BIND (and others) compress the names inside the RDATA of those types while this server did not. TSIG now verifies the bytes as received (RFC 8945 §5.3) — UPDATE, NOTIFY, signed queries, and the responses of a signed AXFR/IXFR from another primary (including its unsigned intermediate messages). Records whose RDATA holds no name (A, TXT, SRV) were never affected, so the failure looked random.
+- **An upstream DoT server with a private CA could not be verified**: the CA of a TLS profile was set as a client-certificate CA, which an outgoing connection ignores, instead of as the trust root, so the upstream's certificate was checked against the system roots.
+- **Renaming a record through the API left it under its old name**: until the next reload the live zone answered the old owner and returned NODATA for the new one.
+- **A storage write could be invisible after a restart**: when the write-ahead log ended in a full-length but corrupt entry, new entries were appended after it and recovery stopped at the corrupt one. Recovery now truncates at the first entry whose checksum fails. Persisted KV data, Raft snapshots and Raft hard state with trailing bytes are rejected instead of half-read.
+- **Signing a zone that already held some DNSKEYs dropped the other configured keys** from the DNSKEY RRset, so signatures made with those keys could not be verified.
+- **Prefetch refreshed a cache entry only once**: a refreshed entry was stored marked as already prefetched and was never prefetched again.
+- **Lowering `cache.size` at runtime did not evict**: the cache kept its old size until entries expired.
+- **Root hints files listing addresses before the NS record** lost those addresses.
+- **Loopback reverse names**: queries for types other than PTR at `1.0.0.127.in-addr.arpa.` and the `::1` reverse name were forwarded upstream instead of answered NODATA locally.
+- **An XoT secondary that was ahead of this server got a lone SOA**, which told it that it was up to date; it now gets the full zone, as over TCP.
+- **Response rate limiting let the first amplifying response of a new client through without penalty**, and very small `max_buckets` settings for RRL and the rate limiter evicted incorrectly.
+- **Login lockout could be avoided by spacing attempts**: the periodic cleanup dropped the failed-attempt counters of every user and address not yet locked out, so failures spread across cleanup runs never added up to a lockout. Counters now live for the lockout period after the last attempt. Sessions restored from disk at start could also exceed `max_sessions_per_user` (the newest ones are kept).
+- **Creating a zone through the API** validated and qualified only the first nameserver name; every listed nameserver is now checked and stored the same way.
+- **`dnsctl dig` over TCP accepted a response for a different question** with a matching ID.
+- **Cluster metrics kept reporting nodes that had left the cluster.**
+- **DoH `Cache-Control`** now also honours the SOA of the authority section when the answer section is not empty.
+- **mDNS service names were case-sensitive** in the service cache.
+- **Error responses from the transport layer** now echo the request's OPCODE, RD and CD bits.
+- **Shutdown and lifecycle**: the cache, upstream and security managers are stopped on every exit path, a signal-triggered shutdown runs its callbacks once, starting the API server twice is an error, and a NOTIFY received during shutdown no longer panics.
+- **Hardening**: data races and shared-slice aliasing fixed in GeoDNS rules, split-horizon views, mDNS registrations, RPZ and slave-zone configuration, root hints, resolver info, the NSEC aggressive cache, the iterative resolver swap on reload, ZONEMD computation, IXFR journal inputs and runtime/server configuration snapshots; truncated upstream responses are released back to the pool; DNS64 recognises a synthesised address only when its RFC 6052 u-octet and suffix are zero; DNS padding, DNSSL and RDNSS options are bounds-checked; RFC 7901 CHAIN options are encoded as a single name; the load generator no longer panics on a negative workload.
 
 ## [1.4.1] — 2026-11-01
 
