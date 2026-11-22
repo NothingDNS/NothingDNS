@@ -88,3 +88,25 @@ func TestRPZRelativeOwnerUnderSubOrigin(t *testing.T) {
 		t.Fatalf("relative owner kept unqualified: %#v", r)
 	}
 }
+
+// draft-vixie-dnsop-dns-rpz-00 §10: a CNAME to the trigger QNAME is the
+// deprecated PASSTHRU encoding, still recognised (F884).
+func TestRPZLegacyPassthruEncoding(t *testing.T) {
+	f := t.TempDir() + "/p.rpz"
+	body := "$TTL 60\n@ IN SOA ns.rpz. admin.rpz. 1 3600 600 86400 60\n@ IN NS ns.rpz.\n" +
+		"*.azone.example.com CNAME garden.example.net.\n" +
+		"ok.azone.example.com CNAME ok.azone.example.com.\n"
+	if err := os.WriteFile(f, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e := NewEngine(Config{Enabled: true, Files: []string{f}})
+	if err := e.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if r := e.QNAMEPolicy("ok.azone.example.com."); r == nil || r.Action != ActionPassThrough {
+		t.Fatalf("ok.azone.example.com: %+v, want PASSTHRU", r)
+	}
+	if r := e.QNAMEPolicy("x.azone.example.com."); r == nil || r.Action != ActionCNAME {
+		t.Fatalf("x.azone.example.com: %+v, want the walled-garden CNAME", r)
+	}
+}

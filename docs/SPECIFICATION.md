@@ -683,6 +683,8 @@ NODATA), several records at one trigger form one answer, a CNAME target
 beginning with `*.` has the query name prepended (YXDOMAIN when the result
 exceeds 255 octets), and `$TTL` sets the TTL of records stating none. The
 `TXT "drop"`, `"passthru"` and `"tcp-only"` shorthands are this server's own.
+A CNAME to the trigger name itself is read as PASSTHRU (the deprecated §10
+encoding).
 
 ```yaml
 blocklist:

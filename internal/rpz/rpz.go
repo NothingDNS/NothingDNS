@@ -328,6 +328,13 @@ func (e *Engine) loadFile(filename string) error {
 			strings.HasSuffix(rule.Pattern, "."+apex) {
 			rule.Pattern = rule.Pattern[:len(rule.Pattern)-len(apex)-1]
 		}
+		if rule.Trigger == TriggerQNAME && rule.Action == ActionCNAME &&
+			strings.EqualFold(rule.OverrideData, rule.Pattern) {
+			// draft-vixie-dnsop-dns-rpz-00 §10: a CNAME to the trigger QNAME
+			// is the deprecated PASSTHRU encoding, "still recognized by RPZ
+			// subscriber implementations"; it was a CNAME to itself (F884).
+			rule.Action, rule.OverrideData = ActionPassThrough, ""
+		}
 		if rule.Action == ActionOverride {
 			// Local Data is the set of RRsets at the trigger (F668); IP
 			// triggers kept only their first record (F882).
