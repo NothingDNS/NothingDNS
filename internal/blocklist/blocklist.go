@@ -365,6 +365,7 @@ func (bl *Blocklist) fetchURL(url string) (map[string]Entry, error) {
 	sourceEntries := make(map[string]Entry)
 
 	lineNum := 0
+	var skipped unsupportedLines
 	for scanner.Scan() {
 		lineNum++
 		line := strings.TrimSpace(scanner.Text())
@@ -384,6 +385,10 @@ func (bl *Blocklist) fetchURL(url string) (map[string]Entry, error) {
 				if hostsHeaderName(domain) {
 					continue // F872
 				}
+				if !validEntryName(domain) {
+					skipped.add(line) // F873
+					continue
+				}
 				entryCount++
 				if entryCount > maxEntries {
 					return nil, fmt.Errorf("blocklist %s exceeds maximum entry count of %d", url, maxEntries)
@@ -398,6 +403,10 @@ func (bl *Blocklist) fetchURL(url string) (map[string]Entry, error) {
 		domain := normalizeDomain(fields[1])
 		if hostsHeaderName(domain) {
 			continue // F872
+		}
+		if !validEntryName(domain) {
+			skipped.add(line) // F873
+			continue
 		}
 		entryCount++
 		if entryCount > maxEntries {
@@ -422,6 +431,7 @@ func (bl *Blocklist) fetchURL(url string) (map[string]Entry, error) {
 		}
 		return nil, err
 	}
+	skipped.report(url)
 	return sourceEntries, nil
 }
 
@@ -449,6 +459,8 @@ func (bl *Blocklist) loadFile(path string) error {
 
 	scanner := bufio.NewScanner(f)
 	lineNum := 0
+	var skipped unsupportedLines
+	defer skipped.report(path)
 
 	for scanner.Scan() {
 		lineNum++
@@ -481,6 +493,10 @@ func (bl *Blocklist) loadFile(path string) error {
 		}
 		if hostsHeaderName(domain) {
 			continue // F872
+		}
+		if !validEntryName(domain) {
+			skipped.add(line) // F873
+			continue
 		}
 
 		// Extract comment if present
@@ -903,6 +919,48 @@ var hostsHeaderNames = map[string]bool{
 func hostsHeaderName(domain string) bool {
 	return domain == "localhost" || strings.HasSuffix(domain, ".localhost") ||
 		hostsHeaderNames[domain] || net.ParseIP(domain) != nil
+}
+
+// validEntryName reports whether a normalized entry is a domain name: labels
+// of 1-63 letters, digits, '-' or '_', at most 253 characters. Lists in
+// another syntax (Adblock "||x^", wildcard "*.x", regex) are not supported
+// (SPECIFICATION §9.1.1); their lines can never match and used to load as
+// entries, so a list that blocks nothing reported N entries (F873).
+func validEntryName(domain string) bool {
+	if domain == "" || len(domain) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(domain, ".") {
+		if len(label) == 0 || len(label) > 63 {
+			return false
+		}
+		for i := 0; i < len(label); i++ {
+			c := label[i]
+			if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// unsupportedLines counts the lines of one source that are not entries.
+type unsupportedLines struct {
+	n     int
+	first string
+}
+
+func (u *unsupportedLines) add(line string) {
+	if u.n == 0 {
+		u.first = line
+	}
+	u.n++
+}
+
+func (u *unsupportedLines) report(source string) {
+	if u.n > 0 {
+		util.Warnf("blocklist %s: skipped %d lines that are not domain names (only hosts-file and one-domain-per-line formats are supported), first: %q", source, u.n, u.first)
+	}
 }
 
 // stripInlineComment drops a trailing "# comment" from a blocklist line.

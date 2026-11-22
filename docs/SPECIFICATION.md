@@ -637,7 +637,9 @@ the data:
 
 #### 9.1.1 Blocklist
 - Sources: local files and HTTPS URLs, in hosts-file format (`0.0.0.0 ads.example.com`)
-  or one domain per line; `#` comments
+  or one domain per line; `#` comments. A line whose name is not a domain name
+  (Adblock `||x^`, wildcard `*.x`, regex) is skipped, and the source is logged
+  with the number of skipped lines
 - URL sources must be `https://` with an IP-literal host that is not private,
   loopback or link-local (redirects are checked the same way); response bodies
   and entry counts are capped
