@@ -4,7 +4,9 @@ import (
 	"testing"
 
 	"github.com/nothingdns/nothingdns/internal/dns64"
+	"github.com/nothingdns/nothingdns/internal/filter"
 	"github.com/nothingdns/nothingdns/internal/protocol"
+	"github.com/nothingdns/nothingdns/internal/zone"
 )
 
 // RFC 6147 §5.1: a DNS64 that is authoritative examines "its own results"
@@ -58,5 +60,55 @@ alias IN CNAME www
 	// A name that does not exist stays NXDOMAIN.
 	if m := ask("nope.local.test."); m.Header.Flags.RCODE != protocol.RcodeNameError || len(m.Answers) != 0 {
 		t.Fatalf("nope.local.test.: rcode %d answers %d", m.Header.Flags.RCODE, len(m.Answers))
+	}
+}
+
+// Split-horizon views answer from their own zones (splitHorizonStage,
+// answerViewCNAME), and DNS64 applies there too, from the view's A RRset
+// (F876).
+func TestDNS64SynthesizesFromViewZone(t *testing.T) {
+	h := newTestHandler()
+	h.config.Resolution.AuthoritativeOnly = true
+	synth, err := dns64.NewSynthesizer("", 0) // 64:ff9b::/96
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.security.DNS64Synth = synth
+	sh, err := filter.NewSplitHorizon([]filter.ViewConfig{
+		{Name: "internal", MatchClients: []string{"127.0.0.0/8"}},
+		{Name: "external", MatchClients: []string{"0.0.0.0/0"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.splitHorizon = sh
+	viewZone := func(addr string) string {
+		return `$ORIGIN split.test.
+$TTL 300
+@   IN SOA ns1.split.test. admin.split.test. ( 1 3600 600 86400 120 )
+@   IN NS  ns1.split.test.
+ns1 IN A   ` + addr + `
+www IN A   ` + addr + `
+alias IN CNAME www
+`
+	}
+	h.viewZones = map[string]map[string]*zone.Zone{
+		"internal": {"split.test.": loadTestZoneFile(t, "internal.split.test.", viewZone("192.0.2.10"))},
+		"external": {"split.test.": loadTestZoneFile(t, "external.split.test.", viewZone("198.51.100.10"))},
+	}
+	for _, tc := range []struct{ client, name, want string }{
+		{"127.0.0.1", "www.split.test.", "64:ff9b::c000:20a"},
+		{"127.0.0.1", "alias.split.test.", "64:ff9b::c000:20a"},
+		{"10.9.9.9", "www.split.test.", "64:ff9b::c633:640a"},
+		{"10.9.9.9", "alias.split.test.", "64:ff9b::c633:640a"},
+	} {
+		m := askFrom(t, h, tc.client, tc.name, protocol.TypeAAAA)
+		if len(m.Answers) == 0 {
+			t.Fatalf("%s from %s: no answer, want %s", tc.name, tc.client, tc.want)
+		}
+		last, ok := m.Answers[len(m.Answers)-1].Data.(*protocol.RDataAAAA)
+		if !ok || last.String() != tc.want {
+			t.Fatalf("%s from %s: %v, want AAAA %s", tc.name, tc.client, m.Answers, tc.want)
+		}
 	}
 }

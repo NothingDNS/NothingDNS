@@ -397,7 +397,7 @@ func splitHorizonStage(h *integratedHandler) Stage {
 				continue // F383
 			}
 			h.logger.Debugf("View %s: checking zone %s for %s", view.Name, m.Origin, q.qname)
-			if h.handleAuthoritative(m.Zone, w, q.msg, q.q, q.qname, &q.cacheHit) {
+			if h.serveAuthoritative(m.Zone, w, q) { // handleAuthoritative + DNS64 (F875, F876)
 				return true, nil
 			}
 		}
@@ -443,6 +443,13 @@ func (h *integratedHandler) answerViewCNAME(q *query, w server.ResponseWriter, v
 	handled, err := h.applyRPZResponsePolicyWithError(w, q.msg, q.q, resp, result.targetName)
 	if handled || err != nil {
 		return handled, err
+	}
+	// F876: DNS64 for a view chain that ends without a usable AAAA, the A
+	// chain resolved inside the same view.
+	if synth, handled, err := h.synthesizeChainDNS64(w, q, vzMap, result, resp, sign); handled || err != nil {
+		return handled, err
+	} else if synth != nil {
+		resp = synth
 	}
 	if h.metrics != nil {
 		h.metrics.RecordResponse(resp.Header.Flags.RCODE)
@@ -520,7 +527,7 @@ func cnameStage(h *integratedHandler) Stage {
 				return handled, err
 			}
 			// F875: DNS64 for a chain that ends without a usable AAAA.
-			if synth, handled, err := h.synthesizeChainDNS64(w, q, result, resp, sign); handled || err != nil {
+			if synth, handled, err := h.synthesizeChainDNS64(w, q, nil, result, resp, sign); handled || err != nil {
 				return handled, err
 			} else if synth != nil {
 				resp = synth

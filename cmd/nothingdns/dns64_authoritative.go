@@ -58,11 +58,11 @@ func (h *integratedHandler) serveAuthoritative(z *zone.Zone, w server.ResponseWr
 }
 
 // synthesizeChainDNS64 is synthesizeLocalDNS64 for an in-zone CNAME chain
-// (cnameStage): resp is the chain answered for AAAA; the A answer is the same
-// chain resolved for A, and the synthesized answer keeps the chain (RFC 6147
-// §5.3.1). handled reports that RPZ answered the A query instead, as on the
-// forwarding path.
-func (h *integratedHandler) synthesizeChainDNS64(w server.ResponseWriter, q *query, chain cnameChainResult, resp *protocol.Message, sign bool) (synth *protocol.Message, handled bool, err error) {
+// (cnameStage, and answerViewCNAME with the view's zones as vzMap): resp is the
+// chain answered for AAAA; the A answer is the same chain resolved for A, and
+// the synthesized answer keeps the chain (RFC 6147 §5.3.1). handled reports
+// that RPZ answered the A query instead, as on the forwarding path.
+func (h *integratedHandler) synthesizeChainDNS64(w server.ResponseWriter, q *query, vzMap map[string]*zone.Zone, chain cnameChainResult, resp *protocol.Message, sign bool) (synth *protocol.Message, handled bool, err error) {
 	synthesizer := h.security.DNS64Synth
 	if synthesizer == nil || q.qtype != protocol.TypeAAAA || q.msg.Header.Flags.CD {
 		return nil, false, nil
@@ -73,7 +73,7 @@ func (h *integratedHandler) synthesizeChainDNS64(w server.ResponseWriter, q *que
 	}
 	aMsg := q.msg.Copy()
 	aMsg.Questions = []*protocol.Question{{Name: q.q.Name.Copy(), QType: protocol.TypeA, QClass: q.q.QClass}}
-	tgt := h.resolveChainTarget(w, aMsg, nil, chain.targetName, protocol.TypeA, sign)
+	tgt := h.resolveChainTarget(w, aMsg, vzMap, chain.targetName, protocol.TypeA, sign)
 	aResp := h.buildChainResponse(aMsg, chain, tgt, sign)
 	if handled, err := h.applyRPZResponsePolicyWithError(w, q.msg, q.q, aResp, chain.targetName); handled || err != nil {
 		return nil, handled, err
