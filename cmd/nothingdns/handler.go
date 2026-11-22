@@ -1074,6 +1074,21 @@ func (h *integratedHandler) applyRPZAction(w server.ResponseWriter, r *protocol.
 		}
 		valid := 0
 		for _, rr := range append([]*rpz.Rule{rule}, rule.Additional...) {
+			if rr.RRType != "" && rr.RRType != "A" && rr.RRType != "AAAA" {
+				// Local Data of any other type (draft-vixie-dnsop-dns-rpz-00
+				// §3.6), answered for its own type or ANY (F881).
+				rrType := protocol.StringToType[rr.RRType]
+				data := protocol.ParseRDataText(rr.RRType, rr.OverrideData)
+				if rrType == 0 || data == nil {
+					h.logger.Warnf("RPZ invalid %s local data: %s", rr.RRType, rr.OverrideData)
+					continue
+				}
+				valid++
+				if q.QType == rrType || q.QType == protocol.TypeANY {
+					resp.AddAnswer(&protocol.ResourceRecord{Name: q.Name, Type: rrType, Class: protocol.ClassIN, TTL: rr.TTL, Data: data})
+				}
+				continue
+			}
 			overrideIP := net.ParseIP(rr.OverrideData)
 			if overrideIP == nil {
 				h.logger.Warnf("RPZ override invalid IP: %s", rr.OverrideData)
@@ -1114,9 +1129,28 @@ func (h *integratedHandler) applyRPZAction(w server.ResponseWriter, r *protocol.
 		_, err := w.Write(resp)
 		return true, err
 	case rpz.ActionCNAME:
-		targetName, err := protocol.ParseName(rule.OverrideData)
+		target := rule.OverrideData
+		if strings.HasPrefix(target, "*.") {
+			// draft-vixie-dnsop-dns-rpz-00 §3.6: a wildcard target is the
+			// QNAME prepended to it ("bad.example.com CNAME
+			// *.garden.example.net." -> bad.example.com.garden.example.net.);
+			// it was sent as the literal "*.garden.example.net." (F880).
+			target = strings.TrimSuffix(q.Name.String(), ".") + target[1:]
+		}
+		targetName, err := protocol.ParseName(target)
+		if err != nil && target != rule.OverrideData {
+			// Too long once the QNAME is prepended: fail closed, as a DNAME
+			// substitution that overflows is answered YXDOMAIN (RFC 6672
+			// §2.2), rather than letting the name escape the policy.
+			resp := &protocol.Message{
+				Header:    protocol.Header{ID: r.Header.ID, Flags: protocol.NewResponseFlags(protocol.RcodeYXDomain)},
+				Questions: r.Questions,
+			}
+			_, err := w.Write(resp)
+			return true, err
+		}
 		if err != nil {
-			h.logger.Warnf("RPZ CNAME invalid target: %s", rule.OverrideData)
+			h.logger.Warnf("RPZ CNAME invalid target: %s", target)
 			return false, nil
 		}
 		resp := &protocol.Message{

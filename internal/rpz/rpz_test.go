@@ -1010,9 +1010,11 @@ func TestActionStringValidation(t *testing.T) {
 		{"TXT", `"passthru"`, ActionPassThrough},
 		{"TXT", `"drop"`, ActionDrop},
 		{"TXT", `"tcp-only"`, ActionTCPOnly},
-		{"TXT", `"unknown"`, ActionNXDOMAIN},           // Unknown TXT action = NXDOMAIN
-		{"TXT", ``, ActionNXDOMAIN},                    // Empty TXT = NXDOMAIN
-		{"MX", `10 mail.example.com.`, ActionNXDOMAIN}, // Unsupported type = NXDOMAIN
+		// Any other record is Local Data (draft-vixie-dnsop-dns-rpz-00 §3.6,
+		// F881); parseLine rejects RDATA that does not parse.
+		{"TXT", `"unknown"`, ActionOverride},
+		{"TXT", ``, ActionOverride},
+		{"MX", `10 mail.example.com.`, ActionOverride},
 	}
 
 	for _, tc := range tests {

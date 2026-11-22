@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nothingdns/nothingdns/internal/protocol"
 	"github.com/nothingdns/nothingdns/internal/util"
 )
 
@@ -58,8 +59,13 @@ type Rule struct {
 	Trigger TriggerType
 	// Pattern to match (domain name for QNAME/NSDNAME, CIDR for IP-based).
 	Pattern string
-	// OverrideData contains replacement data (CNAME target, override IP).
+	// OverrideData contains replacement data (CNAME target, override IP,
+	// or the presentation-format RDATA of a Local Data record).
 	OverrideData string
+	// RRType is the record type of Local Data (ActionOverride) read from a
+	// policy zone ("A", "TXT", "MX", …). Empty for an override added through
+	// the API, whose OverrideData is an address (A or AAAA by its family).
+	RRType string
 	// TTL for synthetic responses.
 	TTL uint32
 	// PolicyName identifies which policy zone this rule came from.
@@ -242,6 +248,10 @@ func (e *Engine) loadFile(filename string) error {
 	// relative to it (F860).
 	// lastOwner is the owner of the previous record line, as rewritten below.
 	origin, apex, lastOwner := "", "", ""
+	// defaultTTL is the $TTL in force, the TTL of records that state none
+	// (RFC 2308 §4); a $TTL line used to be skipped as malformed and such
+	// records answered with TTL 0 (F883).
+	var defaultTTL uint32
 
 	for scanner.Scan() {
 		lineNum++
@@ -253,6 +263,21 @@ func (e *Engine) loadFile(filename string) error {
 		fields := strings.Fields(line)
 		if len(fields) >= 2 && strings.EqualFold(fields[0], "$ORIGIN") {
 			origin = fields[1]
+			continue
+		}
+		if strings.EqualFold(fields[0], "$TTL") {
+			ttl, ok, err := uint32(0), false, error(nil)
+			if len(fields) >= 2 {
+				ttl, ok, err = parseTTLField(fields[1])
+			}
+			if !ok || err != nil {
+				if e.logger != nil {
+					e.logger.Warnf("rpz: skipping malformed $TTL on line %d in %s", lineNum, filename)
+				}
+				atomic.AddUint64(&e.parseErrors, 1)
+				continue
+			}
+			defaultTTL = ttl
 			continue
 		}
 		if raw[0] == ' ' || raw[0] == '\t' {
@@ -288,7 +313,7 @@ func (e *Engine) loadFile(filename string) error {
 			}
 		}
 
-		rule, err := e.parseLine(line, policyName)
+		rule, err := e.parseLineTTL(line, policyName, defaultTTL)
 		if err != nil {
 			if e.logger != nil {
 				e.logger.Warnf("rpz: skipping malformed line %d in %s: %v", lineNum, filename, err)
@@ -303,9 +328,10 @@ func (e *Engine) loadFile(filename string) error {
 			strings.HasSuffix(rule.Pattern, "."+apex) {
 			rule.Pattern = rule.Pattern[:len(rule.Pattern)-len(apex)-1]
 		}
-		if rule.Trigger == TriggerQNAME && rule.Action == ActionOverride {
-			if existing, ok := e.qnameRules[strings.ToLower(rule.Pattern)]; ok &&
-				existing.Action == ActionOverride && existing.PolicyName == rule.PolicyName {
+		if rule.Action == ActionOverride {
+			// Local Data is the set of RRsets at the trigger (F668); IP
+			// triggers kept only their first record (F882).
+			if existing := e.overrideRuleFor(rule); existing != nil {
 				existing.Additional = append(existing.Additional, rule)
 				continue
 			}
@@ -317,32 +343,101 @@ func (e *Engine) loadFile(filename string) error {
 	return scanner.Err()
 }
 
+// overrideRuleFor returns the Local Data rule already loaded for rule's
+// trigger in the same policy zone, or nil.
+func (e *Engine) overrideRuleFor(rule *Rule) *Rule {
+	same := func(r *Rule) bool {
+		return r.Action == ActionOverride && r.PolicyName == rule.PolicyName && r.Pattern == rule.Pattern
+	}
+	var actions []*Rule
+	switch rule.Trigger {
+	case TriggerQNAME:
+		if existing, ok := e.qnameRules[strings.ToLower(rule.Pattern)]; ok && same(existing) {
+			return existing
+		}
+		return nil
+	case TriggerResponseIP:
+		actions = e.respActions
+	case TriggerClientIP:
+		actions = e.clientActions
+	case TriggerNSIP:
+		actions = e.nsipActions
+	}
+	for _, r := range actions {
+		if same(r) {
+			return r
+		}
+	}
+	return nil
+}
+
+// rpzLocalDataExcluded lists the record types draft-vixie-dnsop-dns-rpz-00
+// §3.6 does not allow as Local Data (SOA and NS are the policy zone's own).
+var rpzLocalDataExcluded = map[string]bool{
+	"DNAME": true, "DNSKEY": true, "RRSIG": true, "NSEC": true, "NSEC3": true,
+	"NSEC3PARAM": true, "DS": true, "CDS": true, "CDNSKEY": true,
+}
+
+// rdataText returns the RDATA of a record line: the text after its first
+// n fields, without an unquoted ";" comment.
+func rdataText(line string, n int) string {
+	rest := line
+	for i := 0; i < n; i++ {
+		rest = strings.TrimLeft(rest, " \t")
+		if j := strings.IndexAny(rest, " \t"); j >= 0 {
+			rest = rest[j:]
+		} else {
+			rest = ""
+		}
+	}
+	inQuote := false
+	for i := 0; i < len(rest); i++ {
+		switch rest[i] {
+		case '\\':
+			i++
+		case '"':
+			inQuote = !inQuote
+		case ';':
+			if !inQuote {
+				return strings.TrimSpace(rest[:i])
+			}
+		}
+	}
+	return strings.TrimSpace(rest)
+}
+
 // parseLine parses a single RPZ zone file line.
 // Format: <rpz-name> [<ttl>] [IN] <type> <rdata> (TTL and class are
 // optional, RFC 1035 §5.1, so "name CNAME ." is a whole rule — F859).
 func (e *Engine) parseLine(line, policyName string) (*Rule, error) {
+	return e.parseLineTTL(line, policyName, 0)
+}
+
+// parseLineTTL is parseLine with the TTL of a record that states none.
+func (e *Engine) parseLineTTL(line, policyName string, defaultTTL uint32) (*Rule, error) {
 	fields := strings.Fields(line)
 	if len(fields) < 3 {
 		return nil, fmt.Errorf("too few fields")
 	}
 
 	owner := fields[0]
-	// Skip class field if present, find type and rdata
+	// The type is the first field after the owner that is neither a class
+	// nor a TTL; any type is Local Data (draft-vixie-dnsop-dns-rpz-00 §3.6),
+	// not only the few listed before (F881).
 	typeIdx := -1
 	for i := 1; i < len(fields); i++ {
 		upper := strings.ToUpper(fields[i])
 		if upper == "IN" || upper == "CH" {
 			continue
 		}
-		if upper == "A" || upper == "AAAA" || upper == "CNAME" || upper == "TXT" ||
-			upper == "SOA" || upper == "NS" || upper == "PTR" || upper == "MX" {
+		if _, ok := protocol.StringToType[upper]; ok {
 			typeIdx = i
 			break
 		}
-		// Might be TTL (numeric)
-		if typeIdx == -1 {
+		if _, ok, _ := parseTTLField(fields[i]); ok {
 			continue
 		}
+		break
 	}
 
 	if typeIdx == -1 || typeIdx+1 >= len(fields) {
@@ -356,9 +451,16 @@ func (e *Engine) parseLine(line, policyName string) (*Rule, error) {
 	if rtype == "SOA" || rtype == "NS" {
 		return nil, nil
 	}
+	if rpzLocalDataExcluded[rtype] {
+		return nil, fmt.Errorf("%s records are not allowed as RPZ local data", rtype)
+	}
+	if rtype != "CNAME" && rtype != "A" && rtype != "AAAA" {
+		// Multi-field RDATA (MX, SRV, TXT with spaces) is the rest of the line.
+		rdata = rdataText(line, typeIdx+1)
+	}
 
 	// Parse TTL
-	ttl := uint32(0)
+	ttl := defaultTTL
 	for i := 1; i < typeIdx; i++ {
 		upper := strings.ToUpper(fields[i])
 		if upper == "IN" || upper == "CH" {
@@ -380,6 +482,13 @@ func (e *Engine) parseLine(line, policyName string) (*Rule, error) {
 
 	// Determine action from record type and rdata
 	action, overrideData := e.parseAction(rtype, rdata)
+	var rrType string
+	if action == ActionOverride {
+		if protocol.ParseRDataText(rtype, overrideData) == nil {
+			return nil, fmt.Errorf("invalid %s local data %q", rtype, overrideData)
+		}
+		rrType = rtype
+	}
 
 	priority := 0
 	if p, ok := e.policies[policyName]; ok {
@@ -391,6 +500,7 @@ func (e *Engine) parseLine(line, policyName string) (*Rule, error) {
 		Trigger:      trigger,
 		Pattern:      pattern,
 		OverrideData: overrideData,
+		RRType:       rrType,
 		TTL:          ttl,
 		PolicyName:   policyName,
 		Priority:     priority,
@@ -701,6 +811,7 @@ func (e *Engine) parseAction(rtype, rdata string) (PolicyAction, string) {
 	case "A", "AAAA":
 		return ActionOverride, rdata
 	case "TXT":
+		// This server's own shorthand; any other TXT is Local Data.
 		if strings.EqualFold(rdata, "drop") || strings.EqualFold(strings.Trim(rdata, "\""), "drop") {
 			return ActionDrop, ""
 		}
@@ -710,9 +821,11 @@ func (e *Engine) parseAction(rtype, rdata string) (PolicyAction, string) {
 		if strings.EqualFold(rdata, "tcp-only") || strings.EqualFold(strings.Trim(rdata, "\""), "tcp-only") {
 			return ActionTCPOnly, ""
 		}
-		return ActionNXDOMAIN, ""
+		return ActionOverride, rdata
 	default:
-		return ActionNXDOMAIN, ""
+		// draft-vixie-dnsop-dns-rpz-00 §3.6: records of any other type are
+		// Local Data answered for that type; they were read as NXDOMAIN (F881).
+		return ActionOverride, rdata
 	}
 }
 

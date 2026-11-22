@@ -677,6 +677,12 @@ Client-IP triggers end in `.rpz-client-ip`. The earlier forms are still read:
 `.rpz-clientip`, and IPv6 as reversed single-hex-digit nibbles
 (`48.8.b.d.0.1.0.0.2.rpz-ip`), except that eight single-digit labels which are
 a valid word encoding are read as words.
+Local Data follows §3.6: records of any type except SOA, NS, DNAME and DNSSEC
+types answer queries of their type (ANY returns all of them, other types get
+NODATA), several records at one trigger form one answer, a CNAME target
+beginning with `*.` has the query name prepended (YXDOMAIN when the result
+exceeds 255 octets), and `$TTL` sets the TTL of records stating none. The
+`TXT "drop"`, `"passthru"` and `"tcp-only"` shorthands are this server's own.
 
 ```yaml
 blocklist:
