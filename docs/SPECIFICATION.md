@@ -670,6 +670,13 @@ rewrite it.
 RPZ files (`rpz.files`) carry QNAME, client-IP, response-IP, NSDNAME and NSIP
 triggers with NXDOMAIN, NODATA, CNAME, address override, DROP, PASSTHRU and
 TCP-only actions; rules can also be added and removed through the API.
+IP triggers use the draft-vixie-dnsop-dns-rpz-00 §4.1.1 encoding: IPv4 as
+`prefix.B4.B3.B2.B1` (`24.0.2.0.192.rpz-ip`), IPv6 as the reversed 16-bit
+words with `zz` for `::` (`128.3.zz.db8.2001.rpz-ip` is 2001:db8::3/128).
+Client-IP triggers end in `.rpz-client-ip`. The earlier forms are still read:
+`.rpz-clientip`, and IPv6 as reversed single-hex-digit nibbles
+(`48.8.b.d.0.1.0.0.2.rpz-ip`), except that eight single-digit labels which are
+a valid word encoding are read as words.
 
 ```yaml
 blocklist:

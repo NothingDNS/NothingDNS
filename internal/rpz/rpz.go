@@ -214,7 +214,8 @@ func (e *Engine) Load() error {
 //	QNAME triggers:  bad.example.com.rpz-zone.  -> matches bad.example.com
 //	Wildcard QNAME:  *.example.com.rpz-zone.    -> matches *.example.com subdomains
 //	Response IP:     32.1.0.168.192.rpz-ip.     -> matches 192.168.0.1/32
-//	Client IP:       24.0.168.192.rpz-clientip. -> matches 192.168.0.0/24
+//	Response IPv6:   128.3.zz.db8.2001.rpz-ip.  -> matches 2001:db8::3/128
+//	Client IP:       24.0.168.192.rpz-client-ip. -> matches 192.168.0.0/24 (also .rpz-clientip)
 //	NSDNAME:         ns.evil.com.rpz-nsdname.   -> matches nameserver ns.evil.com
 //	NSIP:            32.1.0.168.192.rpz-nsip.   -> matches NS IP 192.168.0.1/32
 //
@@ -474,7 +475,14 @@ func parseTTLField(field string) (uint32, bool, error) {
 func (e *Engine) parseOwnerName(owner string) (TriggerType, string) {
 	owner = strings.ToLower(owner)
 
-	// Check for RPZ suffix tags
+	// Check for RPZ suffix tags. draft-vixie-dnsop-dns-rpz-00 §4.1 names the
+	// client IP trigger "rpz-client-ip" (as BIND does); "rpz-clientip" is
+	// this server's earlier spelling, still read (F878).
+	if idx := strings.LastIndex(owner, ".rpz-client-ip"); idx != -1 {
+		ipPart := owner[:idx]
+		cidr := reverseRPZToCIDR(ipPart)
+		return TriggerClientIP, cidr
+	}
 	if idx := strings.LastIndex(owner, ".rpz-clientip"); idx != -1 {
 		ipPart := owner[:idx]
 		cidr := reverseRPZToCIDR(ipPart)
@@ -531,12 +539,20 @@ func reverseRPZToCIDR(rpzIP string) string {
 		ipParts[i], ipParts[j] = ipParts[j], ipParts[i]
 	}
 
-	// DNS-RPZ encodes IPv6 triggers as reversed single-hex-digit nibbles
-	// (up to 32 labels). A dotted-quad string can never have more than four
-	// labels, so 5+ all-nibble labels are unambiguously IPv6 — decode them
-	// to a standard IPv6 CIDR. Anything with four or fewer labels (every
-	// currently-loading IPv4 rule, including single-digit octets) keeps the
-	// exact legacy dotted interpretation below.
+	// draft-vixie-dnsop-dns-rpz-00 §4.1.1 encodes IPv6 as the address's
+	// 16-bit words reversed, "zz" standing for "::" ("128.3.zz.db8.2001" is
+	// 2001:db8::3/128). Only nibble labels were decoded, so every IPv6
+	// trigger written that way was dropped (F877).
+	if cidr := hextetsToCIDR(ipParts, prefixLen); cidr != "" {
+		return cidr
+	}
+
+	// Reversed single-hex-digit nibbles (up to 32 labels), the form this
+	// server read before F877, are still decoded. A dotted-quad string can
+	// never have more than four labels, so 5+ all-nibble labels are
+	// unambiguously IPv6. Anything with four or fewer labels (every IPv4
+	// rule, including single-digit octets) keeps the dotted interpretation
+	// below.
 	if len(ipParts) > 4 {
 		if cidr := reversedNibblesToCIDR(ipParts, prefixLen); cidr != "" {
 			return cidr
@@ -549,6 +565,72 @@ func reverseRPZToCIDR(rpzIP string) string {
 	}
 
 	return strings.Join(ipParts, ".") + "/" + prefixLen
+}
+
+// hextetsToCIDR decodes the draft-vixie-dnsop-dns-rpz-00 §4.1.1 IPv6 words
+// (already back in address order) plus the prefix length into a CIDR, or
+// returns "" when they are not that encoding. A "zz" label marks the
+// compressed zero run; without one all eight words are present. Eight
+// single-hex-digit labels are also a nibble prefix (the pre-F877 form): they
+// are read as words only when they are a valid §4.1.1 encoding, i.e. hold
+// no uncompressed run of two or more zero words (RFC 5952 §4.2.1).
+func hextetsToCIDR(words []string, prefixLen string) string {
+	plen, err := strconv.Atoi(prefixLen)
+	if err != nil || plen < 1 || plen > 128 || len(words) == 0 || len(words) > 8 {
+		return ""
+	}
+	isWord := func(s string) bool {
+		if len(s) < 1 || len(s) > 4 {
+			return false
+		}
+		for i := 0; i < len(s); i++ {
+			c := s[i]
+			if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
+				return false
+			}
+		}
+		return true
+	}
+	zz, multi, zeroRun, longestZeroRun := -1, false, 0, 0
+	for i, w := range words {
+		if w == "zz" {
+			if zz >= 0 {
+				return ""
+			}
+			zz = i
+			zeroRun = 0
+			continue
+		}
+		if !isWord(w) {
+			return ""
+		}
+		if len(w) > 1 {
+			multi = true
+		}
+		if strings.Trim(w, "0") == "" {
+			zeroRun++
+			longestZeroRun = max(longestZeroRun, zeroRun)
+		} else {
+			zeroRun = 0
+		}
+	}
+	var addr string
+	switch {
+	case zz >= 0:
+		if len(words) > 7 {
+			return "" // "::" stands for at least one zero word
+		}
+		addr = strings.Join(words[:zz], ":") + "::" + strings.Join(words[zz+1:], ":")
+	case len(words) == 8 && (multi || longestZeroRun < 2):
+		addr = strings.Join(words, ":")
+	default:
+		return ""
+	}
+	ip := net.ParseIP(addr)
+	if ip == nil || strings.Contains(addr, ".") {
+		return ""
+	}
+	return ip.String() + "/" + prefixLen
 }
 
 // reversedNibblesToCIDR converts already-reversed IPv6 nibble labels plus an
