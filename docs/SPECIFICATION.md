@@ -113,7 +113,7 @@ nothingdns/
 | `blocklist` | Domain blocklists (hosts and domain-per-line files, URLs) |
 | `rpz` | Response Policy Zones |
 | `geodns` | GeoIP (MMDB) based answers |
-| `dns64` | DNS64 synthesis (RFC 6147) |
+| `dns64` | DNS64 synthesis (RFC 6147) for forwarded and resolved answers and for names in local zones (including through in-zone CNAME chains) |
 | `idna` | IDNA / Punycode validation (RFC 5891 to 5893) |
 | `cluster` | Gossip membership, Raft consensus (`cluster/raft`), zone batches |
 | `storage` | Embedded key-value store and write-ahead log |

@@ -474,7 +474,7 @@ func authoritativeStage(h *integratedHandler) Stage {
 				continue // F383
 			}
 			h.logger.Debugf("Checking zone %s for %s", m.name, q.qname)
-			if h.handleAuthoritative(m.z, w, q.msg, q.q, q.qname, &q.cacheHit) {
+			if h.serveAuthoritative(m.z, w, q) { // handleAuthoritative + DNS64 (F875)
 				return true, nil
 			}
 		}
@@ -518,6 +518,12 @@ func cnameStage(h *integratedHandler) Stage {
 			handled, err := h.applyRPZResponsePolicyWithError(w, q.msg, q.q, resp, result.targetName)
 			if handled || err != nil {
 				return handled, err
+			}
+			// F875: DNS64 for a chain that ends without a usable AAAA.
+			if synth, handled, err := h.synthesizeChainDNS64(w, q, result, resp, sign); handled || err != nil {
+				return handled, err
+			} else if synth != nil {
+				resp = synth
 			}
 
 			if h.metrics != nil {
