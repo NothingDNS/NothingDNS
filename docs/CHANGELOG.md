@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Built with Go 1.27.4**: fixes GO-2026-6859, a crash of HTTP/1 servers through a header race in `net/http`'s `MaxBytesReader`, which the API, dashboard, DoH and ODoH endpoints use. The release image builds from `golang:1.27.4-alpine`.
+
 ### Changed
 
 Run `nothingdns -validate-config` before upgrading: some configurations and inputs that loaded before are now rejected.

@@ -39,14 +39,14 @@
 go mod init github.com/nothingdns/nothingdns
 ```
 
-The root module requires Go 1.26.9, is built with toolchain 1.27.3, and keeps the runtime dependency set intentionally small.
+The root module requires Go 1.26.9, is built with toolchain 1.27.4, and keeps the runtime dependency set intentionally small.
 
 ```go
 module github.com/nothingdns/nothingdns
 
 go 1.26.9
 
-toolchain go1.27.3
+toolchain go1.27.4
 
 require (
     github.com/quic-go/quic-go v0.60.0
