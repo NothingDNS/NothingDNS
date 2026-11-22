@@ -57,6 +57,10 @@ const (
 	mmdbTypeFloat     = 15
 )
 
+// mmdbMaxPrealloc caps the capacity preallocated for an MMDB map or array;
+// larger containers grow as their entries are decoded (F874).
+const mmdbMaxPrealloc = 64
+
 // mmdbDecoder reads typed values from a MMDB data section. The data
 // section bytes are the *whole file* — the decoder is given absolute
 // offsets and an explicit data-section start so that pointer arithmetic
@@ -256,7 +260,14 @@ func (d *mmdbDecoder) decodeValue(offset, maxDepth int) (interface{}, int, error
 		return math.Float64frombits(binary.BigEndian.Uint64(d.buf[off2 : off2+8])), off2 + 8, nil
 
 	case mmdbTypeMap:
-		m := make(map[string]interface{}, size)
+		// Each entry takes at least two bytes (key and value control
+		// bytes); a larger count is malformed. Preallocation is capped so
+		// memory follows the entries actually decoded: the size field alone
+		// made a 4-byte value allocate over a gigabyte, per lookup (F874).
+		if size > (len(d.buf)-off2)/2 {
+			return nil, 0, &mmdbDecodeError{"map size exceeds remaining data"}
+		}
+		m := make(map[string]interface{}, min(size, mmdbMaxPrealloc))
 		cur := off2
 		for i := 0; i < size; i++ {
 			// Map keys must be UTF-8 strings (or pointers to them).
@@ -278,7 +289,11 @@ func (d *mmdbDecoder) decodeValue(offset, maxDepth int) (interface{}, int, error
 		return m, cur, nil
 
 	case mmdbTypeArray:
-		arr := make([]interface{}, 0, size)
+		// Each element takes at least one byte (F874, as for maps).
+		if size > len(d.buf)-off2 {
+			return nil, 0, &mmdbDecodeError{"array size exceeds remaining data"}
+		}
+		arr := make([]interface{}, 0, min(size, mmdbMaxPrealloc))
 		cur := off2
 		for i := 0; i < size; i++ {
 			v, next, err := d.decodeValue(cur, maxDepth-1)
