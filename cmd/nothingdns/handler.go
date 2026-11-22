@@ -994,7 +994,24 @@ func (h *integratedHandler) applyRPZRule(w server.ResponseWriter, r *protocol.Me
 
 // applyRPZRuleWithError applies an RPZ rule action and returns true if the query was handled.
 // This handles all RPZ policy actions consistently.
+//
+// Local DNS64 (dns64_authoritative.go) answers through a dns64CaptureWriter:
+// its A sub-query skips RPZ, which is applied to the A answer against the
+// client's AAAA question instead, and a rule that answered the AAAA query is
+// recorded so no synthesis replaces it (F879).
 func (h *integratedHandler) applyRPZRuleWithError(w server.ResponseWriter, r *protocol.Message, q *protocol.Question, rule *rpz.Rule) (bool, error) {
+	cw, captured := w.(*dns64CaptureWriter)
+	if captured && cw.skipRPZ {
+		return false, nil
+	}
+	handled, err := h.applyRPZAction(w, r, q, rule)
+	if captured && handled {
+		cw.rpzHandled = true
+	}
+	return handled, err
+}
+
+func (h *integratedHandler) applyRPZAction(w server.ResponseWriter, r *protocol.Message, q *protocol.Question, rule *rpz.Rule) (bool, error) {
 	switch rule.Action {
 	case rpz.ActionNXDOMAIN:
 		h.logger.Debugf("RPZ NXDOMAIN for %s (policy: %s)", q.Name.String(), rule.PolicyName)

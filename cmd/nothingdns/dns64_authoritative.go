@@ -17,9 +17,15 @@ import (
 
 // dns64CaptureWriter records the response the authoritative code would write
 // instead of sending it, so it can be replaced by a synthesized answer.
+// rpzHandled records that an RPZ rule wrote it: the policy's answer stands, as
+// on the forwarding path, where RPZ runs before DNS64. skipRPZ makes
+// applyRPZRuleWithError skip RPZ for the A sub-query, whose answer is checked
+// against the client's AAAA question instead (F879).
 type dns64CaptureWriter struct {
-	inner server.ResponseWriter
-	msg   *protocol.Message
+	inner      server.ResponseWriter
+	msg        *protocol.Message
+	skipRPZ    bool
+	rpzHandled bool
 }
 
 func (c *dns64CaptureWriter) Write(m *protocol.Message) (int, error) {
@@ -47,9 +53,15 @@ func (h *integratedHandler) serveAuthoritative(z *zone.Zone, w server.ResponseWr
 		return true // nothing was written (e.g. a dropped query)
 	}
 	resp := cw.msg
-	if synth := h.synthesizeLocalDNS64(z, w, q, resp); synth != nil {
-		reply(w, q.msg, synth) // as the forwarding path sends its synthesis
-		return true
+	if !cw.rpzHandled { // an RPZ answer to the AAAA query stands (F879)
+		synth, handled := h.synthesizeLocalDNS64(z, w, q, resp)
+		if handled {
+			return true
+		}
+		if synth != nil {
+			reply(w, q.msg, synth) // as the forwarding path sends its synthesis
+			return true
+		}
 	}
 	if _, err := w.Write(resp); err != nil {
 		logErrorf("failed to write response: %v", err)
@@ -119,31 +131,39 @@ func capSynthesizedTTL(synth, negative *protocol.Message) {
 // synthesizeLocalDNS64 returns the synthesized AAAA answer for resp, the
 // zone's own answer to q, or nil when resp stands: an answer with a usable
 // AAAA, a non-NOERROR answer (NXDOMAIN, a refusal), or no A RRset at the name.
-func (h *integratedHandler) synthesizeLocalDNS64(z *zone.Zone, w server.ResponseWriter, q *query, resp *protocol.Message) *protocol.Message {
+// handled reports that an RPZ rule triggered by the A answer has answered the
+// query instead, as on the forwarding path (F879).
+func (h *integratedHandler) synthesizeLocalDNS64(z *zone.Zone, w server.ResponseWriter, q *query, resp *protocol.Message) (synth *protocol.Message, handled bool) {
 	synthesizer := h.security.DNS64Synth
 	// RFC 6147 §5.1.4: excluded AAAA records are unusable for the client.
 	synthesizer.FilterExcludedAAAA(q.q, resp)
 	if resp.Header.Flags.RCODE != protocol.RcodeSuccess || !synthesizer.ShouldSynthesize(q.q, resp) {
-		return nil
+		return nil, false
 	}
 	aMsg := q.msg.Copy()
 	aMsg.Questions = []*protocol.Question{{Name: q.q.Name.Copy(), QType: protocol.TypeA, QClass: q.q.QClass}}
-	acw := &dns64CaptureWriter{inner: w}
+	acw := &dns64CaptureWriter{inner: w, skipRPZ: true}
 	var aCacheHit bool
 	if !h.handleAuthoritative(z, acw, aMsg, aMsg.Questions[0], q.qname, &aCacheHit) || acw.msg == nil {
-		return nil
+		return nil, false
 	}
 	aResp := acw.msg
-	if aResp.Header.Flags.RCODE != protocol.RcodeSuccess || len(aResp.Answers) == 0 {
-		return nil
+	if handled, err := h.applyRPZResponsePolicyWithError(w, q.msg, q.q, aResp, q.qname); handled || err != nil {
+		if err != nil {
+			h.logger.Warnf("RPZ response write failed for %s: %v", q.qname, err)
+		}
+		return nil, true
 	}
-	synth := synthesizer.SynthesizeResponse(q.q, aResp)
+	if aResp.Header.Flags.RCODE != protocol.RcodeSuccess || len(aResp.Answers) == 0 {
+		return nil, false
+	}
+	synth = synthesizer.SynthesizeResponse(q.q, aResp)
 	if synth == nil || hasNoAAAAAnswer(synth) {
-		return nil
+		return nil, false
 	}
 	capSynthesizedTTL(synth, resp)
 	synth.Header.ID = resp.Header.ID
 	synth.Questions = q.msg.Questions
 	h.logger.Debugf("DNS64: synthesized %d AAAA records for %s from zone %s", len(synth.Answers), q.qname, z.Origin)
-	return synth
+	return synth, false
 }

@@ -1,11 +1,13 @@
 package main
 
 import (
+	"os"
 	"testing"
 
 	"github.com/nothingdns/nothingdns/internal/dns64"
 	"github.com/nothingdns/nothingdns/internal/filter"
 	"github.com/nothingdns/nothingdns/internal/protocol"
+	"github.com/nothingdns/nothingdns/internal/rpz"
 	"github.com/nothingdns/nothingdns/internal/zone"
 )
 
@@ -110,5 +112,56 @@ alias IN CNAME www
 		if !ok || last.String() != tc.want {
 			t.Fatalf("%s from %s: %v, want AAAA %s", tc.name, tc.client, m.Answers, tc.want)
 		}
+	}
+}
+
+// An RPZ rule decides a local answer whether or not DNS64 is on (F879): a
+// rule triggered by the A answer behind a synthesis answers the AAAA query
+// (NXDOMAIN, DROP), as on the forwarding path, and a rule that answered the
+// AAAA query itself is not replaced by a synthesis.
+func TestDNS64HonoursRPZOnLocalAnswers(t *testing.T) {
+	h := newTestHandler()
+	synth, err := dns64.NewSynthesizer("", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.security.DNS64Synth = synth
+	h.zones["local.test."] = loadTestZoneFile(t, "local.test.", `$ORIGIN local.test.
+$TTL 300
+@   IN SOA ns1.local.test. admin.local.test. ( 1 3600 600 86400 120 )
+@   IN NS  ns1.local.test.
+ns1 IN A   192.0.2.53
+www IN A   192.0.2.10
+dropme IN A 192.0.2.30
+v6bad IN A 192.0.2.20
+v6bad IN AAAA 2001:db8::bad
+`)
+	h.RebuildZoneTree()
+	f := t.TempDir() + "/p.rpz"
+	body := "$TTL 60\n@ IN SOA ns.rpz. admin.rpz. 1 3600 600 86400 60\n@ IN NS ns.rpz.\n" +
+		"32.10.2.0.192.rpz-ip CNAME .\n" +
+		"32.30.2.0.192.rpz-ip CNAME rpz-drop.\n" +
+		"128.bad.zz.db8.2001.rpz-ip CNAME *.\n"
+	if err := os.WriteFile(f, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	eng := rpz.NewEngine(rpz.Config{Enabled: true, Files: []string{f}})
+	if err := eng.Load(); err != nil {
+		t.Fatal(err)
+	}
+	h.security.RPZEngine = eng
+	ask := func(name string) *protocol.Message {
+		w := newCaptureWriter("10.0.0.1", "udp")
+		h.ServeDNS(w, newTestQuery(t, name, protocol.TypeAAAA))
+		return w.msg
+	}
+	if m := ask("www.local.test."); m == nil || m.Header.Flags.RCODE != protocol.RcodeNameError {
+		t.Errorf("www.local.test. AAAA: %v, want the RPZ NXDOMAIN", m)
+	}
+	if m := ask("dropme.local.test."); m != nil {
+		t.Errorf("dropme.local.test. AAAA: %v, want no response (rpz-drop)", m)
+	}
+	if m := ask("v6bad.local.test."); m == nil || len(m.Answers) != 0 {
+		t.Errorf("v6bad.local.test. AAAA: %v, want the RPZ NODATA", m)
 	}
 }
