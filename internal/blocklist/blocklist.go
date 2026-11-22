@@ -380,11 +380,14 @@ func (bl *Blocklist) fetchURL(url string) (map[string]Entry, error) {
 		if len(fields) < 2 {
 			// Also accept just domain per line (no IP)
 			if len(fields) == 1 && net.ParseIP(fields[0]) == nil {
+				domain := normalizeDomain(fields[0])
+				if hostsHeaderName(domain) {
+					continue // F872
+				}
 				entryCount++
 				if entryCount > maxEntries {
 					return nil, fmt.Errorf("blocklist %s exceeds maximum entry count of %d", url, maxEntries)
 				}
-				domain := normalizeDomain(fields[0])
 				sourceEntries[domain] = Entry{Domain: domain, Comment: "url:" + url}
 			}
 			continue
@@ -392,11 +395,14 @@ func (bl *Blocklist) fetchURL(url string) (map[string]Entry, error) {
 
 		// fields[0] is IP (127.0.0.1, 0.0.0.0, etc.)
 		// fields[1] is the domain to block
+		domain := normalizeDomain(fields[1])
+		if hostsHeaderName(domain) {
+			continue // F872
+		}
 		entryCount++
 		if entryCount > maxEntries {
 			return nil, fmt.Errorf("blocklist %s exceeds maximum entry count of %d", url, maxEntries)
 		}
-		domain := normalizeDomain(fields[1])
 
 		// Extract comment if present
 		comment := ""
@@ -472,6 +478,9 @@ func (bl *Blocklist) loadFile(path string) error {
 			domain = normalizeDomain(fields[1])
 		default:
 			continue
+		}
+		if hostsHeaderName(domain) {
+			continue // F872
 		}
 
 		// Extract comment if present
@@ -875,6 +884,25 @@ func (bl *Blocklist) ListFiles() []string {
 // entry silently never blocked anything.
 func normalizeDomain(s string) string {
 	return strings.ToLower(strings.TrimSuffix(s, "."))
+}
+
+// hostsHeaderNames are the names the header of a hosts file maps for the host
+// itself (hosts(5); the header of StevenBlack/hosts and similar lists), not
+// names to block.
+var hostsHeaderNames = map[string]bool{
+	"localhost.localdomain": true, "local": true, "broadcasthost": true,
+	"ip6-localhost": true, "ip6-loopback": true, "ip6-localnet": true, "ip6-mcastprefix": true,
+	"ip6-allnodes": true, "ip6-allrouters": true, "ip6-allhosts": true,
+}
+
+// hostsHeaderName reports whether a list entry (normalized) is a hosts-file
+// header line rather than a name to block: localhost and the names below it
+// (answered locally, RFC 6761 §6.3), the other header names, or an address
+// ("0.0.0.0 0.0.0.0"). Blocked, "localhost" overrode the local answer and
+// "local", matched as a parent, blocked every *.local name (F872).
+func hostsHeaderName(domain string) bool {
+	return domain == "localhost" || strings.HasSuffix(domain, ".localhost") ||
+		hostsHeaderNames[domain] || net.ParseIP(domain) != nil
 }
 
 // stripInlineComment drops a trailing "# comment" from a blocklist line.

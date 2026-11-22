@@ -642,6 +642,10 @@ the data:
   loopback or link-local (redirects are checked the same way); response bodies
   and entry counts are capped
 - A listed name blocks itself and its subdomains
+- The header lines of a hosts file are not entries: `localhost` and names below
+  it (answered locally, RFC 6761), `localhost.localdomain`, `local`,
+  `broadcasthost`, the `ip6-*` names and address-only lines (`0.0.0.0 0.0.0.0`)
+  are skipped in file and URL sources (a name added through the API is kept)
 - CNAME inspection (`blocklist.cname_inspection`, default on): a recursive or
   forwarded answer whose CNAME chain leads to a listed name is blocked the same
   way (CNAME cloaking). It is checked before the answer is cached and again on
