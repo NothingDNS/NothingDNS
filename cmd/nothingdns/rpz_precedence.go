@@ -11,6 +11,7 @@
 package main
 
 import (
+	"github.com/nothingdns/nothingdns/internal/protocol"
 	"github.com/nothingdns/nothingdns/internal/rpz"
 	"github.com/nothingdns/nothingdns/internal/server"
 )
@@ -80,4 +81,48 @@ func rpzOverruledByPassthru(w server.ResponseWriter, rule *rpz.Rule) bool {
 func rpzQNAMEOutranks(eng *rpz.Engine, qname string, clientRule *rpz.Rule) bool {
 	r := eng.QNAMEPolicy(qname)
 	return r != nil && r.Precedes(clientRule)
+}
+
+// cacheableUnderPolicy reports whether resp, an answer fetched for name
+// outside a client query (a prefetch refresh, an out-of-zone CNAME target),
+// would reach a client asking for name: no RPZ response rule and no
+// blocklist CNAME inspection stops it. A cache hit is served without those
+// checks, so only such an answer may be stored under name's key (F728,
+// F888). A client query for name first meets its QNAME rule, and a PASSTHRU
+// there outranks the response rules (F885).
+func (h *integratedHandler) cacheableUnderPolicy(query *protocol.Message, question *protocol.Question, name string, resp *protocol.Message) bool {
+	rpzW := &rpzPassthruWriter{ResponseWriter: prefetchDiscardWriter{}}
+	if eng := h.security.RPZEngine; eng != nil {
+		if rule := eng.QNAMEPolicy(name); rule != nil && rule.Action == rpz.ActionPassThrough {
+			rpzW.state.passthru = rule
+		}
+	}
+	if handled, _ := h.applyRPZResponsePolicyWithError(rpzW, query, question, resp, name); handled {
+		return false
+	}
+	_, blocked := h.blockedCNAMETarget(question.Name.String(), resp)
+	return !blocked
+}
+
+// rpzSyntheticWriter marks the resolution of an RPZ-supplied CNAME target, to
+// which RPZ rules do not apply (draft-vixie-dnsop-dns-rpz-00 §6): checking
+// the walled garden's answer against the rule that sent the client there
+// recursed without end when the garden's address is covered by it.
+type rpzSyntheticWriter struct{ server.ResponseWriter }
+
+func (w *rpzSyntheticWriter) Unwrap() server.ResponseWriter { return w.ResponseWriter }
+
+// followingRPZTarget reports whether w resolves an RPZ-supplied CNAME target.
+func followingRPZTarget(w server.ResponseWriter) bool {
+	for w != nil {
+		if _, ok := w.(*rpzSyntheticWriter); ok {
+			return true
+		}
+		u, ok := w.(interface{ Unwrap() server.ResponseWriter })
+		if !ok {
+			return false
+		}
+		w = u.Unwrap()
+	}
+	return false
 }

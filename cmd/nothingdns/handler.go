@@ -1173,7 +1173,9 @@ func (h *integratedHandler) applyRPZAction(w server.ResponseWriter, r *protocol.
 		// Chase the target like a zone CNAME: a bare CNAME left stubs
 		// with no address for the walled garden (F660).
 		if q.QType != protocol.TypeCNAME {
-			for _, rr := range h.resolveCNAMETarget(w, r, q, targetName.String(), q.QType) {
+			// draft-vixie-dnsop-dns-rpz-00 §6: RPZ rules do not apply
+			// while following an RPZ-supplied CNAME.
+			for _, rr := range h.resolveCNAMETarget(&rpzSyntheticWriter{w}, r, q, targetName.String(), q.QType) {
 				resp.AddAnswer(rr)
 			}
 		}

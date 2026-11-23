@@ -975,7 +975,12 @@ func (h *integratedHandler) resolveExternalCNAMETarget(w server.ResponseWriter, 
 		// record TTLs in place before caching and before we copy records for the
 		// client — this ensures downstream DNS caches receive the configured max_ttl
 		// cap, not the upstream's raw TTL (e.g. CDN 999999s).
-		if resp.Header.Flags.RCODE == protocol.RcodeSuccess && len(resp.Answers) > 0 {
+		// Cached under the target's own key, the answer is what a direct
+		// query for the target gets from the cache stage, which applies no
+		// RPZ response rule: an answer such a rule stops is not cached (F888).
+		// An RPZ walled garden is not checked against RPZ (§6), as before.
+		if resp.Header.Flags.RCODE == protocol.RcodeSuccess && len(resp.Answers) > 0 &&
+			(followingRPZTarget(w) || h.cacheableUnderPolicy(upstreamQuery, upstreamQuery.Questions[0], targetName, resp)) {
 			ttl := answerCacheTTL(resp)
 			clampedTTL := h.cache.ApplyTTLPolicy(resp, ttl)
 			h.cache.Set(cacheKey, resp, clampedTTL)
