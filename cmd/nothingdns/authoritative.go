@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"time"
@@ -917,7 +918,7 @@ func (h *integratedHandler) resolveExternalCNAMETarget(w server.ResponseWriter, 
 	if h.config != nil && h.config.Resolution.AuthoritativeOnly {
 		return nil
 	}
-	if h.upstream != nil || h.loadBalancer != nil {
+	if h.resolver != nil || h.upstream != nil || h.loadBalancer != nil {
 		targetNameParsed, err := protocol.ParseName(targetName)
 		if err != nil {
 			return nil
@@ -945,13 +946,30 @@ func (h *integratedHandler) resolveExternalCNAMETarget(w server.ResponseWriter, 
 			outQuery = withDOBit(upstreamQuery)
 		}
 		var resp *protocol.Message
-		if h.loadBalancer != nil {
+		switch {
+		case h.resolver != nil:
+			// As the pipeline resolves (resolverStage before upstreamStage)
+			// and as DNS64 does (F658): with only the iterative resolver an
+			// outside target was never chased, so an alias answered RA=1
+			// with a bare CNAME unless the target was already cached (F889).
+			ctx, cancel := context.WithTimeout(context.Background(), iterativeResolveTimeout(h.config))
+			resp, err = h.resolver.Resolve(ctx, targetName, qtype)
+			cancel()
+			if err == nil && resp == nil {
+				err = errors.New("no response")
+			}
+			if err == nil {
+				sanitizePipelineResponse(resp)
+				// The authority's AA is not this server's claim (F659).
+				resp.Header.Flags.AA = false
+			}
+		case h.loadBalancer != nil:
 			resp, err = h.loadBalancer.Query(outQuery)
-		} else {
+		default:
 			resp, err = h.upstream.Query(outQuery)
 		}
 		if err != nil {
-			h.logger.Warnf("Upstream CNAME target query failed for %s: %v", targetName, err)
+			h.logger.Warnf("CNAME target query failed for %s: %v", targetName, err)
 			return nil
 		}
 		// Return the pooled *Message to the sync.Pool after the cache takes a deep
