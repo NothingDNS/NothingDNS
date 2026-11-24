@@ -265,6 +265,12 @@ func cacheStage(h *integratedHandler) Stage {
 			if h.blockCNAMETarget(q, resp) {
 				return true, nil
 			}
+			// So may the RPZ response rules: policies apply to every
+			// response (draft-vixie-dnsop-dns-rpz-00 §4), and a reloaded
+			// rpz-ip rule skipped answers cached before it (F890).
+			if handled, err := h.applyRPZResponsePolicyWithError(w, q.msg, q.q, resp, q.qname); handled || err != nil {
+				return handled, err
+			}
 			reply(q.currentWriter, q.msg, resp)
 			return true, nil
 		}
@@ -707,6 +713,12 @@ func (h *integratedHandler) serveStaleOnFailedRefresh(q *query, why string) bool
 	}
 	if h.blockCNAMETarget(q, stale.Message) {
 		return true
+	}
+	if handled, err := h.applyRPZResponsePolicyWithError(q.currentWriter, q.msg, q.q, stale.Message, q.qname); handled || err != nil {
+		if err != nil {
+			h.logger.Warnf("RPZ response write failed for %s: %v", q.qname, err)
+		}
+		return true // F890, as for cache hits
 	}
 	h.logger.Debugf("Serving stale cache entry for %s (%s)", q.qname, why)
 	if h.metrics != nil {

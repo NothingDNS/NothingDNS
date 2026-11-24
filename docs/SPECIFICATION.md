@@ -691,6 +691,9 @@ position; within a zone client-IP, QNAME, response-IP, NSDNAME and NSIP
 triggers rank in that order, exact names before wildcards (then the most
 labels), longer IP prefixes before shorter. A client-IP PASSTHRU answer is not
 cached for other clients.
+Response rules (response IP, CNAME targets as QNAME triggers, NSDNAME, NSIP)
+are applied to cached and stale answers too, so a reloaded rule takes effect
+at once.
 
 ```yaml
 blocklist:
