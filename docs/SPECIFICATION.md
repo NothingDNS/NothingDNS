@@ -384,7 +384,9 @@ upstream:
   background refresh for the entry (at most 16 in flight), through the
   resolver or the upstreams like the original query, with the same DNSSEC
   validation and blocklist CNAME inspection; the fresh answer replaces the
-  entry (`cmd/nothingdns/prefetch.go`).
+  entry (`cmd/nothingdns/prefetch.go`). A forwarded refresh carries the DO
+  bit of the entry's key, so an entry cached for DO=1 clients keeps its
+  RRSIGs.
 
 ### 5.3 Security
 

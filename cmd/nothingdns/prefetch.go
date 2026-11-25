@@ -94,10 +94,11 @@ func (h *integratedHandler) prefetch(key string, qtype uint16) {
 		viaResolver = true
 		resp, err = h.resolver.Resolve(ctx, name, qtype)
 	case h.loadBalancer != nil || h.upstream != nil:
-		out := query
-		if h.validator != nil {
-			out = withDOBit(query)
-		}
+		// Ask as the client miss behind this entry asked (forwardedQuery): a
+		// "|1" entry holds the RRSIGs a DO=1 client gets (RFC 4035 §3.2.1),
+		// so its refresh must request them too, validator or not — a DO=0
+		// refresh would replace the signed entry with an unsigned one (F891).
+		out := forwardedQuery(query, h.validator != nil || doBit)
 		if h.loadBalancer != nil {
 			resp, err = h.loadBalancer.QueryContext(ctx, out)
 		} else {
