@@ -922,6 +922,9 @@ func (c *IXFRClient) ParseIXFRResponse(records []*protocol.ResourceRecord) (*IXF
 			}
 			// IXFR format: SOA + SOA(old) + changes + SOA(new) + changes + SOA
 			resp.NewSerial = firstSOA.Serial
+			if oldSOA, ok := records[1].Data.(*protocol.RDataSOA); ok {
+				resp.OldSerial = oldSOA.Serial
+			}
 			return resp, nil
 		}
 	}
