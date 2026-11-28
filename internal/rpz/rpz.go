@@ -299,20 +299,23 @@ func (e *Engine) loadFile(filename string) error {
 			// A line that begins with a blank is owned by the last stated
 			// owner (RFC 1035 §5.1, F861).
 			if lastOwner != "" {
-				fields = append([]string{lastOwner}, fields...)
-				line = strings.Join(fields, " ")
+				// Keep the original field spacing. Quoted TXT and other character
+				// strings preserve interior whitespace in master-file syntax.
+				line = lastOwner + raw
+				fields = strings.Fields(line)
 			}
 		} else {
 			// A relative owner is relative to the $ORIGIN in force; below
 			// the apex, qualify it with the labels between them (F862).
 			if sub := subOrigin(origin, apex); sub != "" && !strings.HasPrefix(fields[0], "$") &&
 				!strings.HasSuffix(fields[0], ".") {
+				originalOwner := fields[0]
 				if fields[0] == "@" {
 					fields[0] = sub
 				} else {
 					fields[0] += "." + sub
 				}
-				line = strings.Join(fields, " ")
+				line = fields[0] + raw[len(originalOwner):]
 			}
 			if !strings.HasPrefix(fields[0], "$") {
 				lastOwner = fields[0]
