@@ -277,7 +277,15 @@ func (e *Engine) loadFile(filename string) error {
 		}
 		fields := strings.Fields(line)
 		if len(fields) >= 2 && strings.EqualFold(fields[0], "$ORIGIN") {
-			origin = fields[1]
+			nextOrigin := fields[1]
+			if !strings.HasSuffix(nextOrigin, ".") && origin != "" {
+				if origin == "." {
+					nextOrigin += "."
+				} else {
+					nextOrigin += "." + origin
+				}
+			}
+			origin = nextOrigin
 			continue
 		}
 		if strings.EqualFold(fields[0], "$TTL") {
