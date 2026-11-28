@@ -258,6 +258,10 @@ type Cache struct {
 	shards [numShards]cacheShard
 	clock  cacheClock
 
+	// insertMu serializes capacity-bearing inserts and runtime capacity
+	// changes. Reads and removals remain fully sharded.
+	insertMu sync.Mutex
+
 	// Configuration snapshot. Reads are lock-free via the atomic pointer;
 	// UpdateConfig swaps in a fresh immutable copy (serialised via cfgMu), so
 	// hot-reload never races with in-flight Get/Set calls.
@@ -329,8 +333,9 @@ func New(config Config) *Cache {
 	return c
 }
 
-// perShardCapacity divides total capacity across shards, rounding up so the
-// total never falls below the requested value. Always at least 1.
+// perShardCapacity gives every shard room to cache its keys. The rounded-up
+// local capacities are an eviction-distribution aid; Cache.trimToCapacity
+// enforces the exact configured global bound.
 func perShardCapacity(total int) int {
 	per := (total + numShards - 1) / numShards
 	if per < 1 {
@@ -655,11 +660,13 @@ func (c *Cache) boundedTTL(ttl uint32) time.Duration {
 func (c *Cache) Set(key string, msg *protocol.Message, ttl uint32) {
 	msg = msg.Copy() // copy outside the shard lock
 
+	c.insertMu.Lock()
+	defer c.insertMu.Unlock()
 	s := c.shardOf(key)
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	c.setInternal(s, key, msg, ttl, false)
+	s.mu.Unlock()
+	c.trimToCapacity(s)
 }
 
 // SetAuthoritative caches an answer built from this server's own zone data.
@@ -676,10 +683,10 @@ func (c *Cache) SetAuthoritative(key string, msg *protocol.Message, ttl uint32) 
 	}
 	msg = msg.Copy()
 
+	c.insertMu.Lock()
+	defer c.insertMu.Unlock()
 	s := c.shardOf(key)
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	now := c.now()
 	s.addEntry(key, &Entry{
 		Key:           key,
@@ -690,6 +697,8 @@ func (c *Cache) SetAuthoritative(key string, msg *protocol.Message, ttl uint32) 
 		insertedAt:    now,
 		authoritative: true,
 	})
+	s.mu.Unlock()
+	c.trimToCapacity(s)
 }
 
 // SetNegative adds a negative cache entry (NXDOMAIN or NODATA).
@@ -804,9 +813,12 @@ func (c *Cache) setNegativeEntry(key, name string, rcode uint8, msg *protocol.Me
 	}
 
 	s := c.shardOf(key)
+	c.insertMu.Lock()
+	defer c.insertMu.Unlock()
 	s.mu.Lock()
 	s.addEntry(key, entry)
 	s.mu.Unlock()
+	c.trimToCapacity(s)
 }
 
 // setInternal adds or updates an entry with the given TTL. Must be called
@@ -1233,6 +1245,8 @@ func (c *Cache) GetConfig() Config {
 // UpdateConfig updates the runtime cache configuration.
 // This allows changing cache behavior without restarting the server.
 func (c *Cache) UpdateConfig(cfg Config) {
+	c.insertMu.Lock()
+	defer c.insertMu.Unlock()
 	c.cfgMu.Lock()
 	next := cfg
 	c.cfg.Store(&next)
@@ -1253,6 +1267,7 @@ func (c *Cache) UpdateConfig(cfg Config) {
 		}
 		s.mu.Unlock()
 	}
+	c.trimToCapacity(nil)
 }
 
 // config returns the current immutable configuration snapshot.
@@ -1278,10 +1293,12 @@ func (c *Cache) OnPrefetchCompleteIfCurrent(key string, expected *Entry, msg *pr
 func (c *Cache) onPrefetchComplete(key string, expected *Entry, msg *protocol.Message, ttl uint32) bool {
 	msg = msg.Copy() // setInternal takes ownership; copy outside the shard lock
 
+	c.insertMu.Lock()
+	defer c.insertMu.Unlock()
 	s := c.shardOf(key)
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if expected != nil && s.entries[key] != expected {
+		s.mu.Unlock()
 		msg.Release()
 		return false
 	}
@@ -1289,7 +1306,43 @@ func (c *Cache) onPrefetchComplete(key string, expected *Entry, msg *protocol.Me
 	// The new PrefetchDue is in the future, and its fresh prefetchFired gate
 	// prevents duplicate callbacks once that threshold is reached.
 	c.setInternal(s, key, msg, ttl, false)
+	s.mu.Unlock()
+	c.trimToCapacity(s)
 	return true
+}
+
+// trimToCapacity enforces Config.Capacity across all shards. insertMu must be
+// held, so concurrent inserts cannot race the check. Removals may run in
+// parallel but can only reduce the total. preferred is the shard that received
+// the newest insert; evicting its LRU first avoids disturbing unrelated shards
+// when the global bound alone caused the overflow.
+func (c *Cache) trimToCapacity(preferred *cacheShard) {
+	limit := c.config().Capacity
+	if limit <= 0 {
+		return // preserve the legacy zero-config behavior used by lightweight callers
+	}
+	for c.Size() > limit {
+		evicted := false
+		if preferred != nil {
+			preferred.mu.Lock()
+			evicted = preferred.evictOldest()
+			preferred.mu.Unlock()
+		}
+		if !evicted {
+			for i := range c.shards {
+				s := &c.shards[i]
+				s.mu.Lock()
+				evicted = s.evictOldest()
+				s.mu.Unlock()
+				if evicted {
+					break
+				}
+			}
+		}
+		if !evicted {
+			return
+		}
+	}
 }
 
 // ExtractQueryInfo extracts the query name and type from a cache key.
