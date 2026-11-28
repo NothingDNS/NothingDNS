@@ -657,6 +657,13 @@ func (s *KVStore) Update(fn func(*Tx) error) error {
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if !tx.closed {
+			if rollbackErr := tx.Rollback(); rollbackErr != nil {
+				util.Warnf("kvstore: rollback after transaction callback panic: %v", rollbackErr)
+			}
+		}
+	}()
 
 	if err := fn(tx); err != nil {
 		if rollbackErr := tx.Rollback(); rollbackErr != nil {
@@ -676,6 +683,13 @@ func (s *KVStore) View(fn func(*Tx) error) error {
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if !tx.closed {
+			if rollbackErr := tx.Rollback(); rollbackErr != nil {
+				util.Warnf("kvstore: rollback after transaction callback panic: %v", rollbackErr)
+			}
+		}
+	}()
 
 	err = fn(tx)
 	if rollbackErr := tx.Rollback(); rollbackErr != nil {
