@@ -511,6 +511,9 @@ func (s *Synthesizer) FilterExcludedAAAA(question *protocol.Question, response *
 	}
 	response.Answers = kept
 	response.Header.ANCount = uint16(len(kept))
+	// The answer RRset changed, so its former authentication status no longer
+	// applies even when an unexcluded address remains in the response.
+	response.Header.Flags.AD = false
 	return true
 }
 
