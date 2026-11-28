@@ -888,6 +888,10 @@ func (s *KVStore) removeTx(tx *Tx) {
 // Bucket returns a bucket by name. F060: lock-free; the store lock is
 // already held by Begin for the lifetime of the transaction.
 func (tx *Tx) Bucket(name []byte) *KVBucket {
+	if tx == nil || tx.closed {
+		return nil
+	}
+
 	key := string(name)
 	data, ok := tx.store.root.Buckets[key]
 	if !ok {
@@ -1038,6 +1042,10 @@ func (b *KVBucket) Delete(key []byte) error {
 
 // Bucket returns a nested bucket. F060: lock-free.
 func (b *KVBucket) Bucket(name []byte) *KVBucket {
+	if b == nil || b.tx == nil || b.tx.closed {
+		return nil
+	}
+
 	key := string(name)
 	data, ok := b.data.Buckets[key]
 	if !ok {
@@ -1140,6 +1148,10 @@ func (b *KVBucket) ForEach(fn func(k, v []byte) error) error {
 
 // Stats returns bucket statistics. F060: lock-free.
 func (b *KVBucket) Stats() BucketStats {
+	if b == nil || b.tx == nil || b.tx.closed {
+		return BucketStats{}
+	}
+
 	return BucketStats{
 		KeyCount: int64(len(b.data.Entries)),
 	}
