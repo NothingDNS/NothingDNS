@@ -265,9 +265,10 @@ type Cache struct {
 	cfg   atomic.Pointer[Config]
 
 	// Callbacks
-	callbackMu     sync.Mutex
-	prefetchFunc   func(key string, qtype uint16)
-	invalidateFunc func(key string)
+	callbackMu        sync.Mutex
+	prefetchFunc      func(key string, qtype uint16)
+	prefetchEntryFunc func(key string, qtype uint16, entry *Entry)
+	invalidateFunc    func(key string)
 }
 
 // shardOf returns the shard responsible for the given key.
@@ -484,13 +485,18 @@ func (c *Cache) Get(key string) *Entry {
 	if entry.ShouldPrefetch(now) {
 		c.callbackMu.Lock()
 		fn := c.prefetchFunc
+		entryFn := c.prefetchEntryFunc
 		c.callbackMu.Unlock()
-		if fn != nil && atomic.CompareAndSwapUint32(&entry.prefetchFired, 0, 1) {
+		if (fn != nil || entryFn != nil) && atomic.CompareAndSwapUint32(&entry.prefetchFired, 0, 1) {
 			qtype := uint16(0)
 			if entry.Message != nil && len(entry.Message.Questions) > 0 {
 				qtype = entry.Message.Questions[0].QType
 			}
-			go fn(key, qtype)
+			if entryFn != nil {
+				go entryFn(key, qtype, entry)
+			} else {
+				go fn(key, qtype)
+			}
 		}
 	}
 
@@ -1206,6 +1212,15 @@ func (c *Cache) SetPrefetchFunc(fn func(key string, qtype uint16)) {
 	c.callbackMu.Unlock()
 }
 
+// SetPrefetchEntryFunc sets a prefetch callback that also receives the exact
+// entry whose hit scheduled the refresh. The identity lets completion reject
+// stale work after invalidation or replacement.
+func (c *Cache) SetPrefetchEntryFunc(fn func(key string, qtype uint16, entry *Entry)) {
+	c.callbackMu.Lock()
+	c.prefetchEntryFunc = fn
+	c.callbackMu.Unlock()
+}
+
 // GetConfig returns a snapshot of the cache's current runtime
 // configuration. Used by callers that want to honor "patch
 // semantics" — read current, modify, UpdateConfig — without
@@ -1250,15 +1265,31 @@ func (c *Cache) config() *Config {
 // prefetchFired belong to that cycle, so reusing the old one-shot state would
 // make a hot entry refresh only once and then expire on the next cycle.
 func (c *Cache) OnPrefetchComplete(key string, msg *protocol.Message, ttl uint32) {
+	c.onPrefetchComplete(key, nil, msg, ttl)
+}
+
+// OnPrefetchCompleteIfCurrent replaces key only while expected is still the
+// entry mapped to it. A background refresh must not resurrect an invalidated
+// entry or overwrite a newer value that arrived while its query was in flight.
+func (c *Cache) OnPrefetchCompleteIfCurrent(key string, expected *Entry, msg *protocol.Message, ttl uint32) bool {
+	return c.onPrefetchComplete(key, expected, msg, ttl)
+}
+
+func (c *Cache) onPrefetchComplete(key string, expected *Entry, msg *protocol.Message, ttl uint32) bool {
 	msg = msg.Copy() // setInternal takes ownership; copy outside the shard lock
 
 	s := c.shardOf(key)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if expected != nil && s.entries[key] != expected {
+		msg.Release()
+		return false
+	}
 
 	// The new PrefetchDue is in the future, and its fresh prefetchFired gate
 	// prevents duplicate callbacks once that threshold is reached.
 	c.setInternal(s, key, msg, ttl, false)
+	return true
 }
 
 // ExtractQueryInfo extracts the query name and type from a cache key.

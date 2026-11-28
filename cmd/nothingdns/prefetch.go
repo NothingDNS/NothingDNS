@@ -31,7 +31,7 @@ var prefetchSlots = make(chan struct{}, maxConcurrentPrefetch)
 // wirePrefetch installs the prefetch callback on the handler's cache.
 func (h *integratedHandler) wirePrefetch() {
 	if h.cache != nil {
-		h.cache.SetPrefetchFunc(h.prefetch)
+		h.cache.SetPrefetchEntryFunc(h.prefetchEntry)
 	}
 }
 
@@ -51,6 +51,10 @@ func (prefetchDiscardWriter) MaxSize() int                         { return 512 
 // present, cache TTL policy — and is otherwise dropped, leaving the old entry
 // to expire normally. It must never store anything a client query would not.
 func (h *integratedHandler) prefetch(key string, qtype uint16) {
+	h.prefetchEntry(key, qtype, nil)
+}
+
+func (h *integratedHandler) prefetchEntry(key string, qtype uint16, expected *cache.Entry) {
 	prefetchSlots <- struct{}{}
 	defer func() { <-prefetchSlots }()
 
@@ -62,6 +66,12 @@ func (h *integratedHandler) prefetch(key string, qtype uint16) {
 	name, keyType := cache.ExtractQueryInfo(key)
 	if name == "" || keyType != qtype {
 		return
+	}
+	// Capture the entry whose cache hit scheduled this work. Completion is
+	// conditional on that exact entry still owning key, so a concurrent flush,
+	// invalidation, or newer answer cannot be undone by this stale refresh.
+	if expected == nil {
+		expected = h.cache.Get(key)
 	}
 	doBit := strings.HasSuffix(key, "|1")
 	// Names over the key's length limit are stored as a decimal hash and cannot
@@ -153,7 +163,12 @@ func (h *integratedHandler) prefetch(key string, qtype uint16) {
 		return // a TTL 0 answer is not cacheable (RFC 1035 §3.2.1)
 	}
 	ttl = h.cache.ApplyTTLPolicy(resp, ttl)
-	h.cache.OnPrefetchComplete(key, resp, ttl)
+	if expected == nil {
+		// Direct internal callers may use prefetch to populate an absent key.
+		h.cache.OnPrefetchComplete(key, resp, ttl)
+	} else {
+		h.cache.OnPrefetchCompleteIfCurrent(key, expected, resp, ttl)
+	}
 }
 
 // isAllDigits reports whether s is non-empty and made only of ASCII digits.
