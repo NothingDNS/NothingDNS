@@ -682,6 +682,7 @@ const maxUnsignedTSIGMessages = 99
 type ixfrStreamTracker struct {
 	clientSerial uint32
 	newSerial    uint32
+	blockSerial  uint32 // serial produced by the most recently closed diff block
 	n            int
 	incremental  bool
 	inAdds       bool // incremental: currently in an additions section
@@ -730,16 +731,24 @@ func (t *ixfrStreamTracker) feed(rr *protocol.ResourceRecord) error {
 			t.done = true // AXFR-style transfer of an SOA-only zone
 			return nil
 		}
+		if soa.Serial != t.clientSerial {
+			return fmt.Errorf("IXFR first difference starts at serial %d, client requested %d", soa.Serial, t.clientSerial)
+		}
 		t.incremental = true // first diff block's old SOA opens deletions
+		t.blockSerial = soa.Serial
 	case soa == nil:
 		return nil
 	case !t.incremental:
 		t.done = true // AXFR-style closing SOA
 	case !t.inAdds:
+		t.blockSerial = soa.Serial
 		t.inAdds = true // diff block's new SOA opens additions
 	case soa.Serial == t.newSerial:
 		t.done = true // closing SOA
 	default:
+		if soa.Serial != t.blockSerial {
+			return fmt.Errorf("IXFR difference sequence starts at serial %d after previous sequence produced %d", soa.Serial, t.blockSerial)
+		}
 		t.inAdds = false // next diff block's old SOA
 	}
 	return nil
