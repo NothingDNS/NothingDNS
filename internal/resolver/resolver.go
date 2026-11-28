@@ -510,9 +510,6 @@ func (r *Resolver) resolve(ctx context.Context, name string, qtype uint16, cname
 				continue
 			}
 
-			// Advance the zone cut to the delegated zone.
-			currentZoneCut = newZoneCut
-
 			// Resolve NS names that don't have glue
 			r.resolveNSAddresses(ctx, newDeleg)
 
@@ -521,6 +518,10 @@ func (r *Resolver) resolve(ctx context.Context, name string, qtype uint16, cname
 				continue
 			}
 
+			// Advance only after the referral is usable. Otherwise the next
+			// server in the current delegation would be judged against a child
+			// cut that this resolver never actually reached.
+			currentZoneCut = newZoneCut
 			deleg = newDeleg
 			continue
 
