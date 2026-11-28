@@ -272,12 +272,10 @@ func (r *Resolver) Resolve(ctx context.Context, name string, qtype uint16) (*pro
 // pruneAnswerToChain removes Answer records that are not part of the resolution
 // chain for (name, qtype): the queried name's RRset, the CNAME chain that leads
 // to it, and the DNAME(s) whose subtree the chain passed through. Records whose
-// owner is off-chain are dropped. It is conservative — it only prunes when more
-// than one answer is present and never drops chain/DNAME records — so legitimate
-// multi-record answers, CNAME chains, DNAME synthesis, and RRSIGs (owned by the
-// name they cover) are preserved.
+// owner is off-chain are dropped. Legitimate multi-record answers, CNAME chains,
+// DNAME synthesis, and RRSIGs (owned by the name they cover) are preserved.
 func pruneAnswerToChain(msg *protocol.Message, qname string, qtype uint16) {
-	if msg == nil || len(msg.Answers) <= 1 {
+	if msg == nil || len(msg.Answers) == 0 {
 		return
 	}
 	norm := func(s string) string { return strings.ToLower(strings.TrimSuffix(s, ".")) }
