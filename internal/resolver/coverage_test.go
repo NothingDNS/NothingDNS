@@ -654,7 +654,7 @@ func TestCollectUpstreamAddrs_SkipsMalformedRecords(t *testing.T) {
 		{Type: protocol.TypeA},
 		{Name: mustName("ns1.example.com."), Type: protocol.TypeA, Data: (*protocol.RDataA)(nil)},
 		makeARR("ns1.example.com.", "10.0.0.1"),
-	})
+	}, "ns1.example.com.", protocol.TypeA)
 	if len(addrs) != 1 || addrs[0] != "10.0.0.1:53" {
 		t.Fatalf("collectUpstreamAddrs = %v, want [10.0.0.1:53]", addrs)
 	}

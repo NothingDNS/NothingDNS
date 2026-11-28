@@ -1060,12 +1060,33 @@ func nsRecursionDepth(ctx context.Context) int {
 	return 0
 }
 
-// collectUpstreamAddrs extracts usable A/AAAA upstream addresses from an
-// answer section, applying the private-IP filter.
-func (r *Resolver) collectUpstreamAddrs(answers []*protocol.ResourceRecord) []string {
+// collectUpstreamAddrs extracts usable A/AAAA upstream addresses from the
+// answer chain for name, applying the private-IP filter. Records owned by an
+// unrelated name are never nameserver addresses for this lookup.
+func (r *Resolver) collectUpstreamAddrs(answers []*protocol.ResourceRecord, name string, qtype uint16) []string {
+	norm := func(s string) string { return strings.ToLower(strings.TrimSuffix(s, ".")) }
+	chain := map[string]bool{norm(name): true}
+	current := norm(name)
+	for range answers {
+		var next string
+		for _, rr := range answers {
+			if rr == nil || rr.Name == nil || rr.Type != protocol.TypeCNAME || norm(rr.Name.String()) != current {
+				continue
+			}
+			if cname, ok := rr.Data.(*protocol.RDataCNAME); ok && cname != nil && cname.CName != nil {
+				next = norm(cname.CName.String())
+			}
+		}
+		if next == "" || chain[next] {
+			break
+		}
+		chain[next] = true
+		current = next
+	}
+
 	var addrs []string
 	for _, rr := range answers {
-		if rr == nil {
+		if rr == nil || rr.Name == nil || !chain[norm(rr.Name.String())] || rr.Type != qtype {
 			continue
 		}
 		var ip net.IP
@@ -1101,40 +1122,14 @@ func (r *Resolver) lookupNSAddresses(ctx context.Context, nsName string) []strin
 	// Try A record
 	if aKey := cacheKey(nsName, protocol.TypeA); r.cache != nil {
 		if entry := r.cache.Get(aKey); entry != nil && !entry.IsNegative && entry.Message != nil {
-			for _, rr := range entry.Message.Answers {
-				if rr == nil || rr.Type != protocol.TypeA {
-					continue
-				}
-				a, ok := rr.Data.(*protocol.RDataA)
-				if !ok || a == nil {
-					continue
-				}
-				ip := net.IP(a.Address[:])
-				if !r.config.AllowPrivateUpstream && isDisallowedUpstreamIP(ip) {
-					continue
-				}
-				addrs = append(addrs, withPort(ip.String(), "53"))
-			}
+			addrs = append(addrs, r.collectUpstreamAddrs(entry.Message.Answers, nsName, protocol.TypeA)...)
 		}
 	}
 
 	// Try AAAA record
 	if aaaaKey := cacheKey(nsName, protocol.TypeAAAA); r.cache != nil {
 		if entry := r.cache.Get(aaaaKey); entry != nil && !entry.IsNegative && entry.Message != nil {
-			for _, rr := range entry.Message.Answers {
-				if rr == nil || rr.Type != protocol.TypeAAAA {
-					continue
-				}
-				a, ok := rr.Data.(*protocol.RDataAAAA)
-				if !ok || a == nil {
-					continue
-				}
-				ip := net.IP(a.Address[:])
-				if !r.config.AllowPrivateUpstream && isDisallowedUpstreamIP(ip) {
-					continue
-				}
-				addrs = append(addrs, withPort(ip.String(), "53"))
-			}
+			addrs = append(addrs, r.collectUpstreamAddrs(entry.Message.Answers, nsName, protocol.TypeAAAA)...)
 		}
 	}
 
@@ -1149,7 +1144,7 @@ func (r *Resolver) lookupNSAddresses(ctx context.Context, nsName string) []strin
 				if err != nil || resp == nil {
 					continue
 				}
-				addrs = append(addrs, r.collectUpstreamAddrs(resp.Answers)...)
+				addrs = append(addrs, r.collectUpstreamAddrs(resp.Answers, nsName, qt)...)
 			}
 		}
 	}
