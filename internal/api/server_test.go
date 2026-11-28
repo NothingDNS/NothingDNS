@@ -118,9 +118,23 @@ func TestAPIServerDoubleStartDoesNotOrphanListener(t *testing.T) {
 }
 
 func TestAPIStatus(t *testing.T) {
+	// Reserve an ephemeral port instead of hard-coding one. A fixed port
+	// makes this test fail on any machine where another process already
+	// holds it, and because Start()'s error was ignored, the request below
+	// then hit that foreign server and failed with a misleading 404/HTML
+	// diagnostic instead of the real bind error.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve ephemeral port: %v", err)
+	}
+	addr := ln.Addr().String()
+	if err := ln.Close(); err != nil {
+		t.Fatalf("release reserved port: %v", err)
+	}
+
 	cfg := config.HTTPConfig{
 		Enabled:   true,
-		Bind:      "127.0.0.1:18081",
+		Bind:      addr,
 		AuthToken: "test-token",
 	}
 
@@ -133,10 +147,13 @@ func TestAPIStatus(t *testing.T) {
 	c := cache.New(cacheCfg)
 
 	server := NewServer(cfg, nil, c, nil, nil, nil, nil)
-	server.Start()
+	if err := server.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer server.Stop()
 	time.Sleep(100 * time.Millisecond)
 
-	req, _ := http.NewRequest("GET", "http://127.0.0.1:18081/api/v1/status", nil)
+	req, _ := http.NewRequest("GET", "http://"+addr+"/api/v1/status", nil)
 	req.Header.Set("Authorization", "Bearer test-token")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

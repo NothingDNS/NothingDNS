@@ -60,15 +60,19 @@ func TestDNSKEYIsRevoked(t *testing.T) {
 	}
 }
 
-// TestIsAlgorithmRecommended tests IsAlgorithmRecommended
+// TestIsAlgorithmRecommended tests IsAlgorithmRecommended against the
+// RFC 8624 algorithm status table.
 func TestIsAlgorithmRecommended(t *testing.T) {
 	recommended := []uint8{
-		AlgorithmECDSAP256SHA256,
-		AlgorithmED25519,
+		AlgorithmRSASHA256,       // 8: MUST per RFC 8624
+		AlgorithmECDSAP256SHA256, // 13: MUST per RFC 8624
+		AlgorithmED25519,         // 15: RECOMMENDED per RFC 8624
 	}
 	notRecommended := []uint8{
-		AlgorithmRSAMD5,
-		AlgorithmRSASHA1,
+		AlgorithmRSAMD5,          // 1: NOT RECOMMENDED
+		AlgorithmRSASHA1,         // 5: NOT RECOMMENDED
+		AlgorithmRSASHA512,       // 10: NOT RECOMMENDED per RFC 8624 §3.1
+		AlgorithmECDSAP384SHA384, // 14: MAY (not a recommendation)
 	}
 
 	for _, alg := range recommended {

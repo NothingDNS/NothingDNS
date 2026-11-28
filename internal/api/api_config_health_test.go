@@ -347,6 +347,10 @@ func TestHandleConfigGet_ClusterKeyRedacted(t *testing.T) {
 func TestHandleConfigLogging_Success(t *testing.T) {
 	store := newAuthStoreWithUser(t, "admin", "testpass123", auth.RoleAdmin)
 	s := newServerWithAuth(store)
+	// handleConfigLogging applies the level to the process-global default
+	// logger (api_config.go); restore the suite default so tests running
+	// after this one in any order do not inherit DEBUG.
+	t.Cleanup(func() { util.GetDefaultLogger().SetLevel(util.INFO) })
 
 	adminUser, _ := store.GetUser("admin")
 	body, _ := json.Marshal(map[string]string{"level": "debug"})
@@ -414,6 +418,10 @@ func TestHandleConfigLogging_InvalidLevel(t *testing.T) {
 func TestHandleConfigLogging_AllLevels(t *testing.T) {
 	store := newAuthStoreWithUser(t, "admin", "testpass123", auth.RoleAdmin)
 	s := newServerWithAuth(store)
+	// The last cycle entry is "fatal": without this restore the default
+	// logger stays at FATAL for every test that runs after this one in a
+	// shuffled order, silencing their WARN/INFO output and masking failures.
+	t.Cleanup(func() { util.GetDefaultLogger().SetLevel(util.INFO) })
 	adminUser, _ := store.GetUser("admin")
 
 	levels := []string{"debug", "info", "warn", "warning", "error", "fatal"}

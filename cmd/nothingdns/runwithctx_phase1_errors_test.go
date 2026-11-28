@@ -32,13 +32,32 @@ func rateLimiterWorkers() int {
 	return strings.Count(string(buf[:n]), "filter.(*RateLimiter).cleanup")
 }
 
+// waitForStableWorkerCount polls a process-wide worker count until two
+// consecutive samples agree, so the asynchronous exit of a goroutine
+// whose Stop() only signals (closes a channel without joining, e.g.
+// RateLimiter.Stop) does not skew a baseline sampled right after Stop:
+// a just-stopped worker settles to the stable floor, while a genuinely
+// leaked worker stays in every sample and still fails the assertion.
+func waitForStableWorkerCount(sample func() int) int {
+	prev := sample()
+	for i := 0; i < 50; i++ {
+		time.Sleep(10 * time.Millisecond)
+		cur := sample()
+		if cur == prev {
+			return cur
+		}
+		prev = cur
+	}
+	return prev
+}
+
 // F783: every startup error after cache persistence begins must retire the
 // worker. Repeated invalid blocklist starts used to leave one worker each.
 func TestRunWithContext_StartupErrorStopsCachePersistence(t *testing.T) {
 	control := NewCacheManager(config.DefaultConfig(), util.NewLogger(util.ERROR, util.TextFormat, nil))
 	control.StartPersistence(time.Hour)
 	control.Stop()
-	base := cachePersistenceWorkers()
+	base := waitForStableWorkerCount(cachePersistenceWorkers)
 
 	for i := 0; i < 4; i++ {
 		cfg := config.DefaultConfig()
@@ -64,7 +83,7 @@ func TestRunWithContext_StartupErrorStopsUpstream(t *testing.T) {
 		t.Fatal(err)
 	}
 	control.Stop()
-	base := upstreamHealthWorkers()
+	base := waitForStableWorkerCount(upstreamHealthWorkers)
 
 	for i := 0; i < 4; i++ {
 		cfg := config.DefaultConfig()
@@ -90,7 +109,7 @@ func TestRunWithContext_StartupErrorStopsSecurity(t *testing.T) {
 		t.Fatal(err)
 	}
 	control.Stop()
-	base := rateLimiterWorkers()
+	base := waitForStableWorkerCount(rateLimiterWorkers)
 
 	for i := 0; i < 4; i++ {
 		cfg := config.DefaultConfig()

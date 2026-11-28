@@ -645,6 +645,14 @@ func forEachWireLabel(wire []byte, fn func(label []byte) bool) {
 // format (RFC 4034 Section 6.2). Each label is prefixed with its length byte,
 // and the name is terminated with a zero-length root label. The name is
 // lowercased using ASCII-only rules (DNS names are ASCII).
+//
+// The input is presentation-format text, so RFC 1035 §5.1 escapes are decoded
+// before splitting: `\X` quotes the next character (`\.`, `\\`, `\"`, ...) and
+// `\DDD` is one decimal octet (e.g. `\032` = space). Only unescaped dots end
+// labels — `my\.host.example.` is the single label "my.host" — and decoded
+// bytes are lowercased like the rest of the name. A malformed escape (fewer
+// digits than `\DDD`, value > 255, or a trailing backslash) keeps its literal
+// bytes so the output never silently diverges from the input.
 func CanonicalWireName(name string) []byte {
 	// Trim whitespace and trailing dot
 	start := 0
@@ -655,41 +663,79 @@ func CanonicalWireName(name string) []byte {
 	for end > start && (name[end-1] == ' ' || name[end-1] == '\t') {
 		end--
 	}
+	// Trim surrounding whitespace only. The trailing root dot is NOT
+	// stripped here: `\.` quotes a dot (RFC 1035 §5.1), so a trailing dot
+	// must be split escape-aware by the loop below. An unescaped trailing
+	// dot simply yields an empty final label, which appendCanonicalLabel
+	// skips — identical wire output, without eating escaped dots.
 	name = name[start:end]
-	if len(name) > 0 && name[len(name)-1] == '.' {
-		name = name[:len(name)-1]
-	}
 	if name == "" {
 		return []byte{0}
 	}
 
-	// Count dots to estimate wire size
-	dots := 0
-	for i := 0; i < len(name); i++ {
-		if name[i] == '.' {
-			dots++
-		}
-	}
-
-	// Pre-allocate: labels + length bytes + root zero
-	wire := make([]byte, 0, len(name)+2-dots)
+	// Escapes can only shrink the text (`\DDD` is 4 bytes → 1, `\X` is
+	// 2 → 1), so len(name)+2 is a safe capacity upper bound.
+	wire := make([]byte, 0, len(name)+2)
 	labelStart := 0
-	for i := 0; i <= len(name); i++ {
-		if i == len(name) || name[i] == '.' {
-			labelLen := i - labelStart
-			if labelLen == 0 {
-				labelStart = i + 1
-				continue
+	for i := 0; i < len(name); {
+		switch c := name[i]; {
+		case c == '\\':
+			// An escape never ends a label: skip it wholesale so the
+			// following dot (if any) is not treated as a separator.
+			if i+3 < len(name) && isASCIIDigit(name[i+1]) && isASCIIDigit(name[i+2]) && isASCIIDigit(name[i+3]) {
+				i += 4
+			} else {
+				i += 2
 			}
-			wire = append(wire, byte(labelLen))
-			for j := 0; j < labelLen; j++ {
-				wire = append(wire, toLower(name[labelStart+j]))
-			}
+			continue
+		case c == '.':
+			wire = appendCanonicalLabel(wire, name[labelStart:i])
 			labelStart = i + 1
 		}
+		i++
 	}
+	wire = appendCanonicalLabel(wire, name[labelStart:])
 	wire = append(wire, 0)
 	return wire
+}
+
+// appendCanonicalLabel decodes RFC 1035 §5.1 escapes in label and appends it
+// as one wire label, lowercasing US-ASCII letters (RFC 4034 §6.1). An empty
+// label appends nothing.
+func appendCanonicalLabel(wire []byte, label string) []byte {
+	if len(label) == 0 {
+		return wire
+	}
+	decoded := make([]byte, 0, len(label))
+	for i := 0; i < len(label); {
+		c := label[i]
+		if c == '\\' && i+1 < len(label) {
+			if i+3 < len(label) && isASCIIDigit(label[i+1]) && isASCIIDigit(label[i+2]) && isASCIIDigit(label[i+3]) {
+				v := int(label[i+1]-'0')*100 + int(label[i+2]-'0')*10 + int(label[i+3]-'0')
+				if v <= 255 {
+					decoded = append(decoded, byte(v))
+					i += 4
+					continue
+				}
+			}
+			// `\X` quotes X; a `\DDD` with a value > 255 keeps its bytes.
+			decoded = append(decoded, label[i+1])
+			i += 2
+			continue
+		}
+		decoded = append(decoded, c)
+		i++
+	}
+	wire = append(wire, byte(len(decoded)))
+	for j := range decoded {
+		wire = append(wire, toLower(decoded[j]))
+	}
+	return wire
+}
+
+// isASCIIDigit reports whether b is an ASCII decimal digit.
+func isASCIIDigit(b byte) bool {
+	return b >= '0' && b <= '9'
 }
 
 // WireNameLength returns the length of a domain name at the given offset.

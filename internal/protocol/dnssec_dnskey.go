@@ -41,7 +41,7 @@ const (
 	// AlgorithmRSASHA256 is RSA/SHA-256 (MUST implement per RFC 8624).
 	AlgorithmRSASHA256 = 8
 
-	// AlgorithmRSASHA512 is RSA/SHA-512 (SHOULD implement per RFC 8624).
+	// AlgorithmRSASHA512 is RSA/SHA-512 (NOT RECOMMENDED per RFC 8624).
 	AlgorithmRSASHA512 = 10
 
 	// AlgorithmECCGOST is GOST R 34.10-2001 (obsoleted).
@@ -109,7 +109,9 @@ func IsAlgorithmSupported(alg uint8) bool {
 // IsAlgorithmRecommended returns true if the algorithm is recommended per RFC 8624.
 func IsAlgorithmRecommended(alg uint8) bool {
 	switch alg {
-	case AlgorithmRSASHA256, AlgorithmRSASHA512,
+	// RSASHA512 (10) is intentionally absent: RFC 8624 lists it as
+	// NOT RECOMMENDED, despite having no known weaknesses.
+	case AlgorithmRSASHA256,
 		AlgorithmECDSAP256SHA256, AlgorithmED25519:
 		return true
 	default:
