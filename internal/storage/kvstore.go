@@ -1112,17 +1112,19 @@ func (b *KVBucket) DeleteBucket(name []byte) error {
 
 // Cursor returns a cursor for iteration. F060: lock-free.
 func (b *KVBucket) Cursor() *KVCursor {
+	cursor := &KVCursor{bucket: b, pos: -1}
+	if b == nil || b.tx == nil || b.tx.closed {
+		return cursor
+	}
+
 	keys := make([]string, 0, len(b.data.Entries))
 	for k := range b.data.Entries {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 
-	return &KVCursor{
-		bucket: b,
-		keys:   keys,
-		pos:    -1,
-	}
+	cursor.keys = keys
+	return cursor
 }
 
 // ForEach iterates over all key-value pairs
@@ -1196,7 +1198,7 @@ func (c *KVCursor) Seek(seek []byte) ([]byte, []byte) {
 }
 
 func (c *KVCursor) current() ([]byte, []byte) {
-	if c.pos < 0 || c.pos >= len(c.keys) {
+	if c == nil || c.bucket == nil || c.bucket.tx == nil || c.bucket.tx.closed || c.pos < 0 || c.pos >= len(c.keys) {
 		return nil, nil
 	}
 	k := c.keys[c.pos]
